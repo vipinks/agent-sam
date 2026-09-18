@@ -13,6 +13,7 @@ import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
+import { useChatSessionsContext } from './chat-sessions-context'
 import {
   applyAgentChunk,
   resolveDecision,
@@ -77,7 +78,11 @@ export function ChatPanel() {
   const activeModel = useWorkbenchStore((s) => s.activeModel)
   const setTarget = useWorkbenchStore((s) => s.setTarget)
 
-  const [messages, setMessages] = useState<AgentTurn[]>([])
+  // Sessions own the transcript: it is shared with the panel (which saves it before a switch) and
+  // persisted at turn boundaries. The pane reads and replaces it, but does not hold it.
+  const sessions = useChatSessionsContext()
+  const messages = sessions.transcript.turns
+
   const [draft, setDraft] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   // Off by default: a tool that writes to disk should be a deliberate choice, not a default.
@@ -89,7 +94,8 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
   // Mirrored so the stream callback reads the latest transcript without being re-created, which is
   // what keeps the run from restarting on every chunk.
-  const messagesRef = useRef<AgentTurn[]>([])
+  const messagesRef = useRef<AgentTurn[]>(messages)
+  messagesRef.current = messages
   const streamingTurnIdRef = useRef<string | null>(null)
   // Chunks land here and drain on a frame; `frameRef` also prevents scheduling more than one.
   const bufferRef = useRef('')
@@ -124,9 +130,16 @@ export function ChatPanel() {
     overscan: 8,
   })
 
+  // The session API is read through a ref so `updateMessages` keeps a stable identity: it is a
+  // dependency of the stream callbacks, and a new identity per render would restart the run on every
+  // chunk — exactly what this pane is built to avoid.
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+
   const updateMessages = useCallback((next: AgentTurn[]) => {
     messagesRef.current = next
-    setMessages(next)
+    // Through the shared session state, not local state: this is the transcript that gets saved.
+    sessionsRef.current.setTranscript({ turns: next, interrupted: false })
   }, [])
 
   const stickToBottom = useCallback(() => {
@@ -244,6 +257,10 @@ export function ChatPanel() {
     const text = draft.trim()
     if (!text || isStreaming || pending) return
 
+    // Sending with no session open is normal: a session is created for the message, and named from
+    // it. This is what makes the composer work before the user has ever touched the session list.
+    sessionsRef.current.ensureSession(text)
+
     // The history sent is text-only: the agent owns the provider-shaped history, including tool
     // turns, and hands it back on a pause.
     const history = toHistory(messagesRef.current)
@@ -265,6 +282,11 @@ export function ChatPanel() {
       }),
       assistantTurn.id
     )
+
+    // A turn boundary: the user's message and its finished assistant turn are now a complete unit,
+    // so this is when the transcript is worth writing. Never per token — the run above may have
+    // produced hundreds of chunks, and this is one save.
+    sessionsRef.current.scheduleSave()
   }, [
     activeModel,
     activeProviderId,
@@ -317,6 +339,9 @@ export function ChatPanel() {
         }),
         current.turnId
       )
+
+      // Answering a decision completes the turn, so it is a save point too.
+      sessionsRef.current.scheduleSave()
     },
     [
       activeModel,

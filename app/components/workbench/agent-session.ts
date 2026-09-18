@@ -63,10 +63,39 @@ export interface AgentChunkEffect {
 }
 
 let counter = 0
+
+/**
+ * Continue the turn numbering after a rehydrated transcript.
+ *
+ * Ids are `<prefix>-<n>` and the counter is module-level, so reopening a saved conversation would
+ * otherwise restart at one and hand new turns the ids already in the file — after which a chunk
+ * addressed by turn id could land on the wrong turn, and two turns would share a React key.
+ * Called when a transcript is loaded; it only ever moves the counter forward.
+ */
+export function resumeTurnNumbering(turns: readonly AgentTurn[]): void {
+  for (const turn of turns) {
+    const match = /-(\d+)$/.exec(turn.id)
+    if (!match) continue
+    const n = Number(match[1])
+    if (Number.isFinite(n) && n > counter) counter = n
+  }
+}
+
 /** Ids are local to the transcript; nothing outside it reads them. */
 function nextId(prefix: string): string {
   counter += 1
   return `${prefix}-${counter}`
+}
+
+/**
+ * Whether a transcript was cut off mid-turn.
+ *
+ * A step still marked `running` is the signature: nothing can still be running in a process that has
+ * restarted. An `awaiting` step is deliberately not counted — a pause for approval is a legitimate
+ * state, even though the pause itself is never persisted.
+ */
+export function isInterrupted(turns: readonly AgentTurn[]): boolean {
+  return turns.some((turn) => turn.steps.some((step) => step.status === 'running'))
 }
 
 /**

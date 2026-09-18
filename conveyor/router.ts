@@ -8,8 +8,10 @@ import { settingsModule } from './modules/settings'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
 import { agentModule } from './modules/agent'
+import { sessionsModule } from './modules/sessions'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
+import { chatSessionsStore } from './stores/chat-sessions'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -30,10 +32,11 @@ export const router = createRouter(
     llm: llmModule,
     terminal: terminalModule,
     agent: agentModule,
+    sessions: sessionsModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
-    stores: [workspaceStore, providerConfigStore], // main holds the state; every window mirrors it live
+    stores: [workspaceStore, providerConfigStore, chatSessionsStore], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
 )
