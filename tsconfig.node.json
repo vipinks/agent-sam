@@ -7,7 +7,8 @@
     "lib/**/*",
     "conveyor/**/*",
     "resources/**/*",
-    "app/**/*"
+    "app/**/*",
+    "vitest.config.ts"
   ],
   "compilerOptions": {
     "composite": true,
