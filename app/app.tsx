@@ -1,15 +1,12 @@
 import { WindowFrame } from './shell'
-import { Welcome } from './components/welcome'
+import { Workbench } from './components/workbench'
 import './styles/app.css'
 
-/**
- * App root. `<Welcome />` is the starter tour and the only thing here that is meant to go: drop the
- * line and delete `components/welcome`, and this is an empty window with the shell still around it.
- */
+/** App root. The custom window shell (titlebar, menus, controls) wraps the workbench UI. */
 export default function App() {
   return (
-    <WindowFrame title="Electron React App">
-      <Welcome />
+    <WindowFrame title="Sam AI">
+      <Workbench />
     </WindowFrame>
   )
 }

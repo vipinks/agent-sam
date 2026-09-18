@@ -6,3 +6,5 @@ out
 temp
 # TypeScript incremental build info
 *.tsbuildinfo
+# Local verification harnesses and reference captures (not part of the app)
+.preview
