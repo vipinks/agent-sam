@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, stream } from '../init'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
+import { notifyWorkspaceChanged } from '../events'
 
 /**
  * Local command execution — the only place in the app that spawns a process.
@@ -187,6 +188,12 @@ export async function* runCommand(options: {
     signal.removeEventListener('abort', onAbort)
     // If the consumer abandons the generator, the process must not be left running.
     if (!child.killed && exitCode === null) child.kill('SIGTERM')
+
+    // Announced in `finally`, so it fires exactly once per run whatever ended it — a clean exit, a
+    // non-zero one, an abort, or a spawn failure that threw. A command can create files as easily as
+    // a write can, and guarding on the in-band exit marker would miss the abort and failure paths,
+    // which are precisely the ones that leave a half-finished command's output on disk.
+    notifyWorkspaceChanged({ kind: 'command-exited' })
   }
 }
 

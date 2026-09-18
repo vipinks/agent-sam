@@ -5,6 +5,7 @@ import { ExplorerPanel } from './explorer-panel'
 import { SettingsView } from './settings-view'
 import { TerminalPanel } from './terminal-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
+import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -16,9 +17,14 @@ import { useWorkbenchStore } from './store'
  * Two rail items take the whole main area rather than the secondary panel, because they are places
  * you go rather than things you glance at: Settings (a screen you leave when done) and Terminal (a
  * transcript that wants the width).
+ *
+ * The workspace-change subscription lives here rather than in the explorer or the viewer, so a burst
+ * of writes from one agent turn invalidates the listings once rather than once per subscriber.
  */
 export function Workbench() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
+  const selectedFile = useWorkbenchStore((s) => s.selectedFile)
+  useWorkspaceChangeInvalidation(selectedFile)
 
   return (
     <div className="flex h-full min-h-0">

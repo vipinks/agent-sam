@@ -3,8 +3,9 @@ import { mkdir, readFile as readFileFromDisk, readdir, stat, writeFile as writeF
 import { dialog } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
-import { defineModule, query, command } from '../init'
+import { defineModule, query, command, event } from '../init'
 import { resolveWorkspacePath } from './workspace-paths'
+import { notifyWorkspaceChanged, workspaceChangedSchema } from '../events'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -18,6 +19,32 @@ const HIDDEN_ENTRIES = new Set(['node_modules', '.git', 'dist'])
 /** Reads larger than this are refused rather than shipped over IPC — see `readFile`. */
 export const MAX_FILE_BYTES = 1024 * 1024
 
+/**
+ * Write a UTF-8 file, creating parent directories as needed, and report it.
+ *
+ * This is the one place a workspace file is written, and the agent's `write_file` tool calls it
+ * rather than reaching for `fs` itself. That is what makes the change notification complete: a
+ * second write path would be a second place to remember to announce, and the agent's writes are
+ * exactly the ones the renderer used to miss.
+ */
+export async function writeWorkspaceFile(rootPath: string, requested: string, content: string): Promise<string> {
+  const target = resolveWorkspacePath(rootPath, requested)
+
+  try {
+    // Recursive mkdir is idempotent, so this is also the common path where the directory exists.
+    await mkdir(dirname(target), { recursive: true })
+    await writeFileToDisk(target, content, 'utf8')
+  } catch (err) {
+    // A refused write is more useful to the agent than a raw errno, but it must not be worded as a
+    // traversal failure — the containment check above is the only source of that code.
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new ConveyorError('WRITE_FAILED', `Could not write ${requested}. ${reason}`)
+  }
+
+  notifyWorkspaceChanged({ kind: 'written', path: target })
+  return target
+}
+
 /** One child of a listed directory. */
 const directoryEntrySchema = z.object({
   name: z.string(),
@@ -26,6 +53,14 @@ const directoryEntrySchema = z.object({
 })
 
 export const workspaceModule = defineModule({
+  /**
+   * Pushed to every window when something in the workspace changes on disk. Directory listings and
+   * file contents are cached per path, and these changes originate in main — an agent's write, a
+   * shell command — so the renderer has no mutation of its own to invalidate from. This is how it
+   * hears about them.
+   */
+  onChanged: event(workspaceChangedSchema),
+
   /**
    * Ask the OS for a folder. Returns null when the user cancels — a cancel is an ordinary outcome,
    * not an error, so it is not thrown.
@@ -123,19 +158,7 @@ export const workspaceModule = defineModule({
       rootPath: z.string().min(1),
     }),
     async ({ input }) => {
-      const target = resolveWorkspacePath(input.rootPath, input.path)
-
-      try {
-        // Recursive mkdir is idempotent, so this is also the common path where the directory exists.
-        await mkdir(dirname(target), { recursive: true })
-        await writeFileToDisk(target, input.content, 'utf8')
-      } catch (err) {
-        // A refused write is more useful to the agent than a raw errno, but it must not be worded as
-        // a traversal failure — the containment check above is the only source of that code.
-        const reason = err instanceof Error ? err.message : String(err)
-        throw new ConveyorError('WRITE_FAILED', `Could not write ${input.path}. ${reason}`)
-      }
-
+      const target = await writeWorkspaceFile(input.rootPath, input.path, input.content)
       return { path: target, bytes: Buffer.byteLength(input.content, 'utf8') }
     }
   ),

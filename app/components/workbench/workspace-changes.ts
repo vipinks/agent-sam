@@ -1,0 +1,145 @@
+import type { WorkspaceChanged } from '@/conveyor/events'
+
+/**
+ * Keeping the explorer and the open file honest when main changes something on disk.
+ *
+ * Directory listings and file contents are cached per path, and every mutation now happens in main
+ * — an agent's `write_file`, a shell command — so the renderer has no mutation of its own to
+ * invalidate from. Main pushes `workspace.onChanged` instead, and this turns those pushes into
+ * invalidations.
+ *
+ * The coalescing is the part worth reading. One agent turn can write several files and run several
+ * commands, each raising its own event; invalidating per event would fire a refetch per file and
+ * thrash the tree. Events are therefore collected into a burst, and one flush invalidates the
+ * listings once and each written path once.
+ *
+ * Deliberately free of React and of the conveyor client, so the logic can be exercised directly —
+ * the client is created at import time and needs a `window`, so importing it here would make this
+ * untestable. `use-workspace-changes.ts` is the React binding.
+ */
+
+/** How long a burst may keep growing. Long enough to span one turn, short enough to feel immediate. */
+export const COALESCE_MS = 150
+
+/** What a burst does when it flushes. */
+export interface ChangeHandlers {
+  /** Called at most once per burst: every listing is stale now. */
+  invalidateListings: () => void
+  /** Called once per burst, with the distinct paths written during it. */
+  onWrites: (paths: readonly string[]) => void
+}
+
+export interface ChangeCoalescer {
+  /** Feed one event. */
+  handle: (payload: WorkspaceChanged) => void
+  /** Flush now, without waiting for the window to close. */
+  flush: () => void
+  /** Drop a pending burst and stop its timer. */
+  dispose: () => void
+}
+
+/**
+ * Collect change events into bursts, and hand each burst to `handlers` exactly once.
+ *
+ * The clock is injected so a burst can be driven from a test rather than waited on.
+ */
+export function createChangeCoalescer(
+  handlers: ChangeHandlers,
+  options: { delayMs?: number; schedule?: typeof setTimeout; cancel?: typeof clearTimeout } = {}
+): ChangeCoalescer {
+  const delayMs = options.delayMs ?? COALESCE_MS
+  const schedule = options.schedule ?? setTimeout
+  const cancel = options.cancel ?? clearTimeout
+
+  // A burst's state. `timer` doubles as the "a burst is open" flag, which is what stops a burst
+  // being flushed twice.
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const written = new Set<string>()
+
+  const flush = () => {
+    if (timer === null) return
+    cancel(timer)
+    timer = null
+
+    const paths = [...written]
+    written.clear()
+
+    // Runs even when no path was written: a command exiting means the listings may have moved.
+    handlers.invalidateListings()
+    if (paths.length > 0) handlers.onWrites(paths)
+  }
+
+  return {
+    handle(payload) {
+      if (payload.kind === 'written' && payload.path) written.add(payload.path)
+      // The first event of a burst opens the window; later ones join it rather than extending it,
+      // so a long stream of writes cannot postpone the flush indefinitely.
+      if (timer === null) timer = schedule(flush, delayMs)
+    },
+    flush,
+    dispose() {
+      if (timer !== null) cancel(timer)
+      timer = null
+      written.clear()
+    },
+  }
+}
+
+/**
+ * Subscribe to workspace changes and hand each burst to `handlers`.
+ *
+ * `subscribe` is a parameter rather than a direct call to conveyor, so the wiring can be exercised
+ * with a fake source. Returns the unsubscribe function.
+ */
+export function subscribeToWorkspaceChanges(
+  subscribe: (listener: (payload: WorkspaceChanged) => void) => () => void,
+  handlers: ChangeHandlers,
+  options: { delayMs?: number; schedule?: typeof setTimeout; cancel?: typeof clearTimeout } = {}
+): () => void {
+  const coalescer = createChangeCoalescer(handlers, options)
+  const unsubscribe = subscribe((payload) => coalescer.handle(payload))
+
+  return () => {
+    // Flush before dropping: a burst that arrived just before unmount is still a real change, and
+    // the caches outlive this component.
+    coalescer.flush()
+    coalescer.dispose()
+    unsubscribe()
+  }
+}
+
+/** The conveyor surface the handlers need — narrowed, so a fake can stand in for it in a test. */
+export interface WorkspaceChangeClient {
+  workspace: {
+    listDirectory: { invalidate: () => Promise<void> }
+    readFile: { invalidate: (input: { path: string }) => Promise<void> }
+  }
+}
+
+/**
+ * Build the handlers that turn a burst of changes into invalidations.
+ *
+ * `getOpenFile` is a getter rather than a value: the subscription outlives any single render, so
+ * reading the open file at flush time keeps the handler correct without it being re-created — and
+ * therefore without the event channel being re-subscribed — on every render.
+ */
+export function createWorkspaceChangeHandlers(
+  client: WorkspaceChangeClient,
+  getOpenFile: () => string | null
+): ChangeHandlers {
+  return {
+    invalidateListings: () => {
+      // Bare: every cached listing, so expanded folders refetch now and collapsed ones refetch on
+      // their next expansion.
+      void client.workspace.listDirectory.invalidate()
+    },
+    onWrites: (paths) => {
+      // Only the file on screen: editing a file nobody is looking at does not need a refetch, and
+      // its next open would read through the invalidated entry anyway.
+      const open = getOpenFile()
+      if (open && paths.includes(open)) {
+        void client.workspace.readFile.invalidate({ path: open })
+      }
+    },
+  }
+}

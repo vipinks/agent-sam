@@ -1,5 +1,5 @@
-import { mkdir, readFile as readFileFromDisk, stat, writeFile as writeFileToDisk } from 'fs/promises'
-import { dirname, relative } from 'path'
+import { readFile as readFileFromDisk, stat } from 'fs/promises'
+import { relative } from 'path'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, stream } from '../init'
@@ -8,7 +8,7 @@ import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type Too
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
-import { MAX_FILE_BYTES } from './workspace'
+import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -139,6 +139,20 @@ function displayPath(workspaceRoot: string | null, absolute: string): string {
 }
 
 /**
+ * The root a write needs, as a non-null string.
+ *
+ * `resolveWorkspacePath` already refuses a missing root with NO_WORKSPACE; this narrows the type so
+ * the shared write helper — which the renderer's command also calls with a required root — can take
+ * a plain string.
+ */
+function requireRoot(workspaceRoot: string | null): string {
+  if (!workspaceRoot) {
+    throw new ConveyorError('NO_WORKSPACE', 'Open a folder before writing files.')
+  }
+  return workspaceRoot
+}
+
+/**
  * Run one tool call.
  *
  * A refused operation is returned as `ok: false` rather than thrown: the model should be told that
@@ -206,9 +220,9 @@ export async function executeTool(
 
       case 'write_file': {
         const { path, content } = parsed.data as { path: string; content: string }
-        const target = resolveWorkspacePath(workspaceRoot, path)
-        await mkdir(dirname(target), { recursive: true })
-        await writeFileToDisk(target, content, 'utf8')
+        // Through the workspace's own write path rather than `fs` directly: that is what announces
+        // the change to the renderer, so the explorer and the open file pick the edit up.
+        const target = await writeWorkspaceFile(requireRoot(workspaceRoot), path, content)
         const bytes = Buffer.byteLength(content, 'utf8')
         return {
           ok: true,

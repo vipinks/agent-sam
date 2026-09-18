@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import { createRouter, devLogger } from 'electron-conveyor/main'
+import { createRouter, createEmitter, devLogger } from 'electron-conveyor/main'
 import { windows, openAppWindow } from '@/lib/main/app'
 import { windowModule, setupWindowEvents } from './modules/window'
 import { webModule } from './modules/web'
@@ -10,6 +10,7 @@ import { terminalModule } from './modules/terminal'
 import { agentModule } from './modules/agent'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
+import { setWorkspaceChangeSink } from './events'
 
 /**
  * The app's whole IPC surface — modules, stores, context, global middleware — registered in one
@@ -38,6 +39,16 @@ export const router = createRouter(
 )
 
 export type AppRouter = typeof router
+
+/**
+ * Fan out workspace changes to every window.
+ *
+ * Declared here rather than in a module because `createEmitter` needs the module's id, which
+ * `createRouter` has only just assigned — and because the emitter is module-independent: both the
+ * workspace module and the terminal module raise the same event, and they share this one sink.
+ */
+const emitWorkspaceChanged = createEmitter(workspaceModule, () => windows.broadcast())
+setWorkspaceChangeSink(emitWorkspaceChanged.onChanged)
 
 /** Wire per-window push events. Call once per created window. */
 export function setupEvents(win: BrowserWindow): void {
