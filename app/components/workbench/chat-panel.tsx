@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { MessageSquare, SendHorizontal, Square } from 'lucide-react'
+import { MessageSquare, SendHorizontal, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError } from 'electron-conveyor/react'
 import { Button } from '../ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Textarea } from '../ui/textarea'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
 import { MessageBubble, type ChatMessage } from './message-bubble'
 import { useWorkbenchStore } from './store'
@@ -46,8 +48,9 @@ function streamErrorMessage(error: unknown, providerName: string): string {
  * bubble is memoized so a flush re-renders only the message that grew.
  */
 export function ChatPanel() {
-  const providerId = useWorkbenchStore((s) => s.providerId)
-  const model = useWorkbenchStore((s) => s.model)
+  const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
+  const activeModel = useWorkbenchStore((s) => s.activeModel)
+  const setTarget = useWorkbenchStore((s) => s.setTarget)
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
@@ -65,7 +68,12 @@ export function ChatPanel() {
   const iteratorRef = useRef<AsyncIterator<string> | null>(null)
 
   const providers = conveyor.settings.listProviders.useQuery()
-  const providerName = providers.data?.find((p) => p.id === providerId)?.name ?? providerId
+  const providerName = providers.data?.find((p) => p.id === activeProviderId)?.name ?? activeProviderId
+
+  // Whether the selected provider has a key. Undefined while the query is in flight, which must
+  // not read as "missing" — a warning that flashes on load is worse than none.
+  const configured = conveyor.settings.listConfigured.useQuery()
+  const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -148,8 +156,8 @@ export function ChatPanel() {
     // Take the iterator explicitly rather than `for await`: the Stop button needs a handle to
     // cancel, and `for await` would keep it out of reach.
     const stream = conveyor.llm.chat({
-      providerId,
-      model,
+      providerId: activeProviderId,
+      model: activeModel,
       messages: [...history, { role: 'user' as const, content: text }],
     })
     const iterator = stream[Symbol.asyncIterator]()
@@ -176,13 +184,13 @@ export function ChatPanel() {
       setIsStreaming(false)
     }
   }, [
+    activeModel,
+    activeProviderId,
     applyToStreaming,
     draft,
     enqueue,
     flush,
     isStreaming,
-    model,
-    providerId,
     providerName,
     stickToBottom,
     updateMessages,
@@ -199,7 +207,48 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col bg-background">
       <PaneHeader icon={MessageSquare} title="Chat">
-        <span className="truncate font-mono text-[11px] text-muted-foreground">{model}</span>
+        {/* Choosing the target here is the point: the composer sends to whatever this says. */}
+        <Select
+          value={activeProviderId}
+          onValueChange={(id) => {
+            const picked = providers.data?.find((p) => p.id === id)
+            // The provider's own default model, never the previous provider's.
+            if (picked) setTarget({ providerId: picked.id, model: picked.defaultModel })
+          }}
+        >
+          <SelectTrigger aria-label="Provider and model" title={`${providerName} · ${activeModel}`}>
+            <SelectValue placeholder="Choose a provider" />
+          </SelectTrigger>
+          <SelectContent>
+            {providers.data?.map((provider) => (
+              <SelectItem key={provider.id} value={provider.id}>
+                <span className="flex items-baseline gap-2">
+                  <span>{provider.name}</span>
+                  <span className="font-mono text-[10.5px] text-muted-foreground">{provider.defaultModel}</span>
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {isKeyMissing && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`No API key saved for ${providerName}`}
+                  className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <TriangleAlert className="size-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="text-[11.5px]">No API key saved for this provider — add one in Settings.</span>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
       </PaneHeader>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">

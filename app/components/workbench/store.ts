@@ -2,8 +2,8 @@ import { create } from 'zustand'
 
 /**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —
- * because real state (the workspace, the API keys) belongs to main. The one thing that outlives a
- * window here is the chosen model, which is a preference rather than a truth.
+ * because real state (the workspace, the API keys) belongs to main. The chat target is a
+ * preference rather than a truth, so it lives here and survives a restart.
  */
 interface WorkbenchState {
   /**
@@ -15,29 +15,36 @@ interface WorkbenchState {
   /** Path of the file previewed in the code viewer, or null for the empty state. */
   selectedFile: string | null
   setSelectedFile: (path: string | null) => void
-  /** Provider and model the composer sends to. Persisted so a restart resumes where you were. */
-  providerId: string
-  model: string
+  /** Provider the composer sends to. Paired with `activeModel` below. */
+  activeProviderId: string
+  /** Model the composer sends to. */
+  activeModel: string
+  /** Switch provider and model together — a provider's default model is not the previous one's. */
   setTarget: (target: { providerId: string; model: string }) => void
 }
 
 const TARGET_KEY = 'sam-ai-chat-target'
 
-/** The last used provider/model, or the first provider's defaults. */
-function initialTarget(): { providerId: string; model: string } {
+/** The default target, which is also what an unreadable preference falls back to. */
+const DEFAULT_TARGET = { providerId: 'deepseek', model: 'deepseek-chat' } as const
+
+/** The last used provider/model, or the default. */
+function initialTarget(): { activeProviderId: string; activeModel: string } {
   try {
     const saved = localStorage.getItem(TARGET_KEY)
     if (saved) {
       const parsed = JSON.parse(saved) as { providerId?: unknown; model?: unknown }
       if (typeof parsed.providerId === 'string' && typeof parsed.model === 'string') {
-        return { providerId: parsed.providerId, model: parsed.model }
+        return { activeProviderId: parsed.providerId, activeModel: parsed.model }
       }
     }
   } catch {
     // Unreadable preference — fall through to the default rather than failing to start.
   }
-  return { providerId: 'deepseek', model: 'deepseek-chat' }
+  return { activeProviderId: DEFAULT_TARGET.providerId, activeModel: DEFAULT_TARGET.model }
 }
+
+export { DEFAULT_TARGET }
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   activeActivity: 'chat',
@@ -51,6 +58,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     } catch {
       // A full or blocked localStorage must not break switching models.
     }
-    set({ providerId, model })
+    set({ activeProviderId: providerId, activeModel: model })
   },
 }))
