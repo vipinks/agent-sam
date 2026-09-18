@@ -4,6 +4,7 @@ import { dirname, join } from 'path'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, command } from '../init'
+import { fetchModels } from './models-engine'
 
 /**
  * API keys for the model providers. Keys are the one secret this app holds, so they never touch the
@@ -14,7 +15,12 @@ import { defineModule, query, command } from '../init'
 /** Sidecar file under `userData`. Never a hardcoded absolute path. */
 const KEY_FILE = ['settings', 'api-keys.json']
 
-/** The providers offered in Settings. Hardcoded until there is a reason to fetch them. */
+/**
+ * The providers offered in Settings, each with the model to preselect.
+ *
+ * `defaultModel` is a starting point, not a constraint: `fetchModels` replaces it with the provider's
+ * real catalogue, and the chat dropdown only ever shows models the user has switched on.
+ */
 export const PROVIDERS = [
   { id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' },
   { id: 'openrouter', name: 'OpenRouter', defaultModel: 'openai/gpt-4o-mini' },
@@ -22,6 +28,17 @@ export const PROVIDERS = [
   { id: 'openai', name: 'OpenAI', defaultModel: 'gpt-4o-mini' },
   { id: 'anthropic', name: 'Anthropic', defaultModel: 'claude-3-5-sonnet-latest' },
 ] as const
+
+/**
+ * A provider's catalogue when it has not been fetched.
+ *
+ * Without this the chat dropdown would be empty for the default provider, because it only lists
+ * `enabledModels` — and nothing has been fetched yet. One entry is the seeded default, which the
+ * dropdown marks as not yet confirmed; a real Fetch replaces it.
+ */
+export const DEFAULT_MODELS: Record<string, Array<{ id: string; name?: string }>> = Object.fromEntries(
+  PROVIDERS.map((p) => [p.id, [{ id: p.defaultModel, name: p.defaultModel }]])
+)
 
 /** On-disk shape: provider id → base64 ciphertext. Keeping it a map means one file, not five. */
 type KeyFile = Record<string, string>
@@ -112,7 +129,30 @@ export const settingsModule = defineModule({
     return readApiKey(input.providerId)
   }),
 
-  /** Which providers currently hold a key — enough for Settings without moving any secret. */
+  /**
+   * The catalogue to show before a provider has ever been fetched — its seeded default model, so
+   * the chat dropdown is usable on a fresh install.
+   */
+  defaultModels: query(() => DEFAULT_MODELS),
+
+  /**
+   * Retrieve a provider's model list. The key is read here and used here: the renderer asks for a
+   * catalogue, never for the credential behind it. Anthropic answers from a curated list instead of
+   * a request, so the shape the UI receives is identical either way.
+   */
+  fetchModels: command(z.object({ providerId: z.string().min(1) }), async ({ input }) => {
+    const known = PROVIDERS.some((p) => p.id === input.providerId)
+    if (!known) throw new ConveyorError('UNKNOWN_PROVIDER', `No provider named '${input.providerId}'.`)
+
+    // A missing key is only fatal where a request is actually made; Anthropic's curated list needs
+    // no credential, so this is deliberately left to the engine to decide.
+    const apiKey = await readApiKey(input.providerId)
+    return fetchModels(input.providerId, apiKey)
+  }),
+
+  /**
+   * Which providers currently hold a key — enough for Settings without moving any secret.
+   */
   listConfigured: query(async () => {
     const file = await readKeyFile()
     return Object.keys(file)

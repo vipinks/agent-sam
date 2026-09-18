@@ -7,6 +7,7 @@ import { workspaceModule } from './modules/workspace'
 import { settingsModule } from './modules/settings'
 import { llmModule } from './modules/llm'
 import { workspaceStore } from './stores/workspace'
+import { providerConfigStore } from './stores/provider-config'
 
 /**
  * The app's whole IPC surface — modules, stores, context, global middleware — registered in one
@@ -27,7 +28,7 @@ export const router = createRouter(
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
-    stores: [workspaceStore], // main holds the state; every window mirrors it live
+    stores: [workspaceStore, providerConfigStore], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
 )

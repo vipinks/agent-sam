@@ -3,9 +3,10 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageSquare, SendHorizontal, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
-import { ConveyorError } from 'electron-conveyor/react'
+import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
+import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { Button } from '../ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
@@ -68,12 +69,27 @@ export function ChatPanel() {
   const iteratorRef = useRef<AsyncIterator<string> | null>(null)
 
   const providers = conveyor.settings.listProviders.useQuery()
-  const providerName = providers.data?.find((p) => p.id === activeProviderId)?.name ?? activeProviderId
+  // The seeded catalogue: what to offer before a provider has ever been fetched.
+  const defaultModels = conveyor.settings.defaultModels.useQuery()
+
+  // The user's intent, from the persisted store: the dropdown offers exactly these.
+  const configs = useConveyorStore(providerConfigStore, (s) => s.providers)
 
   // Whether the selected provider has a key. Undefined while the query is in flight, which must
   // not read as "missing" — a warning that flashes on load is worse than none.
   const configured = conveyor.settings.listConfigured.useQuery()
   const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
+
+  /**
+   * The models to offer for a provider: the ones switched on in Settings, or the seeded default
+   * when nothing has been fetched yet. An empty result is what drives the "enable models" entry.
+   */
+  const modelsFor = (providerId: string) =>
+    configs[providerId]?.fetchedModels.length
+      ? configs[providerId].enabledModels
+      : (defaultModels.data?.[providerId] ?? []).map((m) => m.id)
+
+  const providerName = providers.data?.find((p) => p.id === activeProviderId)?.name ?? activeProviderId
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -207,27 +223,53 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col bg-background">
       <PaneHeader icon={MessageSquare} title="Chat">
-        {/* Choosing the target here is the point: the composer sends to whatever this says. */}
+        {/*
+          One control, two axes: the value is `provider::model`, so picking either changes both.
+          Options are grouped by provider, and a provider only offers the models switched on in
+          Settings — a provider with none gets a disabled hint instead of a dead end.
+        */}
         <Select
-          value={activeProviderId}
-          onValueChange={(id) => {
-            const picked = providers.data?.find((p) => p.id === id)
-            // The provider's own default model, never the previous provider's.
-            if (picked) setTarget({ providerId: picked.id, model: picked.defaultModel })
+          value={`${activeProviderId}::${activeModel}`}
+          onValueChange={(picked) => {
+            const [providerId, ...rest] = picked.split('::')
+            const model = rest.join('::')
+
+            // An explicit model wins — including one belonging to a different provider, which is
+            // how a user compares two providers' models without a detour through the first entry.
+            if (model) {
+              setTarget({ providerId, model })
+              return
+            }
+
+            // Only a bare provider pick auto-selects, and then it takes that provider's first
+            // enabled model, since the previous provider's model means nothing to it.
+            const first = modelsFor(providerId)[0]
+            if (first) setTarget({ providerId, model: first })
           }}
         >
           <SelectTrigger aria-label="Provider and model" title={`${providerName} · ${activeModel}`}>
-            <SelectValue placeholder="Choose a provider" />
+            <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
-            {providers.data?.map((provider) => (
-              <SelectItem key={provider.id} value={provider.id}>
-                <span className="flex items-baseline gap-2">
-                  <span>{provider.name}</span>
-                  <span className="font-mono text-[10.5px] text-muted-foreground">{provider.defaultModel}</span>
-                </span>
-              </SelectItem>
-            ))}
+            {providers.data?.map((provider) => {
+              const models = modelsFor(provider.id)
+              return (
+                <SelectGroup key={provider.id}>
+                  <SelectLabel>{provider.name}</SelectLabel>
+                  {models.length === 0 ? (
+                    <SelectItem value={`${provider.id}::`} disabled>
+                      <span className="text-muted-foreground">Enable models in Settings</span>
+                    </SelectItem>
+                  ) : (
+                    models.map((model) => (
+                      <SelectItem key={model} value={`${provider.id}::${model}`}>
+                        <span className="font-mono">{model}</span>
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectGroup>
+              )
+            })}
           </SelectContent>
         </Select>
 

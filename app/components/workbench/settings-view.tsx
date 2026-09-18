@@ -1,17 +1,22 @@
-import { useState } from 'react'
-import { Check, KeyRound, Loader2, Settings as SettingsIcon, ShieldAlert, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Check, KeyRound, Loader2, RefreshCw, Settings as SettingsIcon, ShieldAlert, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
-import { ConveyorError } from 'electron-conveyor/react'
+import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
+import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { PaneHeader } from './pane-header'
+import { ModelList } from './model-list'
 
 /**
- * Settings: one row per provider, each holding its own key. This is the only screen that handles a
- * secret, and it hands the value straight to main — nothing is kept in renderer state beyond the
- * input the user is typing into, and the save clears it immediately afterwards.
+ * Settings: one row per provider, each holding its own key and its own model list.
+ *
+ * This is the only screen that handles a secret, and it hands the value straight to main — nothing
+ * is kept in renderer state beyond the input the user is typing into, and the save clears it
+ * immediately. Model choices are different: they are the user's intent, so they live in the
+ * persisted `provider-config` store and are written the moment a switch is flipped.
  */
 export function SettingsView() {
   const providers = conveyor.settings.listProviders.useQuery()
@@ -27,8 +32,8 @@ export function SettingsView() {
           <header className="mb-6">
             <h1 className="text-lg font-semibold tracking-tight">Model providers</h1>
             <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-              Keys are encrypted with your operating system keychain and never leave the main process. The chat
-              interface reads them from there, so the window you are looking at never holds one.
+              Keys are encrypted with your operating system keychain and never leave the main process. Fetch a
+              provider&rsquo;s models, switch on the ones you want, and they appear in the chat picker.
             </p>
           </header>
 
@@ -49,15 +54,13 @@ export function SettingsView() {
 
           <div className="flex flex-col gap-2.5">
             {providers.data?.map((provider) => (
-              <ProviderRow
+              <ProviderCard
                 key={provider.id}
                 id={provider.id}
                 name={provider.name}
-                defaultModel={provider.defaultModel}
                 configured={(configured.data ?? []).includes(provider.id)}
                 disabled={encryptionAvailable.data === false}
-                onSaved={() => void configured.refetch()}
-                onCleared={() => void configured.refetch()}
+                onKeyChanged={() => void configured.refetch()}
               />
             ))}
           </div>
@@ -67,46 +70,84 @@ export function SettingsView() {
   )
 }
 
+/** The error copy for a failed fetch, branched on the code rather than on the message text. */
+function fetchErrorMessage(error: unknown, name: string): string {
+  if (error instanceof ConveyorError) {
+    switch (error.code) {
+      case 'NO_API_KEY':
+        return `Save a ${name} API key first — the catalogue is fetched with it.`
+      case 'AUTH_FAILED':
+        return `${name} rejected the saved key. Check it and try again.`
+      case 'RATE_LIMITED':
+        return `${name} is rate limiting this key. Try again shortly.`
+      case 'NETWORK_ERROR':
+        return `Could not reach ${name}. Check your connection.`
+      case 'ENCRYPTION_UNAVAILABLE':
+        return 'No OS keychain is available, so the saved key cannot be decrypted.'
+      default:
+        return `${name} returned a catalogue this app could not read.`
+    }
+  }
+  return 'The model list could not be fetched.'
+}
+
 /** The error copy for a failed save, branched on the code rather than on the message text. */
 function saveErrorMessage(error: unknown): string {
   if (error instanceof ConveyorError) {
-    if (error.code === 'ENCRYPTION_UNAVAILABLE') return 'No OS keychain is available, so this key was not saved.'
-    if (error.code === 'UNKNOWN_PROVIDER') return 'That provider is not supported.'
-    if (error.code === 'INVALID_INPUT') return 'That key does not look valid. Check it and try again.'
+    switch (error.code) {
+      case 'ENCRYPTION_UNAVAILABLE':
+        return 'No OS keychain is available, so this key was not saved.'
+      case 'UNKNOWN_PROVIDER':
+        return 'That provider is not supported.'
+      case 'INVALID_INPUT':
+        return 'That key does not look valid. Check it and try again.'
+      default:
+        return 'The key could not be saved.'
+    }
   }
   return 'The key could not be saved.'
 }
 
-function ProviderRow({
+function ProviderCard({
   id,
   name,
-  defaultModel,
   configured,
   disabled,
-  onSaved,
-  onCleared,
+  onKeyChanged,
 }: {
   id: string
   name: string
-  defaultModel: string
   configured: boolean
   disabled: boolean
-  onSaved: () => void
-  onCleared: () => void
+  onKeyChanged: () => void
 }) {
   const [value, setValue] = useState('')
+  // Opened on the render right after a fetch, so the list you just asked for is visible. The list
+  // itself owns whether it is expanded after that.
+  const [justFetched, setJustFetched] = useState(false)
+
   const save = conveyor.settings.saveApiKey.useMutation()
   const clear = conveyor.settings.clearApiKey.useMutation()
+  const fetchModels = conveyor.settings.fetchModels.useMutation()
+
+  // The store is the source of truth for both lists, so it survives a window close. Both are
+  // memoised because the store slice is absent for an unfetched provider, and a fresh `?? []` each
+  // render would invalidate every memo that depends on them.
+  const config = useConveyorStore(providerConfigStore, (s) => s.providers[id])
+  const { toggleModel, setFetchedModels } = useConveyorStore(providerConfigStore)
+
+  const fetched = useMemo(() => config?.fetchedModels ?? [], [config])
+  const enabled = useMemo(() => config?.enabledModels ?? [], [config])
 
   const onSave = async () => {
     if (!value.trim()) return
     try {
       await save.mutateAsync({ providerId: id, apiKey: value.trim() })
-      // Clear the field as soon as main has the ciphertext: the input is the only place the
-      // plaintext was ever held on this side.
+      // Clear the field as soon as main holds the ciphertext: this input was the only place the
+      // plaintext ever lived on the renderer side.
       setValue('')
       toast.success(`${name} key saved`, { description: 'Encrypted and stored on this machine.' })
-      onSaved()
+      onKeyChanged()
     } catch (err) {
       toast.error(`${name} key was not saved`, { description: saveErrorMessage(err) })
     }
@@ -117,9 +158,21 @@ function ProviderRow({
       await clear.mutateAsync({ providerId: id })
       setValue('')
       toast.success(`${name} key removed`)
-      onCleared()
+      onKeyChanged()
     } catch {
       toast.error(`${name} key could not be removed`)
+    }
+  }
+
+  const onFetch = async () => {
+    try {
+      const models = await fetchModels.mutateAsync({ providerId: id })
+      // Record the catalogue, then open the list: fetching to see nothing would be a dead end.
+      setFetchedModels({ providerId: id, models })
+      setJustFetched(true)
+      toast.success(`${models.length} ${name} models`, { description: 'Switch on the ones you want to use.' })
+    } catch (err) {
+      toast.error(`${name} models could not be fetched`, { description: fetchErrorMessage(err, name) })
     }
   }
 
@@ -134,7 +187,17 @@ function ProviderRow({
             saved
           </span>
         )}
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground">{defaultModel}</span>
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="ml-auto"
+          aria-label={`Fetch ${name} models`}
+          disabled={fetchModels.isPending}
+          onClick={() => void onFetch()}
+        >
+          {fetchModels.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+        </Button>
       </div>
 
       <div className="mt-2.5 flex items-center gap-2">
@@ -168,6 +231,30 @@ function ProviderRow({
           </Button>
         )}
       </div>
+
+      {/* Enabled models, always visible: this is what the chat picker will actually offer. */}
+      {enabled.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5" aria-label={`Enabled ${name} models`}>
+          {enabled.map((modelId) => (
+            <span
+              key={modelId}
+              className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-[10.5px] text-foreground/80"
+            >
+              <span className="truncate">{modelId}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {fetched.length > 0 && (
+        <ModelList
+          providerName={name}
+          models={fetched}
+          enabled={enabled}
+          defaultOpen={justFetched}
+          onToggle={(modelId) => toggleModel({ providerId: id, modelId })}
+        />
+      )}
     </div>
   )
 }
