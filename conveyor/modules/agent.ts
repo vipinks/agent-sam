@@ -271,11 +271,12 @@ export type AgentChunk =
        */
       messages: ChatMessage[]
       /**
-       * The call exactly as the model sent it, so resume runs the same thing that was approved.
-       * Rebuilding it on the UI side from the display args would be a second source of truth, and
-       * one that could silently disagree once anything in the display path truncates.
+       * Every call waiting on this decision, exactly as the model sent them. The one decision covers
+       * all of them: they arrived in one assistant turn, and the provider requires an answer for each
+       * before the next request. Resuming with the model's own calls also means the run executes what
+       * was approved rather than a rebuild of it, which a display layer could have altered.
        */
-      call: ToolCall
+      calls: ToolCall[]
       /** Steps consumed so far, so the budget spans approvals rather than resetting on each one. */
       steps: number
     }
@@ -325,7 +326,8 @@ export function describeToolCall(tool: string, args: Record<string, unknown>): s
 }
 
 interface PendingDecision {
-  call: ToolCall
+  /** Every gated call from the paused turn, answered together by the one decision. */
+  calls: ToolCall[]
   denied: boolean
 }
 
@@ -356,27 +358,32 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   const history: ChatMessage[] = opts.messages.map((m) => ({ ...m }))
   let steps = opts.steps ?? 0
 
-  // A resumed run re-enters with the paused call already decided. `opts.messages` already ends with
-  // the assistant turn that asked for it, so nothing is reconstructed here — pushing it again would
-  // duplicate the turn and orphan the other calls in the same batch.
+  // A resumed run re-enters with the paused batch already decided. `opts.messages` already ends with
+  // the assistant turn that asked for these calls, so nothing is reconstructed here — pushing it
+  // again would duplicate the turn and orphan the other calls in the same batch.
+  //
+  // Every gated call is answered here, one tool message each, because the provider requires a result
+  // for every `tool_call_id` the assistant turn declared before the next request. Answering only the
+  // first would leave the rest unanswered, which is the failure this whole path exists to avoid.
   if (opts.pending) {
-    const { call, denied } = opts.pending
-    const tool = call.function.name
+    for (const call of opts.pending.calls) {
+      const tool = call.function.name
 
-    const outcome: ToolOutcome = denied
-      ? {
-          ok: false,
-          code: 'DENIED',
-          output:
-            'The user denied permission to run this tool. Do not retry it. Explain what you were trying to do and ask how they would like to proceed.',
-        }
-      : await executeTool(tool, call.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
+      const outcome: ToolOutcome = opts.pending.denied
+        ? {
+            ok: false,
+            code: 'DENIED',
+            output:
+              'The user denied permission to run this tool. Do not retry it. Explain what you were trying to do and ask how they would like to proceed.',
+          }
+        : await executeTool(tool, call.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
 
-    // The result is yielded as well as recorded, so the card already on screen can be completed
-    // rather than left looking like it is still running.
-    yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
-    history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
-    steps += 1
+      // The result is yielded as well as recorded, so the card already on screen can be completed
+      // rather than left looking like it is still running.
+      yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
+      history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
+      steps += 1
+    }
   }
 
   for (;;) {
@@ -407,12 +414,14 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         yield { type: 'text_delta', text: delta.text }
       }
 
-      if (delta.toolCall) {
-        const existing = partials.get(delta.toolCall.index) ?? { index: delta.toolCall.index, args: '' }
-        if (delta.toolCall.id) existing.id = delta.toolCall.id
-        if (delta.toolCall.name) existing.name = delta.toolCall.name
-        if (delta.toolCall.argumentsDelta) existing.args += delta.toolCall.argumentsDelta
-        partials.set(delta.toolCall.index, existing)
+      // Every fragment in the frame, not just the first: a provider may batch several calls into one
+      // `tool_calls` array, and a call that never gets accumulated is a call that never gets answered.
+      for (const fragment of delta.toolCalls ?? []) {
+        const existing = partials.get(fragment.index) ?? { index: fragment.index, args: '' }
+        if (fragment.id) existing.id = fragment.id
+        if (fragment.name) existing.name = fragment.name
+        if (fragment.argumentsDelta) existing.args += fragment.argumentsDelta
+        partials.set(fragment.index, existing)
       }
     }
 
@@ -433,12 +442,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       return
     }
 
-    // Every call in the batch is announced before any of them is decided. The pause then comes
-    // after the whole batch is on screen, for two reasons: the assistant turn was recorded with all
-    // of its calls, so resuming with only one result appended would leave the rest orphaned and the
-    // history invalid; and the user should see everything the model asked for before approving the
-    // part of it that needs consent.
-    let gate: { call: ToolCall; tool: string; args: Record<string, unknown> } | null = null
+    // Calls that need a decision before they can run. Collected rather than pausing at the first one:
+    // the assistant turn was recorded with every call it asked for, and the provider requires an
+    // answer for each. Pausing per call would resolve one and leave the siblings — the exact shape
+    // that produces "insufficient tool messages following tool_calls".
+    const gated: ToolCall[] = []
 
     for (const call of calls) {
       const tool = call.function.name
@@ -446,7 +454,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       yield { type: 'tool_call_start', callId: call.id, tool, args: displayArgs }
 
       if (needsApproval(tool) && !opts.autoApprove) {
-        gate ??= { call, tool, args: displayArgs }
+        gated.push(call)
         continue
       }
 
@@ -459,16 +467,18 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
     }
 
-    // The history is handed over exactly as it stands. `resume` appends the decided call's result and
-    // re-enters the loop, so the run continues rather than restarting this round-trip.
-    if (gate) {
+    // The history is handed over exactly as it stands, with every gated call. `resume` answers all of
+    // them from the one decision and re-enters the loop, so the run continues rather than restarting
+    // this round-trip.
+    if (gated.length > 0) {
+      const first = gated[0]
       yield {
         type: 'awaiting_approval',
-        callId: gate.call.id,
-        tool: gate.tool,
-        args: gate.args,
+        callId: first.id,
+        tool: first.function.name,
+        args: argsForDisplay(first),
+        calls: gated,
         messages: history.map((m) => ({ ...m })),
-        call: gate.call,
         steps,
       }
       return
@@ -539,7 +549,8 @@ export const agentModule = defineModule({
       messages: z.array(messageSchema).min(1),
       workspaceRoot: z.string().nullable(),
       autoApprove: z.boolean().optional(),
-      call: callSchema,
+      /** Every gated call from the paused turn; one decision covers the whole batch. */
+      calls: z.array(callSchema).min(1, 'At least one call must be answered'),
       steps: z.number().int().min(0).optional(),
       decision: z.enum(['approved', 'denied']),
     }),
@@ -555,7 +566,7 @@ export const agentModule = defineModule({
         signal,
         steps: input.steps ?? 0,
         pending: {
-          call: input.call as ToolCall,
+          calls: input.calls as ToolCall[],
           denied: input.decision === 'denied',
         },
       })

@@ -54,8 +54,8 @@ interface PendingApproval {
   tool: string
   /** The provider-shaped history the run handed over, echoed back untouched on resume. */
   messages: unknown[]
-  /** The model's own call, echoed back so resume runs exactly what was approved. */
-  call: PendingCall
+  /** Every gated call from the paused turn; one decision answers all of them. */
+  calls: PendingCall[]
   steps: number
 }
 
@@ -212,10 +212,11 @@ export function ChatPanel() {
               callId: effect.approval.callId,
               tool: effect.approval.tool,
               messages: effect.approval.messages,
-              call: effect.approval.call,
+              calls: effect.approval.calls,
               steps: effect.approval.steps,
             })
-            // The stream is over as far as this call is concerned; the run continues on approval.
+            // The stream is over as far as these calls are concerned; the run continues on the
+            // decision.
             return
           }
 
@@ -290,8 +291,12 @@ export function ChatPanel() {
       if (!current || isStreaming) return
 
       setPending(null)
-      // Record the decision in the card so it stops looking like it is waiting.
-      updateMessages(resolveDecision(messagesRef.current, current.turnId, current.callId, approved))
+      // Record the decision against every gated card, so none is left looking like it is waiting.
+      let next = messagesRef.current
+      for (const call of current.calls) {
+        next = resolveDecision(next, current.turnId, call.id, approved)
+      }
+      updateMessages(next)
 
       streamingTurnIdRef.current = current.turnId
       requestAnimationFrame(stickToBottom)
@@ -300,12 +305,13 @@ export function ChatPanel() {
         conveyor.agent.resume({
           providerId: activeProviderId,
           model: activeModel,
-          // The history the loop paused with, and the model's own call — both handed back exactly as
-          // they came, so nothing is rebuilt from the display layer.
+          // The history the loop paused with and the model's own calls — both handed back exactly as
+          // they came, so nothing is rebuilt from the display layer. Every call goes back in one
+          // request: the provider requires a result for each call the assistant turn declared.
           messages: current.messages as never,
           workspaceRoot: rootPath,
           autoApprove,
-          call: current.call,
+          calls: current.calls,
           steps: current.steps,
           decision: approved ? 'approved' : 'denied',
         }),

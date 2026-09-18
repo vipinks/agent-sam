@@ -52,8 +52,11 @@ export interface AgentChunkEffect {
     callId: string
     tool: string
     messages: ChatMessage[]
-    /** The model's own call, carried so resume runs what was approved rather than a rebuild of it. */
-    call: PendingCall
+    /**
+     * Every call waiting on this decision, as the model sent them. One decision answers the whole
+     * batch, because the provider requires a result for each call in the turn that asked for them.
+     */
+    calls: PendingCall[]
     steps: number
   }
   done?: { reason: 'complete' | 'max_steps' }
@@ -157,13 +160,20 @@ export function applyAgentChunk(
       const callId = String(c.callId)
       const messages = Array.isArray(c.messages) ? (c.messages as ChatMessage[]) : []
       const steps = typeof c.steps === 'number' ? c.steps : 0
-      // A pause without a usable call cannot be resumed, so it is not reported as one: the card
+      // A pause without any usable call cannot be resumed, so it is not reported as one: the card
       // would otherwise sit awaiting a decision that could never be carried out.
-      const call = c.call as PendingCall | undefined
-      if (!call || typeof call !== 'object' || !call.id) return { turns, effect: {} }
+      const calls = Array.isArray(c.calls) ? (c.calls as PendingCall[]).filter((call) => call && call.id) : []
+      if (calls.length === 0) return { turns, effect: {} }
+
+      // Every gated call is marked, not just the one the pause names: one decision answers the whole
+      // batch, so every card in it has to show that it is waiting.
+      let next = turns
+      for (const call of calls) {
+        next = updateStep(next, turnId, call.id, (step) => ({ ...step, status: 'awaiting' }))
+      }
       return {
-        turns: updateStep(turns, turnId, callId, (step) => ({ ...step, status: 'awaiting' })),
-        effect: { approval: { callId, tool: String(c.tool), messages, call, steps } },
+        turns: next,
+        effect: { approval: { callId, tool: String(c.tool), messages, calls, steps } },
       }
     }
 

@@ -24,7 +24,9 @@ import type { ToolStep } from './agent-session'
  * user's.
  *
  * A step awaiting consent is the one case that is forced open: a collapsed prompt would hide the
- * decision the run is blocked on.
+ * decision the run is blocked on. Approving or denying there decides every action waiting in the
+ * same turn, because they arrived in one assistant message and the provider requires an answer for
+ * each of them before the next request.
  */
 export function AgentActionCard({
   step,
@@ -88,7 +90,9 @@ export function AgentActionCard({
               <Button size="sm" variant="outline" onClick={() => onDeny?.(step.callId)}>
                 Deny
               </Button>
-              <span className="text-[11px] text-muted-foreground">This will run in your workspace.</span>
+              <span className="text-[11px] text-muted-foreground">
+                Decides every action waiting here; they are answered together.
+              </span>
             </div>
           )}
         </div>

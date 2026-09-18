@@ -119,14 +119,24 @@ export function buildRequest(
  */
 export interface StreamDelta {
   text?: string
-  toolCall?: {
-    /** Position in the response's tool_calls array; the only stable key while streaming. */
-    index: number
-    id?: string
-    name?: string
-    /** A JSON fragment, not a complete document. */
-    argumentsDelta?: string
-  }
+  /**
+   * Every tool-call fragment in the frame, not just the first.
+   *
+   * A provider may put several calls in one `tool_calls` array. Reading only index 0 silently drops
+   * the others, and a dropped call is never answered — which is what makes the next request fail the
+   * provider's "every tool_call_id must be answered" contract.
+   */
+  toolCalls?: ToolCallFragment[]
+}
+
+/** One call's fragment within a frame. */
+export interface ToolCallFragment {
+  /** Position in the response's tool_calls array; the only stable key while streaming. */
+  index: number
+  id?: string
+  name?: string
+  /** A JSON fragment, not a complete document. */
+  argumentsDelta?: string
 }
 
 /**
@@ -165,17 +175,18 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
 
   const calls = delta.tool_calls as Array<Record<string, unknown>> | undefined
   if (calls?.length) {
-    const call = calls[0]
-    const fn = call.function as Record<string, unknown> | undefined
-    result.toolCall = {
-      index: typeof call.index === 'number' ? call.index : 0,
-      ...(typeof call.id === 'string' && call.id ? { id: call.id } : {}),
-      ...(typeof fn?.name === 'string' && fn.name ? { name: fn.name } : {}),
-      ...(typeof fn?.arguments === 'string' && fn.arguments ? { argumentsDelta: fn.arguments } : {}),
-    }
+    result.toolCalls = calls.map((call) => {
+      const fn = call.function as Record<string, unknown> | undefined
+      return {
+        index: typeof call.index === 'number' ? call.index : 0,
+        ...(typeof call.id === 'string' && call.id ? { id: call.id } : {}),
+        ...(typeof fn?.name === 'string' && fn.name ? { name: fn.name } : {}),
+        ...(typeof fn?.arguments === 'string' && fn.arguments ? { argumentsDelta: fn.arguments } : {}),
+      }
+    })
   }
 
-  return result.text !== undefined || result.toolCall !== undefined ? result : null
+  return result.text !== undefined || result.toolCalls !== undefined ? result : null
 }
 
 /** An error object embedded in a 200 response body, e.g. `{"error":{"message":"..."}}`. */
