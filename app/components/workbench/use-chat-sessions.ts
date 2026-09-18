@@ -5,6 +5,7 @@ import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { rehydrateTranscript, serializeTranscript, type TranscriptState } from './session-transcript'
 import { resumeTurnNumbering } from './agent-session'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
+import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
 
 /**
  * The coordination between the session list, the transcript on screen, and the file it is saved to.
@@ -48,6 +49,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
 
+  // The last snapshot written for the on-screen transcript, for the dirty check. Null until a
+  // session is loaded.
+  const savedRef = useRef<ReturnType<typeof serializeTranscript> | null>(null)
+
   const [transcript, setTranscriptState] = useState<TranscriptState>({ turns: [], interrupted: false })
   const [error, setError] = useState<SessionError | null>(null)
 
@@ -57,8 +62,15 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   transcriptRef.current = transcript
   const activeIdRef = useRef(activeSessionId)
   activeIdRef.current = activeSessionId
-  // The last snapshot written, for the dirty check. Null until a session is loaded.
-  const savedRef = useRef<ReturnType<typeof serializeTranscript> | null>(null)
+  // The session the on-screen transcript belongs to — which is NOT the store's `activeSessionId`.
+  // The store persists the active id, so after a restart it names a session whose transcript has
+  // never been read into memory. Keeping the two separate is what lets a click load it; treating
+  // them as one is what made a click on the restored session do nothing.
+  // The session list, read through a ref so the callbacks that need the current titles keep a
+  // stable identity — they are mostly invoked from event handlers that must not re-create a stream.
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+  const hydratedIdRef = useRef<string | null>(null)
 
   const setTranscript = useCallback((next: TranscriptState) => {
     transcriptRef.current = next
@@ -124,23 +136,41 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     const id = crypto.randomUUID()
     addSession({ id, title: UNTITLED, providerId, model })
     setActive({ id })
+    activeIdRef.current = id
     savedRef.current = null
     setError(null)
+    // A new session is hydrated by definition: it starts empty and that empty transcript belongs to
+    // it. Leaving this unset would let a click on the new row try to load a file that cannot exist.
+    hydratedIdRef.current = id
     setTranscript({ turns: [], interrupted: false })
     return id
   }, [addSession, model, providerId, setActive, setTranscript])
+
+  /**
+   * Apply a plan's transcript: set it, and remember which session it belongs to.
+   *
+   * `hydratedIdRef` is the load-bearing part. It is what distinguishes "this session is on screen"
+   * from "this session is the active one in the store", and without it a restored-but-unloaded
+   * session can never be loaded.
+   */
+  const applyTranscript = useCallback(
+    (id: string, next: TranscriptState) => {
+      // Continue the reducer's numbering past the restored turns, or new turns would reuse ids that
+      // are already in the transcript.
+      resumeTurnNumbering(next.turns)
+      hydratedIdRef.current = id
+      setTranscript(next)
+    },
+    [setTranscript]
+  )
 
   const load = useCallback(
     async (id: string) => {
       try {
         const snapshot = await conveyor.sessions.loadTranscript({ id })
-        const next = rehydrateTranscript(snapshot)
-        // Continue the reducer's numbering past the restored turns, or new turns would reuse ids
-        // that are already in the transcript.
-        resumeTurnNumbering(next.turns)
         savedRef.current = snapshot
         setError(null)
-        setTranscript(next)
+        applyTranscript(id, rehydrateTranscript(snapshot))
       } catch (err) {
         // Branched on the code, never the message text.
         const corrupt = err instanceof ConveyorError && err.code === 'SESSION_CORRUPT'
@@ -152,23 +182,60 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         })
         // The row still opens, empty, so the user has somewhere to go from here.
         savedRef.current = null
-        setTranscript({ turns: [], interrupted: false })
+        applyTranscript(id, { turns: [], interrupted: false })
       }
     },
-    [setTranscript]
+    [applyTranscript]
   )
 
   const openSession = useCallback(
     async (id: string) => {
-      if (id === activeIdRef.current) return
-      // Save before leaving: switching away is exactly when unsaved turns would be lost.
-      await saveNow()
+      // The whole click decision, made by the pure function rather than reimplemented here. The
+      // load-bearing part is that it tests `hydratedId`, not the store's active id: a session
+      // restored from a previous run is active with an empty transcript, and clicking it must load.
+      const start = planResumeStart({
+        requestedId: id,
+        hydratedId: hydratedIdRef.current,
+        transcript: transcriptRef.current,
+        savedSnapshot: savedRef.current,
+      })
+      if (start.alreadyShowing) return
+
+      if (start.saveFirst) await saveNow()
       setActive({ id })
       activeIdRef.current = id
       await load(id)
+
+      // The other half of the plan: what the loaded session becomes, including the self-heal for a
+      // row stored before titles were applied.
+      const session = sessionsRef.current.find((s) => s.id === id)
+      const finish = planResumeFinish({
+        // Just read, so the stored one is authoritative for this decision.
+        loaded: savedRef.current,
+        metadataTitle: session?.title ?? UNTITLED,
+      })
+      if (finish.repairTitle) touchSession({ id, title: finish.repairTitle })
     },
-    [load, saveNow, setActive]
+    [load, saveNow, setActive, touchSession]
   )
+
+  /**
+   * Restore the session the store says is active, once, on startup.
+   *
+   * The store persists `activeSessionId`, so after a restart the app knows which conversation was
+   * open but holds no transcript for it — the pane would sit on its empty state until the user
+   * clicked the row that is already highlighted. This runs the same load the click path uses, so
+   * both routes hydrate identically.
+   *
+   * Declared after `load` because it calls it, and guarded so it fires once: a later store change
+   * must not hydrate over turns the user has since typed.
+   */
+  const hydratedOnceRef = useRef(false)
+  useEffect(() => {
+    if (hydratedOnceRef.current || !activeSessionId) return
+    hydratedOnceRef.current = true
+    void load(activeSessionId)
+  }, [activeSessionId, load])
 
   const deleteSession = useCallback(
     async (id: string) => {
@@ -184,34 +251,59 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       if (activeIdRef.current === id) {
         savedRef.current = null
         setError(null)
+        hydratedIdRef.current = null
         setTranscript({ turns: [], interrupted: false })
       }
     },
     [removeSession, setTranscript]
   )
 
+  /**
+   * The session a message belongs to, created and named if it does not exist yet.
+   *
+   * Both halves of the naming decision come from `planFirstSend`: whether to create, and whether this
+   * message is the one that names the session. Returning early on an existing id — which is what the
+   * Phase 7 code did — is what left every persisted row called "Untitled conversation", because a
+   * session restored from a previous run has an id from the moment the app starts.
+   */
   const ensureSession = useCallback(
     (firstMessage: string) => {
-      const existing = activeIdRef.current
-      if (existing) return existing
+      const activeId = activeIdRef.current
+      const activeTitle = sessionsRef.current.find((s) => s.id === activeId)?.title ?? null
+
+      const plan = planFirstSend({
+        activeId,
+        activeTitle,
+        message: firstMessage,
+        isHydrated: hydratedIdRef.current === activeId,
+      })
+
+      if (!plan.create) {
+        // An existing session: named here only if it is still untitled, which can only happen once.
+        if (plan.title && activeId) touchSession({ id: activeId, title: plan.title })
+        return activeId as string
+      }
+
       const id = createSession()
-      // The title is set here, once, and never again — later messages must not rename a session the
-      // user has come to recognise.
-      touchSession({ id, title: titleFromMessage(firstMessage) || UNTITLED })
+      if (plan.title) touchSession({ id, title: plan.title })
       return id
     },
     [createSession, touchSession]
   )
 
+  /**
+   * Name a session from its first message, if it is still untitled.
+   *
+   * Kept as a separate entry point for callers that know they are holding a first message; it reads
+   * the current title rather than being called unconditionally.
+   */
   const maybeTitle = useCallback(
     (id: string, firstMessage: string) => {
-      // Only the first message names a session, which is why this checks the current title rather
-      // than being called unconditionally by the caller.
-      const session = sessions.find((s) => s.id === id)
+      const session = sessionsRef.current.find((s) => s.id === id)
       if (!session || session.title !== UNTITLED) return
       touchSession({ id, title: titleFromMessage(firstMessage) || UNTITLED })
     },
-    [sessions, touchSession]
+    [touchSession]
   )
 
   return {
