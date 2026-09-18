@@ -2,46 +2,59 @@ import { ChatPanel } from './chat-panel'
 import { CodeViewer } from './code-viewer'
 import { IconRail } from './icon-rail'
 import { ExplorerPanel } from './explorer-panel'
+import { SettingsView } from './settings-view'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
+import { useWorkbenchStore } from './store'
 
 /**
  * The workbench: icon rail, secondary panel, and a main area split between the chat and the code
  * viewer. The panel proportions are the window's starting point; dragging the handles owns them
  * from then on. Pane minimums are in pixels so they hold when the window is narrowed — the group
  * itself still needs at least one panel that can absorb the remainder.
+ *
+ * Settings is a full-width view rather than a fourth pane: it is a screen you leave when you are
+ * done, so it takes the main area instead of sitting beside the conversation.
  */
 export function Workbench() {
+  const activeActivity = useWorkbenchStore((s) => s.activeActivity)
+
   return (
     <div className="flex h-full min-h-0">
       <IconRail />
 
-      <ResizablePanelGroup id="workbench" orientation="horizontal">
-        <ResizablePanel
-          id="explorer"
-          defaultSize={250}
-          minSize={180}
-          maxSize={520}
-          groupResizeBehavior="preserve-pixel-size"
-        >
-          <ExplorerPanel />
-        </ResizablePanel>
+      {activeActivity === 'settings' ? (
+        <div className="min-w-0 flex-1">
+          <SettingsView />
+        </div>
+      ) : (
+        <ResizablePanelGroup id="workbench" orientation="horizontal">
+          <ResizablePanel
+            id="explorer"
+            defaultSize={250}
+            minSize={180}
+            maxSize={520}
+            groupResizeBehavior="preserve-pixel-size"
+          >
+            <ExplorerPanel />
+          </ResizablePanel>
 
-        <ResizableHandle />
+          <ResizableHandle />
 
-        <ResizablePanel id="main" minSize={420}>
-          <ResizablePanelGroup id="workbench-main" orientation="horizontal">
-            <ResizablePanel id="chat" defaultSize="62" minSize={320}>
-              <ChatPanel />
-            </ResizablePanel>
+          <ResizablePanel id="main" minSize={420}>
+            <ResizablePanelGroup id="workbench-main" orientation="horizontal">
+              <ResizablePanel id="chat" defaultSize="62" minSize={320}>
+                <ChatPanel />
+              </ResizablePanel>
 
-            <ResizableHandle />
+              <ResizableHandle />
 
-            <ResizablePanel id="code" defaultSize="38" minSize={280}>
-              <CodeViewer />
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+              <ResizablePanel id="code" defaultSize="38" minSize={280}>
+                <CodeViewer />
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      )}
     </div>
   )
 }

@@ -2,32 +2,25 @@ import { Folder, MessageSquare, Settings, SquareTerminal, type LucideIcon } from
 import { cn } from '@/lib/utils'
 import { useWorkbenchStore } from './store'
 
-/** The three activity views the workbench switches between. */
+/** The activity views the workbench switches between. */
 export interface Activity {
   id: string
   label: string
   icon: LucideIcon
   /** What the secondary panel shows while this view is active. */
   panelTitle: string
-  /** Narrows an open file list down to what belongs to the view; everything shows for the rest. */
-  filter: RegExp | null
 }
 
 export const ACTIVITIES: Activity[] = [
-  { id: 'files', label: 'Explorer', icon: Folder, panelTitle: 'Explorer', filter: null },
-  { id: 'chat', label: 'Chat', icon: MessageSquare, panelTitle: 'Chat Sessions', filter: /\.(tsx?|jsx?|md|json)$/ },
-  {
-    id: 'terminal',
-    label: 'Terminal',
-    icon: SquareTerminal,
-    panelTitle: 'Terminal',
-    filter: /\.(tsx?|jsx?|json)$/,
-  },
+  { id: 'files', label: 'Explorer', icon: Folder, panelTitle: 'Explorer' },
+  { id: 'chat', label: 'Chat', icon: MessageSquare, panelTitle: 'Chat Sessions' },
+  { id: 'terminal', label: 'Terminal', icon: SquareTerminal, panelTitle: 'Terminal' },
 ]
 
 /**
  * The icon rail: the workbench's top-level navigation. Icons only, so each button states its label
- * through a tooltip for pointers and an `aria-label` for everything else.
+ * through a tooltip for pointers and an `aria-label` for everything else. Settings sits at the
+ * foot because it is a place you visit and leave, not a mode you work in.
  */
 export function IconRail() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
@@ -65,7 +58,15 @@ export function IconRail() {
         type="button"
         title="Settings"
         aria-label="Settings"
-        className="mt-auto flex size-10 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        aria-pressed={activeActivity === 'settings'}
+        onClick={() => setActiveActivity('settings')}
+        className={cn(
+          'mt-auto flex size-10 items-center justify-center rounded-md outline-none transition-colors',
+          'focus-visible:ring-2 focus-visible:ring-ring',
+          activeActivity === 'settings'
+            ? 'bg-brand-soft text-brand'
+            : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+        )}
       >
         <Settings className="size-4.5" />
       </button>

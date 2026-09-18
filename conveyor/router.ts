@@ -4,6 +4,8 @@ import { windows, openAppWindow } from '@/lib/main/app'
 import { windowModule, setupWindowEvents } from './modules/window'
 import { webModule } from './modules/web'
 import { workspaceModule } from './modules/workspace'
+import { settingsModule } from './modules/settings'
+import { llmModule } from './modules/llm'
 import { workspaceStore } from './stores/workspace'
 
 /**
@@ -20,6 +22,8 @@ export const router = createRouter(
     window: windowModule,
     web: webModule,
     workspace: workspaceModule,
+    settings: settingsModule,
+    llm: llmModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),

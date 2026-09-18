@@ -94,7 +94,9 @@ export function ExplorerPanel() {
               <AlertTriangle className="size-6 text-muted-foreground/50" />
               <div>
                 <p className="text-[13px] font-medium">This folder could not be read</p>
-                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">{listErrorMessage(root.error)}</p>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                  {listErrorMessage(root.error)}
+                </p>
               </div>
               {picker}
             </div>
