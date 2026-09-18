@@ -3,6 +3,7 @@ import { CodeViewer } from './code-viewer'
 import { IconRail } from './icon-rail'
 import { ExplorerPanel } from './explorer-panel'
 import { SettingsView } from './settings-view'
+import { TerminalPanel } from './terminal-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkbenchStore } from './store'
 
@@ -12,8 +13,9 @@ import { useWorkbenchStore } from './store'
  * from then on. Pane minimums are in pixels so they hold when the window is narrowed — the group
  * itself still needs at least one panel that can absorb the remainder.
  *
- * Settings is a full-width view rather than a fourth pane: it is a screen you leave when you are
- * done, so it takes the main area instead of sitting beside the conversation.
+ * Two rail items take the whole main area rather than the secondary panel, because they are places
+ * you go rather than things you glance at: Settings (a screen you leave when done) and Terminal (a
+ * transcript that wants the width).
  */
 export function Workbench() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
@@ -25,6 +27,10 @@ export function Workbench() {
       {activeActivity === 'settings' ? (
         <div className="min-w-0 flex-1">
           <SettingsView />
+        </div>
+      ) : activeActivity === 'terminal' ? (
+        <div className="min-w-0 flex-1">
+          <TerminalPanel />
         </div>
       ) : (
         <ResizablePanelGroup id="workbench" orientation="horizontal">

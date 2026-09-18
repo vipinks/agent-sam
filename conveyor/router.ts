@@ -6,6 +6,7 @@ import { webModule } from './modules/web'
 import { workspaceModule } from './modules/workspace'
 import { settingsModule } from './modules/settings'
 import { llmModule } from './modules/llm'
+import { terminalModule } from './modules/terminal'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 
@@ -25,6 +26,7 @@ export const router = createRouter(
     workspace: workspaceModule,
     settings: settingsModule,
     llm: llmModule,
+    terminal: terminalModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
