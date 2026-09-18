@@ -1,9 +1,10 @@
-import { basename, join } from 'path'
-import { readFile as readFileFromDisk, readdir, stat } from 'fs/promises'
+import { basename, dirname, join } from 'path'
+import { mkdir, readFile as readFileFromDisk, readdir, stat, writeFile as writeFileToDisk } from 'fs/promises'
 import { dialog } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, command } from '../init'
+import { resolveWorkspacePath } from './workspace-paths'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -15,7 +16,7 @@ import { defineModule, query, command } from '../init'
 const HIDDEN_ENTRIES = new Set(['node_modules', '.git', 'dist'])
 
 /** Reads larger than this are refused rather than shipped over IPC — see `readFile`. */
-const MAX_FILE_BYTES = 1024 * 1024
+export const MAX_FILE_BYTES = 1024 * 1024
 
 /** One child of a listed directory. */
 const directoryEntrySchema = z.object({
@@ -107,4 +108,35 @@ export const workspaceModule = defineModule({
 
     return { content, path: input.path }
   }),
+
+  /**
+   * Write a UTF-8 text file, creating any directories it needs.
+   *
+   * `rootPath` is required rather than optional: this is the agent's write path, and a write that
+   * cannot be checked against a workspace must not happen at all. Containment is enforced by
+   * `resolveWorkspacePath`, which also refuses a symlinked route out of the workspace.
+   */
+  writeFile: command(
+    z.object({
+      path: z.string().min(1),
+      content: z.string(),
+      rootPath: z.string().min(1),
+    }),
+    async ({ input }) => {
+      const target = resolveWorkspacePath(input.rootPath, input.path)
+
+      try {
+        // Recursive mkdir is idempotent, so this is also the common path where the directory exists.
+        await mkdir(dirname(target), { recursive: true })
+        await writeFileToDisk(target, input.content, 'utf8')
+      } catch (err) {
+        // A refused write is more useful to the agent than a raw errno, but it must not be worded as
+        // a traversal failure — the containment check above is the only source of that code.
+        const reason = err instanceof Error ? err.message : String(err)
+        throw new ConveyorError('WRITE_FAILED', `Could not write ${input.path}. ${reason}`)
+      }
+
+      return { path: target, bytes: Buffer.byteLength(input.content, 'utf8') }
+    }
+  ),
 })

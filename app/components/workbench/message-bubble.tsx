@@ -1,15 +1,8 @@
 import { memo } from 'react'
 import Markdown from 'react-markdown'
 import { cn } from '@/lib/utils'
-
-/** One turn in the transcript. */
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  /** Set when the turn ended in a failure, so the bubble can say so instead of looking truncated. */
-  error?: string
-}
+import { AgentActionCard } from './agent-action-card'
+import type { AgentTurn } from './agent-session'
 
 /**
  * A single message bubble.
@@ -18,8 +11,17 @@ export interface ChatMessage {
  * each token would re-render every previous turn — the exact cost the performance rule forbids.
  * Only the streaming message's `content` changes, so only it re-renders.
  */
-export const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessage }) {
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  onApprove,
+  onDeny,
+}: {
+  message: AgentTurn
+  onApprove?: (callId: string) => void
+  onDeny?: (callId: string) => void
+}) {
   const isUser = message.role === 'user'
+  const steps = message.steps
 
   return (
     <div className={cn('flex w-full px-4 py-2.5', isUser ? 'justify-end' : 'justify-start')}>
@@ -34,7 +36,20 @@ export const MessageBubble = memo(function MessageBubble({ message }: { message:
           // angle brackets and asterisks.
           <p className="break-words whitespace-pre-wrap">{message.content}</p>
         ) : (
-          <MarkdownContent content={message.content} />
+          <>
+            {/* Steps above the prose: the actions are what the answer refers to, so they read in
+                the order they happened. */}
+            {steps.length > 0 && (
+              <div className="mb-2 space-y-1.5">
+                {steps.map((step) => (
+                  <AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />
+                ))}
+              </div>
+            )}
+            {/* With steps but no prose yet, the cards are the content — an empty "Thinking…" under
+                them would be noise. */}
+            {(message.content || steps.length === 0) && <MarkdownContent content={message.content} />}
+          </>
         )}
 
         {message.error && (

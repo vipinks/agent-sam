@@ -10,8 +10,29 @@ import { ConveyorError } from 'electron-conveyor/main'
  */
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  /** Present on an assistant turn that asked for tools. */
+  tool_calls?: ToolCall[]
+  /** Present on a `tool` turn: which call it answers. */
+  tool_call_id?: string
+}
+
+/** A tool invocation the model asked for. */
+export interface ToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
+}
+
+/** An OpenAI-compatible tool definition. */
+export interface ToolDefinition {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }
 }
 
 /** Providers that speak the OpenAI `/chat/completions` dialect. */
@@ -40,7 +61,8 @@ export function buildRequest(
   providerId: string,
   apiKey: string,
   model: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  tools?: ToolDefinition[]
 ): ProviderRequest {
   if (providerId === 'anthropic') {
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content)
@@ -73,14 +95,45 @@ export function buildRequest(
   // something.
   if (providerId === 'openrouter') headers['x-title'] = 'Sam AI'
 
-  return { url, headers, body: { model, stream: true, messages } }
+  return {
+    url,
+    headers,
+    body: {
+      model,
+      stream: true,
+      messages,
+      // Only sent when there are tools: some gateways reject an empty array, and omitting the keys
+      // entirely is what keeps an ordinary chat request shaped exactly as it was before tools.
+      ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
+    },
+  }
 }
 
 /**
- * Pull the text out of one decoded SSE `data:` payload. Returns null for payloads that carry no
- * text — pings, role openers, the terminating `[DONE]`, and Anthropic's non-delta events.
+ * One decoded frame: the text it may carry, and any tool-call fragments it may carry.
+ *
+ * Tool calls stream in pieces — an id in one frame, the function name perhaps in the same or the
+ * next, then the JSON arguments over many — so the parser reports raw fragments and the caller
+ * accumulates them. Trying to interpret a partial fragment here would mean guessing at JSON that is
+ * still being written.
  */
-export function extractDelta(providerId: string, payload: string): string | null {
+export interface StreamDelta {
+  text?: string
+  toolCall?: {
+    /** Position in the response's tool_calls array; the only stable key while streaming. */
+    index: number
+    id?: string
+    name?: string
+    /** A JSON fragment, not a complete document. */
+    argumentsDelta?: string
+  }
+}
+
+/**
+ * Pull everything useful out of one decoded SSE `data:` payload. Returns null for payloads that
+ * carry nothing — pings, role openers, the terminating `[DONE]`, and Anthropic's non-delta events.
+ */
+export function extractDelta(providerId: string, payload: string): StreamDelta | null {
   if (payload === '[DONE]') return null
 
   let event: unknown
@@ -95,7 +148,7 @@ export function extractDelta(providerId: string, payload: string): string | null
   if (providerId === 'anthropic') {
     if (e.type === 'content_block_delta') {
       const delta = e.delta as Record<string, unknown> | undefined
-      if (delta && typeof delta.text === 'string') return delta.text
+      if (delta && typeof delta.text === 'string') return { text: delta.text }
     }
     return null
   }
@@ -105,8 +158,24 @@ export function extractDelta(providerId: string, payload: string): string | null
 
   const choices = e.choices as Array<Record<string, unknown>> | undefined
   const delta = choices?.[0]?.delta as Record<string, unknown> | undefined
-  if (delta && typeof delta.content === 'string') return delta.content
-  return null
+  if (!delta) return null
+
+  const result: StreamDelta = {}
+  if (typeof delta.content === 'string' && delta.content) result.text = delta.content
+
+  const calls = delta.tool_calls as Array<Record<string, unknown>> | undefined
+  if (calls?.length) {
+    const call = calls[0]
+    const fn = call.function as Record<string, unknown> | undefined
+    result.toolCall = {
+      index: typeof call.index === 'number' ? call.index : 0,
+      ...(typeof call.id === 'string' && call.id ? { id: call.id } : {}),
+      ...(typeof fn?.name === 'string' && fn.name ? { name: fn.name } : {}),
+      ...(typeof fn?.arguments === 'string' && fn.arguments ? { argumentsDelta: fn.arguments } : {}),
+    }
+  }
+
+  return result.text !== undefined || result.toolCall !== undefined ? result : null
 }
 
 /** An error object embedded in a 200 response body, e.g. `{"error":{"message":"..."}}`. */
@@ -119,15 +188,15 @@ function inStreamError(error: unknown): ConveyorError {
 }
 
 /**
- * Walk an SSE byte stream and yield the text deltas. Frames are separated by a blank line and may
- * carry `event:`/`id:` lines, which are skipped: every provider here puts what we need in `data:`.
+ * Walk an SSE byte stream and yield its deltas. Frames are separated by a blank line and may carry
+ * `event:`/`id:` lines, which are skipped: every provider here puts what we need in `data:`.
  *
  * The reader is released in a `finally` so an aborted or errored stream does not leak the body.
  */
 export async function* parseSse(
   body: ReadableStream<Uint8Array>,
   providerId: string
-): AsyncGenerator<string, void, undefined> {
+): AsyncGenerator<StreamDelta, void, undefined> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -210,20 +279,24 @@ export function mapHttpError(status: number, detail: string): ConveyorError {
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
 
 /**
- * Run one chat completion and yield its text deltas. The caller owns `signal`; aborting it aborts
- * the request and ends the generator quietly, which is what a cancelled stream should look like.
+ * Run one chat completion and yield its deltas, tool-call fragments included.
+ *
+ * The caller owns `signal`; aborting it aborts the request and ends the generator quietly, which is
+ * what a cancelled stream should look like. This is the level the agent loop needs, because a
+ * request answered with tool calls carries no text at all.
  */
-export async function* streamChat(options: {
+export async function* streamDeltas(options: {
   providerId: string
   apiKey: string
   model: string
   messages: ChatMessage[]
+  tools?: ToolDefinition[]
   signal: AbortSignal
   fetchImpl?: FetchLike
-}): AsyncGenerator<string, void, undefined> {
-  const { providerId, apiKey, model, messages, signal } = options
+}): AsyncGenerator<StreamDelta, void, undefined> {
+  const { providerId, apiKey, model, messages, tools, signal } = options
   const doFetch: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init))
-  const request = buildRequest(providerId, apiKey, model, messages)
+  const request = buildRequest(providerId, apiKey, model, messages, tools)
 
   let response: Response
   try {
@@ -248,6 +321,25 @@ export async function* streamChat(options: {
   }
 
   yield* parseSse(response.body, providerId)
+}
+
+/**
+ * Run one chat completion and yield only its text.
+ *
+ * A thin filter over `streamDeltas`, kept as the plain-chat surface: `llm.chat` streams tokens to
+ * the UI and has no use for tool fragments, so it should not have to look inside them.
+ */
+export async function* streamChat(options: {
+  providerId: string
+  apiKey: string
+  model: string
+  messages: ChatMessage[]
+  signal: AbortSignal
+  fetchImpl?: FetchLike
+}): AsyncGenerator<string, void, undefined> {
+  for await (const delta of streamDeltas(options)) {
+    if (delta.text) yield delta.text
+  }
 }
 
 function hostOf(url: string): string {

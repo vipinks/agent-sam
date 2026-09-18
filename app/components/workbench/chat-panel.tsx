@@ -1,23 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { MessageSquare, SendHorizontal, Square, TriangleAlert } from 'lucide-react'
+import { MessageSquare, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
+import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Button } from '../ui/button'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
+import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
-import { MessageBubble, type ChatMessage } from './message-bubble'
+import { MessageBubble } from './message-bubble'
+import {
+  applyAgentChunk,
+  resolveDecision,
+  startAssistantTurn,
+  startUserTurn,
+  toHistory,
+  type AgentTurn,
+  type PendingCall,
+} from './agent-session'
 import { useWorkbenchStore } from './store'
-
-let nextId = 0
-function makeId(prefix: string): string {
-  nextId += 1
-  return `${prefix}-${nextId}`
-}
 
 /** Stream failures, in the user's terms, branched on the error code rather than the message text. */
 function streamErrorMessage(error: unknown, providerName: string): string {
@@ -33,6 +38,8 @@ function streamErrorMessage(error: unknown, providerName: string): string {
         return `Could not reach ${providerName}. Check your connection.`
       case 'PROVIDER_ERROR':
         return `${providerName} refused the request.`
+      case 'NO_WORKSPACE':
+        return 'Open a folder first — the agent works inside your workspace.'
       default:
         return error.message
     }
@@ -40,33 +47,55 @@ function streamErrorMessage(error: unknown, providerName: string): string {
   return 'The response stream ended unexpectedly.'
 }
 
+/** What the agent is paused on, and everything needed to continue it. */
+interface PendingApproval {
+  turnId: string
+  callId: string
+  tool: string
+  /** The provider-shaped history the run handed over, echoed back untouched on resume. */
+  messages: unknown[]
+  /** The model's own call, echoed back so resume runs exactly what was approved. */
+  call: PendingCall
+  steps: number
+}
+
 /**
- * The chat pane: a virtualized transcript and a composer.
+ * The chat pane: a virtualized transcript, a composer, and the agent's consent gate.
  *
- * Streaming stays out of React's render path. Tokens accumulate in a ref and are flushed once per
- * animation frame, so a fast model cannot outrun the compositor — one render per frame rather than
- * one per token. The transcript is virtualized so only visible turns are in the DOM, and each
- * bubble is memoized so a flush re-renders only the message that grew.
+ * The agent run is a sequence of streamed chunks that each either extend the assistant's prose or
+ * attach a tool card to it. Chunks accumulate in a ref and are flushed once per animation frame, so
+ * a fast model cannot outrun the compositor — one render per frame rather than one per token, with
+ * the transcript virtualized and each bubble memoized so only the turn that grew re-renders.
+ *
+ * A run that needs permission does not hang: the agent stream *ends* at the pause, handing over the
+ * history it paused with. Approving starts a second stream that continues from there, which is why
+ * the loop spans two calls rather than one long-lived stream — conveyor streams are one-way, so
+ * there is no channel to push a decision down mid-stream.
  */
 export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
   const activeModel = useWorkbenchStore((s) => s.activeModel)
   const setTarget = useWorkbenchStore((s) => s.setTarget)
 
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<AgentTurn[]>([])
   const [draft, setDraft] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
+  // Off by default: a tool that writes to disk should be a deliberate choice, not a default.
+  const [autoApprove, setAutoApprove] = useState(false)
+  const [pending, setPending] = useState<PendingApproval | null>(null)
+
+  const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  // Mirrored so the stream callback reads the latest history without being re-created — which is
-  // what keeps the stream from restarting on every token.
-  const messagesRef = useRef<ChatMessage[]>([])
-  const streamingIdRef = useRef<string | null>(null)
-  // Tokens land here and drain on a frame; `frameRef` also prevents scheduling more than one.
+  // Mirrored so the stream callback reads the latest transcript without being re-created, which is
+  // what keeps the run from restarting on every chunk.
+  const messagesRef = useRef<AgentTurn[]>([])
+  const streamingTurnIdRef = useRef<string | null>(null)
+  // Chunks land here and drain on a frame; `frameRef` also prevents scheduling more than one.
   const bufferRef = useRef('')
   const frameRef = useRef<number | null>(null)
   // The live iterator, so the Stop button can cancel at the source.
-  const iteratorRef = useRef<AsyncIterator<string> | null>(null)
+  const iteratorRef = useRef<AsyncIterator<unknown> | null>(null)
 
   const providers = conveyor.settings.listProviders.useQuery()
   // The seeded catalogue: what to offer before a provider has ever been fetched.
@@ -78,18 +107,15 @@ export function ChatPanel() {
   // Whether the selected provider has a key. Undefined while the query is in flight, which must
   // not read as "missing" — a warning that flashes on load is worse than none.
   const configured = conveyor.settings.listConfigured.useQuery()
-  const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
-
-  /**
-   * The models to offer for a provider: the ones switched on in Settings, or the seeded default
-   * when nothing has been fetched yet. An empty result is what drives the "enable models" entry.
-   */
-  const modelsFor = (providerId: string) =>
-    configs[providerId]?.fetchedModels.length
-      ? configs[providerId].enabledModels
-      : (defaultModels.data?.[providerId] ?? []).map((m) => m.id)
 
   const providerName = providers.data?.find((p) => p.id === activeProviderId)?.name ?? activeProviderId
+  const modelsFor = (providerId: string): string[] => {
+    const enabled = configs[providerId]?.enabledModels
+    if (enabled && enabled.length > 0) return enabled
+    // The seeded catalogue carries names as well as ids; the composer only needs the ids.
+    return (defaultModels.data?.[providerId] ?? []).map((m) => m.id)
+  }
+  const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -98,24 +124,10 @@ export function ChatPanel() {
     overscan: 8,
   })
 
-  const updateMessages = useCallback((next: ChatMessage[]) => {
+  const updateMessages = useCallback((next: AgentTurn[]) => {
     messagesRef.current = next
     setMessages(next)
   }, [])
-
-  /** Replace the streaming turn in place. Earlier turns keep identity, so memo skips re-rendering. */
-  const applyToStreaming = useCallback(
-    (mutate: (message: ChatMessage) => ChatMessage) => {
-      const id = streamingIdRef.current
-      if (id === null) return
-      const next = messagesRef.current.slice()
-      const index = next.findIndex((m) => m.id === id)
-      if (index === -1) return
-      next[index] = mutate(next[index])
-      updateMessages(next)
-    },
-    [updateMessages]
-  )
 
   const stickToBottom = useCallback(() => {
     const count = messagesRef.current.length
@@ -127,11 +139,14 @@ export function ChatPanel() {
     const chunk = bufferRef.current
     if (!chunk) return
     bufferRef.current = ''
-    applyToStreaming((message) => ({ ...message, content: message.content + chunk }))
+    const turnId = streamingTurnIdRef.current
+    if (turnId === null) return
+    const { turns } = applyAgentChunk(messagesRef.current, turnId, { type: 'text_delta', text: chunk })
+    updateMessages(turns)
     stickToBottom()
-  }, [applyToStreaming, stickToBottom])
+  }, [stickToBottom, updateMessages])
 
-  /** Queue a token. Calls inside one frame coalesce into a single render. */
+  /** Queue text. Calls inside one frame coalesce into a single render. */
   const enqueue = useCallback(
     (chunk: string) => {
       bufferRef.current += chunk
@@ -139,6 +154,15 @@ export function ChatPanel() {
     },
     [flush]
   )
+
+  /** Apply the buffered text immediately, so a pause or an exit never swallows the last tokens. */
+  const drainNow = useCallback(() => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current)
+      frameRef.current = null
+      flush()
+    }
+  }, [flush])
 
   // Drop any pending frame on unmount so a late flush cannot set state on a gone pane.
   useEffect(() => {
@@ -153,64 +177,153 @@ export function ChatPanel() {
     setIsStreaming(false)
   }, [])
 
+  /**
+   * Drive one agent stream to its end.
+   *
+   * Every chunk is handed to the reducer, which owns what the transcript looks like. The only chunk
+   * with a side effect is the pause: it stops this stream and records what is needed to continue.
+   */
+  const runStream = useCallback(
+    async (stream: AsyncIterable<unknown>, turnId: string) => {
+      const iterator = stream[Symbol.asyncIterator]()
+      iteratorRef.current = iterator
+      setIsStreaming(true)
+
+      try {
+        for (;;) {
+          const { value, done } = await iterator.next()
+          if (done) break
+
+          const chunk = value as Record<string, unknown>
+          // Text is buffered for the frame; everything else applies immediately, because a card or a
+          // pause is a discrete event and should not wait on a frame.
+          if (chunk.type === 'text_delta' && typeof chunk.text === 'string') {
+            enqueue(chunk.text)
+            continue
+          }
+
+          drainNow()
+          const { turns, effect } = applyAgentChunk(messagesRef.current, turnId, chunk)
+          updateMessages(turns)
+
+          if (effect.approval) {
+            setPending({
+              turnId,
+              callId: effect.approval.callId,
+              tool: effect.approval.tool,
+              messages: effect.approval.messages,
+              call: effect.approval.call,
+              steps: effect.approval.steps,
+            })
+            // The stream is over as far as this call is concerned; the run continues on approval.
+            return
+          }
+
+          if (effect.done) {
+            stickToBottom()
+            return
+          }
+          stickToBottom()
+        }
+      } catch (err) {
+        const message = streamErrorMessage(err, providerName)
+        updateMessages(messagesRef.current.map((t) => (t.id === turnId ? { ...t, error: message } : t)))
+        toast.error('The agent stopped', { description: message })
+      } finally {
+        drainNow()
+        iteratorRef.current = null
+        streamingTurnIdRef.current = null
+        setIsStreaming(false)
+      }
+    },
+    [drainNow, enqueue, providerName, stickToBottom, updateMessages]
+  )
+
   const send = useCallback(async () => {
     const text = draft.trim()
-    if (!text || isStreaming) return
+    if (!text || isStreaming || pending) return
 
-    // Build the transcript to send: the history plus this turn. The assistant placeholder is added
-    // locally but must not be sent to the provider, so it is appended after the request is shaped.
-    const history = messagesRef.current.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }))
+    // The history sent is text-only: the agent owns the provider-shaped history, including tool
+    // turns, and hands it back on a pause.
+    const history = toHistory(messagesRef.current)
 
-    const userMessage: ChatMessage = { id: makeId('user'), role: 'user', content: text }
-    const assistantMessage: ChatMessage = { id: makeId('assistant'), role: 'assistant', content: '' }
-    streamingIdRef.current = assistantMessage.id
+    const userTurn = startUserTurn(text)
+    const assistantTurn = startAssistantTurn()
+    streamingTurnIdRef.current = assistantTurn.id
     setDraft('')
-    setIsStreaming(true)
-    updateMessages([...messagesRef.current, userMessage, assistantMessage])
+    updateMessages([...messagesRef.current, userTurn, assistantTurn])
     requestAnimationFrame(stickToBottom)
 
-    // Take the iterator explicitly rather than `for await`: the Stop button needs a handle to
-    // cancel, and `for await` would keep it out of reach.
-    const stream = conveyor.llm.chat({
-      providerId: activeProviderId,
-      model: activeModel,
-      messages: [...history, { role: 'user' as const, content: text }],
-    })
-    const iterator = stream[Symbol.asyncIterator]()
-    iteratorRef.current = iterator
-
-    try {
-      for (;;) {
-        const { value, done } = await iterator.next()
-        if (done) break
-        enqueue(value)
-      }
-      // Drain whatever is still buffered so the final tokens are never dropped.
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current)
-        frameRef.current = null
-        flush()
-      }
-    } catch (err) {
-      applyToStreaming((message) => ({ ...message, error: streamErrorMessage(err, providerName) }))
-      toast.error('The response stopped', { description: streamErrorMessage(err, providerName) })
-    } finally {
-      iteratorRef.current = null
-      streamingIdRef.current = null
-      setIsStreaming(false)
-    }
+    await runStream(
+      conveyor.agent.chatWithTools({
+        providerId: activeProviderId,
+        model: activeModel,
+        messages: [...history, { role: 'user' as const, content: text }],
+        workspaceRoot: rootPath,
+        autoApprove,
+      }),
+      assistantTurn.id
+    )
   }, [
     activeModel,
     activeProviderId,
-    applyToStreaming,
+    autoApprove,
     draft,
-    enqueue,
-    flush,
     isStreaming,
-    providerName,
+    pending,
+    rootPath,
+    runStream,
     stickToBottom,
     updateMessages,
   ])
+
+  /**
+   * Answer a pause.
+   *
+   * Approval and denial travel the same path: the decision goes to `resume`, which either runs the
+   * tool or feeds the refusal back to the model as the tool's result. Denial is therefore not a dead
+   * end — the model gets to explain itself.
+   */
+  const decide = useCallback(
+    async (approved: boolean) => {
+      const current = pending
+      if (!current || isStreaming) return
+
+      setPending(null)
+      // Record the decision in the card so it stops looking like it is waiting.
+      updateMessages(resolveDecision(messagesRef.current, current.turnId, current.callId, approved))
+
+      streamingTurnIdRef.current = current.turnId
+      requestAnimationFrame(stickToBottom)
+
+      await runStream(
+        conveyor.agent.resume({
+          providerId: activeProviderId,
+          model: activeModel,
+          // The history the loop paused with, and the model's own call — both handed back exactly as
+          // they came, so nothing is rebuilt from the display layer.
+          messages: current.messages as never,
+          workspaceRoot: rootPath,
+          autoApprove,
+          call: current.call,
+          steps: current.steps,
+          decision: approved ? 'approved' : 'denied',
+        }),
+        current.turnId
+      )
+    },
+    [
+      activeModel,
+      activeProviderId,
+      autoApprove,
+      isStreaming,
+      pending,
+      rootPath,
+      runStream,
+      stickToBottom,
+      updateMessages,
+    ]
+  )
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter sends; Shift+Enter is a newline, the convention for a composer.
@@ -223,6 +336,34 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col bg-background">
       <PaneHeader icon={MessageSquare} title="Chat">
+        {/*
+          Auto-approve sits beside the model picker because it is the other thing that decides what a
+          send does: whether the agent acts on its own or asks first.
+        */}
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <label className="flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-accent">
+                <ShieldCheck className="size-3.5 text-muted-foreground" />
+                <span className="text-[11px] text-muted-foreground">Auto-approve</span>
+                <Switch
+                  size="sm"
+                  checked={autoApprove}
+                  onCheckedChange={setAutoApprove}
+                  aria-label="Auto-approve tool actions"
+                />
+              </label>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <span className="text-[11.5px]">
+                {autoApprove
+                  ? 'Writes and commands run without asking. Reads are always allowed.'
+                  : 'Each write and command waits for your approval.'}
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+
         {/*
           One control, two axes: the value is `provider::model`, so picking either changes both.
           Options are grouped by provider, and a provider only offers the models switched on in
@@ -299,7 +440,7 @@ export function ChatPanel() {
             <MessageSquare className="size-6 text-muted-foreground/40" />
             <p className="text-[13px] font-medium">Start a conversation</p>
             <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-              Answers stream in here, with the code they touch shown alongside.
+              Answers stream in here, and the agent shows every file it reads and command it runs.
             </p>
           </div>
         ) : (
@@ -313,7 +454,11 @@ export function ChatPanel() {
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${item.start}px)` }}
               >
-                <MessageBubble message={messages[item.index]} />
+                <MessageBubble
+                  message={messages[item.index]}
+                  onApprove={() => void decide(true)}
+                  onDeny={() => void decide(false)}
+                />
               </div>
             ))}
           </div>
@@ -326,7 +471,7 @@ export function ChatPanel() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Ask about this project…"
+            placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project…'}
             aria-label="Message"
             className="min-h-20 resize-none pt-2.5 pr-11 text-[13px]"
           />
@@ -345,7 +490,7 @@ export function ChatPanel() {
               size="icon-sm"
               className="absolute right-2 bottom-2"
               aria-label="Send message"
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || pending !== null}
               onClick={() => void send()}
             >
               <SendHorizontal />
