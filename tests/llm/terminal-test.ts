@@ -144,12 +144,7 @@ async function stderrIsMarked() {
   child.close(1)
 
   const chunks = await promise
-  assert.deepEqual(chunks, [
-    'normal\n',
-    `${STDERR_MARKER}bad\n`,
-    `${STDERR_MARKER}worse\n`,
-    `${EXIT_MARKER}1]`,
-  ])
+  assert.deepEqual(chunks, ['normal\n', `${STDERR_MARKER}bad\n`, `${STDERR_MARKER}worse\n`, `${EXIT_MARKER}1]`])
   // The marker is a prefix, so the payload after it is the untouched stderr text.
   assert.equal(chunks[1].slice(STDERR_MARKER.length), 'bad\n')
   assert.equal(chunks[3], `${EXIT_MARKER}1]`)
@@ -245,10 +240,7 @@ async function abortKillsTheChild() {
   assert.deepEqual(child.killSignals, ['SIGTERM'], 'the kill signal should be SIGTERM')
   // Output emitted before the abort is still delivered, rather than dropped on cancellation.
   assert.ok(chunks.includes('starting\n'), `expected the buffered output, got ${JSON.stringify(chunks)}`)
-  assert.ok(
-    chunks.at(-1)?.startsWith(EXIT_MARKER),
-    `expected an exit marker, got ${JSON.stringify(chunks.at(-1))}`
-  )
+  assert.ok(chunks.at(-1)?.startsWith(EXIT_MARKER), `expected an exit marker, got ${JSON.stringify(chunks.at(-1))}`)
   results.push('aborting kills the child with SIGTERM, flushes buffered output, and still reports an exit')
 }
 

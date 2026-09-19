@@ -7,12 +7,7 @@
  * before the fix would not be reproducing anything.
  */
 import { strict as assert } from 'node:assert'
-import {
-  deriveRepairTitle,
-  planFirstSend,
-  planResume,
-  planIsNoop,
-} from '../../app/components/workbench/session-resume'
+import { deriveRepairTitle, planFirstSend, planResume, planIsNoop } from '../../app/components/workbench/session-resume'
 import { serializeTranscript, type TranscriptState } from '../../app/components/workbench/session-transcript'
 import { titleFromMessage, UNTITLED } from '../../app/components/workbench/session-rules'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '../../conveyor/protocol/transcript'
@@ -100,7 +95,15 @@ function clickingTheAlreadyLoadedSessionIsANoop() {
         id: 'assistant-2',
         role: 'assistant',
         content: 'Done — it prints the first ten.',
-        steps: [{ callId: 'call_1', tool: 'write_file', args: { path: 'fibonacci.py' }, status: 'ok', output: 'Wrote 42 bytes.' }],
+        steps: [
+          {
+            callId: 'call_1',
+            tool: 'write_file',
+            args: { path: 'fibonacci.py' },
+            status: 'ok',
+            output: 'Wrote 42 bytes.',
+          },
+        ],
       },
     ],
     interrupted: false,

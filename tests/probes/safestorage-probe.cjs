@@ -37,10 +37,18 @@ async function main() {
 
   // --- 3. the plaintext must not be recoverable from the file on disk
   const onDisk = await readFile(file, 'utf8')
-  record('ciphertext does not contain the plaintext', !onDisk.includes(secret), onDisk.includes(secret) ? 'LEAKED' : 'opaque')
+  record(
+    'ciphertext does not contain the plaintext',
+    !onDisk.includes(secret),
+    onDisk.includes(secret) ? 'LEAKED' : 'opaque'
+  )
 
   // --- 4. the store's shape: one file, provider -> base64 ciphertext
-  record('persisted shape is provider->base64', /^[A-Za-z0-9+/=]+$/.test(raw.deepseek), raw.deepseek.slice(0, 16) + '...')
+  record(
+    'persisted shape is provider->base64',
+    /^[A-Za-z0-9+/=]+$/.test(raw.deepseek),
+    raw.deepseek.slice(0, 16) + '...'
+  )
 
   // --- 5. a second decrypt of the same ciphertext is stable (no per-call salt confusion)
   const again = safeStorage.decryptString(Buffer.from(raw.deepseek, 'base64'))

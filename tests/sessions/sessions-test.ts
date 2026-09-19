@@ -8,12 +8,12 @@
 import { strict as assert } from 'node:assert'
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadTranscriptFile, saveTranscriptFile, sessionsModule } from '../../conveyor/modules/sessions'
 import {
-  loadTranscriptFile,
-  saveTranscriptFile,
-  sessionsModule,
-} from '../../conveyor/modules/sessions'
-import { transcriptSnapshotSchema, TRANSCRIPT_VERSION, type TranscriptSnapshot } from '../../conveyor/protocol/transcript'
+  transcriptSnapshotSchema,
+  TRANSCRIPT_VERSION,
+  type TranscriptSnapshot,
+} from '../../conveyor/protocol/transcript'
 
 const results: string[] = []
 
@@ -157,7 +157,9 @@ async function validJsonButWrongShapeIsReported() {
     JSON.stringify({
       version: 1,
       interrupted: false,
-      turns: [{ id: 'a', role: 'assistant', content: '', steps: [{ callId: 'c', tool: 't', args: {}, status: 'zzz' }] }],
+      turns: [
+        { id: 'a', role: 'assistant', content: '', steps: [{ callId: 'c', tool: 't', args: {}, status: 'zzz' }] },
+      ],
     }),
     'utf8'
   )
@@ -174,7 +176,11 @@ function theSchemaAcceptsWhatWeWrite() {
   // The module validates on read, so a snapshot the schema rejects could never be read back. If this
   // fails, every save would produce a file that looks corrupt on the next load.
   const parsed = transcriptSnapshotSchema.safeParse(realisticSnapshot())
-  assert.equal(parsed.success, true, `the written shape must satisfy the read schema: ${JSON.stringify(parsed.error?.issues)}`)
+  assert.equal(
+    parsed.success,
+    true,
+    `the written shape must satisfy the read schema: ${JSON.stringify(parsed.error?.issues)}`
+  )
   results.push('the snapshot we write satisfies the schema we read with')
 }
 

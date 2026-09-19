@@ -10,8 +10,7 @@ const path = require('path')
 
 module.exports = {
   app: {
-    getPath: () =>
-      process.env.SAM_TEST_USER_DATA || path.join(require('os').tmpdir(), 'sam-ai-sessions-test'),
+    getPath: () => process.env.SAM_TEST_USER_DATA || path.join(require('os').tmpdir(), 'sam-ai-sessions-test'),
   },
   safeStorage: {
     isEncryptionAvailable: () => false,

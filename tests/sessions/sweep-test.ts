@@ -41,10 +41,7 @@ function setUserData(dir: string): void {
 
 function testRule(): void {
   // Two orphaned files and one live one: only the orphans are selected.
-  const picked = orphanedTranscriptFiles(
-    [`${ORPHAN_A}.json`, `${ORPHAN_B}.json`, `${LIVE_ID}.json`],
-    [LIVE_ID]
-  )
+  const picked = orphanedTranscriptFiles([`${ORPHAN_A}.json`, `${ORPHAN_B}.json`, `${LIVE_ID}.json`], [LIVE_ID])
   check(
     'the rule selects exactly the files with no metadata',
     picked.length === 2 && picked.includes(ORPHAN_A) && picked.includes(ORPHAN_B),

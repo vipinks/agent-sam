@@ -169,11 +169,12 @@ async function commandExitEmitsOnce() {
       return child
     }) as never
 
-    const chunks = await drain(
-      runCommand({ command: 'echo ok', cwd: root, signal: abortSignal().signal, spawnImpl })
-    )
+    const chunks = await drain(runCommand({ command: 'echo ok', cwd: root, signal: abortSignal().signal, spawnImpl }))
 
-    assert.ok(chunks.some((c) => c.includes('EXIT_CODE:0')), 'the run should report its code')
+    assert.ok(
+      chunks.some((c) => c.includes('EXIT_CODE:0')),
+      'the run should report its code'
+    )
     assert.equal(sink.exited.length, 1, `expected exactly one command-exited, got ${sink.exited.length}`)
     assert.equal(sink.written.length, 0, 'a command is not a file write')
 
@@ -297,10 +298,7 @@ function theModuleDeclaresTheEvent() {
   const onChanged = workspaceModule.record.onChanged as { kind?: string } | undefined
   assert.ok(onChanged, 'workspace must declare the onChanged event')
   assert.equal(onChanged.kind, 'event', 'it must be an event, not a procedure')
-  assert.ok(
-    (terminalModule.record.execute as { kind?: string }).kind === 'stream',
-    'terminal.execute stays a stream'
-  )
+  assert.ok((terminalModule.record.execute as { kind?: string }).kind === 'stream', 'terminal.execute stays a stream')
   results.push('workspace declares onChanged as an event')
 }
 

@@ -31,10 +31,7 @@ function requestShaping() {
   assert.equal(openai.headers.authorization, 'Bearer sk-test')
   assert.equal(openai.body.stream, true)
 
-  assert.equal(
-    buildRequest('deepseek', 'k', 'deepseek-chat', []).url,
-    'https://api.deepseek.com/v1/chat/completions'
-  )
+  assert.equal(buildRequest('deepseek', 'k', 'deepseek-chat', []).url, 'https://api.deepseek.com/v1/chat/completions')
 
   const openrouter = buildRequest('openrouter', 'k', 'm', [])
   assert.equal(openrouter.url, 'https://openrouter.ai/api/v1/chat/completions')
@@ -55,7 +52,10 @@ function requestShaping() {
   assert.equal(anthropic.body.stream, true)
   assert.ok(!('authorization' in anthropic.headers))
 
-  assert.throws(() => buildRequest('nope', 'k', 'm', []), (e: { code?: string }) => e.code === 'UNKNOWN_PROVIDER')
+  assert.throws(
+    () => buildRequest('nope', 'k', 'm', []),
+    (e: { code?: string }) => e.code === 'UNKNOWN_PROVIDER'
+  )
   results.push('request shaping')
 }
 

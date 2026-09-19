@@ -112,7 +112,11 @@ async function phase2() {
   if (store) {
     record('phase 2 metadata readable', true, 'ok')
     record('phase 2 session survived', store.sessions?.[0]?.id === SESSION_ID, JSON.stringify(store.sessions?.[0]?.id))
-    record('phase 2 title survived', store.sessions?.[0]?.title === 'make a fibonacci script', store.sessions?.[0]?.title)
+    record(
+      'phase 2 title survived',
+      store.sessions?.[0]?.title === 'make a fibonacci script',
+      store.sessions?.[0]?.title
+    )
     record('phase 2 active id survived', store.activeSessionId === SESSION_ID, String(store.activeSessionId))
   }
 

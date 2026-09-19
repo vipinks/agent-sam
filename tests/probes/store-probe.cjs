@@ -26,9 +26,7 @@ function toggleModel(state, { providerId, modelId }) {
   const enabled = current.enabledModels.includes(modelId)
   state.providers[providerId] = {
     ...current,
-    enabledModels: enabled
-      ? current.enabledModels.filter((id) => id !== modelId)
-      : [...current.enabledModels, modelId],
+    enabledModels: enabled ? current.enabledModels.filter((id) => id !== modelId) : [...current.enabledModels, modelId],
   }
 }
 

@@ -92,9 +92,7 @@ function toolCallFrames(calls: Array<{ id: string; name: string; args: unknown }
         choices: [
           {
             delta: {
-              tool_calls: [
-                { index, id: call.id, type: 'function', function: { name: call.name, arguments: '' } },
-              ],
+              tool_calls: [{ index, id: call.id, type: 'function', function: { name: call.name, arguments: '' } }],
             },
           },
         ],

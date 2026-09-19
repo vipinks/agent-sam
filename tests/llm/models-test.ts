@@ -70,19 +70,23 @@ function tolerantShapes() {
   assert.equal(openrouter[0].name, 'Claude 3.5')
 
   // A bare array of ids, which some gateways return.
-  assert.deepEqual(parseModels('deepseek', ['deepseek-chat', 'deepseek-reasoner']).map((m) => m.id), [
-    'deepseek-chat',
-    'deepseek-reasoner',
-  ])
+  assert.deepEqual(
+    parseModels('deepseek', ['deepseek-chat', 'deepseek-reasoner']).map((m) => m.id),
+    ['deepseek-chat', 'deepseek-reasoner']
+  )
 
   // `{ models: [...] }` instead of `{ data: [...] }`.
-  assert.deepEqual(parseModels('opencode', { models: [{ id: 'deepseek-v4-flash' }] }).map((m) => m.id), [
-    'deepseek-v4-flash',
-  ])
+  assert.deepEqual(
+    parseModels('opencode', { models: [{ id: 'deepseek-v4-flash' }] }).map((m) => m.id),
+    ['deepseek-v4-flash']
+  )
 
   // Duplicates collapse, and entries with no id are dropped rather than becoming blanks.
   const messy = parseModels('openai', { data: [{ id: 'a' }, { id: 'a' }, { object: 'model' }, null, 'b'] })
-  assert.deepEqual(messy.map((m) => m.id), ['a', 'b'])
+  assert.deepEqual(
+    messy.map((m) => m.id),
+    ['a', 'b']
+  )
 
   results.push('tolerates name-maps, bare arrays, duplicates and junk rows')
 }
@@ -130,7 +134,10 @@ async function httpProviders() {
     const models = await fetchModels(providerId, 'sk-test', mock.fn)
     assert.equal(mock.calls[0].url, expectedUrl, `${providerId} url`)
     assert.equal((mock.calls[0].init.headers as Record<string, string>).authorization, 'Bearer sk-test')
-    assert.deepEqual(models.map((m) => m.id), ['m-1', 'm-2'])
+    assert.deepEqual(
+      models.map((m) => m.id),
+      ['m-1', 'm-2']
+    )
   }
   results.push('each OpenAI-compatible provider hits its own /v1/models with the bearer key')
 }
@@ -166,14 +173,8 @@ async function failures() {
 
   // Transport failure -> NETWORK_ERROR
   await assert.rejects(
-    () =>
-      fetchModels(
-        'openai',
-        'k',
-        mockFetch(() => Promise.reject(new TypeError('getaddrinfo ENOTFOUND'))).fn
-      ),
-    (e: { code?: string; message?: string }) =>
-      e.code === 'NETWORK_ERROR' && /api\.openai\.com/.test(e.message ?? '')
+    () => fetchModels('openai', 'k', mockFetch(() => Promise.reject(new TypeError('getaddrinfo ENOTFOUND'))).fn),
+    (e: { code?: string; message?: string }) => e.code === 'NETWORK_ERROR' && /api\.openai\.com/.test(e.message ?? '')
   )
 
   // A body that is not JSON -> PROVIDER_ERROR rather than a crash.
