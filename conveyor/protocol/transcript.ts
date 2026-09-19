@@ -11,8 +11,14 @@ import { z } from 'zod'
  * to the reducer without a translation layer to keep in step.
  */
 
-/** Bumped when the persisted shape changes in a way readers must know about. */
-export const TRANSCRIPT_VERSION = 1
+/**
+ * Bumped when the persisted shape changes in a way readers must know about.
+ *
+ * Version 2 widened a tool step's status with `queued`: consent is per call now, so a frame whose
+ * calls are waiting behind the one being decided has to be describable on disk as well as live. An
+ * older build reading such a file refuses it rather than silently showing a queue as one pause.
+ */
+export const TRANSCRIPT_VERSION = 2
 
 /**
  * A tool step. `status` is the widened set, not just the settled ones: a turn interrupted by a
@@ -23,7 +29,7 @@ const toolStepSchema = z.object({
   callId: z.string(),
   tool: z.string(),
   args: z.record(z.string(), z.unknown()),
-  status: z.enum(['running', 'awaiting', 'denied', 'ok', 'failed']),
+  status: z.enum(['running', 'awaiting', 'queued', 'denied', 'ok', 'failed']),
   output: z.string().optional(),
   code: z.string().optional(),
 })

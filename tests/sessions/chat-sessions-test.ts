@@ -6,10 +6,7 @@
  * cards survives a trip through JSON in a shape the reducer can still render.
  */
 import { strict as assert } from 'node:assert'
-import {
-  backdateStore,
-  createStoreHarness,
-} from './chat-sessions-store-harness'
+import { backdateStore, createStoreHarness } from './chat-sessions-store-harness'
 import {
   createDebouncedSave,
   isDirty,
@@ -121,6 +118,24 @@ function thePauseIsNotPersisted() {
   // The run behind a pause cannot survive a restart, so writing it would restore a card that looks
   // actionable but is not.
   assert.equal(mayPersist(awaiting), false, 'a pause awaiting approval must not be written')
+
+  // The same pause seen from the queue: the call behind the one being decided is part of the same
+  // unresumable state, so it must hold the save back just as the awaiting card does.
+  const queued: TranscriptState = {
+    interrupted: false,
+    turns: [
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: '',
+        steps: [
+          { callId: 'c1', tool: 'write_file', args: { path: 'a' }, status: 'awaiting' },
+          { callId: 'c2', tool: 'write_file', args: { path: 'b' }, status: 'queued' },
+        ],
+      },
+    ],
+  }
+  assert.equal(mayPersist(queued), false, 'a queue behind the decision must not be written either')
   assert.equal(mayPersist(transcriptWithTools()), true, 'ordinary turns are written')
 
   results.push('a transcript paused for approval is not persisted')
@@ -219,10 +234,7 @@ function numberingResumesPastRestoredTurns() {
   resumeTurnNumbering(restored.turns)
 
   const next = startAssistantTurn()
-  assert.ok(
-    !restored.turns.some((t) => t.id === next.id),
-    `a new turn must not reuse a restored id (${next.id})`
-  )
+  assert.ok(!restored.turns.some((t) => t.id === next.id), `a new turn must not reuse a restored id (${next.id})`)
 
   // And a user turn, from the same counter.
   const nextUser = startUserTurn('hello')

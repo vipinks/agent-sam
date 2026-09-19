@@ -28,6 +28,7 @@ if (!existsSync(esbuild)) throw new Error(`esbuild not found at ${esbuild}`)
 /** Every node suite, with the aliases it needs. */
 const SUITES = [
   { name: 'agent loop', src: 'agent/agent-test.ts' },
+  { name: 'approval gate', src: 'agent/approval-gate-test.ts' },
   { name: 'tool protocol', src: 'agent/agent-protocol-test.ts' },
   { name: 'tool protocol (batch)', src: 'agent/agent-protocol2-test.ts' },
   { name: 'workspace events', src: 'agent/events-test.ts' },

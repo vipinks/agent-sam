@@ -49,9 +49,13 @@ export function isDirty(state: TranscriptState, lastSaved: TranscriptSnapshot | 
  * saving it would restore a card that looks actionable but is not. Everything else is saved, which
  * is what makes an unfinished turn — a `running` step — come back as interrupted rather than as a
  * lost conversation.
+ *
+ * `queued` is checked alongside `awaiting` for the same reason and not for symmetry: a call waiting
+ * its turn is part of the same unresumable pause, and a restored queue would look like a decision
+ * the user could still make.
  */
 export function mayPersist(state: TranscriptState): boolean {
-  return !state.turns.some((turn) => turn.steps.some((step) => step.status === 'awaiting'))
+  return !state.turns.some((turn) => turn.steps.some((step) => step.status === 'awaiting' || step.status === 'queued'))
 }
 
 /** Coalescing delay for the post-turn save. Roughly one pause in a person's reading. */

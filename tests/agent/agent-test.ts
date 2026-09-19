@@ -47,7 +47,9 @@ function twoRoundFetch(log: unknown[]): (url: string, init: RequestInit) => Prom
             {
               delta: {
                 role: 'assistant',
-                tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '' } }],
+                tool_calls: [
+                  { index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '' } },
+                ],
               },
             },
           ],
@@ -272,7 +274,9 @@ function singleToolCallFetch(name: string, args: unknown, log: unknown[]) {
           {
             delta: {
               role: 'assistant',
-              tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+              tool_calls: [
+                { index: 0, id: 'call_1', type: 'function', function: { name, arguments: JSON.stringify(args) } },
+              ],
             },
           },
         ],
@@ -292,7 +296,11 @@ async function resumeAfterApproval() {
         role: 'assistant' as const,
         content: '',
         tool_calls: [
-          { id: 'call_1', type: 'function' as const, function: { name: 'write_file', arguments: '{"path":"x.txt","content":"hi"}' } },
+          {
+            id: 'call_1',
+            type: 'function' as const,
+            function: { name: 'write_file', arguments: '{"path":"x.txt","content":"hi"}' },
+          },
         ],
       },
     ]
@@ -373,7 +381,10 @@ async function resumeAfterDenial() {
     const body = (log[0] as { body: { messages: Array<Record<string, unknown>> } }).body
     const toolTurn = body.messages.find((m) => m.role === 'tool')
     assert.ok(toolTurn, 'the denial must be fed back so the model can explain it')
-    assert.deepEqual(chunks.map((c) => c.type), ['tool_result', 'text_delta', 'done'])
+    assert.deepEqual(
+      chunks.map((c) => c.type),
+      ['tool_result', 'text_delta', 'done']
+    )
 
     results.push('a denied call is fed back as its result, so the model can explain the failure')
   } finally {
@@ -402,7 +413,12 @@ async function stepBudgetStopsTheLoop() {
             {
               delta: {
                 tool_calls: [
-                  { index: 0, id: `call_${call}`, type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+                  {
+                    index: 0,
+                    id: `call_${call}`,
+                    type: 'function',
+                    function: { name: 'read_file', arguments: '{"path":"a.txt"}' },
+                  },
                 ],
               },
             },

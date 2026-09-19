@@ -6,6 +6,7 @@ import { defineModule, stream } from '../init'
 import { readApiKey } from './settings'
 import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type ToolDefinition } from './llm-engine'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
+import { nextCallToPresent, type FrameCall, type GateDecision } from '../protocol/approval'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
@@ -29,6 +30,13 @@ import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
  * loop is therefore split: `chatWithTools` runs until a call needs approval and then yields
  * `awaiting_approval` and ends, and `resume` continues from the decision. The UI's Approve button
  * starts a new stream rather than unpausing an old one.
+ *
+ * Consent is per call. A frame may ask for several calls that each need approval, and one click must
+ * not answer all of them: the loop presents the first, waits for its decision, runs or refuses it,
+ * appends its tool message, and only then presents the next — re-asking the model once the frame's
+ * decisions are all resolved. `nextCallToPresent` owns which call is next, so the order is stated
+ * once and tested directly. The batch invariant from the previous fix still holds: the model is not
+ * asked anything until every `tool_call_id` in the frame has a tool message, denials included.
  */
 
 /** Model round-trips allowed in one run. A model that will not stop calling tools must not spin. */
@@ -275,6 +283,7 @@ export type AgentChunk =
   | { type: 'tool_result'; callId: string; tool: string; ok: boolean; code?: string; output: string }
   | {
       type: 'awaiting_approval'
+      /** The one call this decision is about. Every other card in the queue is not yet actionable. */
       callId: string
       tool: string
       args: Record<string, unknown>
@@ -285,10 +294,10 @@ export type AgentChunk =
        */
       messages: ChatMessage[]
       /**
-       * Every call waiting on this decision, exactly as the model sent them. The one decision covers
-       * all of them: they arrived in one assistant turn, and the provider requires an answer for each
-       * before the next request. Resuming with the model's own calls also means the run executes what
-       * was approved rather than a rebuild of it, which a display layer could have altered.
+       * The calls from this frame still awaiting a decision, this one first, exactly as the model
+       * sent them. They arrived in one assistant turn and the provider requires an answer for each
+       * before the next request, so the queue is carried rather than rebuilt: the run executes what
+       * was approved rather than a display layer's reconstruction of it.
        */
       calls: ToolCall[]
       /** Steps consumed so far, so the budget spans approvals rather than resetting on each one. */
@@ -340,9 +349,39 @@ export function describeToolCall(tool: string, args: Record<string, unknown>): s
 }
 
 interface PendingDecision {
-  /** Every gated call from the paused turn, answered together by the one decision. */
+  /**
+   * The gated queue from the paused frame, the decided call first.
+   *
+   * Only the head is answered by this decision. The rest stay queued and are presented one at a
+   * time, because consent is per call.
+   */
   calls: ToolCall[]
   denied: boolean
+}
+
+/**
+ * Put one gated call in front of the user, with the queue behind it.
+ *
+ * The queue travels with the chunk so the renderer can show what is still coming, and is handed back
+ * unchanged on resume — which is how the run re-enters with the model's own calls rather than a
+ * rebuild of them.
+ */
+async function presentCall(
+  queue: ToolCall[],
+  history: ChatMessage[],
+  steps: number
+): Promise<AgentChunk> {
+  const call = queue[0]
+
+  return {
+    type: 'awaiting_approval',
+    callId: call.id,
+    tool: call.function.name,
+    args: argsForDisplay(call),
+    calls: queue,
+    messages: history.map((m) => ({ ...m })),
+    steps,
+  }
 }
 
 interface LoopOptions {
@@ -372,31 +411,48 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   const history: ChatMessage[] = opts.messages.map((m) => ({ ...m }))
   let steps = opts.steps ?? 0
 
-  // A resumed run re-enters with the paused batch already decided. `opts.messages` already ends with
-  // the assistant turn that asked for these calls, so nothing is reconstructed here — pushing it
-  // again would duplicate the turn and orphan the other calls in the same batch.
+  // A resumed run re-enters with the head of the paused queue already decided. `opts.messages`
+  // already ends with the assistant turn that asked for these calls, so nothing is reconstructed
+  // here — pushing it again would duplicate the turn and orphan the other calls in the same frame.
   //
-  // Every gated call is answered here, one tool message each, because the provider requires a result
-  // for every `tool_call_id` the assistant turn declared before the next request. Answering only the
-  // first would leave the rest unanswered, which is the failure this whole path exists to avoid.
+  // Only this one call is answered now. Its decision settles it with its own tool message, and the
+  // rest of the queue is presented in turn: the model is not re-asked until every call in the frame
+  // has been run or refused, because the provider requires a result for each `tool_call_id` the
+  // assistant turn declared before the next request.
   if (opts.pending) {
-    for (const call of opts.pending.calls) {
-      const tool = call.function.name
+    const queue = opts.pending.calls
+    const decided = queue[0]
+    const tool = decided.function.name
 
-      const outcome: ToolOutcome = opts.pending.denied
-        ? {
-            ok: false,
-            code: 'DENIED',
-            output:
-              'The user denied permission to run this tool. Do not retry it. Explain what you were trying to do and ask how they would like to proceed.',
-          }
-        : await executeTool(tool, call.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
+    const outcome: ToolOutcome = opts.pending.denied
+      ? {
+          ok: false,
+          code: 'DENIED',
+          output:
+            'The user denied permission to run this tool. Do not retry it. Explain what you were trying to do and ask how they would like to proceed.',
+        }
+      : await executeTool(tool, decided.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
 
-      // The result is yielded as well as recorded, so the card already on screen can be completed
-      // rather than left looking like it is still running.
-      yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
-      history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
-      steps += 1
+    // The result is yielded as well as recorded, so the card already on screen can be completed
+    // rather than left looking like it is still running.
+    yield { type: 'tool_result', callId: decided.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
+    history.push({ role: 'tool', tool_call_id: decided.id, content: outcome.output })
+    steps += 1
+
+    // Who is next is the gate's decision, not this loop's: the frame's calls plus the decision just
+    // received, and the first one still unanswered is presented. A queue whose every call is now
+    // answered falls through to the model with the whole frame settled.
+    const frame: FrameCall[] = queue.map((call) => ({
+      callId: call.id,
+      needsApproval: needsApproval(call.function.name),
+    }))
+    const decisions: GateDecision[] = [{ callId: decided.id, outcome: opts.pending.denied ? 'denied' : 'approved' }]
+    const next = nextCallToPresent(frame, decisions)
+
+    if (next.kind === 'present') {
+      const index = queue.findIndex((call) => call.id === next.callId)
+      yield await presentCall(queue.slice(index), history, steps)
+      return
     }
   }
 
@@ -456,10 +512,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       return
     }
 
-    // Calls that need a decision before they can run. Collected rather than pausing at the first one:
-    // the assistant turn was recorded with every call it asked for, and the provider requires an
-    // answer for each. Pausing per call would resolve one and leave the siblings — the exact shape
-    // that produces "insufficient tool messages following tool_calls".
+    // Calls that need a decision before they can run. Collected rather than executed, and presented
+    // one at a time from here on: the assistant turn was recorded with every call it asked for, so
+    // the whole frame must be answered before the next request — but answering it is not the same as
+    // asking about it all at once, and asking about it all at once is what gave one click the power
+    // to authorise calls the user never looked at.
     const gated: ToolCall[] = []
 
     for (const call of calls) {
@@ -481,20 +538,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
     }
 
-    // The history is handed over exactly as it stands, with every gated call. `resume` answers all of
-    // them from the one decision and re-enters the loop, so the run continues rather than restarting
-    // this round-trip.
+    // The history is handed over exactly as it stands, with the whole gated queue but only its head
+    // presented. `resume` answers that one call, then presents the next, and so on until the frame is
+    // settled — so the run continues rather than restarting this round-trip.
     if (gated.length > 0) {
-      const first = gated[0]
-      yield {
-        type: 'awaiting_approval',
-        callId: first.id,
-        tool: first.function.name,
-        args: argsForDisplay(first),
-        calls: gated,
-        messages: history.map((m) => ({ ...m })),
-        steps,
-      }
+      yield await presentCall(gated, history, steps)
       return
     }
   }
@@ -553,6 +601,10 @@ export const agentModule = defineModule({
   /**
    * Continue a run that paused for approval.
    *
+   * The decision answers one call. If the paused frame had more calls waiting, the loop presents the
+   * next one instead of re-asking the model, so consent stays per call while the frame's tool-call
+   * contract is still satisfied in full.
+   *
    * Denial does not end the conversation: the refusal is fed back as the tool's result, so the model
    * can explain itself rather than the turn dying silently.
    */
@@ -563,7 +615,10 @@ export const agentModule = defineModule({
       messages: z.array(messageSchema).min(1),
       workspaceRoot: z.string().nullable(),
       autoApprove: z.boolean().optional(),
-      /** Every gated call from the paused turn; one decision covers the whole batch. */
+      /**
+       * The gated queue as it was handed over: the decided call first, the rest still to present.
+       * The decision answers the head only.
+       */
       calls: z.array(callSchema).min(1, 'At least one call must be answered'),
       steps: z.number().int().min(0).optional(),
       decision: z.enum(['approved', 'denied']),

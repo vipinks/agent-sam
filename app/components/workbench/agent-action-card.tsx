@@ -3,6 +3,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleCheck,
+  Clock,
   FilePenLine,
   FileText,
   Loader2,
@@ -23,10 +24,10 @@ import type { ToolStep } from './agent-session'
  * src/app.ts") rather than naming the tool, because the tool name is the model's vocabulary, not the
  * user's.
  *
- * A step awaiting consent is the one case that is forced open: a collapsed prompt would hide the
- * decision the run is blocked on. Approving or denying there decides every action waiting in the
- * same turn, because they arrived in one assistant message and the provider requires an answer for
- * each of them before the next request.
+ * Two states are forced open, because a collapsed prompt would hide something the run is blocked on:
+ * `awaiting` (your decision is the next thing that happens) and `queued` (this call is waiting its
+ * turn behind the one being decided). Only `awaiting` has buttons — consent is per call, so a queued
+ * card shows that it is coming without offering a decision it is not entitled to yet.
  */
 export function AgentActionCard({
   step,
@@ -39,7 +40,8 @@ export function AgentActionCard({
 }) {
   const [open, setOpen] = useState(false)
   const awaiting = step.status === 'awaiting'
-  const expanded = open || awaiting
+  const queued = step.status === 'queued'
+  const expanded = open || awaiting || queued
 
   return (
     <div
@@ -47,7 +49,10 @@ export function AgentActionCard({
         'overflow-hidden rounded-md border text-[12px]',
         // The brand token rather than a warning colour, which this theme does not define: a pending
         // decision should read as "needs you", not as an error.
-        awaiting ? 'border-brand/50 bg-brand-soft/40' : 'border-border bg-muted/30'
+        awaiting ? 'border-brand/50 bg-brand-soft/40' : 'border-border bg-muted/30',
+        // A queued call is visibly inert rather than dimmed out of existence: the user should see
+        // what is coming without mistaking it for something they can act on now.
+        queued && 'opacity-70'
       )}
     >
       <button
@@ -90,10 +95,14 @@ export function AgentActionCard({
               <Button size="sm" variant="outline" onClick={() => onDeny?.(step.callId)}>
                 Deny
               </Button>
-              <span className="text-[11px] text-muted-foreground">
-                Decides every action waiting here; they are answered together.
-              </span>
+              <span className="text-[11px] text-muted-foreground">Decides this action only.</span>
             </div>
+          )}
+
+          {queued && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Waiting its turn — you will be asked about this one separately.
+            </p>
           )}
         </div>
       )}
@@ -127,6 +136,8 @@ function StatusMark({ status }: { status: ToolStep['status'] }) {
       return <XCircle className="size-3.5 shrink-0 text-muted-foreground" aria-label="denied" />
     case 'awaiting':
       return <ShieldQuestion className="size-3.5 shrink-0 text-brand" aria-label="needs approval" />
+    case 'queued':
+      return <Clock className="size-3.5 shrink-0 text-muted-foreground" aria-label="waiting its turn" />
   }
 }
 

@@ -133,11 +133,11 @@ function pauseIsReported() {
 }
 
 /**
- * One decision covers every gated call in the turn, so every one of their cards must say so — not
- * just the call the pause names. Leaving a sibling showing "running" would misreport a run that is
- * actually blocked on the user.
+ * One decision answers one call. Consent is per call, so the call being decided is `awaiting` and
+ * everything behind it in the same frame is `queued`: still visible, still explained, but not
+ * actionable. Marking a sibling `awaiting` would offer a batch approval the gate no longer performs.
  */
-function everyGatedCallIsMarked() {
+function onlyTheHeadOfAGatedFrameIsActionable() {
   const calls = [
     { id: 'w1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a"}' } },
     { id: 'w2', type: 'function', function: { name: 'run_command', arguments: '{"command":"x"}' } },
@@ -148,11 +148,48 @@ function everyGatedCallIsMarked() {
     { type: 'awaiting_approval', callId: 'w1', tool: 'write_file', args: { path: 'a' }, messages: [], calls, steps: 1 },
   ])
 
-  assert.equal(turns[1].steps[0].status, 'awaiting', 'the named call waits')
-  assert.equal(turns[1].steps[1].status, 'awaiting', 'so does its sibling, which one decision also answers')
-  assert.deepEqual((effects[2].approval as Record<string, unknown>).calls, calls)
+  assert.equal(turns[1].steps[0].status, 'awaiting', 'the presented call waits on the user')
+  assert.equal(turns[1].steps[1].status, 'queued', 'its sibling is visibly waiting its turn, not actionable')
+  const approval = effects[2].approval as Record<string, unknown>
+  assert.deepEqual(approval.calls, calls, 'the whole queue travels, so the loop knows what is left')
+  assert.equal(approval.callId, 'w1', 'but the pause names only the call being decided')
 
-  results.push('every call in a gated batch is marked as awaiting the one decision')
+  results.push('only the presented call of a gated frame is actionable; the rest queue visibly')
+}
+
+/**
+ * A queue whose head is not the call named in the pause would be a UI that disagrees with the loop
+ * about what the user is being asked. The queue is authoritative, so it wins.
+ */
+function theQueueDecidesWhichCardIsActionable() {
+  const calls = [
+    { id: 'w1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a"}' } },
+    { id: 'w2', type: 'function', function: { name: 'run_command', arguments: '{"command":"x"}' } },
+  ]
+  const { turns, effects } = run([
+    { type: 'tool_call_start', callId: 'w1', tool: 'write_file', args: { path: 'a' } },
+    { type: 'tool_call_start', callId: 'w2', tool: 'run_command', args: { command: 'x' } },
+    // Deliberately naming the second call: a mismatched chunk must not move the decision to it.
+    {
+      type: 'awaiting_approval',
+      callId: 'w2',
+      tool: 'run_command',
+      args: { command: 'x' },
+      messages: [],
+      calls,
+      steps: 1,
+    },
+  ])
+
+  assert.equal(turns[1].steps[0].status, 'awaiting', 'the queue head is what the user decides on')
+  assert.equal(turns[1].steps[1].status, 'queued', 'and the call the chunk named is not promoted')
+  assert.equal(
+    (effects[2].approval as Record<string, unknown>).callId,
+    'w1',
+    'the decision is attributed to the head, so the resume answers the right call'
+  )
+
+  results.push('the queue, not the chunk, decides which card is actionable')
 }
 
 function pauseWithoutACallIsNotActionable() {
@@ -237,7 +274,10 @@ function identityIsPreserved() {
 }
 
 function doneIsReported() {
-  const { effects } = run([{ type: 'text_delta', text: 'hi' }, { type: 'done', reason: 'complete', steps: 2 }])
+  const { effects } = run([
+    { type: 'text_delta', text: 'hi' },
+    { type: 'done', reason: 'complete', steps: 2 },
+  ])
   assert.deepEqual(effects[1].done, { reason: 'complete' })
 
   const capped = run([{ type: 'done', reason: 'max_steps', steps: 10 }])
@@ -252,7 +292,8 @@ function main() {
   step('unknown call', resultForAnUnknownCallIsIgnored)
   step('multiple calls', multipleCallsInOneTurn)
   step('pause', pauseIsReported)
-  step('every gated call marked', everyGatedCallIsMarked)
+  step('gated frame head', onlyTheHeadOfAGatedFrameIsActionable)
+  step('queue decides the head', theQueueDecidesWhichCardIsActionable)
   step('pause without a call', pauseWithoutACallIsNotActionable)
   step('decisions', decisions)
   step('history', historyIsTextOnly)

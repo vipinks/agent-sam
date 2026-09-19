@@ -47,10 +47,7 @@ function assertToolContract(messages: WireMessage[], where: string): void {
       `${where}: assistant tool_calls [${ids.join(', ')}] must be followed by ${ids.length} tool messages, found ${answered.length}`
     )
     for (const id of ids) {
-      assert.ok(
-        answered.includes(id),
-        `${where}: no tool message answers '${id}' (got ${answered.join(', ')})`
-      )
+      assert.ok(answered.includes(id), `${where}: no tool message answers '${id}' (got ${answered.join(', ')})`)
     }
   }
 }
@@ -109,9 +106,7 @@ function toolCallFrames(calls: Array<{ id: string; name: string; args: unknown }
   calls.forEach((c, index) => {
     frames.push(
       JSON.stringify({
-        choices: [
-          { delta: { tool_calls: [{ index, function: { arguments: JSON.stringify(c.args) } }] } },
-        ],
+        choices: [{ delta: { tool_calls: [{ index, function: { arguments: JSON.stringify(c.args) } }] } }],
       })
     )
   })
@@ -120,10 +115,7 @@ function toolCallFrames(calls: Array<{ id: string; name: string; args: unknown }
 }
 
 function answers(...texts: string[]): string[] {
-  return [
-    ...texts.map((t) => JSON.stringify({ choices: [{ delta: { content: t } }] })),
-    '[DONE]',
-  ]
+  return [...texts.map((t) => JSON.stringify({ choices: [{ delta: { content: t } }] })), '[DONE]']
 }
 
 async function collect(iter: AsyncIterable<unknown>): Promise<Array<Record<string, unknown>>> {
@@ -144,6 +136,10 @@ async function step(label: string, fn: () => void | Promise<void>): Promise<void
  *
  * Every request the loop makes is validated, so if the second model call goes out with the second
  * call still unanswered, this fails with the provider's own complaint.
+ *
+ * Consent is per call, so this is two decisions rather than one: the first resume is asked about
+ * call one only, and the second about call two. That the model is not contacted in between is what
+ * the validator proves.
  */
 async function twoGatedCallsApproveOneDenyOne() {
   const root = mkdtempSync(join(tmpdir(), 'sam-proto2-'))
@@ -172,42 +168,69 @@ async function twoGatedCallsApproveOneDenyOne() {
       fetchImpl: fetchImpl as never,
     }
 
-    // Round 1: both calls need approval, so the run pauses.
-    const first = await collect(
-      runAgentLoop({ ...base, messages: [{ role: 'user', content: 'run two commands' }] })
-    )
+    // Round 1: both calls need approval, so the run pauses on the first.
+    const first = await collect(runAgentLoop({ ...base, messages: [{ role: 'user', content: 'run two commands' }] }))
     const pause = first.find((c) => c.type === 'awaiting_approval')
     assert.ok(pause, `expected a pause, got ${JSON.stringify(first.map((c) => c.type))}`)
+    assert.equal(pause.callId, 'c1', 'the first call is the one being asked about')
+    assert.deepEqual(
+      (pause.calls as Array<{ id: string }>).map((c) => c.id),
+      ['c1', 'c2'],
+      'the queue behind it is carried, so the next pause knows what is left'
+    )
 
-    // One decision covers the whole gated batch, so a single resume must answer both calls. Denying
-    // here exercises the denial path: every call still needs its tool message.
+    // Decision one: approve c1. The loop must run it and come back asking about c2 — not about both,
+    // and not about neither.
     const second = await collect(
       runAgentLoop({
         ...base,
         messages: pause.messages as never,
         steps: pause.steps as number,
-        pending: { calls: pause.calls as never, denied: true },
+        pending: { calls: pause.calls as never, denied: false },
+      })
+    )
+    assert.equal(seen.length, 1, 'the model must not be asked anything while a call is undecided')
+    const secondPause = second.find((c) => c.type === 'awaiting_approval')
+    assert.ok(secondPause, `expected a second pause, got ${JSON.stringify(second.map((c) => c.type))}`)
+    assert.equal(secondPause.callId, 'c2', 'the second call is presented on its own')
+    assert.deepEqual(
+      (secondPause.calls as Array<{ id: string }>).map((c) => c.id),
+      ['c2'],
+      'and it is alone in the queue now'
+    )
+    assert.ok(
+      second.some((c) => c.type === 'tool_result' && c.callId === 'c1'),
+      'the approved call reported its result before the next prompt'
+    )
+
+    // Decision two: deny c2, which completes the frame and lets the model be asked again.
+    const third = await collect(
+      runAgentLoop({
+        ...base,
+        messages: secondPause.messages as never,
+        steps: secondPause.steps as number,
+        pending: { calls: secondPause.calls as never, denied: true },
       })
     )
 
-    assert.equal(second.at(-1)?.type, 'done', `the run should finish: ${JSON.stringify(second.at(-1))}`)
+    assert.equal(third.at(-1)?.type, 'done', `the run should finish: ${JSON.stringify(third.at(-1))}`)
 
-    // Every request passed the validator, so reaching here means both calls were answered before any
-    // model request went out. Assert the shape explicitly too, since that is the reported symptom.
+    // Every request passed the validator, so reaching here means both calls were answered before the
+    // model was contacted again. Assert the shape explicitly too, since that is the reported symptom.
     const last = seen[seen.length - 1]
     const toolTurns = last.filter((m) => m.role === 'tool')
     assert.equal(toolTurns.length, 2, `expected 2 tool messages, got ${toolTurns.length}`)
-    assert.deepEqual(
-      toolTurns.map((m) => m.tool_call_id).sort(),
-      ['c1', 'c2'],
-      'both call ids must be answered'
+    assert.deepEqual(toolTurns.map((m) => m.tool_call_id).sort(), ['c1', 'c2'], 'both call ids must be answered')
+    // The denial is the one that must report itself; the approved call carries its command output.
+    const denied = toolTurns.find((turn) => turn.tool_call_id === 'c2')
+    assert.match(String(denied?.content), /denied/i, 'the refused call must report the refusal')
+    assert.doesNotMatch(
+      String(toolTurns.find((turn) => turn.tool_call_id === 'c1')?.content),
+      /denied/i,
+      'and the approved call must not be reported as denied'
     )
-    // Both were denied by the one decision.
-    for (const turn of toolTurns) {
-      assert.match(String(turn.content), /denied/i, `call ${turn.tool_call_id} must report the denial`)
-    }
 
-    results.push('a batch of two gated calls is fully answered by one decision')
+    results.push('a batch of two gated calls is answered one decision at a time, in full')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -320,12 +343,13 @@ async function mixedBatch() {
 
 function validatorHasTeeth() {
   // Negative controls, so a green suite above cannot be a validator that accepts anything.
-  assert.throws(() =>
-    assertToolContract([{ role: 'assistant', tool_calls: [{ id: 'a' }, { id: 'b' }] }], 'control')
-  )
+  assert.throws(() => assertToolContract([{ role: 'assistant', tool_calls: [{ id: 'a' }, { id: 'b' }] }], 'control'))
   assert.throws(() =>
     assertToolContract(
-      [{ role: 'assistant', tool_calls: [{ id: 'a' }, { id: 'b' }] }, { role: 'tool', tool_call_id: 'a' }],
+      [
+        { role: 'assistant', tool_calls: [{ id: 'a' }, { id: 'b' }] },
+        { role: 'tool', tool_call_id: 'a' },
+      ],
       'control'
     )
   )

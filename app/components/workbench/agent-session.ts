@@ -24,8 +24,15 @@ export interface ToolStep {
   callId: string
   tool: string
   args: Record<string, unknown>
-  /** 'running' until a result or a decision changes it. */
-  status: 'running' | 'awaiting' | 'denied' | 'ok' | 'failed'
+  /**
+   * 'running' until a result or a decision changes it.
+   *
+   * 'awaiting' and 'queued' are the two halves of a consent pause: the call being decided is
+   * 'awaiting', and the others in the same frame are 'queued' behind it. They are distinct states
+   * rather than one because only the awaiting call may be actioned — a queue that looked uniform
+   * would invite the batch approval that consent is per call to prevent.
+   */
+  status: 'running' | 'awaiting' | 'queued' | 'denied' | 'ok' | 'failed'
   output?: string
   /** A stable failure code, for the UI to branch on. */
   code?: string
@@ -49,12 +56,14 @@ export interface AgentTurn {
 export interface AgentChunkEffect {
   textDelta?: string
   approval?: {
+    /** The one call this decision is about. The rest of `calls` are queued behind it. */
     callId: string
     tool: string
     messages: ChatMessage[]
     /**
-     * Every call waiting on this decision, as the model sent them. One decision answers the whole
-     * batch, because the provider requires a result for each call in the turn that asked for them.
+     * The frame's calls still awaiting a decision, this one first, as the model sent them. Only the
+     * head is actioned; the others are carried so the card can show what is coming and so the run
+     * re-enters with the model's own calls rather than a rebuild of them.
      */
     calls: PendingCall[]
     steps: number
@@ -194,15 +203,17 @@ export function applyAgentChunk(
       const calls = Array.isArray(c.calls) ? (c.calls as PendingCall[]).filter((call) => call && call.id) : []
       if (calls.length === 0) return { turns, effect: {} }
 
-      // Every gated call is marked, not just the one the pause names: one decision answers the whole
-      // batch, so every card in it has to show that it is waiting.
+      // The head is the one call being asked about; the rest of the frame is behind it. The queue's
+      // order is authoritative — it is the frame's own order, which is what the loop walks.
+      const headId = calls[0].id
       let next = turns
-      for (const call of calls) {
-        next = updateStep(next, turnId, call.id, (step) => ({ ...step, status: 'awaiting' }))
+      next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting' }))
+      for (const call of calls.slice(1)) {
+        next = updateStep(next, turnId, call.id, (step) => ({ ...step, status: 'queued' }))
       }
       return {
         turns: next,
-        effect: { approval: { callId, tool: String(c.tool), messages, calls, steps } },
+        effect: { approval: { callId: headId || callId, tool: String(c.tool), messages, calls, steps } },
       }
     }
 

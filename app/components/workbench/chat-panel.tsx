@@ -51,11 +51,15 @@ function streamErrorMessage(error: unknown, providerName: string): string {
 /** What the agent is paused on, and everything needed to continue it. */
 interface PendingApproval {
   turnId: string
+  /** The one call this decision is about; the rest of `calls` are queued behind it. */
   callId: string
   tool: string
   /** The provider-shaped history the run handed over, echoed back untouched on resume. */
   messages: unknown[]
-  /** Every gated call from the paused turn; one decision answers all of them. */
+  /**
+   * The frame's calls still awaiting a decision, this one first, as the model sent them. The decision
+   * answers only the head; the loop presents the next one when this stream ends.
+   */
   calls: PendingCall[]
   steps: number
 }
@@ -72,6 +76,11 @@ interface PendingApproval {
  * history it paused with. Approving starts a second stream that continues from there, which is why
  * the loop spans two calls rather than one long-lived stream — conveyor streams are one-way, so
  * there is no channel to push a decision down mid-stream.
+ *
+ * Consent is per call, so a frame with several calls needing approval is a sequence of short streams
+ * rather than one long pause: decide the head, the loop runs it and hands back the next, until the
+ * frame is settled and the model is asked again. Only the head is ever actionable, and the pane holds
+ * exactly one pending decision at a time, which is what makes that true in the UI as well as in main.
  */
 export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
@@ -228,8 +237,7 @@ export function ChatPanel() {
               calls: effect.approval.calls,
               steps: effect.approval.steps,
             })
-            // The stream is over as far as these calls are concerned; the run continues on the
-            // decision.
+            // The stream is over as far as this call is concerned; the run continues on the decision.
             return
           }
 
@@ -313,11 +321,10 @@ export function ChatPanel() {
       if (!current || isStreaming) return
 
       setPending(null)
-      // Record the decision against every gated card, so none is left looking like it is waiting.
-      let next = messagesRef.current
-      for (const call of current.calls) {
-        next = resolveDecision(next, current.turnId, call.id, approved)
-      }
+      // Record the decision against the one call it was about. The cards queued behind it stay queued:
+      // the loop is about to present the next of them, and marking them decided here would claim
+      // consent the user has not given.
+      const next = resolveDecision(messagesRef.current, current.turnId, current.callId, approved)
       updateMessages(next)
 
       streamingTurnIdRef.current = current.turnId
@@ -328,8 +335,8 @@ export function ChatPanel() {
           providerId: activeProviderId,
           model: activeModel,
           // The history the loop paused with and the model's own calls — both handed back exactly as
-          // they came, so nothing is rebuilt from the display layer. Every call goes back in one
-          // request: the provider requires a result for each call the assistant turn declared.
+          // they came, so nothing is rebuilt from the display layer. The queue goes back whole while
+          // the decision answers its head, which is how the loop knows what to present next.
           messages: current.messages as never,
           workspaceRoot: rootPath,
           autoApprove,
