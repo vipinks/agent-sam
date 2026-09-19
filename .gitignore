@@ -8,3 +8,5 @@ temp
 *.tsbuildinfo
 # Local verification harnesses and reference captures (not part of the app)
 .preview
+.preview/
+.vscode/
