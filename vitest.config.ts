@@ -28,6 +28,13 @@ export default defineConfig({
     // Explicit imports rather than globals, so the eslint config needs no test-only additions.
     globals: false,
     restoreMocks: true,
+    // Vitest's 5000ms default is tight for the interaction tests here, which type into a real composer
+    // and wait for a store write — jsdom plus Testing Library work that costs seconds under load. A
+    // concurrent gate run (a build or the node suites alongside) was observed pushing
+    // `clips a long first message` past 5000ms and failing it on a green tree, which makes the suite
+    // report a product defect that is not one. Raised rather than worked around per-test: the margin
+    // is about machine contention, not about which test happens to be running when it happens.
+    testTimeout: 20000,
     // A failing React render should fail with a usable trace rather than a screenful of DOM.
     reporters: ['default'],
   },
