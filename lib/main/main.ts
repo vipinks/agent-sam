@@ -19,8 +19,10 @@ app.whenReady().then(() => {
   // Set app user model id for windows. Kept in step with the appId in electron-builder.yml, so the
   // Windows taskbar/notification identity, the installer entry and the window title all agree.
   electronApp.setAppUserModelId('com.samai.desktop')
-  // One line of evidence that the identity pin took effect, written before any window opens.
-  console.log(`[identity] ${identity.displayName} :: userData=${identity.userData}`)
+  // One line of evidence that the identity pin took effect, written before any window opens. Logged
+  // at warn level because this is the app's only startup assertion about where its data lives, and the
+  // house `no-console` rule allows warn/error precisely so a diagnostic does not have to weaken it.
+  console.warn(`[identity] ${identity.displayName} :: userData=${identity.userData}`)
 
   // Register the custom resources protocol once. The IPC surface (modules, stores, context) is
   // registered by the `@/conveyor/router` import side-effect via ./app.

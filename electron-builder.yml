@@ -1,44 +1,99 @@
-appId: com.guasam.era
-productName: electron-react-app
+# electron-builder packaging for Sam AI.
+#
+# `main` in package.json is `./out/main/main.js`, and electron-vite emits out/{main,preload,renderer},
+# so the packaged app runs the same bundles `npm run dev` produces. The icon the main process loads is
+# resolved at `../../resources/build/icon.png` relative to out/main, so `resources/` must ship next to
+# `out/` inside the app — that is why it is listed explicitly below rather than relying on the default
+# include-everything behaviour.
+appId: com.samai.desktop
+productName: Sam AI
+copyright: Copyright © 2026 Sam AI
+
 asar: true
+# The main process reads icons and the macOS entitlements plist off disk, so resources/ stays outside
+# the asar archive where a plain path can reach it.
 asarUnpack:
   - resources/**
+
 directories:
   buildResources: resources/build
+  output: dist
+
+# Explicit include list rather than the template's negations-only form. With only exclusions, every
+# file not named still gets packed — including tests/, the parity probes, and the gitignored scratch
+# directories (.preview/ holds probe logs and decoded reference files). A distributable should carry
+# the app and nothing else, so the output files are named positively and the rest is excluded.
 files:
+  - out/**
+  - resources/**
+  - package.json
+  - '!**/*.map'
   - '!**/.vscode/*'
-  - '!src/*'
+  - '!tests/**'
+  - '!testing/**'
+  - '!conveyor/**'
+  - '!lib/**'
+  - '!app/**'
+  - '!.preview/**'
+  - '!.freebuff/**'
+  - '!.kun-canvas/**'
+  - '!.kun-design/**'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!electron-builder.yml'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md,AGENTS.md,CLAUDE.md,.gitattributes}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml,.gitignore}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,eslint.config.*}'
+
 win:
-  executableName: electron-react-app
+  executableName: SamAI
+  # An .ico with a 256px entry is required; resources/build/icon.ico has 16..256.
+  icon: resources/build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+
 nsis:
+  # One-click off: the user chooses the install directory, which is the behaviour a personal-use
+  # installer should have. Everyone can still install for the current user only.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  # Unsigned builds: SmartScreen will warn on first run. Recorded in the commit body and README.
+  deleteAppDataOnUninstall: false
+
 mac:
+  icon: resources/build/icon.icns
+  category: public.app-category.developer-tools
   entitlementsInherit: resources/build/entitlements.mac.plist
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
   target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
-  category: Utility
+    - target: dmg
+      arch: [arm64, x64]
+  # Hardened runtime stays off deliberately: it is only meaningful alongside real signing, which this
+  # phase does not configure. See README "Packaging".
+  hardenedRuntime: false
+  notarize: false
+
+dmg:
+  artifactName: ${name}-${version}-${arch}.${ext}
+
+linux:
+  icon: resources/build/icon.png
+  target:
+    - target: AppImage
+      arch: [x64]
+  maintainer: Sam AI
+  category: Development
+  synopsis: A local-first desktop coding assistant
+
 appImage:
   artifactName: ${name}-${version}.${ext}
+
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates
+# No auto-update server yet; the template's placeholder URL would 404 rather than do nothing.
+publish: null

@@ -2,7 +2,9 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <title>Electron</title>
+    <!-- The window title is the renderer's to set: BrowserWindow's `title` option is overridden once
+         the document declares its own, so branding has to land here as well as in main. -->
+    <title>Sam AI</title>
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: res:;"

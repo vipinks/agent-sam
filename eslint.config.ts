@@ -125,6 +125,12 @@ export default [
         process: 'readonly',
         console: 'writable',
         Buffer: 'readonly',
+        // Node's own web-standard globals. The Phase 11 smoke probes drive the packaged app over the
+        // DevTools Protocol, so they use `fetch` for the target list and `WebSocket` for the
+        // connection. Declared here rather than left undefined: `no-undef` should keep catching typos,
+        // and a missing global that only appears in one probe is exactly the case it should not.
+        fetch: 'readonly',
+        WebSocket: 'readonly',
       },
     },
     rules: {

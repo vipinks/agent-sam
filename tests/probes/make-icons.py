@@ -108,6 +108,45 @@ def render_master() -> Image.Image:
     return draw_glyph(img, MASTER)
 
 
+def svg_mark() -> str:
+    """The same mark as SVG, with the geometry kept in one place.
+
+    Written as explicit path geometry rather than an embedded raster, so the vector stays sharp at any
+    size and a designer can edit it. The numbers mirror `draw_glyph`'s fractions; if one changes the
+    other must, which is why they sit next to each other in this file.
+    """
+    # viewBox is 1024 to match the master, so the same fractions can be used verbatim.
+    stroke = round(MASTER * 0.085)
+    left, right = round(MASTER * 0.30), round(MASTER * 0.70)
+    top, mid, bottom = MASTER * 0.31, MASTER * 0.50, MASTER * 0.69
+    r = (right - left) / 2
+    dot_r = MASTER * 0.085
+    cx, cy = MASTER * 0.735, MASTER * 0.735
+    inset = round(MASTER * 0.055)
+    radius = round(MASTER * 0.22)
+    ink = "#%02x%02x%02x" % INK[:3]
+    brand = "#%02x%02x%02x" % BRAND[:3]
+    brand_deep = "#%02x%02x%02x" % BRAND_DEEP[:3]
+
+    # The top bowl runs from the right edge, counter-clockwise over the top, to the left edge; the
+    # bottom bowl runs from the left edge, counter-clockwise under the bottom, to the right edge. Driven
+    # by the same `start`/`end` angles as the PIL arcs above, so the two renderings agree.
+    top_bowl = f'M {left} {top + r} A {r} {r} 0 0 1 {right} {top + r}'
+    bottom_bowl = f'M {left} {mid + r} A {r} {r} 0 0 1 {right} {mid + r}'
+
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {MASTER} {MASTER}" width="{MASTER}" height="{MASTER}" role="img" aria-label="Sam AI">
+  <rect x="{inset}" y="{inset}" width="{MASTER - 2 * inset}" height="{MASTER - 2 * inset}" rx="{radius}" fill="{brand}" />
+  <g fill="none" stroke="{ink}" stroke-width="{stroke}" stroke-linecap="round">
+    <path d="{top_bowl}" />
+    <path d="{bottom_bowl}" />
+    <path d="M {left} {mid} L {right} {mid}" />
+  </g>
+  <circle cx="{cx:.1f}" cy="{cy:.1f}" r="{dot_r * 1.75:.1f}" fill="none" stroke="{brand_deep}" stroke-width="{round(MASTER * 0.018)}" />
+  <circle cx="{cx:.1f}" cy="{cy:.1f}" r="{dot_r:.1f}" fill="{ink}" />
+</svg>
+'''
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preview", action="store_true", help="also write a contact sheet")
@@ -149,6 +188,14 @@ def main() -> int:
             sheet.paste(rendered[s], (x, 4 + (1024 - s)), rendered[s])
             x += s + 8
         sheet.save(ROOT / ".preview" / "icon-contact-sheet.png", format="PNG")
+
+    # --- SVG: the same mark as vectors, so the repository keeps a source-of-truth drawing. The
+    # template shipped Vite's gradient logo here, and leaving it would keep third-party artwork in the
+    # tree under our name even though the raster icons were replaced.
+    #
+    # newline='\n' explicitly: this repo declares `eol=lf` in .gitattributes, and Python's default text
+    # mode would write CRLF on Windows, producing a file git immediately considers modified.
+    (OUT / "icon.svg").write_text(svg_mark(), encoding="utf-8", newline="\n")
 
     for f in ("icon.png", "icon.ico", "icon.icns"):
         p = OUT / f

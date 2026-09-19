@@ -348,3 +348,73 @@ npm run build:unpack
 ```
 
 Distribution files will be located in the `dist` directory.
+
+<br />
+
+## Packaging
+
+Sam AI ships as a personal-use desktop app. Builds are unsigned, and this section is the honest
+version of what that means.
+
+### Targets
+
+Running a build script produces an installer plus a portable archive:
+
+| Script                | Produces                                                            |
+| --------------------- | ------------------------------------------------------------------- |
+| `npm run build:win`   | NSIS installer (`sam-ai-<version>-setup.exe`) and a portable `.zip` |
+| `npm run build:mac`   | `.dmg` (arm64 + x64)                                                |
+| `npm run build:linux` | `.AppImage`                                                         |
+
+Output lands in `dist/`. `npm run build:unpack` produces an unpacked directory instead, which is what
+the smoke test in this repository uses because it launches faster than an installer round-trip.
+
+Each script runs `vite:build:app` first, so `out/` (what the main process loads) is always rebuilt
+from the current sources before electron-builder packs it. `main` in `package.json` is
+`./out/main/main.js`, and `resources/` is shipped beside `out/` inside the app — the main process
+resolves its window icon at `../../resources/build/icon.png`, so both must stay in the packaged tree.
+
+### Code signing: not configured
+
+**Windows builds are unsigned.** On first run Windows SmartScreen will show "Windows protected your
+PC" and the user has to choose _More info_ → _Run anyway_. A freshly downloaded file may also carry an
+"isn't commonly downloaded" warning. This is expected behaviour for an unsigned binary, not a
+malfunction, and it is acceptable for the current goal of distributing to people who already know what
+the app is.
+
+macOS builds are unsigned and un-notarized too: Gatekeeper will refuse a plain double-click, and the
+workaround is right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/Sam AI.app"`.
+Hardened runtime is deliberately off, because it only earns its keep alongside real signing — enabling
+it now would add breakage without removing any warning.
+
+The intended path when this stops being personal-use is **SignPath-style signing** — a managed
+code-signing service (SignPath.io, or Azure Trusted Signing) that holds the certificate and signs
+builds in CI rather than on a developer machine. The pieces that would need to change are confined to
+CI and `electron-builder.yml`: add the signing identity and the platform `sign` configuration first,
+then notarization for macOS, and only then enable `hardenedRuntime`. The app itself needs no change,
+which is why signing is deferred rather than simulated now.
+
+### User data and the directory name
+
+Encrypted API keys, session transcripts and window state live under the OS's per-user application data
+directory, in a directory named `era`:
+
+- Windows: `%APPDATA%\era`
+- macOS: `~/Library/Application Support/era`
+- Linux: `~/.config/era`
+
+That name is **not** branding and must not be renamed. It is pinned in code
+(`lib/main/identity.ts`, which runs before any persisted state is read). The reason is not
+sentimentality about the folder name: Chromium keeps the key that protects `safeStorage` ciphertext in
+`<userData>/Local State`, so pointing the app at a new userData directory makes saved API keys
+permanently undecryptable, with the old file still on disk and unreadable. That failure was measured,
+not assumed — see the commit that introduced this section, or run the probe:
+
+```bash
+bash tests/probes/run-law0-matrix.sh
+```
+
+One caveat that is untested: on macOS, `safeStorage`'s master key is additionally wrapped by a Keychain
+item named after the app, so a rename _might_ break key decryption there even with the directory
+pinned. The probe covers the `Local State` layer; the Keychain layer has not been exercised on a real
+macOS build. Treat macOS key carry-over as unverified until someone runs the probe there.
