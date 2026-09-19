@@ -62,3 +62,7 @@
 ### 6.4 Commit and approval discipline
 - Never leave verified product work uncommitted while investigating harness or runner defects; commit the product work first with fast gates only, then investigate in a follow-up turn.
 - When an approval is granted for a class of commands, restate the granted scope inside each command that needs it, to avoid reviewer retries.
+
+### 6.5 Authoring files
+- Author file content with the file tool, never via a shell heredoc: a truncated heredoc leaves cat waiting on stdin forever, and the turn cannot distinguish a hang from a write.
+- Any command that feeds stdin must take its input from a real redirected file; never rely on the transport to deliver a terminator.
