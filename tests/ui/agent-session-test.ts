@@ -192,6 +192,48 @@ function theQueueDecidesWhichCardIsActionable() {
   results.push('the queue, not the chunk, decides which card is actionable')
 }
 
+/** A gated write carries the diff main computed; a malformed one is ignored rather than rendered. */
+function aGatedWriteCarriesItsDiff() {
+  const diff = { lines: [{ kind: 'added', text: 'hi' }], added: 1, removed: 0, truncated: false }
+  const call = { id: 'w1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a"}' } }
+  const { turns, effects } = run([
+    { type: 'tool_call_start', callId: 'w1', tool: 'write_file', args: { path: 'a' } },
+    {
+      type: 'awaiting_approval',
+      callId: 'w1',
+      tool: 'write_file',
+      args: { path: 'a' },
+      diff,
+      messages: [],
+      calls: [call],
+      steps: 1,
+    },
+  ])
+
+  assert.deepEqual(turns[1].steps[0].diff, diff, 'the card must be given the change to render')
+  assert.deepEqual((effects[1].approval as Record<string, unknown>).diff, diff)
+
+  // A chunk with a diff of the wrong shape crosses IPC from main, so it is untrusted here: dropping
+  // it must leave the card intact rather than crashing the turn waiting on the user.
+  const { turns: junk } = run([
+    { type: 'tool_call_start', callId: 'w1', tool: 'write_file', args: { path: 'a' } },
+    {
+      type: 'awaiting_approval',
+      callId: 'w1',
+      tool: 'write_file',
+      args: { path: 'a' },
+      diff: { lines: 'nope' },
+      messages: [],
+      calls: [call],
+      steps: 1,
+    },
+  ])
+  assert.equal(junk[1].steps[0].diff, undefined, 'a malformed diff is dropped, not rendered')
+  assert.equal(junk[1].steps[0].status, 'awaiting', 'and the decision is still offered')
+
+  results.push('a gated write carries its diff, and a malformed one is ignored')
+}
+
 function pauseWithoutACallIsNotActionable() {
   const { effects } = run([
     { type: 'tool_call_start', callId: 'a1', tool: 'write_file', args: {} },
@@ -294,6 +336,7 @@ function main() {
   step('pause', pauseIsReported)
   step('gated frame head', onlyTheHeadOfAGatedFrameIsActionable)
   step('queue decides the head', theQueueDecidesWhichCardIsActionable)
+  step('gated write diff', aGatedWriteCarriesItsDiff)
   step('pause without a call', pauseWithoutACallIsNotActionable)
   step('decisions', decisions)
   step('history', historyIsTextOnly)

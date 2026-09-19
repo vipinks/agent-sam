@@ -7,6 +7,7 @@ import { readApiKey } from './settings'
 import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type ToolDefinition } from './llm-engine'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
 import { nextCallToPresent, type FrameCall, type GateDecision } from '../protocol/approval'
+import { computeFileDiff, type FileDiff } from '../protocol/diff'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
@@ -288,6 +289,11 @@ export type AgentChunk =
       tool: string
       args: Record<string, unknown>
       /**
+       * The change this write would make, when it is a `write_file` and the baseline could be read.
+       * Computed in main — the renderer must not read the disk — and absent for every other tool.
+       */
+      diff?: FileDiff
+      /**
        * The conversation so far, including the assistant turn that asked for this call. The renderer
        * hands this back untouched on resume, so the provider-shaped history never has to be
        * reconstructed on the UI side.
@@ -360,6 +366,51 @@ interface PendingDecision {
 }
 
 /**
+ * The change a `write_file` would make, for the consent card.
+ *
+ * Read here, in main, because the renderer must never touch the disk: only the finished diff crosses
+ * the IPC hop. A write whose target cannot be resolved or read gets no preview rather than a failed
+ * pause — executing it will report the real problem, and the user still needs the card to decide on.
+ */
+async function previewWriteDiff(
+  workspaceRoot: string | null,
+  tool: string,
+  argsJson: string
+): Promise<FileDiff | undefined> {
+  if (tool !== 'write_file') return undefined
+
+  let requested: { path: string; content: string }
+  try {
+    requested = TOOL_ARG_SCHEMAS.write_file.parse(JSON.parse(argsJson || '{}'))
+  } catch {
+    // Malformed arguments are the execution's problem to report, not the card's.
+    return undefined
+  }
+
+  let target: string
+  try {
+    target = resolveWorkspacePath(workspaceRoot, requested.path)
+  } catch {
+    // Outside the workspace, or no workspace at all. Both are refused at execution time with a code
+    // the UI branches on; the card just shows the call.
+    return undefined
+  }
+
+  let before: string | null
+  try {
+    const size = (await stat(target)).size
+    // Above the read limit the baseline is not worth loading, and the diff would be capped anyway.
+    if (size > MAX_FILE_BYTES) return undefined
+    before = await readFileFromDisk(target, 'utf8')
+  } catch {
+    // Absent is the ordinary "new file" case, which is a diff of pure additions.
+    before = null
+  }
+
+  return computeFileDiff(before, requested.content)
+}
+
+/**
  * Put one gated call in front of the user, with the queue behind it.
  *
  * The queue travels with the chunk so the renderer can show what is still coming, and is handed back
@@ -369,15 +420,18 @@ interface PendingDecision {
 async function presentCall(
   queue: ToolCall[],
   history: ChatMessage[],
-  steps: number
+  steps: number,
+  workspaceRoot: string | null
 ): Promise<AgentChunk> {
   const call = queue[0]
+  const tool = call.function.name
 
   return {
     type: 'awaiting_approval',
     callId: call.id,
-    tool: call.function.name,
+    tool,
     args: argsForDisplay(call),
+    diff: await previewWriteDiff(workspaceRoot, tool, call.function.arguments),
     calls: queue,
     messages: history.map((m) => ({ ...m })),
     steps,
@@ -451,7 +505,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
 
     if (next.kind === 'present') {
       const index = queue.findIndex((call) => call.id === next.callId)
-      yield await presentCall(queue.slice(index), history, steps)
+      yield await presentCall(queue.slice(index), history, steps, opts.workspaceRoot)
       return
     }
   }
@@ -542,7 +596,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // presented. `resume` answers that one call, then presents the next, and so on until the frame is
     // settled — so the run continues rather than restarting this round-trip.
     if (gated.length > 0) {
-      yield await presentCall(gated, history, steps)
+      yield await presentCall(gated, history, steps, opts.workspaceRoot)
       return
     }
   }

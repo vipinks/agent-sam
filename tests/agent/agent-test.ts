@@ -262,6 +262,65 @@ async function pausesForApproval() {
   }
 }
 
+async function gatedWriteCarriesItsDiff() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    // The baseline is a real file on disk, and the proposed content changes one of its lines: the
+    // card must show that, not merely which file it touches.
+    writeFileSync(join(root, 'x.txt'), 'alpha\nbeta\n', 'utf8')
+    const log: unknown[] = []
+    const chunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'edit x.txt' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: singleToolCallFetch('write_file', { path: 'x.txt', content: 'alpha\nBETA\n' }, log) as never,
+      })
+    )
+
+    const pause = chunks.find((c) => c.type === 'awaiting_approval')
+    assert.ok(pause, 'the write must gate')
+    const diff = pause.diff as { lines: Array<{ kind: string; text: string }>; added: number; removed: number }
+    assert.ok(diff, 'a gated write must carry the change it would make')
+    assert.equal(diff.removed, 1, `expected one removal: ${JSON.stringify(diff.lines)}`)
+    assert.equal(diff.added, 1, `expected one addition: ${JSON.stringify(diff.lines)}`)
+    assert.deepEqual(
+      diff.lines.filter((line) => line.kind !== 'context'),
+      [
+        { kind: 'removed', text: 'beta' },
+        { kind: 'added', text: 'BETA' },
+      ],
+      'the diff must name the changed line'
+    )
+
+    // A command is a consent prompt with no change to preview: the field is about what is being
+    // asked for, so it must not appear where there is nothing to show.
+    const commandChunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'run something' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: singleToolCallFetch('run_command', { command: 'echo hi' }, log) as never,
+      })
+    )
+    const commandPause = commandChunks.find((c) => c.type === 'awaiting_approval')
+    assert.ok(commandPause, 'the command must gate')
+    assert.equal(commandPause.diff, undefined, 'only a write has a change to preview')
+
+    results.push('a gated write carries a diff of the change, computed in main')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 /** A provider that asks for one named tool call on the first request, then falls silent. */
 function singleToolCallFetch(name: string, args: unknown, log: unknown[]) {
   let call = 0
@@ -609,6 +668,7 @@ async function main() {
   await step('write_file tool', writeThenRead)
   await step('run_command tool', runCommandTool)
   await step('pauses for approval', pausesForApproval)
+  await step('gated write diff', gatedWriteCarriesItsDiff)
   await step('resumes after approval', resumeAfterApproval)
   await step('resumes after denial', resumeAfterDenial)
   await step('step budget', stepBudgetStopsTheLoop)

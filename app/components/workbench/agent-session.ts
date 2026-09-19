@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
+import type { FileDiff } from '@/conveyor/protocol/diff'
 
 /** The call exactly as the model sent it, as the pause hands it over. */
 export interface PendingCall {
@@ -36,6 +37,12 @@ export interface ToolStep {
   output?: string
   /** A stable failure code, for the UI to branch on. */
   code?: string
+  /**
+   * The change a `write_file` would make, computed in main and handed over with the pause. Present
+   * only on a gated write whose baseline could be read, so the card can show what is being asked for
+   * instead of only which file it touches.
+   */
+  diff?: FileDiff
 }
 
 /** A transcript turn. Assistant turns carry both their prose and any tool steps interleaved after it. */
@@ -67,6 +74,8 @@ export interface AgentChunkEffect {
      */
     calls: PendingCall[]
     steps: number
+    /** The change a gated `write_file` would make, when main could compute one. */
+    diff?: FileDiff
   }
   done?: { reason: 'complete' | 'max_steps' }
 }
@@ -105,6 +114,18 @@ function nextId(prefix: string): string {
  */
 export function isInterrupted(turns: readonly AgentTurn[]): boolean {
   return turns.some((turn) => turn.steps.some((step) => step.status === 'running'))
+}
+
+/**
+ * Whether a diff arrived well enough formed to render.
+ *
+ * The chunk crosses IPC, so it is untrusted input here: a malformed diff must leave the card showing
+ * the call rather than crash the turn that is waiting on the user.
+ */
+function isFileDiff(value: unknown): value is FileDiff {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as FileDiff
+  return Array.isArray(candidate.lines) && typeof candidate.added === 'number' && typeof candidate.removed === 'number'
 }
 
 /**
@@ -198,6 +219,7 @@ export function applyAgentChunk(
       const callId = String(c.callId)
       const messages = Array.isArray(c.messages) ? (c.messages as ChatMessage[]) : []
       const steps = typeof c.steps === 'number' ? c.steps : 0
+      const diff = isFileDiff(c.diff) ? c.diff : undefined
       // A pause without any usable call cannot be resumed, so it is not reported as one: the card
       // would otherwise sit awaiting a decision that could never be carried out.
       const calls = Array.isArray(c.calls) ? (c.calls as PendingCall[]).filter((call) => call && call.id) : []
@@ -207,13 +229,13 @@ export function applyAgentChunk(
       // order is authoritative — it is the frame's own order, which is what the loop walks.
       const headId = calls[0].id
       let next = turns
-      next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting' }))
+      next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting', diff }))
       for (const call of calls.slice(1)) {
         next = updateStep(next, turnId, call.id, (step) => ({ ...step, status: 'queued' }))
       }
       return {
         turns: next,
-        effect: { approval: { callId: headId || callId, tool: String(c.tool), messages, calls, steps } },
+        effect: { approval: { callId: headId || callId, tool: String(c.tool), messages, calls, steps, diff } },
       }
     }
 

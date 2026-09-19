@@ -29,6 +29,7 @@ if (!existsSync(esbuild)) throw new Error(`esbuild not found at ${esbuild}`)
 const SUITES = [
   { name: 'agent loop', src: 'agent/agent-test.ts' },
   { name: 'approval gate', src: 'agent/approval-gate-test.ts' },
+  { name: 'file diff', src: 'agent/file-diff-test.ts' },
   { name: 'tool protocol', src: 'agent/agent-protocol-test.ts' },
   { name: 'tool protocol (batch)', src: 'agent/agent-protocol2-test.ts' },
   { name: 'workspace events', src: 'agent/events-test.ts' },
