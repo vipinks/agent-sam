@@ -1,0 +1,20 @@
+# Line endings: LF everywhere, declared rather than assumed.
+#
+# `core.autocrlf=input` currently keeps this clean on this machine, but it is a per-developer
+# setting: a clone without it (or with `true`) would write CRLF into the worktree and commit it back
+# in a mixed state. Declaring it here makes LF a property of the repository instead of a property of
+# whoever happens to be checked out.
+* text=auto eol=lf
+
+# TODO(known issue, deferred): this does NOT clear the 14 files `prettier --check` reports
+# (AGENTS.md and 13 files under tests/). The line-ending hypothesis is falsified, not merely doubtful:
+# the committed blobs are already LF (`git ls-files --eol` shows i/lf w/lf, and a byte count of the
+# HEAD blobs finds zero CRLF), so there was never an EOL churn here for a `.gitattributes` to fix.
+# The drift is genuine formatting — those files are wrapped differently from what the current
+# `.prettierrc` (printWidth 120) produces, and their last commit is 9dc86d9 — so they were either
+# formatted under different settings or never formatted at all, and Phase 9's revert restored the
+# unformatted version rather than undoing a line-ending sweep.
+#
+# Timeboxed at two hypotheses per the verification budget, so it is deferred here rather than looped
+# on. The fix is mechanical and wants its own commit: `npx prettier --write` on exactly those 14
+# paths, reviewed as a formatting-only diff, after which `prettier --check .` is genuinely zero.
