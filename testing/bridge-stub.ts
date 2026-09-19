@@ -39,8 +39,9 @@ export interface BridgeStub {
   /**
    * This stub's handlers, by method name (or `module.method`).
    *
-   * Exposed so the stable delegate can route stream channels itself, which it must do because a test
-   * may replace `bridge.invoke` with a recording wrapper that does not route them.
+   * Exposed so the stable delegate can route stream calls to the same handlers a test registered: a
+   * stream start names its member in the payload, so resolving it needs this map on whichever stub is
+   * current.
    */
   handlers: Map<string, (input: unknown, channel: string) => unknown>
   /** Push an event payload, as main would. */
@@ -90,6 +91,40 @@ const MANIFEST: Record<string, Record<string, string>> = {
 }
 
 /**
+ * The stream-transport constants, taken from conveyor's protocol rather than inferred.
+ *
+ * `STREAM_START` is its own channel and the member travels inside the payload: the client calls
+ * `invoke(STREAM_START, '<module>.<method>#<id>', { module, method, streamId, input })`. The
+ * composite string `<module>.<method>#<id>` is a stream id, never a channel — matching it as one was
+ * the mistake that left the chat panel's send unrouted.
+ */
+const STREAM_START = 'conveyor:stream:start'
+const STREAM_CANCEL = 'conveyor:stream:cancel'
+const STREAM_PREFIX = 'conveyor:stream:'
+
+/**
+ * Answer a stream start: run the handler stubbed for that member, or resolve with nothing.
+ *
+ * The member is read from the stream id — `<module>.<method>#<id>` — and the handler is given the
+ * call's own input, which the envelope carries under `input`. Handing over the whole envelope instead
+ * would make every stream stub assert against transport metadata it never asked for.
+ *
+ * An unstubbed stream resolves rather than rejecting: the panel opens one on send, and a test about
+ * the title should not have to fake a model reply to get a clean run.
+ */
+function streamReply(
+  handlers: Map<string, (input: unknown, channel: string) => unknown>,
+  member: string,
+  envelope: unknown
+): Promise<unknown> {
+  const parsed = /^([^.]+)\.([^#]+)#/.exec(String(member))
+  const handler = parsed ? (handlers.get(parsed[2]) ?? handlers.get(`${parsed[1]}.${parsed[2]}`)) : undefined
+  if (!handler) return Promise.resolve(undefined)
+  const carries = envelope && typeof envelope === 'object' && 'input' in envelope
+  return Promise.resolve(handler(carries ? (envelope as { input: unknown }).input : undefined, member))
+}
+
+/**
  * The channel conveyor builds for a module id.
  *
  * Only used for assertions about the *invoke* channel, which was confirmed empirically (see the
@@ -109,6 +144,18 @@ export function channelFor(moduleId: string): string {
  * listening windows is global, not a property of one bridge object.
  */
 const allSubscribers = new Set<(payload: unknown) => void>()
+
+/**
+ * Stream subscribers, keyed by the stream channel they registered on.
+ *
+ * Kept apart from the broadcast registry above because a stream subscriber parses its payload
+ * strictly: it reads `msg.type`, and anything that is not a stream envelope becomes an error. A
+ * store or event broadcast reaching it therefore crashes its parser — which is exactly what produced
+ * `Cannot read properties of undefined (reading 'code')`, since the failure is turned into
+ * `ConveyorError.from(msg.error)` with nothing to read. Main never pushes a store payload down a
+ * stream channel, so keeping the two apart is the honest simulation.
+ */
+const streamSubscribers = new Map<string, Set<(payload: unknown) => void>>()
 
 /**
  * The real initial state of each store the app registers, for unseeded reads.
@@ -151,10 +198,13 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
   const bridge: BridgeStub['bridge'] = {
     invoke: async (channel, method, ...args) => {
       calls.push({ channel, method, args })
+      // Stream transport, handled here as well as in the stable delegate. A per-test wrapper is allowed
+      // to replace this `invoke` with a recording one, and the chat panel's send reached only that
+      // wrapper — so routing that lives *only* in the delegate is routing a wrapper can strand.
+      if (channel === STREAM_START) return streamReply(handlers, method, args[0])
+      if (channel === STREAM_CANCEL) return undefined
       const handler = handlers.get(method)
       if (handler) return handler(args[0], channel)
-      // Stream routing deliberately does not live here: the stable delegate handles it, so a test that
-      // replaces this `invoke` with a recording wrapper cannot strand an unrouted stream.
       // A store read is answered from the shared seed, so it works on any stub — including one
       // installed after the fetch began, and including the very first fetch that happens before any
       // test has seeded anything.
@@ -168,10 +218,17 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
       }
       throw new Error(`no stub for ${channel}.${method}`)
     },
-    subscribe: (_channel, cb) => {
-      // Keyed by nothing: delivery is to every subscriber, because the library's channel naming is an
-      // internal detail and a stub that depended on it would break silently. See the module-level
-      // registry note above for why this set is global.
+    subscribe: (channel, cb) => {
+      // A stream subscriber is keyed by its channel, because its payload parser is strict and must not
+      // receive another channel's traffic. Everything else keeps the tolerant broadcast described in
+      // the registry note above: delivery is to every subscriber, because the library's event channel
+      // naming is an internal detail and a stub that depended on it would break silently.
+      if (channel.startsWith(STREAM_PREFIX)) {
+        const set = streamSubscribers.get(channel) ?? new Set()
+        set.add(cb)
+        streamSubscribers.set(channel, set)
+        return () => set.delete(cb)
+      }
       allSubscribers.add(cb)
       return () => allSubscribers.delete(cb)
     },
@@ -192,12 +249,16 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
     on: (method, handler) => {
       handlers.set(method, handler)
     },
-    emit: (_channel, payload) => {
-      // Delivered to every subscriber rather than by channel: the library's event channel naming is
-      // an internal detail, and a stub that depends on it would break silently on an upgrade.
+    emit: (channel, payload) => {
+      // Delivered to every broadcast subscriber rather than by channel: the library's event channel
+      // naming is an internal detail, and a stub that depends on it would break silently on an upgrade.
       for (const cb of allSubscribers) cb(payload)
+      // A stream subscriber is reached only on its own channel, for the strict-parser reason above.
+      for (const cb of streamSubscribers.get(channel) ?? []) cb(payload)
     },
     pushToSubscribers: (payload) => {
+      // A store-changed broadcast belongs to the store mirrors, which are broadcast subscribers. It is
+      // deliberately not routed at stream channels: main would never send it there.
       for (const cb of allSubscribers) cb(payload)
     },
   }
@@ -251,40 +312,18 @@ export const CHAT_SESSIONS_STORE_ID = 'chat-sessions'
 const bridgeDelegate = {
   invoke: (channel: string, method: string, ...args: unknown[]): Promise<unknown> => {
     if (!current) return Promise.reject(new Error('no bridge stub installed'))
-    // Stream channels embed the member and a per-call id: `conveyor:stream:start.<mod>.<method>#<id>`.
-    // Routed here, in the stable object, rather than in the per-test stub — because a test is allowed
-    // to replace its stub's `invoke` with a recording wrapper, and a stream invoke that reached only
-    // that wrapper was left unrouted and surfaced as an unhandled rejection. Per-test wrappers may
-    // still record stream calls; they are no longer required to route them.
-    // TODO(known issue, deferred): 5 unhandled rejections from the DOM suite still read
-    // `no stub for conveyor:stream:start.agent.chatWithTools#<id>`. This branch is the right place for
-    // stream routing and it does match that channel shape in isolation, so the cause is something the
-    // client does before reaching the delegate — it never gets here. Deferred deliberately rather than
-    // looped on: the rejections do not gate product behavior, the 19 DOM tests pass, and the node
-    // suites cover the same wiring. Next step is to log the channel as the client sees it, from inside
-    // `createConveyorClient`, rather than from the stub.
-    if (/^conveyor:stream:start\./.test(channel)) {
-      const member = /^conveyor:stream:start\.([^.]+)\.([^#]+)#/.exec(channel)
-      const streamHandler = member
-        ? (current.handlers.get(member[2]) ?? current.handlers.get(`${member[1]}.${member[2]}`))
-        : undefined
-      // An unstubbed stream resolves with nothing rather than rejecting: the panel opens a stream on
-      // send, and a test about the title should not have to fake a model reply to get a clean run.
-      return Promise.resolve(streamHandler ? streamHandler(args[0], channel) : undefined)
-    }
+    // A pure forwarder. The stream transport is handled inside the stub's own `invoke`, so a stream
+    // start is recorded like every other call and a test that wraps `invoke` still reaches it through
+    // the stub's routing. Handling streams here instead would bypass both the record and the wrapper —
+    // which is how the branch this replaced came to look correct while never being taken.
     return current.bridge.invoke(channel, method, ...args)
   },
   subscribe: (channel: string, cb: (payload: unknown) => void): (() => void) => {
     if (!current) throw new Error('no bridge stub installed')
     // Routed through the current stub rather than straight into the registry, so a test can wrap the
-    // stub's own `subscribe` and observe it. The registry itself stays global because the library
-    // subscribes once and caches its mirror — that subscription must outlive any single stub.
-    const unsubscribe = current.bridge.subscribe(channel, cb)
-    allSubscribers.add(cb)
-    return () => {
-      allSubscribers.delete(cb)
-      unsubscribe?.()
-    }
+    // stub's own `subscribe` and observe it. Where the subscriber is filed — broadcast set or stream
+    // map — is the stub's decision, since it depends on the channel.
+    return current.bridge.subscribe(channel, cb)
   },
   manifest: (): Record<string, Record<string, string>> => (current ? current.bridge.manifest() : MANIFEST),
 }

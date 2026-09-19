@@ -52,6 +52,36 @@ describe('bridge stub', () => {
     expect(received).toEqual([true])
   })
 
+  it('opens a stream on the stream-start channel, with the member in the payload', async () => {
+    let seenInput: unknown
+    const stub = createBridgeStub({
+      chatWithTools: (input) => {
+        seenInput = input
+        return undefined
+      },
+    })
+    setActiveStub(stub)
+
+    // Opening the iterator is what sends the stream start; the chunks themselves arrive by
+    // subscription, so this asserts the request side only.
+    const iterable = appClient().agent.chatWithTools({ messages: [] } as never) as unknown as AsyncIterable<unknown>
+    iterable[Symbol.asyncIterator]()
+    await Promise.resolve()
+
+    const start = stub.calls.find((c) => c.channel === 'conveyor:stream:start')
+    // Pinned because the stub routes by this shape: `<module>.<method>#<id>` is the stream id carried
+    // in the payload, never the channel. Treating it as the channel is what left the chat panel's
+    // send unrouted and rejecting, and a conveyor upgrade that changes this must fail here, naming
+    // the cause, rather than as an unhandled rejection somewhere else.
+    expect(start, 'a stream start must reach the bridge').toBeTruthy()
+    const envelope = start?.args[0] as { module: string; method: string; streamId: string; input: unknown }
+    expect(envelope.module).toBe('agent')
+    expect(envelope.method).toBe('chatWithTools')
+    expect(envelope.streamId).toMatch(/^agent\.chatWithTools#/)
+    // The handler is reached with the call's own input, so a test that stubs a stream is driving it.
+    expect(seenInput).toEqual({ messages: [] })
+  })
+
   it('fails loudly for a member with no stub', async () => {
     const stub = createBridgeStub()
     setActiveStub(stub)
