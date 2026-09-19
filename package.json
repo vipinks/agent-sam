@@ -27,7 +27,8 @@
     "build:linux": "npm run vite:build:app && npm run electron:build:linux",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:dom": "vitest run",
-    "test:dom:watch": "vitest"
+    "test:dom:watch": "vitest",
+    "test:node": "node tests/run-node-suites.mjs"
   },
   "repository": {
     "type": "git",

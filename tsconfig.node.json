@@ -8,7 +8,8 @@
     "conveyor/**/*",
     "resources/**/*",
     "app/**/*",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "tests/run-node-suites.mjs"
   ],
   "compilerOptions": {
     "composite": true,

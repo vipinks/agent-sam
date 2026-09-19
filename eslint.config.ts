@@ -12,6 +12,11 @@ export default [
       'out/**',
       'scripts/**', // plain node build scripts, outside the tsconfig project
 
+      // Local scratch area: throwaway harnesses and captures, gitignored and imported by nothing.
+      // Ignored here as well as deleted, so a future scratch area cannot silently poison the gate
+      // the way this one did — an ignored path cannot contribute errors even if it grows again.
+      '.preview/**',
+
       '.vscode/**',
       '.git/**',
       '.gitignore',
@@ -95,6 +100,50 @@ export default [
           exceptions: ['console', 'localStorage', 'sessionStorage'],
         },
       ],
+    },
+  },
+  // Node-side test harnesses: the runner, its stubs, and the CJS probes.
+  //
+  // These are deliberately CommonJS — they are launched with `node`, and the probes are run by
+  // electron directly, before any bundler exists. `require`/`module`/`Buffer` are therefore the
+  // correct primitives here, not a mistake, and the Node globals they use are declared rather than
+  // assumed so the no-undef rule keeps meaning something everywhere else.
+  {
+    files: ['tests/**/*.cjs', 'tests/**/*.mjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      // Not part of the TypeScript program: these are launched by `node` and are deliberately
+      // plain JavaScript, so there is no project for the type-aware parser to attach them to.
+      // Without this, eslint reports a parsing error for each one.
+      parserOptions: { projectService: false },
+      globals: {
+        require: 'readonly',
+        module: 'writable',
+        exports: 'writable',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        process: 'readonly',
+        console: 'writable',
+        Buffer: 'readonly',
+      },
+    },
+    rules: {
+      // The whole point of these files is to be plain CommonJS that node can run unbuilt.
+      '@typescript-eslint/no-require-imports': 'off',
+      // The runner reports its own progress and summary the same way the suites do.
+      'no-console': 'off',
+    },
+  },
+  // The TypeScript node suites.
+  //
+  // `console.log` is their reporting mechanism, not incidental debugging: each suite prints its own
+  // pass/fail lines and a summary, and the runner treats a non-zero exit as the real signal. Holding
+  // test output to the app's `no-console` rule would mean rewriting every suite's reporting for no
+  // benefit, so the rule is relaxed here and only here.
+  {
+    files: ['tests/**/*.ts', 'tests/**/*.tsx'],
+    rules: {
+      'no-console': 'off',
     },
   },
   // Add specific configuration for preload files

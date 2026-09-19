@@ -8,7 +8,7 @@ import { settingsModule } from './modules/settings'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
 import { agentModule } from './modules/agent'
-import { sessionsModule } from './modules/sessions'
+import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
@@ -42,6 +42,29 @@ export const router = createRouter(
 )
 
 export type AppRouter = typeof router
+
+/**
+ * Clear transcript files left behind by a delete that removed the metadata but not the file.
+ *
+ * Runs once, here, immediately after the router exists — because that is the first moment the store
+ * is readable, and reading it is what makes the sweep correct.
+ *
+ * The store loads its persisted state synchronously during `createRouter` (conveyor reads the JSON
+ * before returning), so by this point `getState()` reflects what was restored from disk. A sweep run
+ * any earlier would see an empty session list and delete every transcript on disk — the failure this
+ * ordering exists to avoid.
+ *
+ * Not awaited: startup must not wait on housekeeping, and a failure here is housekeeping failing
+ * rather than the app failing to start. The rejection is caught so it cannot surface as an
+ * unhandled rejection either.
+ */
+void sweepOrphanedTranscripts(router.stores['chat-sessions'].getState().sessions.map((s) => s.id))
+  .then((swept) => {
+    if (swept > 0) console.warn(`[sessions] swept ${swept} orphaned transcript file(s)`)
+  })
+  .catch((error: unknown) => {
+    console.warn('[sessions] transcript sweep failed', error)
+  })
 
 /**
  * Fan out workspace changes to every window.

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, unlink, writeFile } from 'fs/promises'
+import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { app } from 'electron'
 import { z } from 'zod'
@@ -95,6 +95,74 @@ export async function loadTranscriptFile(id: string): Promise<TranscriptSnapshot
     throw new ConveyorError('SESSION_CORRUPT', 'This conversation is unreadable and was left untouched.')
   }
   return result.data
+}
+
+/**
+ * Which transcript files have no session metadata behind them.
+ *
+ * Pure, and separate from the deleting below, so the rule can be tested without a filesystem: it
+ * takes the filenames found on disk and the ids the store still knows about, and answers which files
+ * are orphaned.
+ *
+ * This exists because deleting a session removes its metadata first and its file second. If the file
+ * delete then fails — a lock, a permission, a crash between the two steps — the metadata is gone and
+ * nothing will ever reference the file again. Without a sweep those bytes are stranded forever.
+ *
+ * Only `<uuid>.json` is considered. A temp file from an interrupted atomic write is *not* an orphan
+ * to be reasoned about here: it was never a session, so treating it as one would risk deleting a file
+ * that a concurrent save is about to rename into place.
+ */
+export function orphanedTranscriptFiles(files: string[], liveSessionIds: string[]): string[] {
+  const live = new Set(liveSessionIds)
+  const orphans: string[] = []
+
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue
+    const id = file.slice(0, -'.json'.length)
+    // Shape-checked as well as membership-checked: a stray name that cannot be a session id is not
+    // ours to delete, whatever the store says.
+    if (!/^[0-9a-fA-F-]{36}$/.test(id)) continue
+    if (!live.has(id)) orphans.push(id)
+  }
+
+  return orphans
+}
+
+/**
+ * Delete transcript files whose session metadata is gone, and report how many were removed.
+ *
+ * Called once on startup. A directory that does not exist yet is not an error — it just means no
+ * conversation has ever been saved.
+ *
+ * Each file is removed independently and failures are not fatal: a sweep that cannot delete one file
+ * must not stop the app from starting, or leave the remaining orphans behind. The count returned is
+ * therefore of files actually deleted, not of orphans found.
+ */
+export async function sweepOrphanedTranscripts(liveSessionIds: string[]): Promise<number> {
+  const dir = sessionsDir()
+
+  let files: string[]
+  try {
+    files = await readdir(dir)
+  } catch {
+    // No directory yet, or it cannot be read. Either way there is nothing this can safely do, and
+    // startup must not fail over housekeeping.
+    return 0
+  }
+
+  const orphans = orphanedTranscriptFiles(files, liveSessionIds)
+  let deleted = 0
+
+  for (const id of orphans) {
+    try {
+      await rm(transcriptPath(id), { force: true })
+      deleted++
+    } catch {
+      // Left for the next startup rather than raised: one undeletable file must not block the rest.
+    }
+  }
+
+  return deleted
 }
 
 export const sessionsModule = defineModule({
