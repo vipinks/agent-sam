@@ -40,7 +40,7 @@
 - Always use Electron's `app.getPath('userData')` for app data, or prompt the user via `dialog.showOpenDialog()` to select a workspace.
 - Validate all inputs crossing the IPC boundary using `zod` schemas within your conveyor commands/queries.
 
-## 6. Verification Budget (standing rule)
+## 6.1 Verification Budget (standing rule)
 
 - While iterating, run only the narrowest test that exercises the change (one vitest file, one node suite, one bundled harness).
 - Run the full gauntlet (test:node, test:dom, typecheck, repo-wide lint, prettier, build) exactly once per commit, at the end of the turn.
@@ -48,14 +48,18 @@
 - Never leave verified product work uncommitted while investigating harness or runner defects; commit the product work first with fast gates only, then investigate in a follow-up turn.
 - When an approval is granted for a class of commands, restate the granted scope inside each command that needs it, to avoid reviewer retries.
 
-## 7. Verification Budget — addendum (runner safety)
+## 6.2 Verification Budget — addendum (runner safety)
 
 - Never wrap test binaries in an external timeout command; always invoke suites through their npm scripts (test:node, test:dom).
 - Any command that may hang must run with output redirected to a file and be polled afterwards, never awaited on a live pipe: a killed parent leaves orphaned workers holding stdout open, and the tool call then waits forever.
 - If a single verification command exceeds five minutes, stop it, report the hang itself as a defect, and proceed with the remaining fast gates; do not wait it out.
 
-## 8. Verification Budget — correction (harness overhead)
+## 6.3 Verification Budget — correction (harness overhead)
 
 - A long "Ran command" timer is often the agent's own turn overhead (reasoning passes, approval-reviewer model calls, sibling-process contention), not the command's real duration. Before diagnosing a gate as slow, measure it once in a plain terminal; if it is fast there, the gate is fine and the cost is harness overhead.
 - Harness overhead is paid per gate invocation, so the budget rule "each gate at most once per commit" is a cost rule, not just a discipline rule. Never rerun a gate whose result is already known this turn.
 - Machine saturation is real but distinct: confirm it with a live CPU/disk sample before acting on it. An idle sample (CPU under 30 percent, disk under 10 percent) rules saturation out entirely.
+
+## 6.4 Verification Budget — addendum (stale timers)
+
+- A long "Ran command" timer can outlive its command. Before diagnosing a hang, check whether the command has already exited: read its redirected output file and exit status, and list matching processes. A timer is a display; an exit code is a fact.

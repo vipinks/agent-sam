@@ -10,3 +10,6 @@ temp
 .preview
 .preview/
 .vscode/
+# Agent scratch directories: in-flight state, never part of the app
+.freebuff/
+.kun-canvas/
