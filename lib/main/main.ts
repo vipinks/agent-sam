@@ -1,3 +1,6 @@
+// First, for its side effect: fixes userData before the router import below reads persisted state.
+// Ordering matters and is explained in that module; moving this import is a data-loss bug.
+import { identity } from './identity'
 import { app, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { openAppWindow } from './app'
@@ -13,8 +16,11 @@ if (process.platform === 'linux') app.commandLine.appendSwitch('password-store',
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  // Set app user model id for windows. Kept in step with the appId in electron-builder.yml, so the
+  // Windows taskbar/notification identity, the installer entry and the window title all agree.
+  electronApp.setAppUserModelId('com.samai.desktop')
+  // One line of evidence that the identity pin took effect, written before any window opens.
+  console.log(`[identity] ${identity.displayName} :: userData=${identity.userData}`)
 
   // Register the custom resources protocol once. The IPC surface (modules, stores, context) is
   // registered by the `@/conveyor/router` import side-effect via ./app.

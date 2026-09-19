@@ -32,7 +32,7 @@ export function createAppWindow(hash?: string): BrowserWindow {
     icon: appIcon,
     frame: false,
     titleBarStyle: 'hiddenInset',
-    title: 'Electron React App',
+    title: 'Sam AI',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       // The conveyor preload is sandbox-compatible (contextBridge + ipcRenderer only), so the

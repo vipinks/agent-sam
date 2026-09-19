@@ -1,12 +1,12 @@
 {
-  "name": "era",
+  "name": "sam-ai",
   "version": "13.0.0",
-  "description": "A modern Electron application starter kit with React, Vite, TypeScript, Shadcn UI and TailwindCSS",
+  "description": "Sam AI — a local-first desktop coding assistant",
   "main": "./out/main/main.js",
   "license": "MIT",
   "author": {
-    "name": "Guasam",
-    "url": "https://github.com/guasam"
+    "name": "Sam AI",
+    "url": "https://github.com/sam-ai"
   },
   "scripts": {
     "dev": "cross-env ELECTRON_DISABLE_SANDBOX=1 electron-vite dev -w",
@@ -89,5 +89,6 @@
     "typescript-eslint": "^8.67.0",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
-  }
+  },
+  "productName": "Sam AI"
 }
