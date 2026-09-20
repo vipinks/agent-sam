@@ -22,7 +22,14 @@ describe('store protocol', () => {
     render(
       <QueryClientProvider client={queryClient}>
         <ChatSessionsProvider>
-          <SessionListPanel onCreate={() => {}} onOpen={() => {}} onDelete={() => {}} error={null} />
+          <SessionListPanel
+            onCreate={() => {}}
+            onOpen={() => {}}
+            onRename={() => {}}
+            onExport={() => {}}
+            onDelete={() => {}}
+            error={null}
+          />
         </ChatSessionsProvider>
       </QueryClientProvider>
     )
@@ -55,7 +62,14 @@ describe('store protocol', () => {
     const view = render(
       <QueryClientProvider client={queryClient}>
         <ChatSessionsProvider>
-          <SessionListPanel onCreate={() => {}} onOpen={() => {}} onDelete={() => {}} error={null} />
+          <SessionListPanel
+            onCreate={() => {}}
+            onOpen={() => {}}
+            onRename={() => {}}
+            onExport={() => {}}
+            onDelete={() => {}}
+            error={null}
+          />
         </ChatSessionsProvider>
       </QueryClientProvider>
     )

@@ -1,3 +1,7 @@
+import { toast } from 'sonner'
+import { ConveyorError } from 'electron-conveyor/react'
+import { conveyor } from '@/conveyor/client'
+import type { ExportFormat } from '@/conveyor/protocol/export'
 import { ChatPanel } from './chat-panel'
 import { CodeViewer } from './code-viewer'
 import { IconRail } from './icon-rail'
@@ -40,6 +44,34 @@ function WorkbenchLayout() {
   const sessions = useChatSessionsContext()
   useWorkspaceChangeInvalidation(selectedFile)
 
+  /**
+   * Export a session through main, and report where it landed.
+   *
+   * Raised here, at the panel that owns the list, rather than inside the row that was clicked: the
+   * row is a view of the session list, and the list can change while the save dialog is open — so a
+   * toast owned by the row could be unmounted before the file it is describing has been written.
+   *
+   * Only the id crosses back: main reads the transcript from disk itself, and the renderer never has
+   * to have the conversation loaded to export it.
+   */
+  const runSessionExport = (id: string, format: ExportFormat) => {
+    void (async () => {
+      try {
+        const path = await conveyor.sessions.exportSession({ id, format })
+        // A dismissed save dialog is an ordinary outcome, not a failure to report.
+        if (path) toast.success('Conversation exported', { description: path })
+      } catch (err) {
+        // Branched on the code, never on the message text.
+        const nothingToExport = err instanceof ConveyorError && err.code === 'SESSION_NOT_FOUND'
+        toast.error(nothingToExport ? 'Nothing to export yet' : 'Could not export this conversation', {
+          description: nothingToExport
+            ? 'This conversation has no saved transcript — send a message first.'
+            : 'The file could not be written. Nothing was changed.',
+        })
+      }
+    })()
+  }
+
   const secondaryPanel = (
     <ResizablePanel
       id="secondary"
@@ -52,6 +84,8 @@ function WorkbenchLayout() {
         <SessionListPanel
           onCreate={() => void sessions.createSession()}
           onOpen={(id) => void sessions.openSession(id)}
+          onRename={sessions.renameSession}
+          onExport={runSessionExport}
           onDelete={(id) => void sessions.deleteSession(id)}
           error={sessions.error}
         />

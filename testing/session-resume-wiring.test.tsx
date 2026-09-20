@@ -118,7 +118,14 @@ function renderPanel(onOpen = vi.fn()) {
   const view = render(
     <QueryClientProvider client={queryClient}>
       <ChatSessionsProvider>
-        <SessionListPanel onCreate={vi.fn()} onOpen={onOpen} onDelete={vi.fn()} error={null} />
+        <SessionListPanel
+          onCreate={vi.fn()}
+          onOpen={onOpen}
+          onRename={vi.fn()}
+          onExport={vi.fn()}
+          onDelete={vi.fn()}
+          error={null}
+        />
       </ChatSessionsProvider>
     </QueryClientProvider>
   )

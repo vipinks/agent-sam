@@ -19,6 +19,15 @@ module.exports = {
   },
   dialog: {
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    // The save dialog is answered from the environment for the same late-resolution reason as
+    // `userData` above: the export command under test needs a real path to write to, and it also
+    // needs to be exercised on the cancel path. A suite sets SAM_TEST_SAVE_PATH to have the dialog
+    // accept, and leaves it unset to have the dialog dismissed — no suite has to know the shape of
+    // either, and nothing here can pop a real dialog.
+    showSaveDialog: async () => {
+      const path = process.env.SAM_TEST_SAVE_PATH
+      return path ? { canceled: false, filePath: path } : { canceled: true, filePath: undefined }
+    },
   },
   shell: { openExternal: async () => undefined },
   BrowserWindow: class {},

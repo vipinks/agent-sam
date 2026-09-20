@@ -4,6 +4,7 @@ import { ConveyorError, useConveyorActions, useConveyorStore } from 'electron-co
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { rehydrateTranscript, serializeTranscript, type TranscriptState } from './session-transcript'
 import { resumeTurnNumbering } from './agent-session'
+import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
 
@@ -43,6 +44,8 @@ export interface ChatSessions {
   scheduleSave: () => void
   /** Rename a session from its first user message, once. */
   maybeTitle: (id: string, firstMessage: string) => void
+  /** Rename a session to a title the user typed. Blank and unchanged titles are refused. */
+  renameSession: (id: string, title: string) => void
 }
 
 export function useChatSessions(providerId: string, model: string): ChatSessions {
@@ -306,6 +309,24 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     [touchSession]
   )
 
+  /**
+   * Rename a session to a title the user typed.
+   *
+   * Deliberately not sharing `maybeTitle`'s "only while untitled" guard: an explicit rename is the
+   * user overriding both the derived name and any earlier one, so the only refusals are a blank
+   * submission and a no-op one. The decision itself is the pure rule, so a blank title cannot become
+   * a store write just because this was called from a blur handler rather than a keypress.
+   */
+  const renameSession = useCallback(
+    (id: string, title: string) => {
+      const session = sessionsRef.current.find((s) => s.id === id)
+      if (!session) return
+      const plan = planRename(session.title, title)
+      if (plan) touchSession({ id, title: plan.title })
+    },
+    [touchSession]
+  )
+
   return {
     transcript,
     setTranscript,
@@ -317,5 +338,6 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     saveNow,
     scheduleSave,
     maybeTitle,
+    renameSession,
   }
 }

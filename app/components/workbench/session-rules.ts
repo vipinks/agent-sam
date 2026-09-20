@@ -7,25 +7,12 @@ import { serializeTranscript, type TranscriptState } from './session-transcript'
  * These are the rules that are easy to get subtly wrong and hard to notice: when a session is
  * renamed, when a transcript is considered dirty, and whether a save is worth doing at all. The
  * component calls these; it does not decide them.
- */
-
-/** Title length, as specified: the first user message, truncated. */
-export const TITLE_MAX = 48
-
-/**
- * Cap a title at the documented length.
  *
- * Truncation happens on the trimmed text, so trailing whitespace cannot eat into the 48 characters,
- * and an ellipsis is appended so a clipped title reads as clipped rather than as a short one.
+ * The title rule itself now lives in the shared protocol module, because main derives a filename from
+ * the same rule when exporting — so this re-exports it rather than keeping a second copy that could
+ * drift. Callers here keep importing from where they always have.
  */
-export function titleFromMessage(message: string): string {
-  const trimmed = message.trim().replace(/\s+/g, ' ')
-  if (trimmed.length <= TITLE_MAX) return trimmed
-  return `${trimmed.slice(0, TITLE_MAX - 1).trimEnd()}…`
-}
-
-/** The title a session gets when its first message is somehow blank. */
-export const UNTITLED = 'Untitled conversation'
+export { TITLE_MAX, titleFromMessage, UNTITLED } from '@/conveyor/protocol/session-title'
 
 /**
  * Whether a transcript is worth writing.

@@ -71,6 +71,8 @@ const MANIFEST: Record<string, Record<string, string>> = {
     deleteTranscript: 'command',
     emptyTranscript: 'query',
     transcriptVersion: 'query',
+    searchSessions: 'query',
+    exportSession: 'command',
   },
   agent: { chatWithTools: 'stream', resume: 'stream' },
   settings: {

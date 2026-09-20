@@ -1,6 +1,6 @@
-import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from 'fs/promises'
-import { join } from 'path'
-import { app } from 'electron'
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'fs/promises'
+import { basename, join } from 'path'
+import { app, dialog } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, command, query } from '../init'
@@ -10,6 +10,15 @@ import {
   TRANSCRIPT_VERSION,
   type TranscriptSnapshot,
 } from '../protocol/transcript'
+import {
+  conversationText,
+  searchTranscriptText,
+  sessionSearchResultSchema,
+  SEARCH_MAX_SNIPPETS,
+  SEARCH_MIN_TERM,
+} from '../protocol/search'
+import { exportFileName, renderExport } from '../protocol/export'
+import { titleFromTranscript } from '../protocol/session-title'
 
 /**
  * Transcript storage — one JSON file per session, under `userData/sessions`.
@@ -165,6 +174,86 @@ export async function sweepOrphanedTranscripts(liveSessionIds: string[]): Promis
   return deleted
 }
 
+/**
+ * How many transcript files one search may read.
+ *
+ * A scan is bounded by files rather than by matching: without a cap, one search over a long history
+ * reads every conversation on disk, and the cost grows with the size of the user's history rather
+ * than with the size of their query. The order is the directory's — a filename is an id, not a
+ * timestamp — which is why the cap is generous enough for a realistic history and why the panel
+ * presents the result as "matches found" rather than as an exhaustive list.
+ */
+export const SEARCH_MAX_FILES = 200
+
+/** The most bytes one transcript may contribute to a scan. Beyond this it is skipped. */
+export const SEARCH_MAX_FILE_BYTES = 512 * 1024
+
+/**
+ * Transcript files under `userData/sessions`, as ids.
+ *
+ * An unreadable directory is an empty history rather than an error: a search over nothing should
+ * return nothing, not fail the panel it is attached to.
+ */
+async function listTranscriptFiles(): Promise<string[]> {
+  let files: string[]
+  try {
+    files = await readdir(sessionsDir())
+  } catch {
+    return []
+  }
+
+  const ids: string[] = []
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue
+    const id = file.slice(0, -'.json'.length)
+    // Shape-checked, so a stray file that cannot be a session id is never read as one.
+    if (!/^[0-9a-fA-F-]{36}$/.test(id)) continue
+    ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * Read a transcript for a scan, refusing one large enough to matter.
+ *
+ * `loadTranscriptFile` reads whatever is there; a scan is different, because it may do this hundreds
+ * of times in one call, and a single pathological file would then dominate the cost. The size is
+ * checked with a `stat` before the read, so an oversized file is never in memory at all.
+ *
+ * An oversized or unreadable file is skipped by the caller rather than reported: one conversation the
+ * search will not look inside is a far smaller problem than a search that fails or that stalls.
+ */
+async function loadBounded(id: string): Promise<TranscriptSnapshot | null> {
+  const path = transcriptPath(id)
+
+  let size: number
+  try {
+    size = (await stat(path)).size
+  } catch {
+    return null
+  }
+  if (size > SEARCH_MAX_FILE_BYTES) return null
+
+  return loadTranscriptFile(id)
+}
+
+/**
+ * Write an exported file.
+ *
+ * Deliberately not atomic, unlike a transcript save: the user chose this path in a dialog, so the
+ * file is theirs, and a temp-then-rename would leave a stray sibling beside it if the process died in
+ * between. A half-written export at a path the user picked is recoverable by exporting again, and
+ * `writeFile` truncates rather than appends, so the retry is clean.
+ */
+async function writeExportFile(path: string, contents: string): Promise<void> {
+  try {
+    await writeFile(path, contents, 'utf8')
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new ConveyorError('SESSION_EXPORT_FAILED', `Could not write ${basename(path)}. ${reason}`)
+  }
+}
+
 export const sessionsModule = defineModule({
   /** Persist one transcript. Called at turn boundaries, not per token. */
   saveTranscript: command(z.object({ id: idSchema, snapshot: transcriptSnapshotSchema }), async ({ input }) => {
@@ -194,4 +283,84 @@ export const sessionsModule = defineModule({
 
   /** The snapshot version this build writes, for the renderer to stamp. */
   transcriptVersion: query(() => TRANSCRIPT_VERSION),
+
+  /**
+   * Scan saved conversations for a term, and report where it appears.
+   *
+   * A query rather than a command because it only reads — and because the panel wants it keyed per
+   * term while the user types, which is what `useQuery` does and a mutation would not.
+   *
+   * The result is snippets and a count. A transcript body never crosses this boundary in either
+   * direction: the panel needs to know where the words are, not what surrounds them, and it holds no
+   * conversation it did not open itself.
+   */
+  searchSessions: query(
+    z.object({
+      // The floor is shared with the extractor rather than restated, so the term the UI scans with and
+      // the term this accepts cannot disagree.
+      term: z.string().min(SEARCH_MIN_TERM),
+    }),
+    async ({ input }) => {
+      // Bounded before the loop, not inside it: the cap is on how much of the user's history one
+      // keystroke may read, so it has to be applied to the file list rather than to what the scan
+      // finds. Capping the *results* instead would let a term that matches nothing read every file on
+      // disk — which is exactly the search that costs the most.
+      const files = (await listTranscriptFiles()).slice(0, SEARCH_MAX_FILES)
+      const results: Array<{ id: string; matchCount: number; snippets: string[] }> = []
+
+      for (const id of files) {
+        // A corrupt or oversized file is skipped rather than raised. Searching is a read-only
+        // convenience over the user's own history, and one unreadable conversation in it must not
+        // take the whole search down with it.
+        let snapshot: TranscriptSnapshot | null
+        try {
+          snapshot = await loadBounded(id)
+        } catch {
+          continue
+        }
+        if (!snapshot) continue
+
+        const found = searchTranscriptText(conversationText(snapshot), input.term, SEARCH_MAX_SNIPPETS)
+        if (found.matchCount === 0) continue
+        results.push({ id, matchCount: found.matchCount, snippets: found.snippets })
+      }
+
+      return sessionSearchResultSchema.array().parse(results)
+    }
+  ),
+
+  /**
+   * Write one conversation out as a file, and report where it landed.
+   *
+   * Main-only, necessarily: it reads the transcript, renders the bytes, opens the OS save dialog and
+   * writes the file. The renderer sends an id and a format and receives a path — never a transcript,
+   * and never a byte of the file.
+   *
+   * A dismissed dialog returns null rather than throwing. Cancelling a save is an ordinary outcome,
+   * and reporting it as an error would put a failure toast on a deliberate decision.
+   */
+  exportSession: command(z.object({ id: idSchema, format: z.enum(['markdown', 'json']) }), async ({ input, ctx }) => {
+    const snapshot = await loadTranscriptFile(input.id)
+    if (!snapshot) {
+      // Nothing has been saved for this session, so there is nothing to write. Its own code,
+      // because the panel says something different for this than for a write failure.
+      throw new ConveyorError('SESSION_NOT_FOUND', 'This conversation has no saved transcript yet.')
+    }
+
+    const title = titleFromTranscript(snapshot)
+    const contents = renderExport(snapshot, { title, format: input.format })
+    const defaultPath = exportFileName(title, input.format)
+
+    // The calling window parents the dialog when there is one, so the sheet is attached to the
+    // window that asked rather than to the app.
+    const win = ctx.window
+    const result = win
+      ? await dialog.showSaveDialog(win, { defaultPath, title: 'Export conversation' })
+      : await dialog.showSaveDialog({ defaultPath, title: 'Export conversation' })
+
+    if (result.canceled || !result.filePath) return null
+
+    await writeExportFile(result.filePath, contents)
+    return result.filePath
+  }),
 })
