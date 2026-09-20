@@ -1,21 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { MessageSquare, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
+import { MessageSquare, Paperclip, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Button } from '../ui/button'
+import { Popover, PopoverAnchor } from '../ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
+import { MentionPicker } from './mention-picker'
+import { MentionChipRow } from './mention-chip'
 import { useChatSessionsContext } from './chat-sessions-context'
 import {
+  activeMentionToken,
+  addMentionPath,
+  filterMentionPaths,
+  removeMentionPath,
+  type MentionRefusal,
+  type MentionToken,
+} from './mentions'
+import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
+import {
   applyAgentChunk,
+  noteContextSkip,
   resolveDecision,
   startAssistantTurn,
   startUserTurn,
@@ -24,6 +37,18 @@ import {
   type PendingCall,
 } from './agent-session'
 import { useWorkbenchStore } from './store'
+
+/**
+ * Why an attach attempt did not add a chip, in the user's terms.
+ *
+ * The cap is named with the same constant main enforces on the wire, so the message cannot promise a
+ * number the schema would then refuse.
+ */
+function mentionRefusalNote(refusal: MentionRefusal): string {
+  return refusal === 'duplicate'
+    ? 'That file is already attached.'
+    : `One message can attach at most ${MAX_MENTION_PATHS} files.`
+}
 
 /** Stream failures, in the user's terms, branched on the error code rather than the message text. */
 function streamErrorMessage(error: unknown, providerName: string): string {
@@ -86,6 +111,8 @@ export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
   const activeModel = useWorkbenchStore((s) => s.activeModel)
   const setTarget = useWorkbenchStore((s) => s.setTarget)
+  // The file the code viewer has open, which the attach control adds as a mention.
+  const selectedFile = useWorkbenchStore((s) => s.selectedFile)
 
   // Sessions own the transcript: it is shared with the panel (which saves it before a switch) and
   // persisted at turn boundaries. The pane reads and replaces it, but does not hold it.
@@ -97,6 +124,31 @@ export function ChatPanel() {
   // Off by default: a tool that writes to disk should be a deliberate choice, not a default.
   const [autoApprove, setAutoApprove] = useState(false)
   const [pending, setPending] = useState<PendingApproval | null>(null)
+
+  /**
+   * The files the next send will attach, in the order they were added.
+   *
+   * Renderer-local, because it is what the user is composing rather than a fact about the workspace
+   * — and the ref beside it is what `send` reads, so the payload is built from the chips that are
+   * on screen without re-creating the send callback on every keystroke.
+   */
+  const [mentionPaths, setMentionPaths] = useState<string[]>([])
+  const mentionPathsRef = useRef<string[]>(mentionPaths)
+  /** Why the last attach attempt was refused, shown under the composer. Cleared by the next one. */
+  const [mentionNote, setMentionNote] = useState<string | null>(null)
+  /**
+   * The `@` token at the caret, and whether the picker has been dismissed for it.
+   *
+   * One piece of state rather than two: a dismissal belongs to a token, and keeping them apart is how
+   * a picker reopens itself after the user has just pressed Escape.
+   */
+  const [mention, setMention] = useState<{ token: MentionToken | null; dismissed: boolean }>({
+    token: null,
+    dismissed: false,
+  })
+  const [pickerIndex, setPickerIndex] = useState(0)
+  const composerRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
@@ -131,6 +183,106 @@ export function ChatPanel() {
     return (defaultModels.data?.[providerId] ?? []).map((m) => m.id)
   }
   const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
+
+  //
+  // Mentions: the `@` picker's source, and the chip row it fills.
+  //
+  // The paths come from the registered query and are never touched by the disk here — main walks the
+  // open folder and returns names, which is the only shape the renderer ever sees. Filtering is
+  // client-side because the list is already bounded by the walk's own cap, and a round trip per
+  // keystroke would be a query storm for a substring test.
+  //
+  const mentionFiles = conveyor.mentions.listFilesFlat.useQuery()
+  const allMentionFiles = mentionFiles.data ?? []
+  const mentionMatches = mention.token ? filterMentionPaths(allMentionFiles, mention.token.query) : []
+  const pickerOpen = mention.token !== null && !mention.dismissed
+  // Clamped rather than reset by an effect: narrowing the query can leave the index past the end, and
+  // deriving the active row keeps the render and the selection in step without a second render.
+  const activePickerIndex = mentionMatches.length === 0 ? 0 : Math.min(pickerIndex, mentionMatches.length - 1)
+
+  /** Replace the chip row, keeping the ref `send` reads in step with what is on screen. */
+  const setChips = useCallback((next: string[]) => {
+    mentionPathsRef.current = next
+    setMentionPaths(next)
+  }, [])
+
+  /**
+   * Attach one path, or say why it could not be attached.
+   *
+   * Both refusals — already attached, and the cap — leave the chips untouched and report themselves
+   * under the composer. A refusal that changed nothing but said nothing would read as a dead control.
+   */
+  const applyMentionPath = useCallback(
+    (path: string) => {
+      const applied = addMentionPath(mentionPathsRef.current, path)
+      setChips(applied.paths)
+      setMentionNote(applied.refused ? mentionRefusalNote(applied.refused) : null)
+    },
+    [setChips]
+  )
+
+  /**
+   * Take one file from the picker.
+   *
+   * The `@` and what was typed after it are removed from the draft, so the token becomes the chip
+   * rather than staying in the message as a fragment of a path. The caret is put where the token
+   * began, and focus stays in the composer: the user is mid-sentence and must not have to click back
+   * in to finish it.
+   */
+  const chooseMention = useCallback(
+    (path: string) => {
+      const token = mention.token
+      applyMentionPath(path)
+      if (token) {
+        setDraft((current) => current.slice(0, token.start) + current.slice(token.end))
+        requestAnimationFrame(() => {
+          const area = textareaRef.current
+          if (!area) return
+          area.focus()
+          area.setSelectionRange(token.start, token.start)
+        })
+      }
+      setMention({ token: null, dismissed: false })
+    },
+    [applyMentionPath, mention.token]
+  )
+
+  /** Add whatever the code viewer has open. Disabled when nothing is open, so the guard is a UI fact too. */
+  const attachOpenFile = useCallback(() => {
+    if (!selectedFile) return
+    applyMentionPath(selectedFile)
+  }, [applyMentionPath, selectedFile])
+
+  const removeMention = useCallback(
+    (path: string) => {
+      setChips(removeMentionPath(mentionPathsRef.current, path))
+      setMentionNote(null)
+    },
+    [setChips]
+  )
+
+  /** The token the caret is in, if any. Called on every edit and every caret move, not only on `@`. */
+  const syncMention = useCallback((text: string, caret: number) => {
+    setMention((previous) => {
+      const token = activeMentionToken(text, caret)
+      if (token === null) {
+        return previous.token === null && !previous.dismissed ? previous : { token: null, dismissed: false }
+      }
+      // A dismissal is about one token. Typing a new `@` is a new intent, and the picker speaks again.
+      const dismissed = previous.dismissed && previous.token !== null && previous.token.start === token.start
+      const unchanged =
+        previous.token !== null &&
+        previous.token.start === token.start &&
+        previous.token.end === token.end &&
+        previous.token.query === token.query &&
+        previous.dismissed === dismissed
+      return unchanged ? previous : { token, dismissed }
+    })
+  }, [])
+
+  const dismissPicker = useCallback(() => {
+    setMention((previous) => (previous.token === null ? previous : { token: previous.token, dismissed: true }))
+  }, [])
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -228,6 +380,12 @@ export function ChatPanel() {
           const { turns, effect } = applyAgentChunk(messagesRef.current, turnId, chunk)
           updateMessages(turns)
 
+          if (effect.contextNotice) {
+            // A file the send named that could not be included. Written onto the turn as a warning row
+            // rather than thrown: the message went out without it, and that is the news.
+            updateMessages(noteContextSkip(messagesRef.current, turnId, effect.contextNotice))
+          }
+
           if (effect.approval) {
             setPending({
               turnId,
@@ -265,6 +423,10 @@ export function ChatPanel() {
     const text = draft.trim()
     if (!text || isStreaming || pending) return
 
+    // The chips as they stand: the payload and the transcript both read this one list, so what is
+    // sent and what the bubble shows afterwards cannot disagree.
+    const chips = mentionPathsRef.current
+
     // Sending with no session open is normal: a session is created for the message, and named from
     // it. This is what makes the composer work before the user has ever touched the session list.
     sessionsRef.current.ensureSession(text)
@@ -273,10 +435,15 @@ export function ChatPanel() {
     // turns, and hands it back on a pause.
     const history = toHistory(messagesRef.current)
 
-    const userTurn = startUserTurn(text)
+    const userTurn = startUserTurn(text, chips)
     const assistantTurn = startAssistantTurn()
     streamingTurnIdRef.current = assistantTurn.id
     setDraft('')
+    // The chips belonged to that message. Main reads the paths from the payload, so clearing here
+    // cannot take them away from the send that is starting — only from the next one.
+    setChips([])
+    setMention({ token: null, dismissed: false })
+    setMentionNote(null)
     updateMessages([...messagesRef.current, userTurn, assistantTurn])
     requestAnimationFrame(stickToBottom)
 
@@ -287,6 +454,9 @@ export function ChatPanel() {
         messages: [...history, { role: 'user' as const, content: text }],
         workspaceRoot: rootPath,
         autoApprove,
+        // Paths only. Main reads the files and appends the context section, so the renderer never
+        // carries file contents and a path the user attached is the only thing crossing this boundary.
+        mentionPaths: chips.length > 0 ? chips : undefined,
       }),
       assistantTurn.id
     )
@@ -304,6 +474,7 @@ export function ChatPanel() {
     pending,
     rootPath,
     runStream,
+    setChips,
     stickToBottom,
     updateMessages,
   ])
@@ -363,7 +534,44 @@ export function ChatPanel() {
     ]
   )
 
+  /**
+   * Composer keys, with the picker taking precedence while it is open.
+   *
+   * The popover is not focus-managed, so the arrow keys and Enter belong to the textarea: moving a
+   * selection into the list would take the caret out of the sentence the token sits in. Escape closes
+   * the picker without touching what was typed — the token stays as text, and the user can finish the
+   * path by hand — and a second Escape is not intercepted, so it reaches the pane as usual.
+   */
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (pickerOpen && event.key === 'Escape') {
+      event.preventDefault()
+      dismissPicker()
+      return
+    }
+
+    if (pickerOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault()
+      const count = mentionMatches.length
+      if (count > 0) {
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setPickerIndex((activePickerIndex + step + count) % count)
+      }
+      return
+    }
+
+    if (pickerOpen && event.key === 'Enter' && !event.shiftKey) {
+      // Enter commits the highlighted file when there is one. With nothing matching there is nothing
+      // to commit, and sending here would post a message still carrying the `@…` the user was about
+      // to turn into a chip — so the picker closes and the draft is left alone.
+      event.preventDefault()
+      if (mentionMatches.length === 0) {
+        dismissPicker()
+        return
+      }
+      chooseMention(mentionMatches[activePickerIndex])
+      return
+    }
+
     // Enter sends; Shift+Enter is a newline, the convention for a composer.
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -503,38 +711,105 @@ export function ChatPanel() {
         )}
       </div>
 
-      <div className="shrink-0 border-t border-border p-3">
-        <div className="relative">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project…'}
-            aria-label="Message"
-            className="min-h-20 resize-none pt-2.5 pr-11 text-[13px]"
-          />
-          {isStreaming ? (
-            <Button
-              size="icon-sm"
-              variant="outline"
-              className="absolute right-2 bottom-2"
-              aria-label="Stop"
-              onClick={stop}
-            >
-              <Square />
-            </Button>
-          ) : (
-            <Button
-              size="icon-sm"
-              className="absolute right-2 bottom-2"
-              aria-label="Send message"
-              disabled={!draft.trim() || pending !== null}
-              onClick={() => void send()}
-            >
-              <SendHorizontal />
-            </Button>
+      <div ref={composerRef} className="shrink-0 border-t border-border p-3">
+        <Popover
+          open={pickerOpen}
+          onOpenChange={(next) => {
+            // The picker can also be dismissed by the layer itself — Escape, or a click outside the
+            // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
+            if (!next) dismissPicker()
+          }}
+        >
+          {/*
+            Anchored to the composer rather than to a trigger: the textarea is what the token was read
+            from, and the picker has to sit against the sentence it belongs to. There is no trigger at
+            all, because nothing opens this popover except the caret being inside an `@` token.
+          */}
+          <PopoverAnchor asChild>
+            <div className="relative">
+              {mentionPaths.length > 0 && (
+                <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
+              )}
+              <Textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value)
+                  syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+                }}
+                // The caret moving is what ends a token as much as typing is, so following it keeps the
+                // picker attached to the word the user is actually in.
+                onSelect={(e) => {
+                  const area = e.currentTarget
+                  syncMention(area.value, area.selectionStart ?? area.value.length)
+                }}
+                onKeyDown={onKeyDown}
+                placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'}
+                aria-label="Message"
+                className="min-h-20 resize-none pt-2.5 pr-20 text-[13px]"
+              />
+              <Button
+                size="icon-sm"
+                variant="outline"
+                className="absolute right-2 bottom-2"
+                aria-label="Attach the open file"
+                title={selectedFile ? `Attach ${selectedFile}` : 'Open a file to attach it'}
+                disabled={!selectedFile}
+                onClick={attachOpenFile}
+              >
+                <Paperclip />
+              </Button>
+              {isStreaming ? (
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  className="absolute right-11 bottom-2"
+                  aria-label="Stop"
+                  onClick={stop}
+                >
+                  <Square />
+                </Button>
+              ) : (
+                <Button
+                  size="icon-sm"
+                  className="absolute right-11 bottom-2"
+                  aria-label="Send message"
+                  disabled={!draft.trim() || pending !== null}
+                  onClick={() => void send()}
+                >
+                  <SendHorizontal />
+                </Button>
+              )}
+            </div>
+          </PopoverAnchor>
+
+          {pickerOpen && (
+            <MentionPicker
+              paths={mentionMatches}
+              // The unfiltered count, so an empty list can say whether nothing matched or there is
+              // nothing to match at all.
+              total={allMentionFiles.length}
+              activeIndex={activePickerIndex}
+              atCap={mentionPaths.length >= MAX_MENTION_PATHS}
+              onSelect={chooseMention}
+              // A click inside the composer — the textarea the caret is in, the chip row, the send
+              // button — must not dismiss the picker: the user is still typing the sentence the token
+              // belongs to, and a picker that closes when you click your own caret is unusable.
+              onInteractOutside={(event) => {
+                const target = event.detail?.originalEvent?.target as Node | null | undefined
+                if (target && composerRef.current?.contains(target)) event.preventDefault()
+              }}
+            />
           )}
-        </div>
+        </Popover>
+
+        {/* Under the composer rather than as a toast: a refusal is about the control the user just
+            used, and it has to still be there when they look back at it. */}
+        {mentionNote && (
+          <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
+            {mentionNote}
+          </p>
+        )}
       </div>
     </div>
   )

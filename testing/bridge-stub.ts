@@ -90,6 +90,10 @@ const MANIFEST: Record<string, Record<string, string>> = {
   terminal: { execute: 'stream', shell: 'query' },
   llm: { chat: 'stream' },
   window: { init: 'query', onFocusChange: 'event', onMaximizeChange: 'event' },
+  // The mention picker's only read. Listed so the composer's call is dispatched as the query main
+  // registered rather than as an unlisted member, which is what the client's Proxy does with an
+  // unknown name.
+  mentions: { listFilesFlat: 'query' },
 }
 
 /**
@@ -252,6 +256,15 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
       handlers.set(method, handler)
     },
     emit: (channel, payload) => {
+      // A stream payload goes to its own channel's subscribers and nowhere else. The tolerant broadcast
+      // below is right for events, whose channel naming is the library's business — but a stream
+      // payload is a chunk, and handing one to a store mirror would replace that store's state with it,
+      // leaving the failure to surface later as a component reading a field its store no longer has.
+      // Main never sends a chunk to a non-stream subscriber, so this is also the honest simulation.
+      if (channel.startsWith(STREAM_PREFIX)) {
+        for (const cb of streamSubscribers.get(channel) ?? []) cb(payload)
+        return
+      }
       // Delivered to every broadcast subscriber rather than by channel: the library's event channel
       // naming is an internal detail, and a stub that depends on it would break silently on an upgrade.
       for (const cb of allSubscribers) cb(payload)

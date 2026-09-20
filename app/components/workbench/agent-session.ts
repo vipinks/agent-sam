@@ -69,6 +69,21 @@ export interface AgentTurn {
    * a chip row shows.
    */
   mentionPaths?: string[]
+  /**
+   * Files this turn's message attached that could not be included, in the order they were reported.
+   *
+   * Live-only, and deliberately not stored: a skip is a fact about one send — the file may be under
+   * the size cap by the next one — so it is reported on the turn while the run is happening and is
+   * not written to the transcript. The paths a send did attach are what a reopened conversation
+   * shows, as chips, which is why those *are* stored.
+   */
+  contextNotices?: ContextNotice[]
+}
+
+/** A file a send asked for that could not be attached, named with the code main reported. */
+export interface ContextNotice {
+  path: string
+  code: string
 }
 
 /**
@@ -318,6 +333,28 @@ export function startAssistantTurn(): AgentTurn {
   return { id: nextId('assistant'), role: 'assistant', content: '', steps: [] }
 }
 
-export function startUserTurn(text: string): AgentTurn {
-  return { id: nextId('user'), role: 'user', content: text, steps: [] }
+export function startUserTurn(text: string, mentionPaths?: readonly string[]): AgentTurn {
+  return {
+    id: nextId('user'),
+    role: 'user',
+    content: text,
+    steps: [],
+    // Written only when something was attached, so a message with nothing attached is the same turn it
+    // was before mentions existed — the same reason `instructionsFile` is conditional.
+    ...(mentionPaths && mentionPaths.length > 0 ? { mentionPaths: [...mentionPaths] } : {}),
+  }
+}
+
+/**
+ * Record that one attached file could not be included.
+ *
+ * Kept as data rather than prose, because `context_notice` carries a code and the wording is the
+ * renderer's to choose — the rule the rest of the app's failures follow. It lands on the assistant
+ * turn being filled in, which is the one the user is looking at while they wait.
+ */
+export function noteContextSkip(turns: AgentTurn[], turnId: string, notice: ContextNotice): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => ({
+    ...turn,
+    contextNotices: [...(turn.contextNotices ?? []), notice],
+  }))
 }

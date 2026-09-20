@@ -1,7 +1,10 @@
 import { memo } from 'react'
 import Markdown from 'react-markdown'
+import { TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AgentActionCard } from './agent-action-card'
+import { MentionChipRow } from './mention-chip'
+import { contextNoticeText } from './mentions'
 import type { AgentTurn } from './agent-session'
 
 /**
@@ -32,11 +35,29 @@ export const MessageBubble = memo(function MessageBubble({
         )}
       >
         {isUser ? (
-          // A user's message is literal text: never parsed as markdown, which would eat their
-          // angle brackets and asterisks.
-          <p className="break-words whitespace-pre-wrap">{message.content}</p>
+          <>
+            {/* What this message attached, above it: the files are what the sentence is about, and a
+                reopened conversation shows them again from the paths that were stored with it. Not
+                removable here — the message has been sent, so the chips are a record, not a control. */}
+            {message.mentionPaths && message.mentionPaths.length > 0 && (
+              <MentionChipRow paths={message.mentionPaths} className="mb-2" />
+            )}
+            {/* A user's message is literal text: never parsed as markdown, which would eat their
+                angle brackets and asterisks. */}
+            <p className="break-words whitespace-pre-wrap">{message.content}</p>
+          </>
         ) : (
           <>
+            {/* Files this send named that could not be included. Above the answer because they are
+                about the question, and a warning the user reads after the reply is a warning too late
+                to do anything about. */}
+            {message.contextNotices && message.contextNotices.length > 0 && (
+              <div className="mb-2 space-y-1">
+                {message.contextNotices.map((notice, index) => (
+                  <ContextNoticeRow key={`${notice.path}-${index}`} path={notice.path} code={notice.code} />
+                ))}
+              </div>
+            )}
             {/* Steps above the prose: the actions are what the answer refers to, so they read in
                 the order they happened. */}
             {steps.length > 0 && (
@@ -59,6 +80,25 @@ export const MessageBubble = memo(function MessageBubble({
     </div>
   )
 })
+
+/**
+ * A file the send named that could not be attached.
+ *
+ * The code is branched on, never the sentence main would have written: the wording belongs to the
+ * renderer, and the code is shown beside it because it is the half of the message that does not move
+ * when the copy does.
+ */
+function ContextNoticeRow({ path, code }: { path: string; code: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-border bg-muted px-2 py-1.5 text-[12px] text-muted-foreground">
+      <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+      <p className="min-w-0">
+        <span className="font-mono break-all text-foreground">{path}</span> {contextNoticeText(code)}{' '}
+        <span className="font-mono">({code})</span>
+      </p>
+    </div>
+  )
+}
 
 /**
  * Markdown for assistant turns. Styled through Tailwind on the surrounding element rather than a
