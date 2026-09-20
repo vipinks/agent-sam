@@ -6,6 +6,7 @@ import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, command, event } from '../init'
 import { resolveWorkspacePath } from './workspace-paths'
 import { notifyWorkspaceChanged, workspaceChangedSchema } from '../events'
+import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -26,9 +27,48 @@ export const MAX_FILE_BYTES = 1024 * 1024
  * rather than reaching for `fs` itself. That is what makes the change notification complete: a
  * second write path would be a second place to remember to announce, and the agent's writes are
  * exactly the ones the renderer used to miss.
+ *
+ * `options.baselineMtime` is the optional guard against a silent overwrite. When it is present, the
+ * target is `stat`ed *immediately* before the write and a differing mtime refuses the write with
+ * `WRITE_CONFLICT` rather than replacing content that changed since it was read. When it is absent the
+ * write is unguarded and behaves exactly as it did before the guard existed — which is the case for
+ * every caller that was not given a baseline to compare against. The agent's `write_file` tool and the
+ * terminal both pass nothing here: an agent writes content it was handed rather than content it read,
+ * so it has no baseline, and inventing one would make those flows refuse writes for no reason.
+ *
+ * `options.force` is the user's deliberate override after a conflict has been shown to them. It is not
+ * a default and must never be inferred from a failure: it is set by a separate action, because
+ * "overwrite what someone else changed" is a decision that belongs to the person making it.
  */
-export async function writeWorkspaceFile(rootPath: string, requested: string, content: string): Promise<string> {
+export async function writeWorkspaceFile(
+  rootPath: string,
+  requested: string,
+  content: string,
+  options: { baselineMtime?: number | null; force?: boolean } = {}
+): Promise<{ path: string; mtimeMs: number | null }> {
   const target = resolveWorkspacePath(rootPath, requested)
+
+  // The guard runs before anything is created or written, so a refused write touches the disk not at
+  // all — no directory made, no file truncated, no event raised. `stat` rather than a cached value:
+  // the whole point is to ask the disk at the last possible moment, because the window between
+  // reading and writing is exactly where the other writer gets in.
+  const baseline = options.baselineMtime ?? null
+  if (baseline !== null) {
+    let diskMtime: number | null = null
+    try {
+      diskMtime = (await stat(target)).mtimeMs
+    } catch {
+      // Absent, which `decideWrite` treats as the disk having moved rather than as unchanged.
+      diskMtime = null
+    }
+
+    if (decideWrite({ baselineMtime: baseline, diskMtime, force: options.force === true }) === WRITE_CONFLICT) {
+      throw new ConveyorError(
+        WRITE_CONFLICT,
+        `${requested} changed on disk since it was read, so it was not overwritten.`
+      )
+    }
+  }
 
   try {
     // Recursive mkdir is idempotent, so this is also the common path where the directory exists.
@@ -42,7 +82,18 @@ export async function writeWorkspaceFile(rootPath: string, requested: string, co
   }
 
   notifyWorkspaceChanged({ kind: 'written', path: target })
-  return target
+
+  // The mtime this write left behind, so a caller guarding its *next* save has a baseline to send
+  // without a separate read. A stat that fails here is not worth failing the write over — the bytes
+  // are on disk, and a caller with no mtime simply writes unguarded next time.
+  let mtimeMs: number | null = null
+  try {
+    mtimeMs = (await stat(target)).mtimeMs
+  } catch {
+    mtimeMs = null
+  }
+
+  return { path: target, mtimeMs }
 }
 
 /** One child of a listed directory. */
@@ -118,19 +169,27 @@ export const workspaceModule = defineModule({
   /**
    * Read one file as UTF-8 text. Size is checked before reading, so an oversized file never lands
    * in memory in the first place.
+   *
+   * `baselineMtime` is the mtime of the bytes being returned, and it is what lets an editor save
+   * safely: it sends that number back with its write, and main refuses the write if the disk has moved
+   * on since. It is optional and additive, so a caller that ignores it — and any stored transcript
+   * holding an older result — is unaffected.
    */
   readFile: query(z.object({ path: z.string().min(1) }), async ({ input }) => {
-    let size: number
+    let stats: { size: number; mtimeMs: number }
     try {
-      size = (await stat(input.path)).size
+      // One `stat` for both the size check and the baseline: the mtime has to describe the bytes that
+      // are about to be read, so asking twice would be two answers to one question.
+      const result = await stat(input.path)
+      stats = { size: result.size, mtimeMs: result.mtimeMs }
     } catch {
       throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
     }
 
-    if (size > MAX_FILE_BYTES) {
+    if (stats.size > MAX_FILE_BYTES) {
       throw new ConveyorError(
         'FILE_TOO_LARGE',
-        `${basename(input.path)} is ${(size / 1024 / 1024).toFixed(1)} MB — the viewer caps files at 1 MB.`
+        `${basename(input.path)} is ${(stats.size / 1024 / 1024).toFixed(1)} MB — the viewer caps files at 1 MB.`
       )
     }
 
@@ -141,7 +200,7 @@ export const workspaceModule = defineModule({
       throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
     }
 
-    return { content, path: input.path }
+    return { content, path: input.path, baselineMtime: stats.mtimeMs }
   }),
 
   /**
@@ -150,16 +209,30 @@ export const workspaceModule = defineModule({
    * `rootPath` is required rather than optional: this is the agent's write path, and a write that
    * cannot be checked against a workspace must not happen at all. Containment is enforced by
    * `resolveWorkspacePath`, which also refuses a symlinked route out of the workspace.
+   *
+   * `baselineMtime` is optional on the wire, and its absence is meaningful rather than a default: a
+   * caller that never read the file — an agent writing content it was handed, or a test — keeps the
+   * unguarded behaviour. `force` is only ever set after a conflict has been shown to the user.
    */
   writeFile: command(
     z.object({
       path: z.string().min(1),
       content: z.string(),
       rootPath: z.string().min(1),
+      /**
+       * The mtime the caller read, as a finite number. Validated here because it crosses the boundary
+       * and an `NaN` would sail through a comparison and disable the guard silently — the one outcome
+       * worse than not having one.
+       */
+      baselineMtime: z.number().finite().optional(),
+      force: z.boolean().optional(),
     }),
     async ({ input }) => {
-      const target = await writeWorkspaceFile(input.rootPath, input.path, input.content)
-      return { path: target, bytes: Buffer.byteLength(input.content, 'utf8') }
+      const written = await writeWorkspaceFile(input.rootPath, input.path, input.content, {
+        baselineMtime: input.baselineMtime ?? null,
+        force: input.force === true,
+      })
+      return { path: written.path, bytes: Buffer.byteLength(input.content, 'utf8'), mtimeMs: written.mtimeMs }
     }
   ),
 })

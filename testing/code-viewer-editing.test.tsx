@@ -25,12 +25,15 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
 const PATH = 'src/app.ts'
 const ROOT = 'C:/w'
 const ON_DISK = 'const a = 1\n'
+/** An mtime for the open file. Distinct from `DISK_MTIME_2` so a stale baseline can be staged. */
+const DISK_MTIME = 1_700_000_000_000
+const DISK_MTIME_2 = 1_700_000_000_999
 
 /** The form the viewer opens in: a repository with one file, already selected. */
 function stubViewer(overrides: Record<string, (input: unknown) => unknown> = {}): BridgeStub {
   const stub = createBridgeStub({
-    readFile: () => ({ path: PATH, content: ON_DISK }),
-    writeFile: () => ({ path: PATH, bytes: ON_DISK.length }),
+    readFile: () => ({ path: PATH, content: ON_DISK, baselineMtime: DISK_MTIME }),
+    writeFile: () => ({ path: PATH, bytes: ON_DISK.length, mtimeMs: DISK_MTIME_2 }),
     listDirectory: () => [],
     status: () => [],
     branch: () => ({ name: 'main', detached: false, upstream: null, ahead: 0, behind: 0 }),
@@ -172,9 +175,15 @@ describe('saving', () => {
 
     await waitFor(() => expect(stub.methodsOn('workspace')).toContain('writeFile'))
     const written = stub.callsTo('workspace').find((call) => call.method === 'writeFile')
-    // The payload the existing main command validates: path, content, and the open root. The text is
-    // appended because the caret is at the end when edit mode focuses the field.
-    expect(written?.args[0]).toEqual({ path: PATH, content: ON_DISK + '// edited\n', rootPath: ROOT })
+    // The payload the existing main command validates: path, content, the open root, and the mtime the
+    // buffer is based on. The text is appended because the caret is at the end when edit mode focuses
+    // the field.
+    expect(written?.args[0]).toEqual({
+      path: PATH,
+      content: ON_DISK + '// edited\n',
+      rootPath: ROOT,
+      baselineMtime: DISK_MTIME,
+    })
 
     await waitFor(() => expect(screen.queryByLabelText('app.ts has unsaved changes')).toBeNull())
   })
@@ -318,5 +327,136 @@ describe('a change on disk', () => {
 
     await waitFor(() => expect(screen.queryByText(/changed on disk/)).toBeNull())
     expect(screen.queryByLabelText('app.ts has unsaved changes')).toBeNull()
+  })
+})
+
+describe('the write baseline', () => {
+  it('sends the mtime it loaded as the baseline', async () => {
+    const stub = stubViewer()
+    await openFile()
+    const area = await startEditing()
+    await userEvent.type(area, 'x')
+
+    await userEvent.click(screen.getByLabelText('Save file'))
+
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('writeFile'))
+    const written = stub.callsTo('workspace').find((call) => call.method === 'writeFile')
+    // The baseline travels with the content, which is the whole guard: main compares it with the disk
+    // immediately before writing.
+    expect((written?.args[0] as { baselineMtime?: number }).baselineMtime).toBe(DISK_MTIME)
+    // And no force on an ordinary save: forcing is a decision the user has not made yet.
+    expect((written?.args[0] as { force?: boolean }).force).toBeUndefined()
+  })
+
+  it('uses the mtime the previous save returned for the next save', async () => {
+    const stub = stubViewer()
+    await openFile()
+    const area = await startEditing()
+
+    await userEvent.type(area, 'one')
+    await userEvent.click(screen.getByLabelText('Save file'))
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('writeFile'))
+
+    await userEvent.type(area, 'two')
+    await userEvent.click(screen.getByLabelText('Save file'))
+
+    await waitFor(() => {
+      const writes = stub.callsTo('workspace').filter((call) => call.method === 'writeFile')
+      expect(writes.length).toBe(2)
+    })
+    const writes = stub.callsTo('workspace').filter((call) => call.method === 'writeFile')
+    // The second save is guarded against what the first one wrote — `DISK_MTIME_2` — not against the
+    // mtime that was loaded. Guarding against the stale one would refuse the user's own second save.
+    expect((writes[1].args[0] as { baselineMtime?: number }).baselineMtime).toBe(DISK_MTIME_2)
+  })
+
+  it('renders the conflict banner when main refuses a stale-baseline save', async () => {
+    stubViewer({
+      writeFile: () => {
+        throw new ConveyorError('WRITE_CONFLICT', 'changed on disk')
+      },
+    })
+    await openFile()
+    const area = await startEditing()
+    await userEvent.type(area, '// mine\n')
+
+    await userEvent.click(screen.getByLabelText('Save file'))
+
+    // Its own banner, not the generic save failure: the buffer is still the user's and the disk still
+    // holds the other version, so the ways out are different.
+    expect(await screen.findByText(/changed on disk since you opened it, so your save was not written/)).toBeTruthy()
+    // The edits are kept and the file is still unsaved.
+    expect((screen.getByLabelText('Edit app.ts') as HTMLTextAreaElement).value).toContain('// mine')
+    expect(screen.getByLabelText('app.ts has unsaved changes')).toBeTruthy()
+  })
+
+  it('Keep mine re-sends with an explicit force', async () => {
+    const stub = stubViewer({
+      writeFile: (input) => {
+        const forced = (input as { force?: boolean }).force === true
+        // The first attempt is refused; the second, forced one goes through. That is the whole
+        // two-click contract: the refusal never retries itself.
+        if (!forced) throw new ConveyorError('WRITE_CONFLICT', 'changed on disk')
+        return { path: PATH, bytes: 1, mtimeMs: DISK_MTIME_2 }
+      },
+    })
+    await openFile()
+    const area = await startEditing()
+    await userEvent.type(area, 'mine')
+
+    await userEvent.click(screen.getByLabelText('Save file'))
+    expect(await screen.findByText(/your save was not written/)).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep mine' }))
+
+    await waitFor(() => {
+      const writes = stub.callsTo('workspace').filter((call) => call.method === 'writeFile')
+      expect(writes.length).toBe(2)
+    })
+    const writes = stub.callsTo('workspace').filter((call) => call.method === 'writeFile')
+    expect((writes[0].args[0] as { force?: boolean }).force).toBeUndefined()
+    expect((writes[1].args[0] as { force?: boolean }).force).toBe(true)
+    // The same baseline goes again: the guard is still told what the buffer is based on, and force is
+    // what overrides the mismatch rather than a dropped baseline.
+    expect((writes[1].args[0] as { baselineMtime?: number }).baselineMtime).toBe(DISK_MTIME)
+
+    // Saved, so the banner is gone and the file is no longer dirty.
+    await waitFor(() => expect(screen.queryByText(/your save was not written/)).toBeNull())
+    expect(screen.queryByLabelText('app.ts has unsaved changes')).toBeNull()
+  })
+
+  it('Reload refetches the content and the mtime', async () => {
+    const stub = stubViewer({
+      writeFile: () => {
+        throw new ConveyorError('WRITE_CONFLICT', 'changed on disk')
+      },
+      listDirectory: () => [],
+    })
+    await openFile()
+    const area = await startEditing()
+    await userEvent.type(area, 'mine')
+    await userEvent.click(screen.getByLabelText('Save file'))
+    expect(await screen.findByText(/your save was not written/)).toBeTruthy()
+
+    // What the disk holds now, with its own mtime.
+    stub.on('readFile', () => ({ path: PATH, content: 'const a = 99\n', baselineMtime: DISK_MTIME_2 }))
+    await userEvent.click(screen.getByRole('button', { name: 'Reload' }))
+
+    // Both are taken: the disk's content replaces the buffer, and the banner is gone because the
+    // question it asked has been answered.
+    await waitFor(() => expect(screen.getByText(/const a = 99/)).toBeTruthy())
+    expect(screen.queryByText(/your save was not written/)).toBeNull()
+    expect(screen.queryByLabelText('app.ts has unsaved changes')).toBeNull()
+
+    // And the refetched mtime is what the next save is guarded against. Edit mode was never left, so
+    // the textarea is already there — only the buffer had been dropped.
+    await userEvent.type(await screen.findByLabelText('Edit app.ts'), 'z')
+    await userEvent.click(screen.getByLabelText('Save file'))
+    await waitFor(() => {
+      const writes = stub.callsTo('workspace').filter((call) => call.method === 'writeFile')
+      expect(writes.length).toBe(2)
+    })
+    const writes = stub.callsTo('workspace').filter((call) => call.method === 'writeFile')
+    expect((writes[1].args[0] as { baselineMtime?: number }).baselineMtime).toBe(DISK_MTIME_2)
   })
 })

@@ -52,6 +52,8 @@ const SUITES = [
   { name: 'mention files', src: 'mentions/mentions-files-test.ts' },
   { name: 'git porcelain parser', src: 'git/porcelain-test.ts' },
   { name: 'git module', src: 'git/git-module-test.ts' },
+  { name: 'write guard rules', src: 'workspace/write-guard-test.ts' },
+  { name: 'write baseline', src: 'workspace/write-baseline-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 

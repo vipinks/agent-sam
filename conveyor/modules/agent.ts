@@ -235,11 +235,15 @@ export async function executeTool(
         const { path, content } = parsed.data as { path: string; content: string }
         // Through the workspace's own write path rather than `fs` directly: that is what announces
         // the change to the renderer, so the explorer and the open file pick the edit up.
-        const target = await writeWorkspaceFile(requireRoot(workspaceRoot), path, content)
+        //
+        // No baseline, deliberately: the agent writes content it was handed, not content it read, so it
+        // has nothing to compare against and this write stays unguarded. The guard is for an editor
+        // saving a buffer over a file that changed since it was loaded.
+        const written = await writeWorkspaceFile(requireRoot(workspaceRoot), path, content)
         const bytes = Buffer.byteLength(content, 'utf8')
         return {
           ok: true,
-          output: `Wrote ${bytes} bytes to ${displayPath(workspaceRoot, target)}.`,
+          output: `Wrote ${bytes} bytes to ${displayPath(workspaceRoot, written.path)}.`,
         }
       }
 

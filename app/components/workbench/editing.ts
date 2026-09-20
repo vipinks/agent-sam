@@ -93,6 +93,10 @@ export function canEdit(errorCode: string | null): boolean {
  */
 export function writeErrorMessage(code: string): string {
   switch (code) {
+    case 'WRITE_CONFLICT':
+      // The optimistic-concurrency refusal. Worded as a fact about the file rather than as a failure
+      // of the save, because the save did exactly what it should: it declined to overwrite.
+      return 'This file changed on disk since you opened it, so it was not overwritten.'
     case 'PATH_TRAVERSAL':
       return 'That path is outside the open folder, so it was not written.'
     case 'FILE_TOO_LARGE':

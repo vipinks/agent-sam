@@ -65,6 +65,25 @@ export function CodeViewer() {
   const [saveError, setSaveError] = useState<string | null>(null)
   /** A real conflict: the disk moved while the buffer held edits. */
   const [conflicted, setConflicted] = useState(false)
+  /**
+   * The mtime of the bytes this buffer is based on.
+   *
+   * Sent with every guarded save, and updated from the write that succeeds — so the second save in a
+   * row is guarded against what the first one wrote rather than against the content that was loaded
+   * before it. Null means there is no baseline to compare against, and the save goes unguarded, which
+   * is the same thing an absent field means on the wire.
+   */
+  const [baselineMtime, setBaselineMtime] = useState<number | null>(null)
+  /**
+   * The conflict the last save reported, as opposed to the one a read reported.
+   *
+   * Kept apart from `conflicted` because the two are raised by different events and answered by
+   * different buttons: a conflict on *read* means the disk already holds something else, and Refetch
+   * content plus Reload are the ways out; a conflict on *write* means the disk changed between the
+   * read and this save, and the way out is to overwrite deliberately or reload. Collapsing them would
+   * make Keep mine claim to be deciding something it had not been told.
+   */
+  const [saveConflict, setSaveConflict] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Mirrors of the two contents, so a decision can be read synchronously when a read lands. React
@@ -72,12 +91,14 @@ export function CodeViewer() {
   // that gets the wrong answer under batching.
   const bufferRef = useRef<string | null>(null)
   const baselineRef = useRef<string | null>(null)
+  const mtimeRef = useRef<number | null>(null)
   // Mirrored from state on every render, the way the chat pane mirrors its transcript. Without this the
   // refs would only move when a read or a save set them, so a keystroke would leave `applyRead`
   // comparing against the content that was loaded — reading the user's edits as "no edits" and taking
   // the clean branch, which throws the edits away. That was a real bug here, caught by the suite.
   bufferRef.current = buffer
   baselineRef.current = baseline
+  mtimeRef.current = baselineMtime
   // The window-level Ctrl+S is registered once per mounted viewer and reads the latest handler through
   // a ref, so binding it does not re-attach the listener on every keystroke.
   const saveRef = useRef<() => void>(() => {})
@@ -98,7 +119,7 @@ export function CodeViewer() {
    * Adopting on the middle branch would throw away the user's edits, which is the bug this branch
    * exists to avoid.
    */
-  const applyRead = useCallback((content: string) => {
+  const applyRead = useCallback((content: string, mtime: number | null) => {
     const current = bufferRef.current
     const base = baselineRef.current
 
@@ -108,6 +129,7 @@ export function CodeViewer() {
       baselineRef.current = content
       setBuffer(content)
       setBaseline(content)
+      setBaselineMtime(mtime)
       setConflicted(false)
       return
     }
@@ -117,24 +139,29 @@ export function CodeViewer() {
     if (decision === 'conflict') {
       // The buffer is deliberately left alone — the user's text is what is at stake — while the
       // baseline moves to what is actually on disk, so a later "Keep mine" overwrites the real
-      // current content rather than a stale idea of it.
+      // current content rather than a stale idea of it. The mtime moves with it, so the overwrite is
+      // guarded against the bytes that are genuinely there.
       baselineRef.current = content
       setBaseline(content)
+      setBaselineMtime(mtime)
       setConflicted(true)
       return
     }
 
     if (decision === 'dirty') {
-      // Nothing to adopt and nothing to warn about: the disk still holds what was loaded.
+      // Nothing to adopt and nothing to warn about: the disk still holds what was loaded. The mtime is
+      // left as it is for the same reason as the content — the buffer is still based on those bytes,
+      // and that is exactly what its next save should be checked against.
       setConflicted(false)
       return
     }
 
-    // Clean: nothing of the user's is unsaved, so the fresh content is adopted.
+    // Clean: nothing of the user's is unsaved, so the fresh content is adopted along with its mtime.
     bufferRef.current = content
     baselineRef.current = content
     setBuffer(content)
     setBaseline(content)
+    setBaselineMtime(mtime)
     setConflicted(false)
   }, [])
 
@@ -142,7 +169,10 @@ export function CodeViewer() {
   useEffect(() => {
     if (file.data === undefined || selectedFile === null) return
     setSaveError(null)
-    applyRead(file.data.content)
+    // A read that lands is also the way out of a save conflict: the content and the mtime have just
+    // been refreshed, so the banner's question has been answered.
+    setSaveConflict(false)
+    applyRead(file.data.content, file.data.baselineMtime ?? null)
   }, [file.data, file.dataUpdatedAt, selectedFile, applyRead])
 
   /** Everything the buffer holds, dropped when the file changes. A buffer belongs to one path. */
@@ -151,8 +181,10 @@ export function CodeViewer() {
     baselineRef.current = null
     setBuffer(null)
     setBaseline(null)
+    setBaselineMtime(null)
     setSaveError(null)
     setConflicted(false)
+    setSaveConflict(false)
     setEditing(false)
   }, [selectedFile])
 
@@ -161,24 +193,52 @@ export function CodeViewer() {
     setEditorDirty(selectedFile, dirty)
   }, [dirty, selectedFile, setEditorDirty])
 
-  const onSave = useCallback(async () => {
-    if (selectedFile === null || buffer === null) return
-    setSaveError(null)
-    try {
-      await save.mutateAsync({ path: selectedFile, content: buffer, rootPath: rootPath ?? '' })
-      // The saved content is what is on disk now, so it becomes the baseline and the buffer stops
-      // being dirty. This is also what makes our own event harmless: the read it triggers carries the
-      // bytes the baseline already holds, so it resolves as clean and raises no banner. The self-write
-      // case is handled by the decision rather than by a flag saying "this one was mine".
-      baselineRef.current = buffer
-      setBaseline(buffer)
-      setConflicted(false)
-    } catch (err) {
-      // Branched on the code, never on the message. The code rides along in the banner too, because it
-      // is the half that does not move when the wording does.
-      setSaveError(err instanceof ConveyorError ? err.code : 'UNKNOWN')
-    }
-  }, [buffer, rootPath, save, selectedFile])
+  /**
+   * Save the buffer, guarded by the mtime it is based on.
+   *
+   * `force` is only ever true on the second, deliberate attempt after a conflict was shown — never
+   * inferred from a failure. Two failures in a row are an ordinary failure, not a licence to overwrite
+   * whatever is on disk.
+   */
+  const onSave = useCallback(
+    async (force = false) => {
+      if (selectedFile === null || buffer === null) return
+      setSaveError(null)
+      try {
+        const written = await save.mutateAsync({
+          path: selectedFile,
+          content: buffer,
+          rootPath: rootPath ?? '',
+          // Absent rather than null when there is no baseline: the field means "compare against this",
+          // and an absent field is what an unguarded write looks like on the wire.
+          ...(mtimeRef.current === null ? {} : { baselineMtime: mtimeRef.current }),
+          ...(force ? { force: true } : {}),
+        })
+
+        // The saved content is what is on disk now, so it becomes the baseline and the buffer stops
+        // being dirty. This is also what makes our own event harmless: the read it triggers carries the
+        // bytes the baseline already holds, so it resolves as clean and raises no banner. The self-write
+        // case is handled by the decision rather than by a flag saying "this one was mine".
+        baselineRef.current = buffer
+        setBaseline(buffer)
+        // The mtime the write reported, so the next save in a row is guarded against what this one
+        // left rather than against what was loaded before it.
+        setBaselineMtime(written.mtimeMs)
+        setConflicted(false)
+        setSaveConflict(false)
+      } catch (err) {
+        // Branched on the code, never on the message. The code rides along in the banner too, because it
+        // is the half that does not move when the wording does.
+        const code = err instanceof ConveyorError ? err.code : 'UNKNOWN'
+        // A refused write is its own state: the buffer is still the user's, the disk still holds the
+        // other version, and the ways out are to overwrite deliberately or to take the disk. Every
+        // other failure keeps the existing banner, which says the edits are still here.
+        if (code === 'WRITE_CONFLICT') setSaveConflict(true)
+        else setSaveError(code)
+      }
+    },
+    [buffer, rootPath, save, selectedFile]
+  )
 
   saveRef.current = () => void onSave()
 
@@ -200,11 +260,13 @@ export function CodeViewer() {
   /** Refetch the file, dropping the buffer. Reload is the user choosing the disk over their edits. */
   const reload = useCallback(() => {
     setConflicted(false)
+    setSaveConflict(false)
     setSaveError(null)
     bufferRef.current = null
     baselineRef.current = null
     setBuffer(null)
     setBaseline(null)
+    setBaselineMtime(null)
     if (selectedFile) void conveyor.workspace.readFile.invalidate({ path: selectedFile })
   }, [selectedFile])
 
@@ -319,6 +381,31 @@ export function CodeViewer() {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           {toolbar}
+
+          {/*
+            A conflict reported by a *save*: the disk changed between the read and this write, so main
+            refused it. Distinct from the banner below, and answered differently — the buffer is still
+            unsaved and the disk still holds the other version, so the two ways out are to take the
+            disk (Reload) or to overwrite it on purpose. Keep mine re-sends with `force`, which is a
+            second deliberate click rather than an inference from the failure.
+          */}
+          {saveConflict && (
+            <div
+              role="alert"
+              className="flex shrink-0 flex-wrap items-center gap-2 border-b border-brand/40 bg-brand-soft/40 px-3 py-1.5 text-[11.5px]"
+            >
+              <TriangleAlert className="size-3.5 shrink-0 text-brand" />
+              <span className="min-w-0 flex-1">
+                This file changed on disk since you opened it, so your save was not written.
+              </span>
+              <Button variant="outline" size="sm" onClick={reload}>
+                Reload
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void onSave(true)}>
+                Keep mine
+              </Button>
+            </div>
+          )}
 
           {conflicted && (
             <div
