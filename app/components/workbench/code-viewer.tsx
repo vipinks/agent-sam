@@ -1,4 +1,5 @@
-import { Braces, FileCode, GitCompare, TriangleAlert, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Braces, FileCode, GitCompare, Lock, Pencil, Save, TriangleAlert, X } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -6,6 +7,7 @@ import { Button } from '../ui/button'
 import { PaneHeader } from './pane-header'
 import { DiffView } from './diff-view'
 import { gitErrorMessage } from './changes'
+import { canEdit, decideConflict, insertTab, isDirty, writeErrorMessage } from './editing'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -19,12 +21,18 @@ import { useWorkbenchStore } from './store'
  * A change and a file are mutually exclusive by construction: each selection clears the other, so the
  * pane has one answer to "what is it showing" rather than two that could disagree about which was
  * clicked most recently.
+ *
+ * The editing rules live in `editing.ts`. What is here is the state they operate on — the baseline (the
+ * content last known to be on disk), the buffer, and the two banners — plus the two things the rules
+ * cannot express: that leaving edit mode keeps unsaved text, and that a save must not raise a conflict
+ * banner against itself.
  */
 export function CodeViewer() {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
   const setSelectedFile = useWorkbenchStore((s) => s.setSelectedFile)
   const selectedChange = useWorkbenchStore((s) => s.selectedChange)
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
+  const setEditorDirty = useWorkbenchStore((s) => s.setEditorDirty)
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
@@ -45,13 +53,217 @@ export function CodeViewer() {
     retry: false,
   })
 
+  const save = conveyor.workspace.writeFile.useMutation()
+
+  /** True while the textarea is showing rather than the read-only render. */
+  const [editing, setEditing] = useState(false)
+  /** The buffer. Null until something has been loaded to edit. */
+  const [buffer, setBuffer] = useState<string | null>(null)
+  /** What is believed to be on disk: the content last loaded, or last saved. */
+  const [baseline, setBaseline] = useState<string | null>(null)
+  /** A failed save, named by code. Cleared by the next attempt. */
+  const [saveError, setSaveError] = useState<string | null>(null)
+  /** A real conflict: the disk moved while the buffer held edits. */
+  const [conflicted, setConflicted] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Mirrors of the two contents, so a decision can be read synchronously when a read lands. React
+  // state alone would mean nesting one updater inside another to see both at once, which is a shape
+  // that gets the wrong answer under batching.
+  const bufferRef = useRef<string | null>(null)
+  const baselineRef = useRef<string | null>(null)
+  // Mirrored from state on every render, the way the chat pane mirrors its transcript. Without this the
+  // refs would only move when a read or a save set them, so a keystroke would leave `applyRead`
+  // comparing against the content that was loaded — reading the user's edits as "no edits" and taking
+  // the clean branch, which throws the edits away. That was a real bug here, caught by the suite.
+  bufferRef.current = buffer
+  baselineRef.current = baseline
+  // The window-level Ctrl+S is registered once per mounted viewer and reads the latest handler through
+  // a ref, so binding it does not re-attach the listener on every keystroke.
+  const saveRef = useRef<() => void>(() => {})
+
+  const readCode = file.error instanceof ConveyorError ? file.error.code : null
+  const editable = selectedFile !== null && canEdit(readCode)
+  const dirty = isDirty(baseline, buffer)
+
+  /**
+   * Adopt freshly read content, or refuse to.
+   *
+   * The three-way decision is the point. A read arriving while the buffer is clean is the ordinary
+   * refetch this viewer always did — the disk is simply what the file is now. A read whose content
+   * still matches the baseline is not a conflict however it was triggered: the disk did not move, so
+   * the unsaved edits stay exactly where they are and nothing is said. Only a real divergence raises
+   * the banner, and a real divergence is never silently dropped.
+   *
+   * Adopting on the middle branch would throw away the user's edits, which is the bug this branch
+   * exists to avoid.
+   */
+  const applyRead = useCallback((content: string) => {
+    const current = bufferRef.current
+    const base = baselineRef.current
+
+    // No buffer yet: this is the file being opened, so the read is simply what it is now.
+    if (current === null || base === null) {
+      bufferRef.current = content
+      baselineRef.current = content
+      setBuffer(content)
+      setBaseline(content)
+      setConflicted(false)
+      return
+    }
+
+    const decision = decideConflict({ baseline: base, local: current, disk: content })
+
+    if (decision === 'conflict') {
+      // The buffer is deliberately left alone — the user's text is what is at stake — while the
+      // baseline moves to what is actually on disk, so a later "Keep mine" overwrites the real
+      // current content rather than a stale idea of it.
+      baselineRef.current = content
+      setBaseline(content)
+      setConflicted(true)
+      return
+    }
+
+    if (decision === 'dirty') {
+      // Nothing to adopt and nothing to warn about: the disk still holds what was loaded.
+      setConflicted(false)
+      return
+    }
+
+    // Clean: nothing of the user's is unsaved, so the fresh content is adopted.
+    bufferRef.current = content
+    baselineRef.current = content
+    setBuffer(content)
+    setBaseline(content)
+    setConflicted(false)
+  }, [])
+
+  // Every arriving read: the first one, a refetch after an external change, a reload after a conflict.
+  useEffect(() => {
+    if (file.data === undefined || selectedFile === null) return
+    setSaveError(null)
+    applyRead(file.data.content)
+  }, [file.data, file.dataUpdatedAt, selectedFile, applyRead])
+
+  /** Everything the buffer holds, dropped when the file changes. A buffer belongs to one path. */
+  useEffect(() => {
+    bufferRef.current = null
+    baselineRef.current = null
+    setBuffer(null)
+    setBaseline(null)
+    setSaveError(null)
+    setConflicted(false)
+    setEditing(false)
+  }, [selectedFile])
+
+  // Publish the dirty flag for the change handler, which lives outside React and cannot read state.
+  useEffect(() => {
+    setEditorDirty(selectedFile, dirty)
+  }, [dirty, selectedFile, setEditorDirty])
+
+  const onSave = useCallback(async () => {
+    if (selectedFile === null || buffer === null) return
+    setSaveError(null)
+    try {
+      await save.mutateAsync({ path: selectedFile, content: buffer, rootPath: rootPath ?? '' })
+      // The saved content is what is on disk now, so it becomes the baseline and the buffer stops
+      // being dirty. This is also what makes our own event harmless: the read it triggers carries the
+      // bytes the baseline already holds, so it resolves as clean and raises no banner. The self-write
+      // case is handled by the decision rather than by a flag saying "this one was mine".
+      baselineRef.current = buffer
+      setBaseline(buffer)
+      setConflicted(false)
+    } catch (err) {
+      // Branched on the code, never on the message. The code rides along in the banner too, because it
+      // is the half that does not move when the wording does.
+      setSaveError(err instanceof ConveyorError ? err.code : 'UNKNOWN')
+    }
+  }, [buffer, rootPath, save, selectedFile])
+
+  saveRef.current = () => void onSave()
+
+  // Ctrl+S, while editing. Bound to the document rather than to the textarea so it works wherever the
+  // focus happens to be inside the pane — a save that only fires when the caret is in one specific
+  // element is a save the user cannot rely on.
+  useEffect(() => {
+    if (!editing) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        saveRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [editing])
+
+  /** Refetch the file, dropping the buffer. Reload is the user choosing the disk over their edits. */
+  const reload = useCallback(() => {
+    setConflicted(false)
+    setSaveError(null)
+    bufferRef.current = null
+    baselineRef.current = null
+    setBuffer(null)
+    setBaseline(null)
+    if (selectedFile) void conveyor.workspace.readFile.invalidate({ path: selectedFile })
+  }, [selectedFile])
+
   const showingDiff = selectedChange !== null
+  const fileName = selectedFile ? (selectedFile.split(/[\\/]/).pop() ?? selectedFile) : ''
+
+  /** The file line: the path, the dirty dot, and the toggle when the file can be edited at all. */
+  const toolbar = !showingDiff && selectedFile && (
+    <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-3">
+      <p className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground" title={selectedFile}>
+        {selectedFile}
+      </p>
+
+      {dirty && (
+        <span
+          role="status"
+          aria-label={`${fileName} has unsaved changes`}
+          title="Unsaved changes"
+          className="size-2 shrink-0 rounded-full bg-brand"
+        />
+      )}
+
+      {editing && (
+        <Button variant="ghost" size="icon-xs" aria-label="Save file" disabled={!dirty} onClick={() => void onSave()}>
+          <Save />
+        </Button>
+      )}
+
+      {editable ? (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={editing ? 'Stop editing' : 'Edit this file'}
+          aria-pressed={editing}
+          onClick={() => {
+            // Leaving edit mode keeps the buffer exactly as it is: the unsaved text stays, the dirty dot
+            // stays, and coming back finds the same characters. Only closing the file drops them.
+            setEditing((current) => !current)
+            // Focus follows the mode, so entering edit puts the caret where the user expects it.
+            requestAnimationFrame(() => textareaRef.current?.focus())
+          }}
+        >
+          {editing ? <Lock /> : <Pencil />}
+        </Button>
+      ) : (
+        // A file the reader refused: there are no contents to edit, and an editor over an empty buffer
+        // would overwrite a file nobody has seen.
+        <span className="shrink-0 text-[10.5px] text-muted-foreground" title="Too large to edit">
+          read-only
+        </span>
+      )}
+    </div>
+  )
 
   return (
     <div className="flex h-full flex-col bg-background">
       <PaneHeader
         icon={showingDiff ? GitCompare : FileCode}
-        title={showingDiff ? 'Diff' : selectedFile ? 'Code' : 'Code Viewer'}
+        title={showingDiff ? 'Diff' : selectedFile ? `Code${editing ? ' · editing' : ''}` : 'Code Viewer'}
       >
         {(showingDiff || selectedFile) && (
           <Button
@@ -106,19 +318,77 @@ export function CodeViewer() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-8 shrink-0 items-center border-b border-border px-3">
-            <p className="truncate font-mono text-[11.5px] text-muted-foreground" title={selectedFile}>
-              {selectedFile}
-            </p>
-          </div>
+          {toolbar}
 
-          {file.isLoading ? (
+          {conflicted && (
+            <div
+              role="alert"
+              className="flex shrink-0 flex-wrap items-center gap-2 border-b border-brand/40 bg-brand-soft/40 px-3 py-1.5 text-[11.5px]"
+            >
+              <TriangleAlert className="size-3.5 shrink-0 text-brand" />
+              <span className="min-w-0 flex-1">
+                This file changed on disk while you have unsaved edits. Saving will overwrite it.
+              </span>
+              <Button variant="outline" size="sm" onClick={reload}>
+                Reload
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setConflicted(false)}>
+                Keep mine
+              </Button>
+            </div>
+          )}
+
+          {saveError && (
+            <div
+              role="alert"
+              className="flex shrink-0 items-start gap-2 border-b border-border bg-muted px-3 py-1.5 text-[11.5px]"
+            >
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+              <p className="min-w-0 flex-1">
+                {writeErrorMessage(saveError)} <span className="font-mono text-muted-foreground">({saveError})</span>{' '}
+                Your edits are still here.
+              </p>
+            </div>
+          )}
+
+          {file.isLoading && buffer === null ? (
             <div className="flex flex-1 items-center justify-center text-[12.5px] text-muted-foreground">Loading…</div>
           ) : file.error ? (
             <FileError error={file.error} path={selectedFile} />
+          ) : editing && buffer !== null ? (
+            <textarea
+              ref={textareaRef}
+              aria-label={`Edit ${fileName}`}
+              value={buffer}
+              onChange={(e) => setBuffer(e.target.value)}
+              onKeyDown={(e) => {
+                // Tab indents rather than leaving the field. Without this the caret would move out of the
+                // editor and there would be no way to indent at all — the trade a plain textarea editor
+                // has to make, and the reason the rule is a function of its own.
+                if (e.key === 'Tab') {
+                  e.preventDefault()
+                  const { text, caret } = insertTab(
+                    e.currentTarget.value,
+                    e.currentTarget.selectionStart,
+                    e.currentTarget.selectionEnd
+                  )
+                  setBuffer(text)
+                  requestAnimationFrame(() => {
+                    const area = textareaRef.current
+                    if (!area) return
+                    area.setSelectionRange(caret, caret)
+                  })
+                }
+              }}
+              spellCheck={false}
+              // Wrapping off, so a long line scrolls rather than reflowing: the same fidelity the
+              // read-only render had, which is the whole reason highlighting can wait.
+              wrap="off"
+              className="min-h-0 flex-1 resize-none overflow-auto bg-background p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre outline-none"
+            />
           ) : (
             <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-relaxed">
-              <code>{file.data?.content}</code>
+              <code>{buffer ?? file.data?.content}</code>
             </pre>
           )}
         </div>

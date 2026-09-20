@@ -139,11 +139,22 @@ export interface WorkspaceChangeClient {
  * reading the open file at flush time keeps the handler correct without it being re-created — and
  * therefore without the event channel being re-subscribed — on every render. `getRootPath` is a getter
  * for the same reason, and the git reads need it because they take the workspace root as an input.
+ *
+ * `editor` is how the handler reaches the open buffer's dirty flag, which lives in a React store it
+ * cannot read directly. It is asked *at flush time* for the same reason the open file is: the user may
+ * have started typing between the event arriving and the burst closing, and it is the state when the
+ * refetch happens that decides whether a banner is warranted.
  */
 export function createWorkspaceChangeHandlers(
   client: WorkspaceChangeClient,
   getOpenFile: () => string | null,
-  getRootPath: () => string | null
+  getRootPath: () => string | null,
+  editor?: {
+    /** Whether the open buffer holds unsaved edits. */
+    isDirty: (path: string) => boolean
+    /** Report that the open path changed from outside, so the viewer can weigh it against the buffer. */
+    noteExternalChange: (path: string) => void
+  }
 ): ChangeHandlers {
   return {
     invalidateListings: () => {
@@ -169,6 +180,17 @@ export function createWorkspaceChangeHandlers(
       // its next open would read through the invalidated entry anyway.
       const open = getOpenFile()
       if (open && paths.includes(open)) {
+        // The branch that matters. A clean buffer is refetched and the new content adopted, which is
+        // what happened before the viewer could edit anything. A dirty buffer must not be silently
+        // replaced under the user's hands, so the change is reported and the viewer weighs the fresh
+        // bytes against the unsaved ones before deciding whether to say anything.
+        //
+        // The refetch happens either way, and deliberately: it is the arriving content that tells the
+        // two apart. A write of the bytes we already had — a touch, or our own save racing its event —
+        // is not a conflict, and a flag saying "an external write happened" could not tell the user
+        // that. `decideConflict` can.
+        if (editor?.isDirty(open)) editor.noteExternalChange(open)
+
         void client.workspace.readFile.invalidate({ path: open })
         // A file that changed may now differ from the index, so the diff on screen is stale too.
         const rootPath = getRootPath()

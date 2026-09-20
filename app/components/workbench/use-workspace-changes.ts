@@ -7,6 +7,7 @@ import {
   subscribeToWorkspaceChanges,
   type WorkspaceChangeClient,
 } from './workspace-changes'
+import { useWorkbenchStore } from './store'
 
 /**
  * The React binding for the workspace-change subscription.
@@ -32,6 +33,16 @@ export function useWorkspaceChangeInvalidation(openFile: string | null): void {
     rootPathRef.current = rootPath
   })
 
+  // The open buffer's dirty flag and the external-change counter live in the workbench store, which
+  // this hook can read at flush time through the same kind of ref — so the subscription is still
+  // created once, and still reads the latest state when a burst actually closes.
+  const editor = useWorkbenchStore((s) => s.editor)
+  const noteExternalChange = useWorkbenchStore((s) => s.noteExternalChange)
+  const editorRef = useRef(editor)
+  useEffect(() => {
+    editorRef.current = editor
+  })
+
   useEffect(() => {
     return subscribeToWorkspaceChanges(
       (listener) => conveyor.workspace.onChanged.subscribe(listener),
@@ -40,8 +51,12 @@ export function useWorkspaceChangeInvalidation(openFile: string | null): void {
       createWorkspaceChangeHandlers(
         conveyor as unknown as WorkspaceChangeClient,
         () => openFileRef.current,
-        () => rootPathRef.current
+        () => rootPathRef.current,
+        {
+          isDirty: (path) => editorRef.current.path === path && editorRef.current.dirty,
+          noteExternalChange,
+        }
       )
     )
-  }, [])
+  }, [noteExternalChange])
 }

@@ -40,6 +40,21 @@ interface WorkbenchState {
    */
   commitMessage: string
   setCommitMessage: (message: string) => void
+  /**
+   * What the code viewer's editor is doing, for the parts of the app that are not it.
+   *
+   * The workspace-change subscription needs to know whether the open buffer has unsaved edits, and it
+   * lives outside React — so the buffer's dirty flag is published here rather than kept private to the
+   * component. `externalNonce` counts external changes reported for the open path: the viewer watches it
+   * to know that a fresh read was caused by something other than its own save.
+   *
+   * A single slot rather than a map, because one file is open at a time and a map would invite the
+   * question of what happens to the entries nothing clears.
+   */
+  editor: { path: string | null; dirty: boolean; externalNonce: number }
+  setEditorDirty: (path: string | null, dirty: boolean) => void
+  /** Report that something outside the viewer wrote the open path. */
+  noteExternalChange: (path: string) => void
 }
 
 const TARGET_KEY = 'sam-ai-chat-target'
@@ -83,4 +98,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   setSelectedChange: (selectedChange) => set({ selectedChange }),
   commitMessage: '',
   setCommitMessage: (commitMessage) => set({ commitMessage }),
+  editor: { path: null, dirty: false, externalNonce: 0 },
+  setEditorDirty: (path, dirty) =>
+    set((state) => ({
+      // A different path means the previous buffer is gone, so the flag is replaced rather than kept.
+      editor: { path, dirty, externalNonce: state.editor.path === path ? state.editor.externalNonce : 0 },
+    })),
+  noteExternalChange: (path) =>
+    set((state) => ({
+      editor: { ...state.editor, path, externalNonce: state.editor.externalNonce + 1 },
+    })),
 }))
