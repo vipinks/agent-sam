@@ -59,6 +59,9 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // carries no key rather than a null it would then have to be read back out of.
     ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
     ...(turn.instructionsTruncated !== undefined ? { instructionsTruncated: turn.instructionsTruncated } : {}),
+    // Paths only, written when the user attached something. A turn with no attachments carries no key,
+    // so an ordinary conversation is stored exactly as it was before mentions existed.
+    ...(turn.mentionPaths !== undefined && turn.mentionPaths.length > 0 ? { mentionPaths: turn.mentionPaths } : {}),
   }))
 
   return { version: TRANSCRIPT_VERSION, turns, interrupted }
@@ -83,6 +86,7 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // it can still name the file.
     ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
     ...(turn.instructionsTruncated !== undefined ? { instructionsTruncated: turn.instructionsTruncated } : {}),
+    ...(turn.mentionPaths !== undefined && turn.mentionPaths.length > 0 ? { mentionPaths: turn.mentionPaths } : {}),
   }))
 
   return { turns, interrupted: snapshot.interrupted }

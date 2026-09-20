@@ -13,6 +13,8 @@ import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
 import { instructionsFileName, planSystemInjection } from '../protocol/context'
+import { assembleMentionContext, MAX_MENTION_PATHS, type MentionSkipCode } from '../protocol/mentions'
+import { readMentions } from './mentions'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -291,6 +293,17 @@ export type AgentChunk =
    * nothing and the name it already recorded stands.
    */
   | { type: 'project_instructions'; file: string; truncated: boolean }
+  /**
+   * A file the user attached that could not be included.
+   *
+   * Reported rather than swallowed, and carrying the code rather than a sentence: the UI says what
+   * happened in its own words, and the model is told the same fact in the section. A skip that reached
+   * the renderer as prose would have to be parsed back out of it to be shown.
+   *
+   * The paths themselves need no chunk: the renderer sent them, so it already holds the list and can
+   * record it on the turn. This is only for what it could not know — which of them did not make it.
+   */
+  | { type: 'context_notice'; path: string; code: MentionSkipCode }
   | { type: 'tool_call_start'; callId: string; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; callId: string; tool: string; ok: boolean; code?: string; output: string }
   | {
@@ -457,6 +470,15 @@ interface LoopOptions {
   messages: ChatMessage[]
   autoApprove: boolean
   signal: AbortSignal
+  /**
+   * Workspace-relative files the user attached to this send, in the order they attached them.
+   *
+   * Read here, in main, and appended to the user's message as a context section: the renderer knows
+   * which paths the user picked and nothing about their contents. Absent for a resumed run, which
+   * re-sends the history it was handed back — including the section already in it — rather than
+   * reading the files a second time and appending them twice.
+   */
+  mentionPaths?: string[]
   steps?: number
   pending?: PendingDecision
   /** Injected so the loop can be driven from a test; the module members leave it unset. */
@@ -494,6 +516,34 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // the text it labels is deliberately stored nowhere.
     const file = instructionsFileName(instructions?.path ?? null)
     if (file) yield { type: 'project_instructions', file, truncated: instructions?.truncated ?? false }
+  }
+
+  // The files the user attached, read here and appended to the last user turn.
+  //
+  // Appended rather than sent as their own message, because they are context *for* that message: a
+  // separate turn would put a wall of file content between the user's sentence and the model's answer
+  // to it, and the model would have to guess which one it was being asked about.
+  //
+  // Only on a fresh send. A resumed run re-enters with the history the pause handed back, which
+  // already carries the section inside its user turn — reading and appending again would duplicate
+  // every attached file in the request.
+  if (!opts.pending && opts.mentionPaths && opts.mentionPaths.length > 0) {
+    // Re-capped here even though the schema already did: the schema guards the IPC boundary, and this
+    // guards the loop, which is also called directly from tests and could be handed anything.
+    const paths = opts.mentionPaths.slice(0, MAX_MENTION_PATHS)
+    const reads = await readMentions(opts.workspaceRoot, paths)
+    const { section, notices } = assembleMentionContext(reads)
+
+    // The user's message gets the section. Found from the end because the last user turn is the one
+    // this send is about; an earlier one already went to the provider without it.
+    const lastUser = history.findLast((m) => m.role === 'user')
+    if (lastUser && section) lastUser.content = `${lastUser.content}\n\n${section}`
+
+    // Each skip is reported as it is found, so the renderer can mark the chip the user is looking at
+    // rather than only telling them after the answer arrived.
+    for (const notice of notices) {
+      yield { type: 'context_notice', path: notice.path, code: notice.code }
+    }
   }
 
   // A resumed run re-enters with the head of the paused queue already decided. `opts.messages`
@@ -668,6 +718,15 @@ export const agentModule = defineModule({
       messages: z.array(messageSchema).min(1, 'A conversation needs at least one message'),
       workspaceRoot: z.string().nullable(),
       autoApprove: z.boolean().optional(),
+      /**
+       * The files the user attached, as workspace-relative paths.
+       *
+       * Capped here, at the boundary, rather than trusted: this array is renderer-supplied and each
+       * path becomes a disk read, so an uncapped one would be an arbitrary number of reads per send. A
+       * non-string is refused by the schema rather than coerced, and an empty list is simply no
+       * mentions.
+       */
+      mentionPaths: z.array(z.string()).max(MAX_MENTION_PATHS).optional(),
     }),
     async function* ({ input, signal }) {
       const apiKey = await requireApiKey(input.providerId)
@@ -678,6 +737,7 @@ export const agentModule = defineModule({
         workspaceRoot: input.workspaceRoot,
         messages: input.messages as ChatMessage[],
         autoApprove: input.autoApprove ?? false,
+        mentionPaths: input.mentionPaths,
         signal,
       })
     }

@@ -331,6 +331,31 @@ function aMalformedAnnouncementIsIgnored() {
   results.push('a malformed instructions announcement is ignored rather than written into the turn')
 }
 
+function aContextNoticeIsReportedWithoutTouchingTheTurn() {
+  const { turns, effects } = run([{ type: 'context_notice', path: 'huge.ts', code: 'CONTEXT_FILE_TOO_LARGE' }])
+
+  // Reported as an effect rather than written into the transcript: the skip is a fact about this send,
+  // and the UI says what happened. The turn records the paths it attached, not what failed.
+  assert.deepEqual(
+    effects[0].contextNotice,
+    { path: 'huge.ts', code: 'CONTEXT_FILE_TOO_LARGE' },
+    'the skip is reported with the code rather than a sentence'
+  )
+  assert.equal(turns[1].steps.length, 0, 'a notice is not a tool card')
+  assert.equal(turns[1].content, '', 'and is not prose')
+  assert.equal(turns[1].mentionPaths, undefined, 'nor does it record paths itself')
+
+  // Malformed input is ignored like any other chunk: no path, or no code, means nothing to report.
+  const junk = run([
+    { type: 'context_notice' },
+    { type: 'context_notice', path: 'a.ts' },
+    { type: 'context_notice', code: 'X' },
+    { type: 'context_notice', path: 42, code: 'X' },
+  ])
+  assert.equal(junk.effects.filter((e) => e.contextNotice).length, 0, 'a notice missing either half is not reported')
+  results.push('a context notice is reported to the component and never written into the turn')
+}
+
 // ---------------------------------------------------------------- robustness
 
 function junkChunks() {
@@ -386,6 +411,7 @@ function main() {
   step('failed turns', erroredTurnsAreNotSent)
   step('instructions record', theInstructionsRecordLandsOnTheTurn)
   step('instructions junk', aMalformedAnnouncementIsIgnored)
+  step('context notice', aContextNoticeIsReportedWithoutTouchingTheTurn)
   step('junk chunks', junkChunks)
   step('identity', identityIsPreserved)
   step('done', doneIsReported)

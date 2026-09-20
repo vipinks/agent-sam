@@ -59,6 +59,18 @@ const turnSchema = z.object({
   instructionsFile: z.string().optional(),
   /** True when only the first 16 KB of that file was read, so the name is not mistaken for the whole. */
   instructionsTruncated: z.boolean().optional(),
+  /**
+   * The workspace files this turn's message pointed at, as paths.
+   *
+   * Paths only, and deliberately: the contents are read fresh per send and sent to the provider, and a
+   * transcript records the conversation rather than a copy of the user's source tree. A transcript
+   * that carried the contents would also go stale the moment the file changed, and could be orders of
+   * magnitude larger than the conversation it belongs to.
+   *
+   * The paths are in the order the user attached them, because that is what a chip row renders and
+   * what the export notes; reordering here would quietly disagree with the message the user sent.
+   */
+  mentionPaths: z.array(z.string()).optional(),
 })
 
 /**

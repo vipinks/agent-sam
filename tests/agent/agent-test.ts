@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeTool, needsApproval, runAgentLoop, TOOL_DEFINITIONS } from '../../conveyor/modules/agent'
+import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
 import { resolveWorkspacePath } from '../../conveyor/modules/workspace-paths'
 
 const results: string[] = []
@@ -805,6 +806,148 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
   }
 }
 
+// ---------------------------------------------------------------- mentions
+
+/**
+ * A send with two mentions: the payload carries the context section, and the skip is announced.
+ *
+ * Asserted on the request body, because that is the only place the answer exists — main reads the
+ * files and appends the section, so nothing on the renderer side could be inspected for this. The
+ * over-cap file is the interesting half: it must appear in the payload as a named skip rather than
+ * being silently dropped, since a mention that vanished would read to the model as an empty file.
+ */
+async function mentionsReachTheProvider() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'small.ts'), 'export const small = 1\n', 'utf8')
+    writeFileSync(join(root, 'huge.ts'), 'x'.repeat(MAX_FILE_BYTES + 1), 'utf8')
+
+    const log: unknown[] = []
+    const chunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'what does this do?' }],
+        autoApprove: false,
+        mentionPaths: ['small.ts', 'huge.ts'],
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
+    const user = sent.find((m) => m.role === 'user')
+    assert.ok(user, 'the user message is sent')
+
+    // The user's own words survive, with the section appended rather than replacing them.
+    assert.ok(user.content.startsWith('what does this do?'), 'the message keeps what the user typed')
+    assert.ok(user.content.includes('small.ts'), 'the attached file is named in the section')
+    assert.ok(user.content.includes('export const small = 1'), 'and its content is carried')
+
+    // The one that could not be included is named with its code, not dropped.
+    assert.ok(user.content.includes('huge.ts'), 'the oversized file is named in the section')
+    assert.ok(user.content.includes('CONTEXT_FILE_TOO_LARGE'), 'with the code that explains why')
+    // And its content is absent: the cap is what this whole path exists for.
+    assert.ok(!user.content.includes('x'.repeat(100)), 'no part of the oversized file is sent')
+
+    // The skip is also announced to the renderer, carrying the code rather than a sentence.
+    const notices = chunks.filter((c) => c.type === 'context_notice')
+    assert.equal(notices.length, 1, 'exactly one skip is announced')
+    assert.equal(notices[0].path, 'huge.ts', 'naming the file')
+    assert.equal(notices[0].code, 'CONTEXT_FILE_TOO_LARGE', 'and its code')
+    results.push('a send with two mentions carries the readable file and names the skipped one with its code')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function aSendWithNoMentionsIsUnchanged() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'small.ts'), 'export const small = 1\n', 'utf8')
+
+    const log: unknown[] = []
+    const chunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
+    const user = sent.find((m) => m.role === 'user')
+    assert.equal(user?.content, 'hello', 'with no mentions the message is sent exactly as typed')
+    assert.ok(
+      !sent.some((m) => m.content.includes('attached the following files')),
+      'and no empty context section is appended'
+    )
+    assert.equal(chunks.filter((c) => c.type === 'context_notice').length, 0, 'and nothing is announced')
+    results.push('a send with no mentions is byte-for-byte what it was before mentions existed')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function aResumeDoesNotReReadTheMentions() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'small.ts'), 'export const small = 1\n', 'utf8')
+
+    const log: unknown[] = []
+    // The history the pause handed back already carries the section inside its user turn, because
+    // that is the history the provider was sent. Appending again would duplicate every file.
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [
+          {
+            role: 'user',
+            content: 'what does this do?\n\nThe user attached the following files\nexport const small = 1',
+          },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"small.ts"}' } },
+            ],
+          },
+        ],
+        autoApprove: false,
+        // Passed deliberately, to prove the resume path ignores it rather than re-reading.
+        mentionPaths: ['small.ts'],
+        steps: 1,
+        pending: {
+          calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"small.ts"}' } }],
+          denied: true,
+        },
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
+    const user = sent.find((m) => m.role === 'user')
+    // The section the pause handed back is still there exactly once. A resume that re-read the
+    // mentions would append a second copy, which is what this count catches.
+    const occurrences = (user?.content.split('export const small = 1').length ?? 1) - 1
+    assert.equal(occurrences, 1, 'the section survives the resume exactly once, not twice')
+    results.push('a resumed run does not read the mentions again or duplicate the section')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -830,6 +973,9 @@ async function main() {
   await step('symlink escape', symlinkEscapeBlocked)
   await step('traversal through the tool', traversalRefusedThroughTheTool)
   await step('bad tool arguments', badArgumentsAreReported)
+  await step('mentions reach the provider', mentionsReachTheProvider)
+  await step('no mentions, unchanged send', aSendWithNoMentionsIsUnchanged)
+  await step('resume does not re-read mentions', aResumeDoesNotReReadTheMentions)
 
   console.log('agent loop: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)

@@ -61,6 +61,14 @@ export interface AgentTurn {
   instructionsFile?: string
   /** True when only the first 16 KB of that file was read. */
   instructionsTruncated?: boolean
+  /**
+   * The workspace files this turn's message attached, as paths.
+   *
+   * Paths only: the contents were read in main for the provider, and a transcript records the
+   * conversation rather than a copy of the source tree. The order is the user's, because that is what
+   * a chip row shows.
+   */
+  mentionPaths?: string[]
 }
 
 /**
@@ -71,6 +79,13 @@ export interface AgentTurn {
  */
 export interface AgentChunkEffect {
   textDelta?: string
+  /**
+   * A file that could not be included in this send.
+   *
+   * Reported rather than acted on, like `approval`: the reducer describes it and the component decides
+   * how to say so.
+   */
+  contextNotice?: { path: string; code: string }
   approval?: {
     /** The one call this decision is about. The rest of `calls` are queued behind it. */
     callId: string
@@ -223,6 +238,16 @@ export function applyAgentChunk(
         turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, steps: [...turn.steps, step] })),
         effect: {},
       }
+    }
+
+    case 'context_notice': {
+      // A file the user attached that could not be included. Reported so the chip can be marked rather
+      // than the message silently losing a file the user watched themselves attach. Carries the code,
+      // never a sentence: the UI says what happened in its own words.
+      const path = typeof c.path === 'string' ? c.path : ''
+      const code = typeof c.code === 'string' ? c.code : ''
+      if (!path || !code) return { turns, effect: {} }
+      return { turns, effect: { contextNotice: { path, code } } }
     }
 
     case 'tool_result': {

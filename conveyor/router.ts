@@ -9,6 +9,7 @@ import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
 import { agentModule } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
+import { mentionsModule } from './modules/mentions'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
@@ -33,6 +34,7 @@ export const router = createRouter(
     terminal: terminalModule,
     agent: agentModule,
     sessions: sessionsModule,
+    mentions: mentionsModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),

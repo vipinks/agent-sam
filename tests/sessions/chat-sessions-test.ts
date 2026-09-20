@@ -228,6 +228,47 @@ function theInstructionsRecordRoundTrips() {
   results.push('the instructions record round-trips, and a conversation without one is written unchanged')
 }
 
+function theMentionPathsRoundTripWithoutTheirContents() {
+  const state: TranscriptState = {
+    interrupted: false,
+    turns: [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'what does this do?',
+        steps: [],
+        mentionPaths: ['src/app.ts', 'README.md'],
+      },
+    ],
+  }
+
+  const snapshot = serializeTranscript(state)
+  assert.deepEqual(snapshot.turns[0].mentionPaths, ['src/app.ts', 'README.md'], 'the paths are written in order')
+
+  // Paths only. The assertion that matters is the absence: the contents were read for the provider and
+  // are deliberately not part of the record, so a transcript cannot smuggle the user's source tree into
+  // a file that is meant to hold a conversation.
+  const serialized = JSON.stringify(snapshot)
+  assert.ok(!serialized.includes('CONTEXT'), 'no context section text is stored')
+
+  const restored = rehydrateTranscript(snapshot)
+  assert.deepEqual(restored.turns[0].mentionPaths, ['src/app.ts', 'README.md'], 'and survive the read back')
+
+  // A turn with no attachments carries no key, so nothing about existing transcripts changes.
+  const plain = serializeTranscript({
+    interrupted: false,
+    turns: [{ id: 'user-1', role: 'user', content: 'hello', steps: [] }],
+  })
+  assert.equal('mentionPaths' in plain.turns[0], false, 'an unattached turn records no mentionPaths key')
+  // And an empty list is the same as none: a send with no attachments is an ordinary send.
+  const empty = serializeTranscript({
+    interrupted: false,
+    turns: [{ id: 'user-1', role: 'user', content: 'hello', steps: [], mentionPaths: [] }],
+  })
+  assert.equal('mentionPaths' in empty.turns[0], false, 'an empty attachment list writes no key either')
+  results.push('mention paths round-trip in order, and no content is ever stored with them')
+}
+
 // ---------------------------------------------------------------- interruption
 
 function anUnfinishedTurnIsInterrupted() {
@@ -520,6 +561,7 @@ async function main() {
   await step('schema agreement', theReaderAcceptsWhatTheWriterProduces)
   await step('absent file', absentIsEmpty)
   await step('instructions record', theInstructionsRecordRoundTrips)
+  await step('mention paths', theMentionPathsRoundTripWithoutTheirContents)
   await step('interruption', anUnfinishedTurnIsInterrupted)
   await step('pause is not interruption', aPauseIsNotAnInterruption)
   await step('numbering', numberingResumesPastRestoredTurns)
