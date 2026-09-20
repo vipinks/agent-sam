@@ -53,6 +53,8 @@ const SUITES = [
   { name: 'git porcelain parser', src: 'git/porcelain-test.ts' },
   { name: 'git module', src: 'git/git-module-test.ts' },
   { name: 'write guard rules', src: 'workspace/write-guard-test.ts' },
+  { name: 'open root', src: 'workspace/open-root-test.ts' },
+  { name: 'recent roots store', src: 'workspace/recent-roots-store-test.ts' },
   { name: 'write baseline', src: 'workspace/write-baseline-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]

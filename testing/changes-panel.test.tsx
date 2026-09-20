@@ -50,7 +50,9 @@ function stubRepo(overrides: Record<string, (input: unknown) => unknown> = {}): 
     discardWorktree: () => ({ discarded: [], failed: [] }),
     ...overrides,
   })
-  stubStore(stub, 'workspace', { rootPath: ROOT })
+  // Seeded with the shape main delivers whole: the store's persisted state is merged over its initial
+  // state, so a mirror that omitted `recentRoots` would not be a state main can produce.
+  stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
   setActiveStub(stub)
   return stub
 }

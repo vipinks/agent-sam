@@ -1,4 +1,4 @@
-import { basename, dirname, join } from 'path'
+import { basename, dirname, join, resolve } from 'path'
 import { mkdir, readFile as readFileFromDisk, readdir, stat, writeFile as writeFileToDisk } from 'fs/promises'
 import { dialog } from 'electron'
 import { z } from 'zod'
@@ -7,6 +7,7 @@ import { defineModule, query, command, event } from '../init'
 import { resolveWorkspacePath } from './workspace-paths'
 import { notifyWorkspaceChanged, workspaceChangedSchema } from '../events'
 import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
+import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -124,6 +125,51 @@ export const workspaceModule = defineModule({
 
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  }),
+
+  /**
+   * Switch to a folder the app already knows: a recent root, or one the dialog just returned.
+   *
+   * The one thing this adds over `pickFolder` is the check that the folder is still there. A recent
+   * root is the only path the app holds that can stop existing between sessions — a deleted folder, a
+   * drive that is not mounted, a renamed parent — and a root stored without one would leave the tree,
+   * the git panel and the viewer pointed at something nothing can read.
+   *
+   * The `stat` is here rather than in the renderer because the renderer has no filesystem, and the
+   * failure is a *code* rather than a message: `WORKSPACE_MISSING` is what the UI branches on to say
+   * the folder is gone, and what tells it not to add the path to the recents list it is showing.
+   *
+   * The resolve is not cosmetic. Recents are compared by path, so every path handed to the store is
+   * resolved first — one spelling per folder, whatever separators or trailing separator the caller
+   * used. It resolves the path *before* the stat, so the check and the stored value cannot be answers
+   * about two different paths.
+   *
+   * A missing folder announces nothing: there is no change to tell the windows about, and an event
+   * here would invalidate the tree they are still correctly showing.
+   */
+  openRoot: command(z.object({ path: z.string().min(1) }), async ({ input }) => {
+    const path = resolve(input.path)
+
+    let isDirectory = false
+    try {
+      isDirectory = (await stat(path)).isDirectory()
+    } catch {
+      // Unreadable is the same outcome as gone here: neither can be browsed, and neither is worth
+      // different wording. A file rather than a folder is the third case, and takes the same branch.
+      isDirectory = false
+    }
+
+    if (!isDirectory) {
+      throw new ConveyorError(WORKSPACE_MISSING, `${path} is not a folder that exists.`)
+    }
+
+    // The root the tree, the git panel and the viewer are pointed at has just changed, and the
+    // renderer cannot see that by itself — this is the event every other change reaches them through,
+    // so a switch invalidates the listings and the repository reads the same way a write does. Raised
+    // after the check, never before: a refused switch must leave those caches alone.
+    notifyWorkspaceChanged({ kind: 'command-exited' })
+
+    return { path }
   }),
 
   /**

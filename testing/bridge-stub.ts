@@ -85,6 +85,9 @@ const MANIFEST: Record<string, Record<string, string>> = {
     readFile: 'query',
     onChanged: 'event',
     pickFolder: 'command',
+    // The recents switcher's switch: the folder dialog returns a path, and this opens one the app
+    // already knows. Both commands, so the client dispatches them the way main registered them.
+    openRoot: 'command',
     writeFile: 'command',
   },
   terminal: { execute: 'stream', shell: 'query' },
