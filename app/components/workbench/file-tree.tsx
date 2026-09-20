@@ -125,13 +125,19 @@ function DirectoryNode({ entry, depth }: { entry: FileTreeEntry; depth: number }
 function FileNode({ entry, depth }: { entry: FileTreeEntry; depth: number }) {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
   const setSelectedFile = useWorkbenchStore((s) => s.setSelectedFile)
+  const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
   const isSelected = selectedFile === entry.path
 
   return (
     <button
       type="button"
       aria-current={isSelected ? 'true' : undefined}
-      onClick={() => setSelectedFile(entry.path)}
+      onClick={() => {
+        // Opening a file closes any diff the viewer was showing, so the pane has one answer to "what
+        // is it showing" rather than two competing ones.
+        setSelectedChange(null)
+        setSelectedFile(entry.path)
+      }}
       className={cn(
         'flex w-full items-center gap-1.5 py-1 pr-2 text-left text-[12.5px] transition-colors',
         indentClass(depth),

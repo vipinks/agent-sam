@@ -25,6 +25,15 @@ export const COALESCE_MS = 150
 export interface ChangeHandlers {
   /** Called at most once per burst: every listing is stale now. */
   invalidateListings: () => void
+  /**
+   * Called at most once per burst: whatever changed may have changed git's reading of it too.
+   *
+   * A write alters a file's status, a command can stage or commit, and the changes panel is showing
+   * both — so its reads are refetched on the same burst that refetches the tree, rather than waiting
+   * for the user to press refresh in a panel they are already looking at. Coalesced with everything
+   * else, because a turn that writes six files must not run six status calls.
+   */
+  invalidateGit: () => void
   /** Called once per burst, with the distinct paths written during it. */
   onWrites: (paths: readonly string[]) => void
 }
@@ -66,6 +75,7 @@ export function createChangeCoalescer(
 
     // Runs even when no path was written: a command exiting means the listings may have moved.
     handlers.invalidateListings()
+    handlers.invalidateGit()
     if (paths.length > 0) handlers.onWrites(paths)
   }
 
@@ -114,6 +124,12 @@ export interface WorkspaceChangeClient {
     listDirectory: { invalidate: () => Promise<void> }
     readFile: { invalidate: (input: { path: string }) => Promise<void> }
   }
+  git: {
+    status: { invalidate: (input: { rootPath: string }) => Promise<void> }
+    branch: { invalidate: (input: { rootPath: string }) => Promise<void> }
+    log: { invalidate: (input: { rootPath: string }) => Promise<void> }
+    diff: { invalidate: (input: { rootPath: string; path: string }) => Promise<void> }
+  }
 }
 
 /**
@@ -121,11 +137,13 @@ export interface WorkspaceChangeClient {
  *
  * `getOpenFile` is a getter rather than a value: the subscription outlives any single render, so
  * reading the open file at flush time keeps the handler correct without it being re-created — and
- * therefore without the event channel being re-subscribed — on every render.
+ * therefore without the event channel being re-subscribed — on every render. `getRootPath` is a getter
+ * for the same reason, and the git reads need it because they take the workspace root as an input.
  */
 export function createWorkspaceChangeHandlers(
   client: WorkspaceChangeClient,
-  getOpenFile: () => string | null
+  getOpenFile: () => string | null,
+  getRootPath: () => string | null
 ): ChangeHandlers {
   return {
     invalidateListings: () => {
@@ -133,12 +151,28 @@ export function createWorkspaceChangeHandlers(
       // their next expansion.
       void client.workspace.listDirectory.invalidate()
     },
+    invalidateGit: () => {
+      const rootPath = getRootPath()
+      // With no folder open there is nothing to ask about, and a null root would be a query main
+      // answers with "not a repository" — a wasted round trip to say nothing.
+      if (!rootPath) return
+
+      // The three reads a change can move: a write alters a status, and a command can also commit or
+      // switch a branch. The log travels with them because a commit made from the terminal would
+      // otherwise leave the panel's recent list stale until it was manually refreshed.
+      void client.git.status.invalidate({ rootPath })
+      void client.git.branch.invalidate({ rootPath })
+      void client.git.log.invalidate({ rootPath })
+    },
     onWrites: (paths) => {
       // Only the file on screen: editing a file nobody is looking at does not need a refetch, and
       // its next open would read through the invalidated entry anyway.
       const open = getOpenFile()
       if (open && paths.includes(open)) {
         void client.workspace.readFile.invalidate({ path: open })
+        // A file that changed may now differ from the index, so the diff on screen is stale too.
+        const rootPath = getRootPath()
+        if (rootPath) void client.git.diff.invalidate({ rootPath, path: open })
       }
     },
   }

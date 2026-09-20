@@ -10,6 +10,8 @@ import {
   parseLocalBranches,
   parseLog,
   parsePorcelainV2,
+  type DiscardFailure,
+  type DiscardResult,
   type GitBranch,
   type GitCommit,
   type GitDiffSide,
@@ -254,20 +256,6 @@ export async function commitChanges(rootPath: string | null, message: string): P
   if (result.code !== 0) throw failed('git commit', result)
 
   notifyWorkspaceChanged({ kind: 'command-exited' })
-}
-
-/** A path a discard could not restore, and why. */
-export interface DiscardFailure {
-  path: string
-  /** A stable code, so the panel can name the reason rather than print git's sentence. */
-  code: string
-}
-
-/** What a discard managed to do, per path. */
-export interface DiscardResult {
-  discarded: string[]
-  /** Paths git refused to restore — untracked files, most often. Reported rather than thrown. */
-  failed: DiscardFailure[]
 }
 
 /**

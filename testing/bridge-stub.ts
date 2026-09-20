@@ -94,6 +94,20 @@ const MANIFEST: Record<string, Record<string, string>> = {
   // registered rather than as an unlisted member, which is what the client's Proxy does with an
   // unknown name.
   mentions: { listFilesFlat: 'query' },
+  // The repository view: the reads the changes panel makes, and the commands it offers. Listed by
+  // kind, so the client dispatches each the way main registered it.
+  git: {
+    status: 'query',
+    branch: 'query',
+    log: 'query',
+    localBranches: 'query',
+    diff: 'query',
+    stage: 'command',
+    unstage: 'command',
+    commit: 'command',
+    discardWorktree: 'command',
+    checkoutBranch: 'command',
+  },
 }
 
 /**

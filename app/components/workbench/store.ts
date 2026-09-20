@@ -21,6 +21,25 @@ interface WorkbenchState {
   activeModel: string
   /** Switch provider and model together — a provider's default model is not the previous one's. */
   setTarget: (target: { providerId: string; model: string }) => void
+  /**
+   * The change the diff pane is showing, or null for the pane's empty state.
+   *
+   * Renderer-local rather than main-owned, for the same reason `selectedFile` is: it is which row the
+   * user is looking at, not a fact about the repository. It lives here rather than inside the changes
+   * section because two panes read it — the row that is selected and the viewer that renders the diff
+   * — and they are not in the same subtree.
+   */
+  selectedChange: { path: string; side: 'staged' | 'unstaged'; origPath?: string } | null
+  setSelectedChange: (change: { path: string; side: 'staged' | 'unstaged'; origPath?: string } | null) => void
+  /**
+   * The commit message being composed.
+   *
+   * Held here rather than in the section because a workspace-change refresh re-renders it, and a
+   * message typed before a refresh must not be lost to one — the same reason a draft survives a
+   * repaint in the composer.
+   */
+  commitMessage: string
+  setCommitMessage: (message: string) => void
 }
 
 const TARGET_KEY = 'sam-ai-chat-target'
@@ -60,4 +79,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     }
     set({ activeProviderId: providerId, activeModel: model })
   },
+  selectedChange: null,
+  setSelectedChange: (selectedChange) => set({ selectedChange }),
+  commitMessage: '',
+  setCommitMessage: (commitMessage) => set({ commitMessage }),
 }))

@@ -78,6 +78,27 @@ export interface GitCommit {
 export type GitDiffSide = 'staged' | 'unstaged'
 
 /**
+ * A path a discard could not restore, and why.
+ *
+ * Shared rather than main-only, because the renderer reports the outcome: it is the result of an
+ * action the panel offers, so its shape belongs with the rest of the vocabulary both processes use.
+ * A `conveyor/modules/*` file is main-only, and the renderer imports that directory for nothing at
+ * all — not even a type.
+ */
+export interface DiscardFailure {
+  path: string
+  /** A stable code, so the panel can name the reason rather than print git's sentence. */
+  code: string
+}
+
+/** What a discard managed to do, per path. */
+export interface DiscardResult {
+  discarded: string[]
+  /** Paths git refused to restore — untracked files, most often. Reported rather than thrown. */
+  failed: DiscardFailure[]
+}
+
+/**
  * Split a porcelain record into its leading whitespace-separated fields and the path tail.
  *
  * The path is the *tail* of the line, never a field: a file called `my file.ts` would otherwise be

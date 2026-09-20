@@ -7,6 +7,7 @@ import { Button } from '../ui/button'
 import { PaneHeader } from './pane-header'
 import { ACTIVITIES } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
+import { ChangesSection } from './changes-section'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -82,12 +83,18 @@ export function ExplorerPanel() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* The open folder heads the tree it describes, so the rows below have a named owner. */}
+          {/*
+            The open folder heads the tree it describes, so the rows below have a named owner, and git's
+            view of it sits directly under that name — the branch, the changes, and the actions on them
+            belong to the folder rather than to a file in it.
+          */}
           <div className="shrink-0 border-b border-border px-3 py-1.5">
             <p className="truncate font-mono text-[11px] text-muted-foreground" title={rootPath}>
               {rootPath}
             </p>
           </div>
+
+          <ChangesSection rootPath={rootPath} />
 
           {root.error ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

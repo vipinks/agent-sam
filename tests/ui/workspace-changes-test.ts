@@ -27,11 +27,20 @@ function step(label: string, fn: () => void): void {
 class FakeCache {
   listingInvalidations = 0
   fileInvalidations: string[] = []
+  /** The roots git's reads were invalidated for, in order. */
+  gitStatusInvalidations: string[] = []
+  gitDiffInvalidations: string[] = []
   /** The open file, as the viewer would report it. */
   openFile: string | null = null
+  /** The open folder, as the workspace store would report it. */
+  rootPath: string | null = '/w'
 
   handlers(): ChangeHandlers {
-    return createWorkspaceChangeHandlers(this.client(), () => this.openFile)
+    return createWorkspaceChangeHandlers(
+      this.client(),
+      () => this.openFile,
+      () => this.rootPath
+    )
   }
 
   client() {
@@ -45,6 +54,20 @@ class FakeCache {
         readFile: {
           invalidate: async (input: { path: string }) => {
             this.fileInvalidations.push(input.path)
+          },
+        },
+      },
+      git: {
+        status: {
+          invalidate: async (input: { rootPath: string }) => {
+            this.gitStatusInvalidations.push(input.rootPath)
+          },
+        },
+        branch: { invalidate: async () => {} },
+        log: { invalidate: async () => {} },
+        diff: {
+          invalidate: async (input: { rootPath: string; path: string }) => {
+            this.gitDiffInvalidations.push(input.path)
           },
         },
       },
@@ -216,6 +239,65 @@ function aCommandExitInvalidatesListings() {
   results.push('a command exit invalidates the listings without a file refetch')
 }
 
+// ---------------------------------------------------------------- git
+
+function oneBurstRefetchesGitOnce() {
+  const cache = new FakeCache()
+  const clock = queuedTime()
+  const coalescer = createChangeCoalescer(cache.handlers(), {
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  })
+
+  // The whole point of doing this inside the coalescer rather than at each call site: a turn that
+  // writes several files must produce one status call, not one per file.
+  coalescer.handle({ kind: 'written', path: '/w/a.py' })
+  coalescer.handle({ kind: 'written', path: '/w/b.py' })
+  coalescer.handle({ kind: 'command-exited' })
+  assert.deepEqual(cache.gitStatusInvalidations, [], 'git must not be asked before the burst closes')
+
+  clock.advance()
+
+  assert.deepEqual(cache.gitStatusInvalidations, ['/w'], 'one burst, one status read, for the open root')
+  results.push('a burst refetches the git status once, for the open folder')
+}
+
+function withoutAFolderThereIsNoGitRead() {
+  const cache = new FakeCache()
+  const clock = queuedTime()
+  const coalescer = createChangeCoalescer(cache.handlers(), {
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  })
+
+  // No folder open: a null root would be answered "not a repository", which is a round trip to say
+  // nothing. The root is read at flush time, so opening a folder mid-burst is still honoured.
+  cache.rootPath = null
+  coalescer.handle({ kind: 'command-exited' })
+  clock.advance()
+
+  assert.deepEqual(cache.gitStatusInvalidations, [], 'with no folder open git is not asked')
+  assert.equal(cache.listingInvalidations, 1, 'while the listings still are')
+  results.push('with no folder open, the git reads are skipped')
+}
+
+function aChangedOpenFileRefetchesItsDiff() {
+  const cache = new FakeCache()
+  const clock = queuedTime()
+  const coalescer = createChangeCoalescer(cache.handlers(), {
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  })
+
+  cache.openFile = '/w/b.py'
+  coalescer.handle({ kind: 'written', path: '/w/b.py' })
+  clock.advance()
+
+  // The file on screen changed, so its diff is stale as well as its contents.
+  assert.deepEqual(cache.gitDiffInvalidations, ['/w/b.py'], 'the open file\u2019s diff is refetched')
+  results.push('a write to the open file refetches its diff as well as its contents')
+}
+
 function separateBurstsInvalidateSeparately() {
   const cache = new FakeCache()
   const clock = queuedTime()
@@ -311,6 +393,9 @@ function main() {
   step('nothing open', nothingOpenMeansNoFileInvalidation)
   step('flush-time open file', theOpenFileIsReadAtFlushTime)
   step('command exit', aCommandExitInvalidatesListings)
+  step('git: one read per burst', oneBurstRefetchesGitOnce)
+  step('git: no folder', withoutAFolderThereIsNoGitRead)
+  step('git: open file', aChangedOpenFileRefetchesItsDiff)
   step('separate bursts', separateBurstsInvalidateSeparately)
   step('bounded burst', aBurstDoesNotExtendForever)
   step('subscription lifecycle', theSourceIsSubscribedAndUnsubscribed)
