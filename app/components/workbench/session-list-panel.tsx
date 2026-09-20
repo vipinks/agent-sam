@@ -24,7 +24,7 @@ import { PaneHeader } from './pane-header'
 import { ACTIVITIES } from './icon-rail'
 import { useWorkbenchStore } from './store'
 import { formatRelativeTime } from './relative-time'
-import { filterSessionsByTitle, isSearchable, snippetsFor } from './session-search'
+import { isSearchable, planVisibleSessions, snippetsFor } from './session-search'
 import { planRename } from './rename'
 import type { SessionError } from './use-chat-sessions'
 
@@ -77,7 +77,6 @@ export function SessionListPanel({
   const [queryFocused, setQueryFocused] = useState(false)
 
   const searchable = isSearchable(query, SEARCH_MIN_TERM)
-  const visible = useMemo(() => filterSessionsByTitle(sessions, query), [sessions, query])
 
   /**
    * The snippet scan.
@@ -90,6 +89,22 @@ export function SessionListPanel({
     input: { term: query.trim() },
     enabled: searchable,
   })
+
+  /**
+   * The rows on screen: title matches unioned with the body matches main reported.
+   *
+   * Scoped to a focused, long-enough term, because that is the only state in which the scan is
+   * running — a blurred or short field has no scan behind it, so `bodyMatchIds` would be a stale
+   * answer to a question the user is no longer asking, and using it would leave rows on screen that
+   * no visible query explains. Below the floor the list is the plain metadata list.
+   */
+  const bodyMatchIds = useMemo(() => {
+    if (!searchable || !queryFocused) return undefined
+    // `data` is undefined until the scan answers, which is the state the title-only rule is for.
+    return matches.data?.map((result) => result.id)
+  }, [matches.data, queryFocused, searchable])
+
+  const visible = useMemo(() => planVisibleSessions(sessions, query, bodyMatchIds), [sessions, query, bodyMatchIds])
 
   /**
    * Commit the row's editor: write the new title, or leave the session alone.
@@ -151,7 +166,7 @@ export function SessionListPanel({
           {visible.map((session) => {
             const isActive = session.id === activeSessionId
             const isBroken = error?.id === session.id
-            const match = searchable && queryFocused ? snippetsFor(session.id, matches.data) : undefined
+            const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
 
             return (
               <li key={session.id}>

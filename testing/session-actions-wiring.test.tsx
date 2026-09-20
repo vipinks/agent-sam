@@ -235,6 +235,96 @@ describe('session search wiring', () => {
     await waitFor(() => expect(screen.queryByText(snippet)).toBeNull())
   })
 
+  it('surfaces a row whose match is only in the transcript body', async () => {
+    // The regression test for the defect this phase fixes. A term that appears nowhere in any title —
+    // only inside a saved transcript — returned no rows at all before the fix: the panel rendered
+    // whichever rows survived the client-side title filter, and the scan's matches were only ever
+    // *decorating* those rows. A body match has to bring its own row into the list.
+    //
+    // Stubbed so the term is genuinely absent from every title in the fixture: "fibonacci" is in no
+    // title above, only in the scan's answer for the second session.
+    const snippet = '…write a fibonacci script and run it…'
+    const stub = createBridgeStub({
+      loadTranscript: () => null,
+      searchSessions: (): SessionSearchResult[] => [{ id: OTHER_ID, matchCount: 2, snippets: [snippet] }],
+    })
+    stubStore(stub, CHAT_SESSIONS_STORE_ID, twoSessions())
+    setActiveStub(stub)
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChatSessionsProvider>
+          <SessionListPanel
+            onCreate={vi.fn()}
+            onOpen={vi.fn()}
+            onRename={vi.fn()}
+            onExport={vi.fn()}
+            onDelete={vi.fn()}
+            error={null}
+          />
+        </ChatSessionsProvider>
+      </QueryClientProvider>
+    )
+
+    const input = screen.getByLabelText('Search conversations')
+    await userEvent.click(input)
+    await userEvent.type(input, 'fibonacci')
+
+    // The body-matched row appears, by title, even though the title does not contain the term.
+    expect(await screen.findByText('unrelated subject entirely')).toBeTruthy()
+    // And it carries what the scan found under it.
+    expect(await screen.findByText(snippet)).toBeTruthy()
+    expect(screen.getByText('2 matches')).toBeTruthy()
+
+    // The row whose title does not match and whose body does *not* match is still gone.
+    expect(screen.queryByText('the parser drops newlines')).toBeNull()
+
+    // Clearing the field returns the list to the plain metadata order, with no stray rows.
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.getByText('the parser drops newlines')).toBeTruthy())
+    expect(screen.getByText('unrelated subject entirely')).toBeTruthy()
+    expect(screen.queryByText(snippet)).toBeNull()
+  })
+
+  it('renders snippets under a row that matches by title and by body alike', async () => {
+    // The union is not only about rescuing body-only rows: a row that survives the title filter and
+    // *also* has body matches must still show its excerpts. The Phase 12 wiring attached snippets
+    // behind the same guard that gated the row set, so tightening one silently affected the other.
+    const snippet = '…the parser needs a trim before it splits…'
+    const stub = createBridgeStub({
+      loadTranscript: () => null,
+      searchSessions: (): SessionSearchResult[] => [{ id: SESSION_ID, matchCount: 3, snippets: [snippet] }],
+    })
+    stubStore(stub, CHAT_SESSIONS_STORE_ID, twoSessions())
+    setActiveStub(stub)
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChatSessionsProvider>
+          <SessionListPanel
+            onCreate={vi.fn()}
+            onOpen={vi.fn()}
+            onRename={vi.fn()}
+            onExport={vi.fn()}
+            onDelete={vi.fn()}
+            error={null}
+          />
+        </ChatSessionsProvider>
+      </QueryClientProvider>
+    )
+
+    const input = screen.getByLabelText('Search conversations')
+    await userEvent.click(input)
+    await userEvent.type(input, 'parser')
+
+    // Same row, both reasons: title-matched, and carrying its body excerpts.
+    expect(await screen.findByText('the parser drops newlines')).toBeTruthy()
+    expect(await screen.findByText(snippet)).toBeTruthy()
+    expect(screen.getByText('3 matches')).toBeTruthy()
+  })
+
   it('clears the search on Escape', async () => {
     renderPanel()
     await ready()

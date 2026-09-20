@@ -23,6 +23,8 @@ import {
 } from '../../app/components/workbench/session-transcript'
 import { resumeTurnNumbering, startAssistantTurn, startUserTurn } from '../../app/components/workbench/agent-session'
 import { formatRelativeTime } from '../../app/components/workbench/relative-time'
+import { isSearchable, planVisibleSessions, snippetsFor } from '../../app/components/workbench/session-search'
+import { SEARCH_MIN_TERM } from '../../conveyor/protocol/search'
 import { transcriptSnapshotSchema } from '../../conveyor/protocol/transcript'
 
 const results: string[] = []
@@ -348,6 +350,121 @@ function uuid(n: number): string {
   return `11111111-2222-4333-8444-${tail}`
 }
 
+// ---------------------------------------------------------------- search rows
+
+/** Two conversations from the store, in the order the store would give them. */
+function twoRows() {
+  const base = { createdAt: 1, updatedAt: 1, providerId: 'deepseek', model: 'deepseek-chat' }
+  return [
+    { id: uuid(1), title: 'the parser drops newlines', ...base },
+    { id: uuid(2), title: 'unrelated subject entirely', ...base },
+  ]
+}
+
+function aBodyOnlyMatchStillGetsARow() {
+  const rows = twoRows()
+
+  // The defect this rule exists for: "fibonacci" appears in no title, only in session 2's
+  // transcript. Before the union, the panel filtered on titles and the scan could only decorate the
+  // rows that survived — so a body match produced an empty list, and the panel said no conversation
+  // matched about a conversation that did.
+  const bodyOnly = planVisibleSessions(rows, 'fibonacci', [uuid(2)])
+  assert.deepEqual(
+    bodyOnly.map((s) => s.id),
+    [uuid(2)],
+    'a session matched only in its body must appear, on its own'
+  )
+
+  // Its snippets come from the same result set, keyed by id.
+  const scanResults = [{ id: uuid(2), matchCount: 2, snippets: ['…fibonacci script…'] }]
+  const match = snippetsFor(uuid(2), scanResults)
+  assert.equal(match?.matchCount, 2, 'the body match carries its count')
+  assert.deepEqual(match?.snippets, ['…fibonacci script…'], 'and its snippets')
+  results.push('a body-only match yields that session id, with its snippets and count')
+}
+
+function aTitleOnlyMatchHasNoSnippets() {
+  const rows = twoRows()
+
+  // "newlines" is in session 1's title and, per the scan's answer, nowhere in any body: the row is
+  // there because of its name, and there is nothing to excerpt under it.
+  const titleOnly = planVisibleSessions(rows, 'newlines', [])
+  assert.deepEqual(
+    titleOnly.map((s) => s.id),
+    [uuid(1)],
+    'a title match stands with an empty scan result'
+  )
+  assert.equal(snippetsFor(uuid(1), []), undefined, 'and has no snippets to attach')
+  assert.equal(snippetsFor(uuid(1), undefined), undefined, 'nor while the scan is in flight')
+  results.push('a title-only match yields that session id with zero snippets')
+}
+
+function theUnionKeepsBothAndTheScanOrderDoesNotWin() {
+  const rows = twoRows()
+
+  // Session 1 matches by title, session 2 by body: both are in the list, in the *store's* order.
+  const both = planVisibleSessions(rows, 'e', [uuid(2)])
+  assert.deepEqual(
+    both.map((s) => s.id),
+    [uuid(1), uuid(2)],
+    'the union keeps both, in metadata order'
+  )
+
+  // The scan answers in directory order, which is not the list's order. Reversing the ids it returns
+  // must not reorder the rows: the scan decides *membership*, never position.
+  const reversed = planVisibleSessions(rows, 'zzz', [uuid(2), uuid(1)])
+  assert.deepEqual(
+    reversed.map((s) => s.id),
+    [uuid(1), uuid(2)],
+    'the scan cannot reorder the list'
+  )
+
+  // A scan id that names no known session is ignored rather than invented as a row.
+  const unknown = planVisibleSessions(rows, 'zzz', ['99999999-8888-4777-8666-555555555555'])
+  assert.deepEqual(unknown, [], 'an unknown id contributes nothing')
+  results.push('the union is by membership only: store order holds, and unknown ids add nothing')
+}
+
+function anEmptyTermIsNotAFilter() {
+  const rows = twoRows()
+
+  // No needle means there is nothing to be a match of, so the metadata list is the answer — even if a
+  // scan from a previous term is somehow still in hand.
+  assert.deepEqual(
+    planVisibleSessions(rows, '', [uuid(2)]).map((s) => s.id),
+    [uuid(1), uuid(2)]
+  )
+  assert.deepEqual(
+    planVisibleSessions(rows, '   ', [uuid(1)]).map((s) => s.id),
+    [uuid(1), uuid(2)]
+  )
+
+  // And an undefined scan result — the in-flight state — leaves the title rule standing alone.
+  assert.deepEqual(
+    planVisibleSessions(rows, 'parser', undefined).map((s) => s.id),
+    [uuid(1)],
+    'before the scan answers, the title rule alone decides'
+  )
+  results.push('an empty term is not a filter, and an in-flight scan does not widen the list')
+}
+
+function titleMatchingIsCaseInsensitiveAndTrimmed() {
+  const rows = twoRows()
+  assert.deepEqual(
+    planVisibleSessions(rows, 'PARSER', []).map((s) => s.id),
+    [uuid(1)],
+    'casing is ignored'
+  )
+  assert.deepEqual(
+    planVisibleSessions(rows, '  parser  ', []).map((s) => s.id),
+    [uuid(1)],
+    'the term is trimmed'
+  )
+  assert.equal(isSearchable('ab', SEARCH_MIN_TERM), false, 'two characters is below the floor')
+  assert.equal(isSearchable('par', SEARCH_MIN_TERM), true, 'three characters reaches it')
+  results.push('the title rule is case-insensitive and trimmed, and the floor is shared')
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -363,6 +480,11 @@ async function main() {
   await step('debounce', debouncedSavesCoalesce)
   await step('relative time', relativeTimes)
   await step('store lifecycle', storeOrderingAndLifecycle)
+  await step('search rows: body match', aBodyOnlyMatchStillGetsARow)
+  await step('search rows: title match', aTitleOnlyMatchHasNoSnippets)
+  await step('search rows: union order', theUnionKeepsBothAndTheScanOrderDoesNotWin)
+  await step('search rows: empty term', anEmptyTermIsNotAFilter)
+  await step('search rows: title matching', titleMatchingIsCaseInsensitiveAndTrimmed)
 
   console.log(`chat sessions: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)

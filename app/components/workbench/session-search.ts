@@ -10,16 +10,41 @@ import type { SessionSearchResult } from '@/conveyor/protocol/search'
  */
 
 /**
- * The rows a term leaves visible.
+ * The rows a search leaves visible, and the reason each one is there.
  *
- * Case-insensitive substring, over the title only. The list is a list of names, so filtering on
- * anything else would hide a row whose name matches, which is precisely the row the user is looking
- * for. An empty or whitespace-only term filters nothing.
+ * A row qualifies two ways, and the list is the union of them:
+ *
+ * - Its **title** matches the term, found here and instantly, because the titles are already in the
+ *   store.
+ * - Its **body** matches, which only main can know: it owns the transcripts, and the renderer is not
+ *   allowed to receive one.
+ *
+ * The union is the whole point and the thing that was wrong before it existed. Taking only the title
+ * matches renders an empty list for a term the user remembers typing — the search reports "no
+ * conversations match" about a conversation that does, which reads as the app having lost the
+ * history rather than as a filter being narrow.
+ *
+ * Order is the store's order, not the scan's: the scan answers in directory order, and letting that
+ * decide the list would reshuffle every row the moment a scan resolved. A body match is *added* to
+ * the metadata list rather than rebuilding it.
+ *
+ * `bodyMatchIds` being undefined means the scan has not answered yet — not that it found nothing —
+ * so the title matches stand alone for that moment. That is what keeps typing immediate: the list
+ * narrows on the keystroke, and the body matches arrive under it when the scan returns.
  */
-export function filterSessionsByTitle(sessions: ChatSession[], term: string): ChatSession[] {
+export function planVisibleSessions(
+  sessions: ChatSession[],
+  term: string,
+  bodyMatchIds: string[] | undefined
+): ChatSession[] {
+  const byBody = new Set(bodyMatchIds ?? [])
   const needle = term.trim().toLowerCase()
+
+  // An empty term is not a filter, and a running scan is not a reason to show anything on its own:
+  // with no needle there is nothing to be a match *of*, so the metadata list is the answer.
   if (!needle) return sessions
-  return sessions.filter((session) => session.title.toLowerCase().includes(needle))
+
+  return sessions.filter((session) => byBody.has(session.id) || session.title.toLowerCase().includes(needle))
 }
 
 /**
