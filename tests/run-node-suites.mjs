@@ -43,6 +43,7 @@ const SUITES = [
   { name: 'session resume', src: 'sessions/session-resume-test.ts' },
   { name: 'session click + title flow', src: 'sessions/session-flow-test.ts' },
   { name: 'transcript storage', src: 'sessions/sessions-test.ts' },
+  { name: 'transcript v1 compatibility', src: 'sessions/transcript-v1-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 
