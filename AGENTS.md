@@ -71,3 +71,10 @@
 
 - Author file content with the file tool, never via a shell heredoc: a truncated heredoc leaves cat waiting on stdin forever, and the turn cannot distinguish a hang from a write.
 - Any command that feeds stdin must take its input from a real redirected file; never rely on the transport to deliver a terminator.
+
+### 6.6 Session hygiene (standing rule)
+
+- One phase per agent session. A session that has carried a full phase is retired, not reused; the next phase opens a fresh session whose first message verifies state from git.
+- A phase that cannot finish inside one context budget is split into lettered turns (A, B, C), each ending in a commit or an explicit clean-boundary pause.
+- If context runs low mid-turn, pause at a clean boundary with a written record — implemented, verified, not done, resume point — and commit nothing unverified; the resume happens in a fresh turn or session.
+- Retire a session at the second behavioral warning sign: repeated re-reads of the same files, contradictions with its own earlier statements, or half-applied edits. Token counters are context, not truth.
