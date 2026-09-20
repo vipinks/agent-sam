@@ -288,6 +288,49 @@ function erroredTurnsAreNotSent() {
   results.push('a failed assistant turn is dropped from history')
 }
 
+function theInstructionsRecordLandsOnTheTurn() {
+  const { turns } = run([
+    { type: 'project_instructions', file: 'AGENTS.md', truncated: false },
+    { type: 'text_delta', text: 'Understood.' },
+  ])
+
+  assert.equal(turns[1].instructionsFile, 'AGENTS.md', 'the file is recorded on the turn')
+  assert.equal(turns[1].instructionsTruncated, false, 'and its truncation with it')
+  assert.equal(turns[1].content, 'Understood.', 'the announcement is not shown as prose')
+  assert.equal(turns[1].steps.length, 0, 'and is not a card either')
+
+  // A capped read says so; the flag is carried, not folded into the name.
+  const capped = run([{ type: 'project_instructions', file: 'CLAUDE.md', truncated: true }])
+  assert.equal(capped.turns[1].instructionsTruncated, true, 'a capped read is recorded as capped')
+
+  // The record reaches only the turn that was announced for.
+  const first = startAssistantTurn()
+  const other = startAssistantTurn()
+  const applied = applyAgentChunk([startUserTurn('hi'), first, other], first.id, {
+    type: 'project_instructions',
+    file: 'AGENTS.md',
+    truncated: false,
+  }).turns
+  assert.equal(applied[1].instructionsFile, 'AGENTS.md', 'the addressed turn records it')
+  assert.equal(applied[2].instructionsFile, undefined, 'and no other turn does')
+  results.push('a run’s instructions file is recorded on the turn it was sent for, and nowhere else')
+}
+
+function aMalformedAnnouncementIsIgnored() {
+  // The chunk crosses IPC, so it is untrusted input here. A non-string name must not reach the
+  // transcript, and an absent truncation flag must not be read as a truncation.
+  const junk = run([
+    { type: 'project_instructions', file: 42, truncated: true },
+    { type: 'project_instructions' },
+    { type: 'project_instructions', file: '', truncated: true },
+  ])
+  assert.equal(junk.turns[1].instructionsFile, undefined, 'a non-string name is not recorded')
+
+  const noFlag = run([{ type: 'project_instructions', file: 'AGENTS.md' }])
+  assert.equal(noFlag.turns[1].instructionsTruncated, false, 'an absent flag reads as whole, not capped')
+  results.push('a malformed instructions announcement is ignored rather than written into the turn')
+}
+
 // ---------------------------------------------------------------- robustness
 
 function junkChunks() {
@@ -341,6 +384,8 @@ function main() {
   step('decisions', decisions)
   step('history', historyIsTextOnly)
   step('failed turns', erroredTurnsAreNotSent)
+  step('instructions record', theInstructionsRecordLandsOnTheTurn)
+  step('instructions junk', aMalformedAnnouncementIsIgnored)
   step('junk chunks', junkChunks)
   step('identity', identityIsPreserved)
   step('done', doneIsReported)

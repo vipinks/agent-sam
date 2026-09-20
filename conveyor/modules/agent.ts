@@ -11,6 +11,8 @@ import { computeFileDiff, type FileDiff } from '../protocol/diff'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
+import { readProjectInstructions } from './project-context'
+import { instructionsFileName, planSystemInjection } from '../protocol/context'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -280,6 +282,15 @@ export async function executeTool(
 /** Chunks the renderer understands. Each is plain data, so it survives the IPC hop. */
 export type AgentChunk =
   | { type: 'text_delta'; text: string }
+  /**
+   * The project instructions this send is being made under, announced before the model answers.
+   *
+   * Announced so the turn can record it: the transcript has to be able to say which file stood behind
+   * an answer, and the renderer is the side that owns the turn. Yielded only when the instructions are
+   * actually injected — a resumed run re-enters with what the pause handed back, so it announces
+   * nothing and the name it already recorded stands.
+   */
+  | { type: 'project_instructions'; file: string; truncated: boolean }
   | { type: 'tool_call_start'; callId: string; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; callId: string; tool: string; ok: boolean; code?: string; output: string }
   | {
@@ -464,6 +475,26 @@ interface LoopOptions {
 export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChunk, void, undefined> {
   const history: ChatMessage[] = opts.messages.map((m) => ({ ...m }))
   let steps = opts.steps ?? 0
+
+  // The project instructions, read fresh on every send rather than kept anywhere.
+  //
+  // Recomputing is the point: editing AGENTS.md and sending again must take effect immediately, and
+  // a cached copy would be a second source of truth that no one thinks to invalidate. They are also
+  // never written to a transcript — a transcript records the conversation, and instructions belong to
+  // the folder it happened in. That is why this is a read per send rather than a stored field.
+  const instructions = await readProjectInstructions(opts.workspaceRoot)
+  const injection = planSystemInjection(history, instructions?.text ?? null)
+  if (injection) {
+    // Position 0, before the conversation: the provider treats a system message as standing context
+    // for everything after it, and a leading one is the only place that is unambiguously true.
+    history.unshift({ role: 'system', content: injection.content })
+
+    // And the renderer is told what was read, so the turn it is filling in can record the name and
+    // whether the read was capped. The name, never the text: this is a label for the transcript, and
+    // the text it labels is deliberately stored nowhere.
+    const file = instructionsFileName(instructions?.path ?? null)
+    if (file) yield { type: 'project_instructions', file, truncated: instructions?.truncated ?? false }
+  }
 
   // A resumed run re-enters with the head of the paused queue already decided. `opts.messages`
   // already ends with the assistant turn that asked for these calls, so nothing is reconstructed

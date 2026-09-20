@@ -47,6 +47,7 @@ const SUITES = [
   { name: 'session search rules', src: 'sessions/session-search-test.ts' },
   { name: 'session export renderer', src: 'sessions/session-export-test.ts' },
   { name: 'session commands (search, export)', src: 'sessions/session-commands-test.ts' },
+  { name: 'project instructions', src: 'sessions/project-instructions-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 

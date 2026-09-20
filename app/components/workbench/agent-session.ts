@@ -52,6 +52,15 @@ export interface AgentTurn {
   content: string
   steps: ToolStep[]
   error?: string
+  /**
+   * The project instructions file this turn was sent under, when there was one.
+   *
+   * The name, never the text — the file is recomputed per send and is not stored anywhere. Recorded
+   * so a transcript can say what stood behind an answer, and so an export can name it.
+   */
+  instructionsFile?: string
+  /** True when only the first 16 KB of that file was read. */
+  instructionsTruncated?: boolean
 }
 
 /**
@@ -186,6 +195,23 @@ export function applyAgentChunk(
     case 'text_delta': {
       const text = typeof c.text === 'string' ? c.text : ''
       return { turns: appendText(turns, turnId, text), effect: { textDelta: text } }
+    }
+
+    case 'project_instructions': {
+      // Recorded on the turn rather than shown: the card and the prose are the conversation, and this
+      // is the context it happened under. A malformed announcement is ignored like any other, so a
+      // chunk from a newer build cannot put a non-string into the transcript.
+      const file = typeof c.file === 'string' ? c.file : ''
+      if (!file) return { turns, effect: {} }
+      const truncated = c.truncated === true
+      return {
+        turns: replaceTurn(turns, turnId, (turn) => ({
+          ...turn,
+          instructionsFile: file,
+          instructionsTruncated: truncated,
+        })),
+        effect: {},
+      }
     }
 
     case 'tool_call_start': {

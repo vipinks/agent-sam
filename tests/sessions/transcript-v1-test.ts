@@ -221,6 +221,41 @@ async function theAcceptingIsBoundedToRealTranscripts() {
   results.push('the boundary holds from both sides: version 1 in, corrupted files out')
 }
 
+// ---------------------------------------------------------------- the additive record
+
+async function aTranscriptWithoutTheInstructionsRecordStillReads() {
+  // The turn record added two optional fields and nothing else, so this file — a v2 transcript from
+  // before the record existed — must load exactly as written. Asserted as an identity rather than as
+  // "it parses": a reader that filled the fields in with nulls, or rewrote the file on the way in,
+  // would still parse, and the whole point of an additive field is that it changes nothing for a
+  // file that predates it.
+  const before: {
+    version: number
+    interrupted: boolean
+    turns: Array<{ id: string; role: string; content: string; steps: unknown[] }>
+  } = {
+    version: 2,
+    interrupted: false,
+    turns: [
+      { id: 'user-1', role: 'user', content: 'rename the file', steps: [] },
+      { id: 'assistant-2', role: 'assistant', content: 'Done.', steps: [] },
+    ],
+  }
+
+  writeFileSync(join(sessionDir, `${UUID}.json`), JSON.stringify(before), 'utf8')
+  const loaded = await loadTranscriptFile(UUID)
+
+  assert.deepEqual(loaded, before, 'a transcript written before the record loads exactly as written')
+  assert.equal('instructionsFile' in (loaded?.turns[0] ?? {}), false, 'and gains no key it was not written with')
+
+  // The reducer receives turns it can render, and reports no record for them — which is what keeps an
+  // export of an older conversation free of a note naming a file that was never recorded.
+  const state = rehydrateTranscript(loaded)
+  assert.equal(state.turns.length, 2, 'both turns survive')
+  assert.equal(state.turns[0].instructionsFile, undefined, 'and none of them claims a record')
+  results.push('a transcript from before the record loads unchanged, with no record invented for it')
+}
+
 // ---------------------------------------------------------------- harness
 
 let sessionDir = ''
@@ -239,6 +274,7 @@ async function main() {
     await step('corrupt json', unparseableJsonIsRefused)
     await step('wrong shape', wrongShapeIsRefused)
     await step('boundary', theAcceptingIsBoundedToRealTranscripts)
+    await step('additive record', aTranscriptWithoutTheInstructionsRecordStillReads)
 
     console.log(`transcript v1 compatibility: ${results.length} passed`)
     for (const r of results) console.log(`  pass: ${r}`)

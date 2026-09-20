@@ -654,6 +654,157 @@ function toolDefinitionsAreWellFormed() {
   results.push('the three tool schemas are OpenAI-shaped and fully described')
 }
 
+// ---------------------------------------------------------------- project instructions
+
+/** A provider that answers once with prose, logging what it was sent. */
+function oneRoundFetch(log: unknown[]): (url: string, init: RequestInit) => Promise<Response> {
+  return async (_url: string, init: RequestInit) => {
+    log.push({ body: JSON.parse(String(init.body)) })
+    return sseResponse([JSON.stringify({ choices: [{ delta: { content: 'Understood.' } }] }), '[DONE]'])
+  }
+}
+
+/**
+ * The instructions reach the provider, at the head of the conversation.
+ *
+ * Asserted on the request body, because that is the only place the answer exists: the loop keeps the
+ * transcript free of them by design, so nothing on the UI side could be inspected for this.
+ */
+async function instructionsReachTheProvider() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'AGENTS.md'), '# House rules\nAlways run the tests.', 'utf8')
+
+    const log: unknown[] = []
+    const chunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
+    assert.equal(sent[0].role, 'system', 'the instructions arrive as a system message')
+    assert.ok(sent[0].content.includes('House rules'), 'carrying the file text')
+    assert.ok(/project instructions/i.test(sent[0].content), 'labelled as project instructions')
+    // Before the conversation, not after it.
+    assert.equal(sent[1].role, 'user', 'the system message precedes the first user turn')
+    assert.equal(sent[1].content, 'hello')
+
+    // And the renderer is told what was read, so the turn can record it. The name only: the text the
+    // transcript deliberately does not keep must not be on the wire either.
+    const announced = chunks.filter((c) => c.type === 'project_instructions')
+    assert.equal(announced.length, 1, 'the record is announced exactly once')
+    assert.equal(announced[0].file, 'AGENTS.md', 'as the file name, not a path')
+    assert.equal(announced[0].truncated, false, 'with the cap reported')
+    // Announced before anything the turn will show, so the turn it lands on is the one it describes.
+    assert.ok(
+      chunks.indexOf(announced[0]) < chunks.findIndex((c) => c.type === 'text_delta'),
+      'before the first thing the turn shows'
+    )
+    results.push('the project instructions are injected as a leading system message, and announced once')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function noInstructionsMeansNoSystemMessage() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    // No candidate file at all.
+    const log: unknown[] = []
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+    const sent = (log[0] as { body: { messages: Array<{ role: string }> } }).body.messages
+    assert.ok(!sent.some((m) => m.role === 'system'), 'nothing is injected to say nothing')
+
+    // And no folder open is the same outcome rather than an error.
+    const noRoot: unknown[] = []
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: null,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(noRoot) as never,
+      })
+    )
+    const sentNoRoot = (noRoot[0] as { body: { messages: Array<{ role: string }> } }).body.messages
+    assert.ok(!sentNoRoot.some((m) => m.role === 'system'), 'no workspace, no injection')
+    results.push('a workspace with no instructions sends no system message at all')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function aResumeDoesNotInjectTheInstructionsTwice() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'AGENTS.md'), '# House rules', 'utf8')
+
+    const log: unknown[] = []
+    // A resumed run re-enters with the history the pause handed back — which already carries the
+    // system message from the original send. Injection is refused on that fact, so the instructions
+    // are not sent a second time and the budget is not spent twice.
+    const chunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [
+          { role: 'system', content: 'The following are the project instructions…\n\n# House rules' },
+          { role: 'user', content: 'go' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+            ],
+          },
+        ],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        steps: 1,
+        pending: {
+          calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }],
+          denied: true,
+        },
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = (log[0] as { body: { messages: Array<{ role: string }> } }).body.messages
+    const systems = sent.filter((m) => m.role === 'system')
+    assert.equal(systems.length, 1, 'exactly one system message, not two')
+    // And nothing is announced either: the turn already carries the record from the original send, and
+    // a second announcement would restate a file the transcript has already named.
+    assert.equal(chunks.filter((c) => c.type === 'project_instructions').length, 0, 'a resumed run announces no record')
+    results.push('a resumed run does not inject the project instructions a second time')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -663,6 +814,9 @@ async function main() {
   }
 
   await step('tool definitions', toolDefinitionsAreWellFormed)
+  await step('instructions reach the provider', instructionsReachTheProvider)
+  await step('no instructions, no system message', noInstructionsMeansNoSystemMessage)
+  await step('resume does not re-inject', aResumeDoesNotInjectTheInstructionsTwice)
   await step('consent rules', approvalRules)
   await step('ReAct loop with a mocked provider', reactLoop)
   await step('write_file tool', writeThenRead)

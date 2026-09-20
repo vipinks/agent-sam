@@ -263,6 +263,75 @@ function argumentSummariesAreBounded() {
   results.push('a large tool argument is summarized rather than pasted whole')
 }
 
+// ---------------------------------------------------------------- the instructions note
+
+/**
+ * The note names the file, and it does so exactly once.
+ *
+ * The record is per turn, so a marker rendered per recorded turn would appear as many times as the
+ * conversation has turns sent under it — in a long session, a line repeating on every heading until
+ * the reader stops seeing it at all. Asserted as a count rather than by presence, because presence is
+ * exactly the assertion that passes for the repeated version.
+ */
+function theInstructionsNoteAppearsExactlyOnce() {
+  const snapshot = twoTurnsOneToolOneDenial()
+
+  const absent = renderMarkdown(snapshot, { title: 'no instructions' })
+  assert.equal(occurrences(absent, 'Project instructions'), 0, 'with no record there is no note')
+  // An explicitly null name is the same case as no name: `exportSession` passes null when the turns
+  // recorded nothing, and that must not render as an empty note.
+  assert.equal(
+    occurrences(renderMarkdown(snapshot, { title: 'x', instructionsFile: null }), 'Project instructions'),
+    0,
+    'a null name renders no note'
+  )
+  assert.equal(
+    occurrences(renderMarkdown(snapshot, { title: 'x', instructionsFile: '' }), 'Project instructions'),
+    0,
+    'an empty name renders no note either'
+  )
+
+  const noted = renderMarkdown(snapshot, { title: 'with instructions', instructionsFile: 'AGENTS.md' })
+  assert.equal(occurrences(noted, 'Project instructions'), 1, 'the note appears exactly once')
+  assert.equal(occurrences(noted, 'AGENTS.md'), 1, 'and names the file exactly once')
+
+  // The note is a statement about the conversation, so it sits above the conversation rather than
+  // between two of its turns.
+  assert.ok(noted.indexOf('Project instructions') < noted.indexOf('## You'), 'the note precedes the turns')
+  assert.ok(noted.startsWith('# with instructions'), 'and follows the title')
+
+  // Several turns carrying the record still produce one note: the count is the property, and this is
+  // the case that would break it under a per-turn rendering.
+  const manyRecorded: TranscriptSnapshot = {
+    version: TRANSCRIPT_VERSION,
+    interrupted: false,
+    turns: [
+      { id: 'u1', role: 'user', content: 'one', steps: [], instructionsFile: 'AGENTS.md' },
+      { id: 'a1', role: 'assistant', content: 'two', steps: [], instructionsFile: 'AGENTS.md' },
+      { id: 'u2', role: 'user', content: 'three', steps: [], instructionsFile: 'AGENTS.md' },
+    ],
+  }
+  assert.equal(
+    occurrences(renderMarkdown(manyRecorded, { title: 'many', instructionsFile: 'AGENTS.md' }), 'Project instructions'),
+    1,
+    'many recorded turns still yield one note'
+  )
+  results.push('the instructions note is named once when present, and absent when there is no record')
+}
+
+function aTruncatedRecordSaysSo() {
+  // The name alone would imply the whole file stood behind the answers, which for a capped read is
+  // false — so the truncation is part of the note rather than something the reader has to infer.
+  const snapshot = twoTurnsOneToolOneDenial()
+  const whole = renderMarkdown(snapshot, { title: 'x', instructionsFile: 'AGENTS.md' })
+  const capped = renderMarkdown(snapshot, { title: 'x', instructionsFile: 'AGENTS.md', instructionsTruncated: true })
+
+  assert.ok(!/16 KB/.test(whole), 'a whole file is not described as capped')
+  assert.equal(occurrences(capped, '16 KB'), 1, 'a capped read says so, once')
+  assert.ok(capped.includes('AGENTS.md'), 'and still names the file')
+  results.push('a truncated instructions read is stated in the note rather than implied')
+}
+
 // ---------------------------------------------------------------- json and the filename
 
 function jsonIsTheRawSnapshot() {
@@ -304,6 +373,8 @@ function main(): void {
   step('unfinished turn', anUnfinishedTurnIsDeclared)
   step('interrupted flag', aConversationFlagIsStatedOnceAndNotTwice)
   step('argument bounds', argumentSummariesAreBounded)
+  step('instructions note', theInstructionsNoteAppearsExactlyOnce)
+  step('instructions truncated', aTruncatedRecordSaysSo)
   step('formats', jsonIsTheRawSnapshot)
   step('filename', theDefaultFileNameIsDerivedFromTheTitle)
 

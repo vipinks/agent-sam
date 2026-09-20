@@ -55,6 +55,10 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     content: turn.content,
     steps: turn.steps.map((step) => ({ ...step })),
     ...(turn.error !== undefined ? { error: turn.error } : {}),
+    // Written only when the turn was actually sent under instructions, so an ordinary conversation
+    // carries no key rather than a null it would then have to be read back out of.
+    ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
+    ...(turn.instructionsTruncated !== undefined ? { instructionsTruncated: turn.instructionsTruncated } : {}),
   }))
 
   return { version: TRANSCRIPT_VERSION, turns, interrupted }
@@ -75,6 +79,10 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     content: turn.content,
     steps: turn.steps.map((step) => ({ ...step })),
     ...(turn.error !== undefined ? { error: turn.error } : {}),
+    // Carried back so an opened conversation keeps saying what it was sent under, and so an export of
+    // it can still name the file.
+    ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
+    ...(turn.instructionsTruncated !== undefined ? { instructionsTruncated: turn.instructionsTruncated } : {}),
   }))
 
   return { turns, interrupted: snapshot.interrupted }

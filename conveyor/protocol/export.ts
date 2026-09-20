@@ -67,8 +67,25 @@ export function exportFileName(title: string, format: ExportFormat): string {
  * the assistant stopped talking and started acting — and so the blocks can be found by searching for
  * a fence rather than by pattern-matching prose.
  */
-export function renderMarkdown(snapshot: TranscriptSnapshot, options: { title: string }): string {
+export function renderMarkdown(
+  snapshot: TranscriptSnapshot,
+  options: { title: string; instructionsFile?: string | null; instructionsTruncated?: boolean }
+): string {
   const lines: string[] = [`# ${options.title.trim() || 'Conversation'}`, '']
+
+  // What was standing behind the conversation — the file name the transcript recorded, passed in by
+  // the caller that read it. Named rather than quoted: the export is a record of the exchange, and
+  // the instructions are a file the reader can open, so pasting 16 KB of them in would bury the thing
+  // being recorded.
+  //
+  // Stated once, at the head, rather than under every turn that was sent under it. The record is per
+  // turn because the context can change mid-conversation, but repeating one line dozens of times
+  // would say nothing the first occurrence did not, and a reader would stop seeing it. The truncation
+  // is part of the note because the name alone would imply the whole file stood behind the answers.
+  if (options.instructionsFile) {
+    const scope = options.instructionsTruncated ? ' (first 16 KB)' : ''
+    lines.push(`_Project instructions: ${options.instructionsFile}${scope}_`, '')
+  }
 
   for (const turn of snapshot.turns) {
     lines.push(`## ${turn.role === 'user' ? USER_HEADING : ASSISTANT_HEADING}`, '')
@@ -161,7 +178,10 @@ function trimTrailingBlank(lines: string[]): string[] {
  * JSON is the snapshot itself, re-indented: an export is a way out of this app, so the JSON is the
  * data the app actually holds rather than a shape invented for export.
  */
-export function renderExport(snapshot: TranscriptSnapshot, options: { title: string; format: ExportFormat }): string {
+export function renderExport(
+  snapshot: TranscriptSnapshot,
+  options: { title: string; format: ExportFormat; instructionsFile?: string | null; instructionsTruncated?: boolean }
+): string {
   if (options.format === 'json') return `${JSON.stringify(snapshot, null, 2)}\n`
   return renderMarkdown(snapshot, options)
 }

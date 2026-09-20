@@ -18,6 +18,7 @@ import {
   SEARCH_MIN_TERM,
 } from '../protocol/search'
 import { exportFileName, renderExport } from '../protocol/export'
+import { recordedInstructions } from '../protocol/context'
 import { exportTitle } from '../protocol/session-title'
 
 /**
@@ -344,6 +345,11 @@ export const sessionsModule = defineModule({
    *
    * A dismissed dialog returns null rather than throwing. Cancelling a save is an ordinary outcome,
    * and reporting it as an error would put a failure toast on a deliberate decision.
+   *
+   * The markdown export also names the project instructions the conversation was sent under, when its
+   * turns recorded one. That is read back out of the transcript rather than sent by the renderer, for
+   * the same reason the conversation is: the file is the record, and a copy on the wire would be a
+   * second source of truth about what stood behind the answers.
    */
   exportSession: command(
     z.object({
@@ -363,7 +369,15 @@ export const sessionsModule = defineModule({
 
       // The stored name when the renderer supplied one, otherwise the first-message rule.
       const title = exportTitle(input.title, snapshot)
-      const contents = renderExport(snapshot, { title, format: input.format })
+      // Read back out of the turns it was recorded on, not passed down from the renderer: the
+      // transcript is the record, and a second copy travelling over IPC could disagree with it.
+      const instructions = recordedInstructions(snapshot.turns)
+      const contents = renderExport(snapshot, {
+        title,
+        format: input.format,
+        instructionsFile: instructions?.file ?? null,
+        instructionsTruncated: instructions?.truncated ?? false,
+      })
       const defaultPath = exportFileName(title, input.format)
 
       // The calling window parents the dialog when there is one, so the sheet is attached to the

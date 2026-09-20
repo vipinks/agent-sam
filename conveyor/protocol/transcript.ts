@@ -17,6 +17,12 @@ import { z } from 'zod'
  * Version 2 widened a tool step's status with `queued`: consent is per call now, so a frame whose
  * calls are waiting behind the one being decided has to be describable on disk as well as live. An
  * older build reading such a file refuses it rather than silently showing a queue as one pause.
+ *
+ * The project-instructions record did *not* bump it. A turn gained two optional fields, so a file
+ * written before them — by this build or the last one — has neither key, and an absent optional key is
+ * stripped rather than defaulted. Old files are valid reads, and a new file read by an older build
+ * loses only the two fields it never knew about. Nothing a reader has to be told about is a version
+ * bump; only a change it would otherwise get wrong is.
  */
 export const TRANSCRIPT_VERSION = 2
 
@@ -40,6 +46,19 @@ const turnSchema = z.object({
   content: z.string(),
   steps: z.array(toolStepSchema),
   error: z.string().optional(),
+  /**
+   * The instructions file this turn was sent under, and whether that read was capped.
+   *
+   * On the turn rather than on the snapshot, because the context a conversation is sent under can
+   * change: a repository that adopts `SAMAI.md` halfway through has turns that were sent under
+   * `AGENTS.md` and turns that were not, and a single name for the file would misdate one half.
+   *
+   * The name, never the text. Instructions are recomputed per send and are not a thing the app stores
+   * — a transcript records the conversation, not the folder it happened in.
+   */
+  instructionsFile: z.string().optional(),
+  /** True when only the first 16 KB of that file was read, so the name is not mistaken for the whole. */
+  instructionsTruncated: z.boolean().optional(),
 })
 
 /**

@@ -183,6 +183,51 @@ function absentIsEmpty() {
   results.push('a session with no saved file opens as an empty conversation')
 }
 
+function theInstructionsRecordRoundTrips() {
+  const state: TranscriptState = {
+    interrupted: false,
+    turns: [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'tighten the loop',
+        steps: [],
+        instructionsFile: 'AGENTS.md',
+        instructionsTruncated: true,
+      },
+      { id: 'assistant-2', role: 'assistant', content: 'Done.', steps: [], instructionsFile: 'AGENTS.md' },
+    ],
+  }
+
+  const snapshot = serializeTranscript(state)
+  assert.equal(snapshot.turns[0].instructionsFile, 'AGENTS.md', 'the name is written')
+  assert.equal(snapshot.turns[0].instructionsTruncated, true, 'the cap is written')
+  // A turn that recorded a name but not the flag carries only the name, rather than a false `false`.
+  assert.equal(snapshot.turns[1].instructionsFile, 'AGENTS.md')
+  assert.equal(
+    'instructionsTruncated' in snapshot.turns[1],
+    false,
+    'an unrecorded flag is omitted rather than defaulted'
+  )
+
+  const parsed = transcriptSnapshotSchema.safeParse(JSON.parse(JSON.stringify(snapshot)))
+  assert.equal(parsed.success, true, 'the record survives the shared schema')
+  assert.deepEqual(
+    rehydrateTranscript(parsed.data ?? null).turns,
+    state.turns,
+    'and comes back on the turns it was recorded on'
+  )
+
+  // An ordinary conversation gains no key at all: this is what keeps it reading exactly as it did
+  // before the record existed, which is the additive-schema property stated as a test.
+  const plain = serializeTranscript({
+    interrupted: false,
+    turns: [{ id: 'user-1', role: 'user', content: 'hello', steps: [] }],
+  })
+  assert.deepEqual(Object.keys(plain.turns[0]).sort(), ['content', 'id', 'role', 'steps'])
+  results.push('the instructions record round-trips, and a conversation without one is written unchanged')
+}
+
 // ---------------------------------------------------------------- interruption
 
 function anUnfinishedTurnIsInterrupted() {
@@ -474,6 +519,7 @@ async function main() {
   await step('round trip', roundTripWithTools)
   await step('schema agreement', theReaderAcceptsWhatTheWriterProduces)
   await step('absent file', absentIsEmpty)
+  await step('instructions record', theInstructionsRecordRoundTrips)
   await step('interruption', anUnfinishedTurnIsInterrupted)
   await step('pause is not interruption', aPauseIsNotAnInterruption)
   await step('numbering', numberingResumesPastRestoredTurns)

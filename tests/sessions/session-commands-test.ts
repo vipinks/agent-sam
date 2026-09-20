@@ -29,6 +29,8 @@ const results: string[] = []
 const MATCHING_ID = '11111111-2222-4333-8444-555555555555'
 const SILENT_ID = '33333333-4444-4555-8666-777777777777'
 const CORRUPT_ID = '44444444-5555-4666-8777-888888888888'
+/** The one conversation whose turns recorded the instructions they were sent under. */
+const INSTRUCTED_ID = '55555555-6666-4777-8888-999999999999'
 
 /** A conversation that mentions the term several times, plus a tool card. */
 function matchingSnapshot(): TranscriptSnapshot {
@@ -43,6 +45,31 @@ function matchingSnapshot(): TranscriptSnapshot {
         content: 'The parser needs a trim. I checked the parser and the parser is otherwise fine.',
         steps: [{ callId: 'c1', tool: 'read_file', args: { path: 'parser.ts' }, status: 'ok', output: 'parse()' }],
       },
+    ],
+  }
+}
+
+/**
+ * A conversation sent under instructions, as the turn record now stores them.
+ *
+ * Seeded as a file rather than built by `serializeTranscript`, because what is under test here is the
+ * stored shape: the export reads a transcript off the disk, so the question is whether a record
+ * written into one is named in the file the user gets back.
+ */
+function instructedSnapshot(): TranscriptSnapshot {
+  return {
+    version: TRANSCRIPT_VERSION,
+    interrupted: false,
+    turns: [
+      {
+        id: 'u1',
+        role: 'user',
+        content: 'tighten the loop',
+        steps: [],
+        instructionsFile: 'AGENTS.md',
+        instructionsTruncated: true,
+      },
+      { id: 'a1', role: 'assistant', content: 'Done.', steps: [], instructionsFile: 'AGENTS.md' },
     ],
   }
 }
@@ -179,6 +206,30 @@ async function aTermThatMatchesNothingReturnsNothing() {
 }
 
 // ---------------------------------------------------------------- the export
+
+async function theCommandWritesTheInstructionsNote() {
+  const target = join(workDir, 'instructed.md')
+  process.env.SAM_TEST_SAVE_PATH = target
+
+  const path = await call('exportSession', { id: INSTRUCTED_ID, format: 'markdown' })
+  assert.equal(path, target, 'the export is written where the dialog said')
+
+  const written = readFileSync(target, 'utf8')
+  // Exactly once, and naming the file. Read back out of the stored transcript rather than sent by the
+  // renderer, so this is the whole path from the record on disk to the note in the file.
+  assert.equal(written.split('Project instructions').length - 1, 1, 'the note appears exactly once')
+  assert.ok(written.includes('AGENTS.md'), 'and names the file')
+  assert.ok(written.includes('16 KB'), 'and states that the read was capped')
+  assert.ok(written.indexOf('Project instructions') < written.indexOf('## You'), 'above the turns')
+
+  // And a conversation whose turns recorded nothing keeps no note, in the file the command wrote.
+  const plainTarget = join(workDir, 'uninstructed.md')
+  process.env.SAM_TEST_SAVE_PATH = plainTarget
+  await call('exportSession', { id: MATCHING_ID, format: 'markdown' })
+  const plain = readFileSync(plainTarget, 'utf8')
+  assert.ok(!plain.includes('Project instructions'), 'a conversation with no record writes no note')
+  results.push('the export command writes the note from the stored transcript, once, and only when recorded')
+}
 
 async function markdownIsWrittenWhereTheDialogSaid() {
   const target = join(workDir, 'exported.md')
@@ -340,6 +391,7 @@ async function main() {
     // Two readable conversations, one of which mentions the term, and one unrelated.
     writeFileSync(join(sessionDir, `${MATCHING_ID}.json`), JSON.stringify(matchingSnapshot()), 'utf8')
     writeFileSync(join(sessionDir, `${SILENT_ID}.json`), JSON.stringify(silentSnapshot()), 'utf8')
+    writeFileSync(join(sessionDir, `${INSTRUCTED_ID}.json`), JSON.stringify(instructedSnapshot()), 'utf8')
     // A file that is not a session id at all, so the scan's own filename filtering is exercised.
     writeFileSync(join(sessionDir, 'not-a-session.json'), JSON.stringify(matchingSnapshot()), 'utf8')
 
@@ -349,6 +401,7 @@ async function main() {
     await step('scan schema', theScanRefusesShortTerms)
     await step('scan empty', aTermThatMatchesNothingReturnsNothing)
     await step('export markdown', markdownIsWrittenWhereTheDialogSaid)
+    await step('export instructions note', theCommandWritesTheInstructionsNote)
     await step('export json', jsonIsTheSnapshotAndNamedFromTheTranscript)
     await step('export cancel', cancellingWritesNothing)
     await step('export missing', exportingAnUnsavedSessionHasItsOwnCode)
