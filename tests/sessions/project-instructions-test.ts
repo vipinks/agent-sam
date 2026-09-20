@@ -12,6 +12,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readProjectInstructions } from '../../conveyor/modules/project-context'
@@ -186,6 +187,87 @@ async function theBoundaryIsExact() {
   results.push('the boundary is exact: at the budget is whole, one byte over is marked')
 }
 
+/**
+ * The bounded read: the returned prefix is the file's own head, and no read exceeds the budget.
+ *
+ * The size assertion is the half a content check cannot make. `readFile`-then-`subarray` returns the
+ * same *bytes*, so every assertion above passes for a reader that pulls a whole 10 MB instructions
+ * file into memory before cutting it — which is the documented behavior this suite now pins. The read
+ * length is therefore observed rather than inferred: `open` is wrapped to report how many bytes each
+ * `read` asks for, which no content assertion can see.
+ *
+ * `createRequire` rather than `import`, and not for style: the point is to reach the *module object*
+ * and wrap one method on it, which a static binding does not give. `require('fs/promises')` and
+ * `node:fs/promises` resolve to the same object, and the reader under test reaches it through the same
+ * cache, so the wrapper sees the real call without a seam in the reader itself.
+ */
+async function anOversizedFileIsReadOnlyToTheBudget() {
+  const root = await makeRoot()
+
+  // 64 KB of distinguishable content, read against a 16 KB budget. ASCII on purpose: this test is
+  // about how many bytes are read, not about where a cut lands.
+  const filler = 'abcdefghijklmnopqrstuvwxyz0123456789'.repeat(1900)
+  const oversized = `${filler}THE-TAIL-IS-NEVER-READ`
+  assert.ok(oversized.length > MAX_INSTRUCTIONS_BYTES * 3, 'the fixture is well past the budget')
+  await writeFile(join(root, 'AGENTS.md'), oversized, 'utf8')
+
+  const fsPromises = createRequire(__filename)('fs/promises') as {
+    open: (...args: unknown[]) => Promise<unknown>
+  }
+  const originalOpen = fsPromises.open
+  const requestedLengths: number[] = []
+
+  // Reports the length each `read` asks for, then delegates. The handle is proxied rather than
+  // replaced so the reader still closes the real one.
+  fsPromises.open = async (...args: unknown[]) => {
+    const handle = (await originalOpen(...args)) as Record<string, unknown>
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === 'read') {
+          return (buffer: Buffer, offset: number, length: number, position: number) => {
+            requestedLengths.push(length)
+            return (target.read as (...a: unknown[]) => Promise<unknown>)(buffer, offset, length, position)
+          }
+        }
+        const value = target[property as string]
+        return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value
+      },
+    })
+  }
+
+  let found: Awaited<ReturnType<typeof readProjectInstructions>>
+  try {
+    found = await readProjectInstructions(root)
+  } finally {
+    fsPromises.open = originalOpen
+  }
+
+  assert.ok(found, 'the oversized file was read')
+  assert.equal(found.truncated, true, 'and reported truncated')
+
+  // The prefix is the file's own head, not something re-assembled or shifted.
+  const body = found.text.slice(0, found.text.length - TRUNCATION_NOTE.length - 2)
+  assert.ok(oversized.startsWith(body), 'the kept text is a real prefix of the file')
+  assert.equal(body.length, MAX_INSTRUCTIONS_BYTES, 'and is exactly the byte budget of ASCII')
+  // Nothing past the budget survived, which is what makes this a cut rather than a sample.
+  assert.ok(!found.text.includes('THE-TAIL-IS-NEVER-READ'), 'the tail was never taken')
+
+  // The point of the exercise: no single read asked for more than the budget.
+  assert.ok(requestedLengths.length > 0, 'the read went through the wrapped open, so it was observed')
+  const largest = Math.max(...requestedLengths)
+  assert.ok(
+    largest <= MAX_INSTRUCTIONS_BYTES,
+    `no read may exceed the ${MAX_INSTRUCTIONS_BYTES}-byte budget, but one asked for ${largest}`
+  )
+
+  // And an in-budget file is returned whole, which is the other half of "only the budget is read".
+  const small = 'short instructions'
+  await writeFile(join(root, 'AGENTS.md'), small, 'utf8')
+  const smallFound = await readProjectInstructions(root)
+  assert.equal(smallFound?.text, small, 'a small file is returned whole')
+  results.push('an oversized instructions file is read only to the byte budget, and never past it')
+}
+
 // ---------------------------------------------------------------- the recorded name
 
 function theRecordedNameIsTheFileNameNotThePath() {
@@ -240,6 +322,7 @@ async function main() {
     await step('empty shadows', anEmptyFileShadowsTheNextCandidate)
     await step('message shape', theMessageIsFencedAsProjectInstructions)
     await step('oversized', anOversizedFileIsCutAndMarked)
+    await step('bounded read', anOversizedFileIsReadOnlyToTheBudget)
     await step('exact boundary', theBoundaryIsExact)
     await step('recorded name', theRecordedNameIsTheFileNameNotThePath)
     await step('turn record', whatATurnRecordedIsReadBackOutOfIt)
