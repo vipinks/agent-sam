@@ -18,7 +18,7 @@ import {
   SEARCH_MIN_TERM,
 } from '../protocol/search'
 import { exportFileName, renderExport } from '../protocol/export'
-import { titleFromTranscript } from '../protocol/session-title'
+import { exportTitle } from '../protocol/session-title'
 
 /**
  * Transcript storage — one JSON file per session, under `userData/sessions`.
@@ -333,34 +333,50 @@ export const sessionsModule = defineModule({
    * Write one conversation out as a file, and report where it landed.
    *
    * Main-only, necessarily: it reads the transcript, renders the bytes, opens the OS save dialog and
-   * writes the file. The renderer sends an id and a format and receives a path — never a transcript,
-   * and never a byte of the file.
+   * writes the file. The renderer sends an id, a format and the title its list is showing, and
+   * receives a path — never a transcript, and never a byte of the file.
+   *
+   * `title` is optional and is the *stored* name, which only the renderer has: a renamed session's
+   * name lives in the session store, and nothing in a transcript records it. Without it an export of
+   * a renamed conversation would be named after the message that started it, disagreeing with the row
+   * the user clicked. It is validated as a bounded optional string here, and sanitized for filesystem
+   * use before it becomes a filename.
    *
    * A dismissed dialog returns null rather than throwing. Cancelling a save is an ordinary outcome,
    * and reporting it as an error would put a failure toast on a deliberate decision.
    */
-  exportSession: command(z.object({ id: idSchema, format: z.enum(['markdown', 'json']) }), async ({ input, ctx }) => {
-    const snapshot = await loadTranscriptFile(input.id)
-    if (!snapshot) {
-      // Nothing has been saved for this session, so there is nothing to write. Its own code,
-      // because the panel says something different for this than for a write failure.
-      throw new ConveyorError('SESSION_NOT_FOUND', 'This conversation has no saved transcript yet.')
+  exportSession: command(
+    z.object({
+      id: idSchema,
+      format: z.enum(['markdown', 'json']),
+      // Bounded rather than unbounded: this crosses the trust boundary and ends up in a filename.
+      // A title longer than this is not a title, and the schema says so rather than the filesystem.
+      title: z.string().max(200).optional(),
+    }),
+    async ({ input, ctx }) => {
+      const snapshot = await loadTranscriptFile(input.id)
+      if (!snapshot) {
+        // Nothing has been saved for this session, so there is nothing to write. Its own code,
+        // because the panel says something different for this than for a write failure.
+        throw new ConveyorError('SESSION_NOT_FOUND', 'This conversation has no saved transcript yet.')
+      }
+
+      // The stored name when the renderer supplied one, otherwise the first-message rule.
+      const title = exportTitle(input.title, snapshot)
+      const contents = renderExport(snapshot, { title, format: input.format })
+      const defaultPath = exportFileName(title, input.format)
+
+      // The calling window parents the dialog when there is one, so the sheet is attached to the
+      // window that asked rather than to the app.
+      const win = ctx.window
+      const result = win
+        ? await dialog.showSaveDialog(win, { defaultPath, title: 'Export conversation' })
+        : await dialog.showSaveDialog({ defaultPath, title: 'Export conversation' })
+
+      if (result.canceled || !result.filePath) return null
+
+      await writeExportFile(result.filePath, contents)
+      return result.filePath
     }
-
-    const title = titleFromTranscript(snapshot)
-    const contents = renderExport(snapshot, { title, format: input.format })
-    const defaultPath = exportFileName(title, input.format)
-
-    // The calling window parents the dialog when there is one, so the sheet is attached to the
-    // window that asked rather than to the app.
-    const win = ctx.window
-    const result = win
-      ? await dialog.showSaveDialog(win, { defaultPath, title: 'Export conversation' })
-      : await dialog.showSaveDialog({ defaultPath, title: 'Export conversation' })
-
-    if (result.canceled || !result.filePath) return null
-
-    await writeExportFile(result.filePath, contents)
-    return result.filePath
-  }),
+  ),
 })

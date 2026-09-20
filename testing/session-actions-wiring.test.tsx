@@ -6,6 +6,7 @@ import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-c
 import { SessionListPanel } from '@/app/components/workbench/session-list-panel'
 import type { SessionSearchResult } from '@/conveyor/protocol/search'
 import type { ExportFormat } from '@/conveyor/protocol/export'
+import { exportRequest } from '@/app/components/workbench/export-request'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -49,7 +50,7 @@ function twoSessions() {
 function renderPanel(
   options: {
     onRename?: (id: string, title: string) => void
-    onExport?: (id: string, format: ExportFormat) => void
+    onExport?: (id: string, format: ExportFormat, title: string) => void
     stub?: BridgeStub
   } = {}
 ) {
@@ -361,7 +362,7 @@ describe('session export wiring', () => {
     await userEvent.click(screen.getByLabelText('Export the parser drops newlines'))
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Markdown (.md)' }))
 
-    expect(onExport).toHaveBeenCalledWith(SESSION_ID, 'markdown')
+    expect(onExport).toHaveBeenCalledWith(SESSION_ID, 'markdown', 'the parser drops newlines')
   })
 
   it('offers json as the other format', async () => {
@@ -371,7 +372,7 @@ describe('session export wiring', () => {
     await userEvent.click(screen.getByLabelText('Export unrelated subject entirely'))
     await userEvent.click(await screen.findByRole('menuitem', { name: 'JSON (.json)' }))
 
-    expect(onExport).toHaveBeenCalledWith(OTHER_ID, 'json')
+    expect(onExport).toHaveBeenCalledWith(OTHER_ID, 'json', 'unrelated subject entirely')
   })
 
   it('closes the format menu on Escape', async () => {
@@ -383,5 +384,36 @@ describe('session export wiring', () => {
 
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('menu', { name: 'Export format' })).toBeNull())
+  })
+})
+
+describe('session export naming', () => {
+  it('sends the row title with the id when the format is chosen', async () => {
+    // The path that matters: the row knows its title, the panel passes it on, and the request is
+    // built from it. Asserted through the third argument the panel supplies rather than through a
+    // store read, because the row is where the title actually lives at the moment of the click.
+    const { onExport } = renderPanel()
+    await ready()
+
+    await userEvent.click(screen.getByLabelText('Export the parser drops newlines'))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Markdown (.md)' }))
+
+    expect(onExport).toHaveBeenCalledWith(SESSION_ID, 'markdown', 'the parser drops newlines')
+  })
+
+  it('builds the request with the title, and omits it when there is none', () => {
+    // The request shape is a rule, so it is exercised directly: an absent title must produce a
+    // request with no `title` key at all. Sending `title: ''` would be accepted by main's optional
+    // schema *as a present title* and win over the first-message fallback, naming an export of an
+    // unnamed session after nothing.
+    expect(exportRequest(SESSION_ID, 'markdown', 'A renamed conversation')).toEqual({
+      id: SESSION_ID,
+      format: 'markdown',
+      title: 'A renamed conversation',
+    })
+
+    expect(exportRequest(SESSION_ID, 'json', '')).toEqual({ id: SESSION_ID, format: 'json' })
+    expect(exportRequest(SESSION_ID, 'json', '   ')).toEqual({ id: SESSION_ID, format: 'json' })
+    expect('title' in exportRequest(SESSION_ID, 'json', '  ')).toBe(false)
   })
 })

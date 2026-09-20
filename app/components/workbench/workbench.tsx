@@ -2,6 +2,7 @@ import { toast } from 'sonner'
 import { ConveyorError } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
 import type { ExportFormat } from '@/conveyor/protocol/export'
+import { exportRequest } from './export-request'
 import { ChatPanel } from './chat-panel'
 import { CodeViewer } from './code-viewer'
 import { IconRail } from './icon-rail'
@@ -51,13 +52,19 @@ function WorkbenchLayout() {
    * row is a view of the session list, and the list can change while the save dialog is open — so a
    * toast owned by the row could be unmounted before the file it is describing has been written.
    *
-   * Only the id crosses back: main reads the transcript from disk itself, and the renderer never has
-   * to have the conversation loaded to export it.
+   * The title travels with the id because the store is the only place a renamed session's name
+   * exists: a transcript records what was said, not what the row is called. Passing it makes the
+   * default filename agree with the row the user clicked, and omitting it — a caller with no title in
+   * hand — leaves main to derive one from the first message.
    */
-  const runSessionExport = (id: string, format: ExportFormat) => {
+  const runSessionExport = (id: string, format: ExportFormat, title: string) => {
     void (async () => {
       try {
-        const path = await conveyor.sessions.exportSession({ id, format })
+        // The title the row is showing travels with the id: a renamed session's name exists only in
+        // the store, and this is what makes the default filename agree with the row that was clicked.
+        // `exportRequest` decides the shape — the title is omitted, not sent empty, when there is
+        // none, so main's optional field is genuinely absent and its fallback applies.
+        const path = await conveyor.sessions.exportSession(exportRequest(id, format, title))
         // A dismissed save dialog is an ordinary outcome, not a failure to report.
         if (path) toast.success('Conversation exported', { description: path })
       } catch (err) {

@@ -22,7 +22,7 @@ import {
   SEARCH_MIN_TERM,
 } from '../../conveyor/protocol/search'
 import { exportFileName } from '../../conveyor/protocol/export'
-import { titleFromTranscript, UNTITLED } from '../../conveyor/protocol/session-title'
+import { exportTitle, titleFromTranscript, UNTITLED } from '../../conveyor/protocol/session-title'
 
 const results: string[] = []
 
@@ -254,6 +254,75 @@ function theDefaultFileNameMatchesTheDerivedTitle() {
   results.push('the default export filename is derived from the transcript by the shared title rule')
 }
 
+async function aRenamedSessionExportsUnderItsStoredName() {
+  const target = join(workDir, 'renamed.md')
+  process.env.SAM_TEST_SAVE_PATH = target
+
+  // The name the user typed, which lives only in the session store. Before this was passed through,
+  // the export was named — and headed — from the first message, disagreeing with the row clicked.
+  const path = await call('exportSession', {
+    id: MATCHING_ID,
+    format: 'markdown',
+    title: 'Newlines investigation',
+  })
+  assert.equal(path, target, 'the export still writes where the dialog said')
+
+  const written = readFileSync(target, 'utf8')
+  assert.ok(
+    written.startsWith('# Newlines investigation'),
+    'the stored title heads the document, not the first message'
+  )
+  assert.ok(
+    !written.includes('# the parser drops trailing newlines'),
+    'and the first-message title is not used at all when one was supplied'
+  )
+  results.push('a stored title supplied by the renderer names the export')
+}
+
+function theStoredTitleBecomesASafeFileName() {
+  // A title is user text and ends up as a filename, so the separators have to be handled — and they
+  // belong in the *document* as written, which is why the two uses are separate rules.
+  assert.equal(exportFileName('a/b: c', 'markdown'), 'a-b- c.md', 'separators are replaced in the filename')
+  assert.equal(
+    exportFileName('..', 'markdown'),
+    'conversation.md',
+    'a title that is only dots cannot produce a hidden or relative name'
+  )
+
+  const snapshot = matchingSnapshot()
+  assert.equal(exportTitle('Renamed by hand', snapshot), 'Renamed by hand', 'a stored title is used as given')
+  assert.equal(exportTitle('  ', snapshot), titleFromTranscript(snapshot), 'a blank title falls back')
+  assert.equal(exportTitle(undefined, snapshot), titleFromTranscript(snapshot), 'an absent title falls back')
+  assert.equal(
+    exportTitle('a/b', snapshot),
+    'a/b',
+    'the document keeps the title as written even where the filename cannot'
+  )
+  results.push('a stored title is sanitized for the filename but kept as written in the document')
+}
+
+function theTitleFieldIsValidatedAndOptional() {
+  const schema = inputSchemaOf('exportSession')
+  assert.equal(schema.safeParse({ id: MATCHING_ID, format: 'markdown' }).success, true, 'the title is optional')
+  assert.equal(
+    schema.safeParse({ id: MATCHING_ID, format: 'markdown', title: 'a name' }).success,
+    true,
+    'a title is accepted'
+  )
+  // Bounded, because this crosses the trust boundary and becomes a filename.
+  assert.equal(
+    schema.safeParse({ id: MATCHING_ID, format: 'markdown', title: 'x'.repeat(201) }).success,
+    false,
+    'an absurdly long title is refused'
+  )
+  assert.equal(
+    schema.safeParse({ id: MATCHING_ID, format: 'markdown', title: 42 }).success,
+    false,
+    'a non-string title is refused'
+  )
+  results.push('the export title is optional, must be a string, and is bounded')
+}
+
 // ---------------------------------------------------------------- harness
 
 let sessionDir = ''
@@ -285,6 +354,9 @@ async function main() {
     await step('export missing', exportingAnUnsavedSessionHasItsOwnCode)
     await step('export schema', theExportSchemaIsClosed)
     await step('export filename', theDefaultFileNameMatchesTheDerivedTitle)
+    await step('export renamed', aRenamedSessionExportsUnderItsStoredName)
+    await step('export title sanitizing', theStoredTitleBecomesASafeFileName)
+    await step('export title schema', theTitleFieldIsValidatedAndOptional)
 
     // The unrelated file must not have become an exported or scanned session along the way.
     assert.ok(

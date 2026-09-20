@@ -57,7 +57,7 @@ export function SessionListPanel({
   onCreate: () => void
   onOpen: (id: string) => void
   onRename: (id: string, title: string) => void
-  onExport: (id: string, format: ExportFormat) => void
+  onExport: (id: string, format: ExportFormat, title: string) => void
   onDelete: (id: string) => void
   /** The session whose transcript failed to load, if any. */
   error: SessionError | null
@@ -226,7 +226,10 @@ export function SessionListPanel({
                         <Pencil />
                       </IconButton>
 
-                      <ExportButton title={session.title} onExport={(format) => onExport(session.id, format)} />
+                      <ExportButton
+                        title={session.title}
+                        onExport={(format) => onExport(session.id, format, session.title)}
+                      />
 
                       <AlertDialog
                         open={pendingDelete === session.id}
