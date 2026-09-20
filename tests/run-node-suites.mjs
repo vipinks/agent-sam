@@ -50,6 +50,8 @@ const SUITES = [
   { name: 'project instructions', src: 'sessions/project-instructions-test.ts' },
   { name: 'mention rules', src: 'mentions/mentions-test.ts' },
   { name: 'mention files', src: 'mentions/mentions-files-test.ts' },
+  { name: 'git porcelain parser', src: 'git/porcelain-test.ts' },
+  { name: 'git module', src: 'git/git-module-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 
