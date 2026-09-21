@@ -384,8 +384,13 @@ export function CodeViewer() {
           ) : diff.error ? (
             <DiffError error={diff.error} />
           ) : (
+            // `fill` is the pane's height policy: the diff is the whole point of this pane, so it takes
+            // the pane's height and scrolls inside itself. Without it the card's cap travels here and the
+            // region stops at content-or-cap height, leaving dead space below. The host keeps
+            // `overflow-auto` rather than `overflow-hidden` so that if the chain ever fails to contain a
+            // diff, the overflow is still reachable by scrolling instead of being silently clipped.
             <div className="min-h-0 flex-1 overflow-auto p-3">
-              {diff.data && <DiffView diff={diff.data} className="mt-0" />}
+              {diff.data && <DiffView diff={diff.data} fill className="mt-0" />}
             </div>
           )}
         </div>
