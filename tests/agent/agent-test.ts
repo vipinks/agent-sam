@@ -122,7 +122,7 @@ async function reactLoop() {
 
     // Both requests advertised the tools; the second carried the tool result back.
     const second = log[1] as { body: { messages: Array<Record<string, unknown>>; tools?: unknown[] } }
-    assert.ok(Array.isArray(second.body.tools) && second.body.tools.length === 3, 'tools were advertised')
+    assert.ok(Array.isArray(second.body.tools) && second.body.tools.length === 4, 'tools were advertised')
     const assistantTurn = second.body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert.ok(assistantTurn, 'the assistant tool-call turn was replayed back to the provider')
     const toolTurn = second.body.messages.find((m) => m.role === 'tool')
@@ -645,14 +645,17 @@ async function badArgumentsAreReported() {
 
 function toolDefinitionsAreWellFormed() {
   const names = TOOL_DEFINITIONS.map((t) => t.function.name)
-  assert.deepEqual(names, ['read_file', 'write_file', 'run_command'])
+  // Four, in the order the model reads them. `set_plan` is last because it is not an action: it is
+  // listed here so the assertion keeps proving that every tool the loop recognises is advertised to
+  // the model, and every tool advertised is one the loop recognises.
+  assert.deepEqual(names, ['read_file', 'write_file', 'run_command', 'set_plan'])
   for (const tool of TOOL_DEFINITIONS) {
     assert.equal(tool.type, 'function')
     assert.ok(tool.function.description.length > 10, `${tool.function.name} needs a real description`)
     assert.equal((tool.function.parameters as { type?: string }).type, 'object')
     assert.ok((tool.function.parameters as { properties?: unknown }).properties, 'parameters must be described')
   }
-  results.push('the three tool schemas are OpenAI-shaped and fully described')
+  results.push('the four tool schemas are OpenAI-shaped and fully described')
 }
 
 // ---------------------------------------------------------------- project instructions

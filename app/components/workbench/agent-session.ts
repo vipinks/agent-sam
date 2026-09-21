@@ -1,5 +1,6 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
+import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 
 /** The call exactly as the model sent it, as the pause hands it over. */
 export interface PendingCall {
@@ -78,6 +79,14 @@ export interface AgentTurn {
    * shows, as chips, which is why those *are* stored.
    */
   contextNotices?: ContextNotice[]
+  /**
+   * The plan the model has declared for this turn, as the checklist shows it.
+   *
+   * Live while the turn runs and stored when it ends: the plan is a fact about the turn, so it lives
+   * on the turn rather than beside the transcript. Absent means no plan was ever declared, which is
+   * the ordinary case — a conversation that needed none renders nothing for it.
+   */
+  plan?: PlanStep[]
 }
 
 /** A file a send asked for that could not be attached, named with the code main reported. */
@@ -255,6 +264,19 @@ export function applyAgentChunk(
       }
     }
 
+    case 'plan': {
+      // Recorded, never merged here: main merges a declaration over the plan in hand and sends the
+      // result, so merging again would be a second place for the same rule to be decided — and two
+      // merges can disagree. Read through `normalizePlan` because the chunk crosses IPC: a plan this
+      // reducer cannot read must leave the turn with no checklist rather than an empty one.
+      //
+      // Replaced rather than appended, which is what makes the row the user is looking at update in
+      // place instead of a second copy appearing below it.
+      const plan = normalizePlan(c.plan)
+      if (!plan) return { turns, effect: {} }
+      return { turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, plan })), effect: {} }
+    }
+
     case 'context_notice': {
       // A file the user attached that could not be included. Reported so the chip can be marked rather
       // than the message silently losing a file the user watched themselves attach. Carries the code,
@@ -357,4 +379,37 @@ export function noteContextSkip(turns: AgentTurn[], turnId: string, notice: Cont
     ...turn,
     contextNotices: [...(turn.contextNotices ?? []), notice],
   }))
+}
+
+/**
+ * Mark a finished turn's plan as no longer running.
+ *
+ * Called when a run ends — because the model answered, because the stream failed, or because the user
+ * stopped it. All three mean the same thing to a plan: nothing is doing that work any more, so a step
+ * left `in_progress` is recorded as `interrupted` rather than left claiming to be under way. A turn
+ * with no plan is returned untouched, so this is safe to call unconditionally at every turn end.
+ *
+ * Not called when a run pauses for consent: a pause ends the *stream*, not the turn — the decision
+ * resumes it — and a checklist that marked its own step interrupted every time the app asked a
+ * question would be wrong at exactly the moment the user is reading it.
+ */
+export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => (turn.plan ? { ...turn, plan: reconcilePlanOnTurnEnd(turn.plan) } : turn))
+}
+
+/**
+ * The plan the checklist shows: the newest one any turn in this conversation declared.
+ *
+ * Read from the turns rather than kept beside them, so there is one place a plan lives and one thing
+ * to store. The newest, because a plan is about what is being worked on now — a second message in a
+ * conversation that declares a new plan replaces the one before it on screen, and the earlier turn
+ * still carries its own as a record. `null` when no turn declared one, which is the state the
+ * checklist renders as nothing at all.
+ */
+export function currentPlan(turns: readonly AgentTurn[]): PlanStep[] | null {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const plan = turns[index].plan
+    if (plan && plan.length > 0) return plan
+  }
+  return null
 }

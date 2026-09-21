@@ -14,6 +14,7 @@ import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
 import { instructionsFileName, planSystemInjection } from '../protocol/context'
 import { assembleMentionContext, MAX_MENTION_PATHS, type MentionSkipCode } from '../protocol/mentions'
+import { MAX_PLAN_STEPS, mergePlan, normalizePlan, planStepSchema, type Plan, type PlanStep } from '../protocol/plan'
 import { readMentions } from './mentions'
 
 /**
@@ -42,6 +43,14 @@ import { readMentions } from './mentions'
  * decisions are all resolved. `nextCallToPresent` owns which call is next, so the order is stated
  * once and tested directly. The batch invariant from the previous fix still holds: the model is not
  * asked anything until every `tool_call_id` in the frame has a tool message, denials included.
+ *
+ * `set_plan` is the one tool exempt from that gate. Every other tool is gated because it touches the
+ * disk, a shell or the network through `executeTool`, and consent is the point of the gate. This one
+ * writes nothing, spawns nothing and reaches nothing: it declares an ordered list of steps, merges it
+ * over the plan in hand, and yields the result as a chunk. A pause in front of it would be a consent
+ * dialog with nothing behind it — and a consent dialog with nothing behind it is how a user is
+ * trained to dismiss the ones that matter. The exemption is therefore a property of the tool, stated
+ * in `needsApproval`, rather than a special case in the loop where the gating decision is made.
  */
 
 /** Model round-trips allowed in one run. A model that will not stop calling tools must not spin. */
@@ -50,7 +59,7 @@ export const MAX_STEPS = 10
 /** Output handed back to the model. A build log should inform it, not exhaust its context. */
 const MAX_TOOL_OUTPUT = 20_000
 
-export const TOOL_NAMES = ['read_file', 'write_file', 'run_command'] as const
+export const TOOL_NAMES = ['read_file', 'write_file', 'run_command', 'set_plan'] as const
 export type AgentToolName = (typeof TOOL_NAMES)[number]
 
 /**
@@ -108,6 +117,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'set_plan',
+      description:
+        'Declare the plan for the work in hand as an ordered list of steps. Send the whole list every time: an entry whose id already exists updates that step, an id that is new is added, and a step you leave out is kept exactly as it was. Mark the one step you are working on in_progress, and nothing else. This only records the plan for the user — it reads and writes no files and runs no commands.',
+      parameters: {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'array',
+            description: 'The plan, in the order the work should be read.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'A stable identifier for the step, reused to update it' },
+                text: { type: 'string', description: 'The step as the user should read it' },
+                status: {
+                  type: 'string',
+                  enum: ['pending', 'in_progress', 'done'],
+                  description: 'Where this step has got to',
+                },
+              },
+              required: ['id', 'text', 'status'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['steps'],
+        additionalProperties: false,
+      },
+    },
+  },
 ]
 
 /** Argument shapes, validated before anything touches the disk or a shell. */
@@ -115,14 +157,22 @@ const TOOL_ARG_SCHEMAS = {
   read_file: z.object({ path: z.string().min(1) }),
   write_file: z.object({ path: z.string().min(1), content: z.string() }),
   run_command: z.object({ command: z.string().min(1), cwd: z.string().optional() }),
+  // A plan beyond the cap is refused rather than truncated, so the model is told its declaration did
+  // not land instead of having steps dropped and then working from a list the user cannot see.
+  set_plan: z.object({ steps: z.array(planStepSchema).min(1).max(MAX_PLAN_STEPS) }),
 } satisfies Record<AgentToolName, z.ZodType>
 
 /**
- * Write and shell access need consent; reading is safe. An unrecognised tool is treated as needing
- * approval, because the safer default for something unclassified is to ask.
+ * Write and shell access need consent; reading is safe, and so is declaring a plan. An unrecognised
+ * tool is treated as needing approval, because the safer default for something unclassified is to
+ * ask.
+ *
+ * Both exemptions are tools that cannot act on anything outside this process. `set_plan` merges a
+ * list and yields it, which is why it never reaches the `gated` queue and why a run can announce a
+ * plan mid-turn without stopping to ask — the property the node plan suite asserts directly.
  */
 export function needsApproval(tool: string): boolean {
-  return tool !== 'read_file'
+  return tool !== 'read_file' && tool !== 'set_plan'
 }
 
 function isAgentTool(tool: string): tool is AgentToolName {
@@ -271,6 +321,14 @@ export async function executeTool(
         const output = body.trim() ? `${body}\n${summary}` : summary
         return { ok: code === 0, code: code === 0 ? undefined : 'COMMAND_FAILED', output: cap(output) }
       }
+
+      case 'set_plan': {
+        // Nothing is done here, deliberately. The list was validated against the schema above, and the
+        // loop merges it into the plan in hand — the loop is the side that can yield the result, and a
+        // merge here would be a second place for the same rule to be decided.
+        const { steps } = parsed.data as { steps: PlanStep[] }
+        return { ok: true, output: `Recorded a plan of ${steps.length} step${steps.length === 1 ? '' : 's'}.` }
+      }
     }
   } catch (err) {
     // Containment failures arrive here as typed errors; anything else is reported as-is so the model
@@ -310,6 +368,20 @@ export type AgentChunk =
   | { type: 'context_notice'; path: string; code: MentionSkipCode }
   | { type: 'tool_call_start'; callId: string; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; callId: string; tool: string; ok: boolean; code?: string; output: string }
+  /**
+   * The plan as it stands after a `set_plan` declaration, merged in the loop rather than handed over
+   * exactly as the model sent it.
+   *
+   * Merged here, once, for the same reason the transcript shape is shared: the renderer would
+   * otherwise have to merge as well, and two merges can disagree. The chunk therefore carries the
+   * whole plan — a checklist is small, and a diff of one would be a second representation to keep
+   * correct — and it is announced on every declaration rather than only when something changed, so the
+   * UI has one rule to follow instead of two.
+   *
+   * Yielded only when the declaration carried a usable step: an empty plan is no plan, and a chunk
+   * announcing one would put a checklist on screen with nothing in it.
+   */
+  | { type: 'plan'; plan: PlanStep[] }
   | {
       type: 'awaiting_approval'
       /** The one call this decision is about. Every other card in the queue is not yet actionable. */
@@ -377,6 +449,8 @@ export function describeToolCall(tool: string, args: Record<string, unknown>): s
       return path ? `Writing ${path}` : 'Writing a file'
     case 'run_command':
       return typeof args.command === 'string' ? `Running ${args.command}` : 'Running a command'
+    case 'set_plan':
+      return Array.isArray(args.steps) ? `Planning ${args.steps.length} steps` : 'Planning'
     default:
       return `Calling ${tool}`
   }
@@ -466,6 +540,23 @@ async function presentCall(
   }
 }
 
+/**
+ * The plan a `set_plan` call declared, or `null` when the call carried nothing usable.
+ *
+ * Read back out of the call's own arguments rather than returned by the tool: `executeTool` is shared
+ * with every other tool and its result is text for the model, while a plan is a structure for the
+ * renderer. Parsed leniently — through the same `normalizePlan` the renderer uses — so one malformed
+ * row costs a row rather than the plan, and a blob that is not JSON at all is simply no plan.
+ */
+function declaredPlan(argsJson: string): Plan | null {
+  try {
+    const parsed: unknown = JSON.parse(argsJson || '{}')
+    return normalizePlan((parsed as { steps?: unknown })?.steps)
+  } catch {
+    return null
+  }
+}
+
 interface LoopOptions {
   providerId: string
   apiKey: string
@@ -501,6 +592,12 @@ interface LoopOptions {
 export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChunk, void, undefined> {
   const history: ChatMessage[] = opts.messages.map((m) => ({ ...m }))
   let steps = opts.steps ?? 0
+
+  // The plan in hand, carried across the round-trips of this run so each declaration merges over the
+  // last rather than replacing it. A frame that names three of six steps therefore cannot shrink the
+  // checklist to three. It starts empty and is not persisted here: the renderer owns the turn, and a
+  // turn is what a transcript stores.
+  let plan: Plan = []
 
   // The project instructions, read fresh on every send rather than kept anywhere.
   //
@@ -672,6 +769,16 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       if (opts.signal.aborted) return
 
       yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
+      // A declared plan is announced after its result, so what the user sees in the checklist and what
+      // the model was told arrive in the same order they happened. Merged over the plan in hand, and
+      // only when the call carried one: a refused call or an empty list leaves the plan as it was.
+      if (tool === 'set_plan' && outcome.ok) {
+        const declared = declaredPlan(call.function.arguments)
+        if (declared) {
+          plan = mergePlan(plan, declared)
+          yield { type: 'plan', plan }
+        }
+      }
       // Failures go back to the model as ordinary tool output, which is what lets it adapt instead of
       // the run collapsing.
       history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })

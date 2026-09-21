@@ -16,6 +16,7 @@ import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
 import { MentionChipRow } from './mention-chip'
+import { PlanChecklist } from './plan-checklist'
 import { useChatSessionsContext } from './chat-sessions-context'
 import {
   activeMentionToken,
@@ -28,6 +29,8 @@ import {
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
 import {
   applyAgentChunk,
+  currentPlan,
+  endTurnPlan,
   noteContextSkip,
   resolveDecision,
   startAssistantTurn,
@@ -118,6 +121,15 @@ export function ChatPanel() {
   // persisted at turn boundaries. The pane reads and replaces it, but does not hold it.
   const sessions = useChatSessionsContext()
   const messages = sessions.transcript.turns
+
+  /**
+   * The plan the checklist shows: the newest one this conversation declared, if any.
+   *
+   * Derived from the turns rather than held beside them, so there is exactly one place a plan lives
+   * and one thing to keep in step. `null` is the ordinary case — most conversations need no plan — and
+   * the checklist renders nothing for it.
+   */
+  const plan = currentPlan(messages)
 
   const [draft, setDraft] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -363,6 +375,11 @@ export function ChatPanel() {
       iteratorRef.current = iterator
       setIsStreaming(true)
 
+      // Whether this run stopped to ask something rather than ending. A pause ends the stream but not
+      // the turn — the decision resumes it — so the plan must be left alone for the checklist above,
+      // while every other way out of this loop ends the turn and reconciles it.
+      let paused = false
+
       try {
         for (;;) {
           const { value, done } = await iterator.next()
@@ -396,6 +413,7 @@ export function ChatPanel() {
               steps: effect.approval.steps,
             })
             // The stream is over as far as this call is concerned; the run continues on the decision.
+            paused = true
             return
           }
 
@@ -414,6 +432,10 @@ export function ChatPanel() {
         iteratorRef.current = null
         streamingTurnIdRef.current = null
         setIsStreaming(false)
+        // The turn is over — answered, failed, or stopped — so a plan that still claims a step is in
+        // progress is corrected here, at the one place every ending passes through. A pause is the
+        // exception, because the turn it belongs to has not ended.
+        if (!paused) updateMessages(endTurnPlan(messagesRef.current, turnId))
       }
     },
     [drainNow, enqueue, providerName, stickToBottom, updateMessages]
@@ -709,6 +731,19 @@ export function ChatPanel() {
             ))}
           </div>
         )}
+      </div>
+
+      {/*
+        Between the transcript and the composer, outside both the scrolling region and the composer's
+        own container: a plan is read while the run is happening, so it must not scroll away with the
+        conversation — and it must not sit inside the composer either, which is the region a click is
+        read as "the user is still typing" for the mention picker's sake.
+
+        Rendered from the live transcript, so a chunk updates it in place, and from the stored snapshot
+        after a reopen, so a conversation resumed from disk shows the plan its turn ended with.
+      */}
+      <div className="shrink-0 px-3">
+        <PlanChecklist plan={plan} />
       </div>
 
       <div ref={composerRef} className="shrink-0 border-t border-border p-3">

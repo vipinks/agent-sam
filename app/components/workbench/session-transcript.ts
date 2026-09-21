@@ -62,6 +62,10 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // Paths only, written when the user attached something. A turn with no attachments carries no key,
     // so an ordinary conversation is stored exactly as it was before mentions existed.
     ...(turn.mentionPaths !== undefined && turn.mentionPaths.length > 0 ? { mentionPaths: turn.mentionPaths } : {}),
+    // The plan as the turn ended with it. Written only when there is one, so an ordinary conversation
+    // carries no key — the same reason the instructions record is conditional — and copied rather than
+    // referenced so a later edit to the live turn cannot reach back into what was just written.
+    ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
   }))
 
   return { version: TRANSCRIPT_VERSION, turns, interrupted }
@@ -87,6 +91,10 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
     ...(turn.instructionsTruncated !== undefined ? { instructionsTruncated: turn.instructionsTruncated } : {}),
     ...(turn.mentionPaths !== undefined && turn.mentionPaths.length > 0 ? { mentionPaths: turn.mentionPaths } : {}),
+    // Carried back so a reopened conversation shows the checklist its turn was working from. It was
+    // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is
+    // a fact about the file rather than something the reader has to work out.
+    ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
   }))
 
   return { turns, interrupted: snapshot.interrupted }

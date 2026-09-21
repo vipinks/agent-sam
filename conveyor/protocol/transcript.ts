@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { planStepSchema } from './plan'
 
 /**
  * The shape of a saved transcript, and its version.
@@ -71,6 +72,18 @@ const turnSchema = z.object({
    * what the export notes; reordering here would quietly disagree with the message the user sent.
    */
   mentionPaths: z.array(z.string()).optional(),
+  /**
+   * The plan the model had declared when this turn ended, if it had one.
+   *
+   * Stored so a reopened conversation can show the checklist its turn was working from, and stored
+   * *reconciled*: whatever the loop announced, a turn that has ended cannot have a step still in
+   * progress, so nothing in this array is `in_progress` by the time it is written.
+   *
+   * Optional, and it did not bump the version for the same reason the instructions record did not: a
+   * file written before plans existed simply has no key, and an absent optional key is stripped
+   * rather than defaulted, so old files stay valid reads.
+   */
+  plan: z.array(planStepSchema).optional(),
 })
 
 /**
