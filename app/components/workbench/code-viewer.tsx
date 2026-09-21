@@ -14,7 +14,7 @@ import { useHighlightedCode } from './use-highlight'
 import { formatBytes, imageOf, type ImageRead } from './image'
 import { MarkdownContent } from './markdown'
 import { previewablePath } from './preview'
-import { spreadsheetOf } from './spreadsheet'
+import { lossNotice, recordEdit, savedLossNotice, spreadsheetOf, type SpreadsheetEdit } from './spreadsheet'
 import { SpreadsheetView } from './spreadsheet-view'
 import { useWorkbenchStore } from './store'
 
@@ -62,6 +62,7 @@ export function CodeViewer() {
   })
 
   const save = conveyor.workspace.writeFile.useMutation()
+  const saveSpreadsheet = conveyor.workspace.writeSpreadsheet.useMutation()
 
   /** True while the textarea is showing rather than the read-only render. */
   const [editing, setEditing] = useState(false)
@@ -100,6 +101,36 @@ export function CodeViewer() {
    * make Keep mine claim to be deciding something it had not been told.
    */
   const [saveConflict, setSaveConflict] = useState(false)
+  /**
+   * Whether the workbook's grid is editable, and the edits typed into it.
+   *
+   * The list lives here rather than inside the grid for the same reason the text buffer does: the dirty
+   * dot, the Save button and the conflict banner are this pane's chrome, and each of them needs one answer
+   * to "is this file unsaved". The grid is handed the list to draw and a callback to add to it — never a
+   * save, and never the file on disk.
+   */
+  const [workbookEditing, setWorkbookEditing] = useState(false)
+  const [workbookEdits, setWorkbookEdits] = useState<SpreadsheetEdit[]>([])
+  /**
+   * The mtime the workbook's edits are based on.
+   *
+   * Sent with every guarded save and moved to what a write reported, exactly as the text editor's is, so
+   * that a second save in a row is checked against what the first one left rather than against the bytes
+   * that were loaded before it.
+   */
+  const [workbookMtime, setWorkbookMtime] = useState<number | null>(null)
+  /**
+   * The fidelity warning, and whether it has been answered.
+   *
+   * Two flags rather than one because the confirmation is one-time per file: cancelling leaves the grid
+   * read-only and asks again on the next attempt, while continuing is remembered so that a user who goes
+   * back into the grid does not have to agree to the same sentence twice. Both are dropped when the path
+   * changes — a confirmation about one file says nothing about the next.
+   */
+  const [workbookPrompt, setWorkbookPrompt] = useState(false)
+  const [workbookConfirmed, setWorkbookConfirmed] = useState(false)
+  /** What the last save did not keep, for the caption. Wording is `savedLossNotice`'s. */
+  const [workbookSaveNote, setWorkbookSaveNote] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // The edit-mode gutter, moved by copying the textarea's scroll offset rather than by scrolling itself:
   // the textarea owns the scroll position in that mode, and this is the element told about it.
@@ -150,7 +181,18 @@ export function CodeViewer() {
   // Neither an image nor a workbook has characters to put in a textarea, so neither offers the editor.
   // This is the only place the two are treated alike, and they are alike for exactly this reason.
   const editable = selectedFile !== null && image === null && spreadsheet === null && canEdit(readCode)
-  const dirty = isDirty(baseline, buffer)
+  // A workbook's unsaved work is its edit list and a text file's is its characters, and only one of the
+  // two is ever non-empty — so the dot, the Save button and the store's dirty flag all mean the same thing
+  // in both panes without either of them having to know which kind is open.
+  const dirty = isDirty(baseline, buffer) || workbookEdits.length > 0
+  /**
+   * What a save of this workbook would not preserve, or null when nothing is at risk.
+   *
+   * Assembled from the fidelity of the read the grid was drawn from, and from the probe's measurements
+   * rather than from a general fear of writers — see `lossNotice`. This is the sentence the confirmation
+   * shows, and it exists as a value here so the same one is used to decide whether to ask at all.
+   */
+  const workbookLoss = spreadsheet === null ? null : lossNotice(spreadsheet.fidelity)
 
   const showingDiff = selectedChange !== null
 
@@ -307,7 +349,13 @@ export function CodeViewer() {
     // no buffer to hold it and no edit to lose. It is skipped rather than adopted as a string, which is
     // also why opening a workbook over an unsaved buffer cannot raise a conflict banner — the buffer is
     // dropped when the path changes, and a path change is the only way to reach this branch.
-    if (spreadsheetOf(file.data)) return
+    if (spreadsheetOf(file.data)) {
+      // A workbook's grid holds no characters to adopt, but it does have a baseline: every arriving read
+      // is the current state of the file, so its mtime is what the next save from this grid has to be
+      // checked against. Without this the first save would be unguarded.
+      setWorkbookMtime(file.data.baselineMtime ?? null)
+      return
+    }
     const content = file.data.content
     // A read with no text is a read this machinery has nothing to do with. The two guards above cover the
     // kinds this pane draws itself; this one covers the shape of the result rather than the kind, and it
@@ -331,6 +379,14 @@ export function CodeViewer() {
     setConflicted(false)
     setSaveConflict(false)
     setEditing(false)
+    // A workbook's editing state belongs to one path for exactly the same reason, and the confirmation
+    // goes with it: it was about the file that has just been closed.
+    setWorkbookEditing(false)
+    setWorkbookEdits([])
+    setWorkbookMtime(null)
+    setWorkbookPrompt(false)
+    setWorkbookConfirmed(false)
+    setWorkbookSaveNote(null)
     // A new file starts in Code, the way an opened file always has: the preview is a choice about the
     // file in front of the user, and a choice made about one file is not a default for the next.
     setView('code')
@@ -388,13 +444,97 @@ export function CodeViewer() {
     [buffer, rootPath, save, selectedFile]
   )
 
-  saveRef.current = () => void onSave()
+  /**
+   * Record one cell's typing.
+   *
+   * Stable across renders on purpose: the grid's rows are memoized on their props, and a callback whose
+   * identity changed every render would redraw every row on every keystroke — which is the cost the memo
+   * exists to avoid. What the cell displayed is passed along with the typing, because only the pane knows
+   * it and the collector needs it to tell a real edit from a cell typed back to what it already said.
+   */
+  const onWorkbookEdit = useCallback((edit: SpreadsheetEdit, displayed: string) => {
+    setWorkbookEdits((current) => recordEdit(current, edit, displayed))
+  }, [])
+
+  /**
+   * Save the workbook's edits, guarded by the mtime the grid was drawn from.
+   *
+   * The same shape as the text save and for the same reasons: `force` is only ever true on the second,
+   * deliberate attempt after a conflict has been shown, a failure is branched on by code rather than by
+   * message, and a success clears the edits so the file stops being dirty while main's own change event
+   * refetches it — which is what redraws the grid from the bytes that are actually on disk.
+   *
+   * The caption note is computed here, from the fidelity that was in hand when the edits were made.
+   * This is the only moment at which the loss is knowable: once the new bytes have been read, a chart the
+   * save did not write back is simply a chart the file does not have, and nothing in the fresh read can
+   * say it was ever there.
+   */
+  const onSaveWorkbook = useCallback(
+    async (force = false) => {
+      if (selectedFile === null || workbookEdits.length === 0) return
+      setSaveError(null)
+      try {
+        const written = await saveSpreadsheet.mutateAsync({
+          path: selectedFile,
+          edits: workbookEdits,
+          // Absent rather than null when there is no baseline, exactly as the text save sends it: the field
+          // means "compare against this", and an absent one is what an unguarded write looks like.
+          ...(workbookMtime === null ? {} : { baselineMtime: workbookMtime }),
+          ...(force ? { force: true } : {}),
+        })
+
+        setWorkbookSaveNote(
+          savedLossNotice({
+            // From the read the edits were made against, because the refetch that follows describes the
+            // file as it now is — and a chart is absent from it either way.
+            hadCharts: spreadsheet?.fidelity.hasCharts === true,
+            replacedFormulas: written.replacedFormulas,
+          })
+        )
+        setWorkbookEdits([])
+        // The mtime this write reported, so the next save in a row is guarded against what it left rather
+        // than against the bytes the grid was originally drawn from.
+        setWorkbookMtime(written.mtimeMs)
+        setSaveConflict(false)
+        // Asked for explicitly rather than waited for. The text editor does not need this — its buffer
+        // already holds the text it just wrote — but a grid's displayed values come from the read, so
+        // clearing the edits leaves it showing the file as it was until a read lands. Main's own change
+        // event would usually bring one; this makes the grid correct whether or not it arrives.
+        void conveyor.workspace.readFile.invalidate({ path: selectedFile })
+      } catch (err) {
+        // Branched on the code, never on the message. A refused write is its own state here too: the edits
+        // are still the user's, the disk still holds the other version, and the banner's two answers are
+        // to take the disk or to overwrite it deliberately.
+        const code = err instanceof ConveyorError ? err.code : 'UNKNOWN'
+        if (code === 'WRITE_CONFLICT') setSaveConflict(true)
+        else setSaveError(code)
+      }
+    },
+    [saveSpreadsheet, selectedFile, spreadsheet, workbookEdits, workbookMtime]
+  )
+
+  /**
+   * The save the pane's one Save button, its one keystroke and its banner's “Keep mine” all reach.
+   *
+   * Which of the two savers runs is decided by what the read returned rather than by which mode the pane is
+   * in, and that is deliberate: a conflict raised by a save has to stay answerable after the user has
+   * walked away from the grid, and a dispatcher keyed on the open file answers it the same way whether or
+   * not the fields are still on screen.
+   */
+  const saveOpenFile = useCallback(
+    (force = false) => (spreadsheet === null ? onSave(force) : onSaveWorkbook(force)),
+    [onSave, onSaveWorkbook, spreadsheet]
+  )
+
+  saveRef.current = () => void saveOpenFile()
 
   // Ctrl+S, while editing. Bound to the document rather than to the textarea so it works wherever the
-  // focus happens to be inside the pane — a save that only fires when the caret is in one specific
-  // element is a save the user cannot rely on.
+  // focus happens to be inside the pane — a save that only fires when the caret is in one specific element
+  // is a save the user cannot rely on. A grid of fields is that case at its widest: there are as many
+  // places for the focus to be as there are cells, and a keystroke that only worked from one of them would
+  // be a keystroke that usually did nothing.
   useEffect(() => {
-    if (!editing) return
+    if (!editing && !workbookEditing) return
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
@@ -403,9 +543,16 @@ export function CodeViewer() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [editing])
+  }, [editing, workbookEditing])
 
-  /** Refetch the file, dropping the buffer. Reload is the user choosing the disk over their edits. */
+  /**
+   * Refetch the file, dropping whatever the pane is holding. Reload is the user choosing the disk.
+   *
+   * Both kinds are dropped, because both are the same choice: a text buffer's characters and a workbook's
+   * edit list are unsaved work, and the button that takes the disk over one takes it over the other. The
+   * grid follows the read that lands: with no edit left to show, a field falls back to the value the file
+   * now has.
+   */
   const reload = useCallback(() => {
     setConflicted(false)
     setSaveConflict(false)
@@ -415,6 +562,9 @@ export function CodeViewer() {
     setBuffer(null)
     setBaseline(null)
     setBaselineMtime(null)
+    setWorkbookEdits([])
+    setWorkbookMtime(null)
+    setWorkbookSaveNote(null)
     if (selectedFile) void conveyor.workspace.readFile.invalidate({ path: selectedFile })
   }, [selectedFile])
 
@@ -427,10 +577,11 @@ export function CodeViewer() {
    * are a text file's chrome, and the disabled `read-only` fallback would say something different — that
    * the file was refused — when the truth is that an editor has nothing here to hold.
    *
-   * A workbook keeps the line but not the fallback. The path is worth showing — it is how a reader knows
-   * which of several similar files is open — and a grid has no dirty dot to have, so the line is the path
-   * and nothing else. What it must not show is `read-only`: that label is the viewer saying it declined
-   * to open a text file, and a workbook was never a text file to decline.
+   * A workbook keeps all of it, and the dot means the same thing there: its unsaved work is its edit list.
+   * What it must not show is `read-only`: that label is the viewer saying it declined to open a *text*
+   * file, and a workbook was never a text file to decline. The two toggles are separate controls rather
+   * than one with a mode, because what they open is not the same thing — one holds characters and the other
+   * holds values — and a single button would have to pick a noun for one of them.
    */
   const toolbar = !showingDiff && selectedFile && image === null && (
     <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-3">
@@ -479,13 +630,52 @@ export function CodeViewer() {
         </div>
       )}
 
-      {editing && (
-        <Button variant="ghost" size="icon-xs" aria-label="Save file" disabled={!dirty} onClick={() => void onSave()}>
+      {(editing || workbookEditing) && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Save file"
+          disabled={!dirty}
+          onClick={() => void saveOpenFile()}
+        >
           <Save />
         </Button>
       )}
 
-      {editable ? (
+      {spreadsheet !== null ? (
+        /*
+          The workbook's toggle: the same affordance as the text editor's, with one thing in front of it.
+
+          Nothing about a workbook is a secret — the grid is a field per shown cell because a value is all
+          this pane can change, and it says so by being fields rather than by being a form with options. The
+          confirmation comes first because a save is not undoable, and the honest moment to say what one will
+          not keep is before the user has typed anything worth keeping.
+        */
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={workbookEditing ? 'Stop editing the workbook' : 'Edit this workbook'}
+          aria-pressed={workbookEditing}
+          onClick={() => {
+            // Leaving the grid keeps the edits exactly as they are: the unsaved values stay recorded, the
+            // dirty dot stays, and coming back finds the same text in the same cells. Only closing the file
+            // or a Reload drops them.
+            if (workbookEditing) {
+              setWorkbookEditing(false)
+              return
+            }
+            // The one-time confirmation. Cancelling leaves the grid read-only with nothing recorded, and
+            // the next attempt asks again — which is what makes refusing free.
+            if (workbookLoss !== null && !workbookConfirmed) {
+              setWorkbookPrompt(true)
+              return
+            }
+            setWorkbookEditing(true)
+          }}
+        >
+          {workbookEditing ? <Lock /> : <Pencil />}
+        </Button>
+      ) : editable ? (
         <Button
           variant="ghost"
           size="icon-xs"
@@ -506,10 +696,11 @@ export function CodeViewer() {
         >
           {editing ? <Lock /> : <Pencil />}
         </Button>
-      ) : spreadsheet !== null ? null : (
+      ) : (
         // A file the reader refused: there are no contents to edit, and an editor over an empty buffer
-        // would overwrite a file nobody has seen. A workbook takes the null branch above rather than this
-        // one: nothing was refused, so there is nothing to say about a refusal.
+        // would overwrite a file nobody has seen. A workbook never reaches this branch — it has a toggle of
+        // its own above, because a grid of values is something this pane can change, and `read-only` would
+        // be a claim about a refusal that did not happen.
         <span className="shrink-0 text-[10.5px] text-muted-foreground" title="Too large to edit">
           read-only
         </span>
@@ -594,11 +785,53 @@ export function CodeViewer() {
           {toolbar}
 
           {/*
+            The confirmation before the first edit of a workbook, and the only place in this pane where a
+            loss is stated *before* it can happen. It is raised from the read's own fidelity report and
+            worded by `lossNotice`, which names what this particular file will not keep — measured against
+            this writer rather than guessed at — and it is asked once per file, because a user who has
+            already agreed to it is not helped by being asked again.
+
+            Cancel is not a "no" that needs remembering: it closes the prompt, records nothing and leaves
+            the grid read-only, so the next attempt simply asks again. That is what lets the question stay
+            honest for the whole session instead of becoming a dialog to dismiss.
+          */}
+          {workbookPrompt && workbookLoss !== null && (
+            <div
+              role="alert"
+              className="flex shrink-0 flex-wrap items-center gap-2 border-b border-brand/40 bg-brand-soft/40 px-3 py-1.5 text-[11.5px]"
+            >
+              <TriangleAlert className="size-3.5 shrink-0 text-brand" />
+              <span className="min-w-0 flex-1">{workbookLoss}</span>
+              <Button variant="outline" size="sm" onClick={() => setWorkbookPrompt(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setWorkbookPrompt(false)
+                  // Remembered, so that leaving the grid and coming back does not raise it again. It is the
+                  // same file with the same contents, and the answer has not changed.
+                  setWorkbookConfirmed(true)
+                  setWorkbookEditing(true)
+                }}
+              >
+                Continue
+              </Button>
+            </div>
+          )}
+
+          {/*
             A conflict reported by a *save*: the disk changed between the read and this write, so main
             refused it. Distinct from the banner below, and answered differently — the buffer is still
             unsaved and the disk still holds the other version, so the two ways out are to take the
             disk (Reload) or to overwrite it on purpose. Keep mine re-sends with `force`, which is a
             second deliberate click rather than an inference from the failure.
+
+            One banner for both kinds of file, deliberately: a workbook edit list and a text buffer raise
+            the same conflict for the same reason, and the two answers mean the same thing in both. Keep
+            mine goes through the same dispatcher the Save button does, so it re-sends whichever file is
+            open — with the edits or the characters that are still unsaved in it.
           */}
           {saveConflict && (
             <div
@@ -612,7 +845,7 @@ export function CodeViewer() {
               <Button variant="outline" size="sm" onClick={reload}>
                 Reload
               </Button>
-              <Button variant="outline" size="sm" onClick={() => void onSave(true)}>
+              <Button variant="outline" size="sm" onClick={() => void saveOpenFile(true)}>
                 Keep mine
               </Button>
             </div>
@@ -662,16 +895,29 @@ export function CodeViewer() {
             <ImageView image={image} alt={fileName} />
           ) : spreadsheet !== null ? (
             /*
-              A workbook, drawn as a grid. Read-only by construction, like the image branch above and for
-              a related reason: there is nothing here that could be typed into, so there is no mode to be
-              in and no toggle to offer. The gutter and the backdrop are as absent as they are for a
-              picture — they number lines and paint tokens, and a table has neither.
+              A workbook, drawn as a grid of the file's own values. The gutter and the backdrop are as
+              absent as they are for a picture — they number lines and paint tokens, and a table has
+              neither.
+
+              What the grid may change is exactly one thing: the value of a cell that is already shown.
+              There is no formula to author, no style to set, and no row or column to insert — a ragged row
+              stays ragged — because each of those is a decision about the shape of a workbook rather than
+              about a value, and this pane does not make them.
 
               `key` on the path, so opening another workbook remounts the grid and the sheet on screen is
               sheet one of the file that is actually open. Without it React would keep the old component's
-              state and a reader could land on sheet four of a workbook they had never seen.
+              state and a reader could land on sheet four of a workbook they had never seen. State that
+              belongs to the file rather than to the grid — the edits, the baseline, the confirmation — is
+              held above and dropped when the path changes, for the same reason.
             */
-            <SpreadsheetView key={selectedFile} read={spreadsheet} />
+            <SpreadsheetView
+              key={selectedFile}
+              read={spreadsheet}
+              editing={workbookEditing}
+              edits={workbookEdits}
+              onEdit={onWorkbookEdit}
+              saveNote={workbookSaveNote}
+            />
           ) : editing && buffer !== null ? (
             <>
               {/*

@@ -50,9 +50,10 @@ export interface ParsedSpreadsheet extends SpreadsheetSheets {
  * wrong, rather than as a bare `as` at the call site where the reason would be lost.
  *
  * Recorded as a defect in the dependency rather than hidden: it is the first thing to re-check if
- * exceljs ever republishes its types.
+ * exceljs ever republishes its types. Exported because the write path loads from bytes too, and a second
+ * copy of this explanation next to a second alias would be the same defect documented twice.
  */
-type WorkbookBytes = Parameters<ExcelJS.Workbook['xlsx']['load']>[0]
+export type WorkbookBytes = Parameters<ExcelJS.Workbook['xlsx']['load']>[0]
 
 /**
  * A worksheet, as read by what exceljs actually exposes rather than by what it declares.

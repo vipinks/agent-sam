@@ -89,6 +89,10 @@ const MANIFEST: Record<string, Record<string, string>> = {
     // already knows. Both commands, so the client dispatches them the way main registered them.
     openRoot: 'command',
     writeFile: 'command',
+    // The workbook write: a command, like the text one above, so the client dispatches it the way main
+    // registered it. Listed even though only the spreadsheet suites stub it, because an unlisted member is
+    // dispatched by the client's Proxy as something else rather than failing loudly.
+    writeSpreadsheet: 'command',
   },
   terminal: { execute: 'stream', shell: 'query' },
   llm: { chat: 'stream' },

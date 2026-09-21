@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ConveyorError } from 'electron-conveyor/react'
 import { CodeViewer } from '@/app/components/workbench/code-viewer'
@@ -11,11 +12,14 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
 /**
  * The viewer with a workbook open.
  *
- * What only a DOM test can see is what the pane does with the sheets main sent: one tab per sheet, the
- * sheet on screen swapping when a tab is pressed, the fidelity line, and — the part this turn is most
- * likely to get wrong — that no edit affordance appears anywhere. Whether a workbook *parses*, what its
- * caps leave out and which codes its refusals carry are decided in main and tested there
- * (`tests/workspace/spreadsheet-read-test.ts`, `testing/spreadsheet-rules.test.ts`).
+ * What only a DOM test can see is what the pane does with the sheets main sent — one tab per sheet, the
+ * sheet on screen swapping when a tab is pressed, the fidelity line — and, since editing arrived, how
+ * the grid is opened: that the loss is named before the first edit, that cancelling leaves it read-only,
+ * that a cell's typing reaches the bridge as an edit list plus the baseline the read handed over, and
+ * that the two banners answer a refused save. Whether a workbook *parses*, what its caps leave out, which
+ * codes its refusals carry and what a save actually preserves are decided in main and tested there
+ * (`tests/workspace/spreadsheet-read-test.ts`, `tests/workspace/spreadsheet-write-test.ts`,
+ * `testing/spreadsheet-rules.test.ts`, `testing/spreadsheet-edit-rules.test.ts`).
  *
  * Mounted with the workspace-change subscription, because that lives at the workbench rather than in the
  * viewer: rendering the viewer alone would leave the refetch case with no listener at all.
@@ -24,6 +28,7 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
 const ROOT = 'C:/w'
 const SHEET_PATH = 'C:/w/report.xlsx'
 const DISK_MTIME = 1_700_000_000_000
+const DISK_MTIME_2 = 1_700_000_000_999
 
 /**
  * A workbook result, shaped the way main sends one.
@@ -121,6 +126,23 @@ function reads(stub: BridgeStub): number {
   return stub.callsTo('workspace').filter((call) => call.method === 'readFile').length
 }
 
+/**
+ * Open the grid, through the confirmation this fixture raises.
+ *
+ * The fixture has formulas and a chart, so the toggle asks first — which is asserted on its own above
+ * rather than here — and continuing is what produces the fields. The first sheet's row 2 column 2 is the
+ * `a2` in the fixture.
+ */
+async function startEditingWorkbook(): Promise<HTMLInputElement> {
+  fireEvent.click(screen.getByLabelText('Edit this workbook'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+  return waitFor(() => {
+    const field = screen.queryByLabelText('First row 2 column 2')
+    if (field === null) throw new Error('the grid has not been opened yet')
+    return field as HTMLInputElement
+  })
+}
+
 beforeEach(() => {
   useWorkbenchStore.setState({
     activeActivity: 'files',
@@ -185,17 +207,22 @@ describe('a workbook in the viewer', () => {
     expect(caption?.textContent).toBe('12 formulas, 1 chart — preview only')
   })
 
-  it('offers no way to change anything', async () => {
+  it('offers a toggle of its own, and no field until the loss is confirmed', async () => {
     stubViewer()
     useWorkbenchStore.setState({ selectedFile: SHEET_PATH })
     const { container } = renderViewer()
 
     await screen.findByRole('group', { name: 'Sheets' })
 
-    // Not a toggle that is off, and not a field that is disabled: neither exists. Nor the `read-only`
-    // label, which is the viewer saying it declined to open a *text* file — a workbook was never one.
+    // A workbook has a toggle of its own rather than the text editor's — the two are never both offered,
+    // because a grid holds values and a textarea holds characters.
     expect(screen.queryByLabelText('Edit this file')).toBeNull()
     expect(screen.queryByLabelText('Stop editing')).toBeNull()
+    expect(screen.getByLabelText('Edit this workbook')).toBeTruthy()
+
+    // And nothing is writable yet: no field exists until the grid has been opened, and no Save button
+    // either, because there is nothing to save. Nor the `read-only` label, which is the viewer saying it
+    // declined to open a *text* file — a workbook was never one.
     expect(screen.queryByLabelText('Save file')).toBeNull()
     expect(screen.queryByText('read-only')).toBeNull()
     expect(container.querySelectorAll('textarea, input, [contenteditable]')).toHaveLength(0)
@@ -232,6 +259,9 @@ describe('a workbook in the viewer', () => {
     // for its size and nothing is corrupt.
     expect(await screen.findByText('report.xlsx is password protected')).toBeTruthy()
     expect(container.querySelector('table')).toBeNull()
+    // And it is never offered for editing: the pane has no grid to edit, because the read refused the
+    // container rather than the user.
+    expect(screen.queryByLabelText('Edit this workbook')).toBeNull()
   })
 
   it('names the two limits a workbook can hit', async () => {
@@ -245,6 +275,163 @@ describe('a workbook in the viewer', () => {
 
     expect(await screen.findByText('report.xlsx is too large to preview')).toBeTruthy()
     expect(container.textContent).toContain('caps workbooks at 8 MB')
+  })
+
+  it('names the loss before the first edit, and stays read-only when that is refused', async () => {
+    stubViewer()
+    useWorkbenchStore.setState({ selectedFile: SHEET_PATH })
+    const { container } = renderViewer()
+
+    await screen.findByRole('group', { name: 'Sheets' })
+    fireEvent.click(screen.getByLabelText('Edit this workbook'))
+
+    // The sentence is the probe's findings rather than a caution, and this fixture has both a chart and
+    // formulas: one is dropped outright by the writer, the other dies only in the cell an edit lands on.
+    const prompt = await screen.findByRole('alert')
+    expect(prompt.textContent).toContain('charts are not written back')
+    expect(prompt.textContent).toContain('a formula in a cell you edit is replaced by the value you type')
+    expect(prompt.textContent).toContain('formulas elsewhere are kept')
+    // Conditional formatting is deliberately not named: this file has none, and warning about it would be
+    // true of the writer and false of the save.
+    expect(prompt.textContent).not.toContain('duplicate-values')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    // Cancelling is not a decision to remember: nothing was recorded, no field appeared, and the prompt
+    // closed. Asking again is what makes refusing free.
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(container.querySelectorAll('textarea, input, [contenteditable]')).toHaveLength(0)
+    expect(screen.queryByLabelText('Save file')).toBeNull()
+    expect(container.textContent).toContain('12 formulas, 1 chart — preview only')
+
+    fireEvent.click(screen.getByLabelText('Edit this workbook'))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+  })
+
+  it('opens a field per shown cell once the loss is accepted, and saves the edits on Ctrl+S', async () => {
+    const stub = stubViewer({
+      writeSpreadsheet: () => ({ path: SHEET_PATH, mtimeMs: DISK_MTIME_2, replacedFormulas: 0 }),
+    })
+    useWorkbenchStore.setState({ selectedFile: SHEET_PATH })
+    renderViewer()
+
+    await screen.findByRole('group', { name: 'Sheets' })
+    const field = await startEditingWorkbook()
+
+    // A cell of the first sheet, named the way a reader of a spreadsheet counts: row 2, column 2 is the
+    // `a2` in the fixture, which is grid row 1 column 1 and so sheet row 2 column 2.
+    expect(field.value).toBe('a2')
+    fireEvent.change(field, { target: { value: '99' } })
+
+    // The dot is the store's flag as well as the pane's, so it is asserted through the store: a
+    // workbooks's unsaved work is its edit list.
+    await waitFor(() =>
+      expect(useWorkbenchStore.getState().editor).toEqual({ path: SHEET_PATH, dirty: true, externalNonce: 0 })
+    )
+
+    const readsBefore = reads(stub)
+    await userEvent.keyboard('{Control>}s{/Control}')
+
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('writeSpreadsheet'))
+    const written = stub.callsTo('workspace').find((call) => call.method === 'writeSpreadsheet')
+    expect(written?.args[0]).toEqual({
+      path: SHEET_PATH,
+      edits: [{ sheet: 0, row: 1, col: 1, value: '99' }],
+      baselineMtime: DISK_MTIME,
+    })
+
+    // Saved: the edits are gone, the file is clean, and the grid has been re-read rather than left
+    // showing the values it was drawn from.
+    await waitFor(() => expect(reads(stub)).toBeGreaterThan(readsBefore))
+    await waitFor(() => expect(screen.queryByLabelText('report.xlsx has unsaved changes')).toBeNull())
+    await waitFor(() =>
+      expect(useWorkbenchStore.getState().editor).toEqual({ path: SHEET_PATH, dirty: false, externalNonce: 0 })
+    )
+  })
+
+  it('answers a refused workbook save with the same banner, and forces only on a second click', async () => {
+    const stub = stubViewer({
+      writeSpreadsheet: (input) => {
+        const { force } = input as { force?: boolean }
+        if (!force) throw new ConveyorError('WRITE_CONFLICT', 'changed on disk')
+        return { path: SHEET_PATH, mtimeMs: DISK_MTIME_2, replacedFormulas: 0 }
+      },
+    })
+    useWorkbenchStore.setState({ selectedFile: SHEET_PATH })
+    renderViewer()
+
+    await screen.findByRole('group', { name: 'Sheets' })
+    const field = await startEditingWorkbook()
+    fireEvent.change(field, { target: { value: '99' } })
+    await userEvent.keyboard('{Control>}s{/Control}')
+
+    // The same banner a text conflict gets, because it is the same conflict: the disk moved and the save
+    // was declined rather than written.
+    expect(await screen.findByText(/changed on disk since you opened it, so your save was not written/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }))
+
+    await waitFor(() =>
+      expect(
+        stub
+          .callsTo('workspace')
+          .filter((call) => call.method === 'writeSpreadsheet' && (call.args[0] as { force?: boolean }).force === true)
+      ).toHaveLength(1)
+    )
+    // And the force went along with the edits, rather than being a licence to write nothing.
+    const forced = stub
+      .callsTo('workspace')
+      .find((call) => call.method === 'writeSpreadsheet' && (call.args[0] as { force?: boolean }).force === true)
+    expect((forced?.args[0] as { edits: unknown[] }).edits).toEqual([{ sheet: 0, row: 1, col: 1, value: '99' }])
+  })
+
+  it('takes the disk on Reload, dropping the edits and re-reading the file', async () => {
+    const stub = stubViewer({
+      writeSpreadsheet: () => {
+        throw new ConveyorError('WRITE_CONFLICT', 'changed on disk')
+      },
+    })
+    useWorkbenchStore.setState({ selectedFile: SHEET_PATH })
+    renderViewer()
+
+    await screen.findByRole('group', { name: 'Sheets' })
+    const field = await startEditingWorkbook()
+    fireEvent.change(field, { target: { value: '99' } })
+    await userEvent.keyboard('{Control>}s{/Control}')
+    await screen.findByRole('button', { name: 'Reload' })
+
+    const readsBefore = reads(stub)
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+
+    await waitFor(() => expect(reads(stub)).toBeGreaterThan(readsBefore))
+    await waitFor(() => expect(screen.queryByLabelText('report.xlsx has unsaved changes')).toBeNull())
+    // The field shows the file again rather than the text that was typed over it: the value is the read's
+    // with no edit left to show, and the banner's question is no longer open.
+    await waitFor(() => expect((screen.getByLabelText('First row 2 column 2') as HTMLInputElement).value).toBe('a2'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('says in the caption what the save did not keep', async () => {
+    stubViewer({
+      writeSpreadsheet: () => ({ path: SHEET_PATH, mtimeMs: DISK_MTIME_2, replacedFormulas: 1 }),
+    })
+    useWorkbenchStore.setState({ selectedFile: SHEET_PATH })
+    const { container } = renderViewer()
+
+    await screen.findByRole('group', { name: 'Sheets' })
+    const field = await startEditingWorkbook()
+    fireEvent.change(field, { target: { value: '99' } })
+    await userEvent.keyboard('{Control>}s{/Control}')
+
+    // Both losses, in the caption's own line: the chart this fixture's fidelity reported, and the one
+    // formula main counted while it still had the cells in hand. The chart is the half the fresh read
+    // cannot report — it describes the file as it now is, and an absence is not evidence.
+    await waitFor(() =>
+      expect(container.querySelector('[data-slot="spreadsheet-caption"]')?.textContent).toContain(
+        'saved: charts were not kept; 1 formula in the cells you edited was replaced by your value'
+      )
+    )
   })
 })
 

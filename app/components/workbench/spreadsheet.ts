@@ -53,6 +53,22 @@ export interface SpreadsheetRead {
 }
 
 /**
+ * One cell edit, as the pane collects and sends it.
+ *
+ * Restated here rather than imported from the protocol module, exactly as `SpreadsheetRead` is and for
+ * the same reason: this is what the renderer *sends*, and the two have to be changed together on
+ * purpose. The indices are the grid's own — the sheet's position in the tab row, and the row and column
+ * as the table drew them, counting from zero — which is the point: the pane names the cell the user
+ * could see, and main is the side that knows where that lands in a workbook.
+ */
+export interface SpreadsheetEdit {
+  sheet: number
+  row: number
+  col: number
+  value: string
+}
+
+/**
  * The workbook a read result carries, as a type predicate so a caller can narrow with it.
  *
  * Takes `unknown` rather than the query's own result type, so the component does not have to tell the
@@ -96,8 +112,14 @@ export function spreadsheetOf(data: unknown): data is SpreadsheetRead {
  *
  * Pluralized one way and one way only, because a caption is prose and "1 formulas" is the kind of thing
  * a reader stops trusting the rest of the sentence over.
+ *
+ * `saveNote` is the one addition a save makes, and it goes last because it is the newest fact: what this
+ * save did *not* keep, from `savedLossNotice`. A save rewrites the whole workbook, so a file that had a
+ * chart in it arrives back without one, and the caption is where that is said — the fresh read cannot
+ * say it, because it describes the file as it now is and cannot remember what was in it before. Null,
+ * the default, is the ordinary case and leaves the sentence exactly as it has always been.
  */
-export function fidelityCaption(fidelity: SpreadsheetFidelity): string {
+export function fidelityCaption(fidelity: SpreadsheetFidelity, saveNote: string | null = null): string {
   const parts: string[] = []
 
   if (fidelity.formulaCount > 0) {
@@ -108,8 +130,8 @@ export function fidelityCaption(fidelity: SpreadsheetFidelity): string {
   }
   if (fidelity.hasConditionalFormatting) parts.push('conditional formatting')
 
-  if (parts.length === 0) return 'Preview only'
-  return `${parts.join(', ')} — preview only`
+  const base = parts.length === 0 ? 'Preview only' : `${parts.join(', ')} — preview only`
+  return saveNote === null ? base : `${base} — ${saveNote}`
 }
 
 /** `one` singular, `many` plural. */
@@ -157,4 +179,119 @@ export function omittedSheetsNote(read: SpreadsheetRead): string | null {
 /** The number of columns the widest row actually carries, which is what the note quotes. */
 function widestRow(sheet: SpreadsheetSheet): number {
   return sheet.rows.reduce((widest, row) => Math.max(widest, row.length), 0)
+}
+
+/**
+ * The edit list with one more typing recorded in it, or with a cell's entry removed.
+ *
+ * The rule that keeps "dirty" honest. Typing a value into a cell and then typing back what the cell
+ * already displayed leaves nothing to save, and holding that as an edit would put a dirty dot on the
+ * file and rewrite the cell with the value it already held — a change the user did not make. So a value
+ * equal to the displayed one *removes* the entry rather than adding it, and re-typing the same value
+ * into an already-edited cell replaces the entry rather than duplicating it. The comparison is by exact
+ * characters, like the text editor's own baseline comparison: whitespace is a thing a user can type.
+ *
+ * Order is the order the cells were visited and means nothing: main applies by address, so two edits
+ * cannot collide and the position of an entry in the list is not a fact about the file.
+ */
+export function recordEdit(
+  edits: readonly SpreadsheetEdit[],
+  edit: SpreadsheetEdit,
+  displayed: string
+): SpreadsheetEdit[] {
+  const without = edits.filter(
+    (existing) => existing.sheet !== edit.sheet || existing.row !== edit.row || existing.col !== edit.col
+  )
+  return edit.value === displayed ? without : [...without, edit]
+}
+
+/**
+ * The edits of one sheet, as the grid needs them: by row, then by column, the text typed into each.
+ *
+ * A map of maps rather than a search per cell, because the grid asks this question once per cell it
+ * draws and a lookup that scanned the list would be the whole edit list times the whole sheet. It is
+ * also what makes the drawing cheap to keep correct: the row a user is typing in is the only row whose
+ * entry changes identity, so the memoized rows either side of it are not redrawn at all.
+ *
+ * A cell can appear only once — `recordEdit` guarantees it — and a later entry still wins if one ever
+ * did, because the alternative would be two answers to one cell and the grid would have to choose.
+ */
+export function editsByCell(edits: readonly SpreadsheetEdit[], sheet: number): Map<number, Map<number, string>> {
+  const byRow = new Map<number, Map<number, string>>()
+
+  for (const edit of edits) {
+    if (edit.sheet !== sheet) continue
+    const row = byRow.get(edit.row) ?? new Map<number, string>()
+    row.set(edit.col, edit.value)
+    byRow.set(edit.row, row)
+  }
+
+  return byRow
+}
+
+/**
+ * What a save will not preserve, for the file that is open — the sentence before the first edit.
+ *
+ * Every clause is a measurement rather than a caution, and they were taken by round-tripping real
+ * workbooks through this writer (`.preview/phase20-probe/`, whose logs are the record). What survived:
+ * formulas as formulas, their cached results, styles — including the style of the very cell an edit
+ * lands on — sheet order, and seven of the eight conditional-formatting rule types. What did not:
+ * charts, every one of them, whichever cell the save touched; `duplicateValues` rules; and a formula in
+ * a cell an edit lands on, which is replaced by the literal value typed into it.
+ *
+ * So the sentence is assembled from the flags rather than fixed, and it names only what this file
+ * actually has: warning a file with no charts that charts will be lost would be true of the writer and
+ * false of the save, which is the sort of warning a reader learns to skip. Null means nothing here is at
+ * risk, and the pane then enters edit mode without asking.
+ *
+ * The qualifiers stay attached — "formulas elsewhere are kept" — because the point of naming a loss is
+ * to be believed, and a reader who is told formulas die and then sees them all still there has been
+ * told something untrue about their file.
+ */
+export function lossNotice(fidelity: SpreadsheetFidelity): string | null {
+  const lost: string[] = []
+
+  if (fidelity.hasCharts) lost.push('charts are not written back')
+  if (fidelity.hasFormulas) {
+    lost.push('a formula in a cell you edit is replaced by the value you type (formulas elsewhere are kept)')
+  }
+  if (fidelity.hasConditionalFormatting) {
+    lost.push('duplicate-values conditional-formatting rules are not written back (the other rule types are)')
+  }
+
+  if (lost.length === 0) return null
+  return `Saving rewrites the whole workbook: ${lost.join('; ')}.`
+}
+
+/**
+ * What the save that just finished did not keep, for the caption — the same measurements, reported
+ * after the fact rather than before it.
+ *
+ * Both clauses come from facts the pane is holding rather than from a guess about the file: whether the
+ * workbook it saved had charts, which is the fidelity of the read the edits were made against, and how
+ * many formulas the edits landed on, which main counted while it still had the cells in hand. The file
+ * itself cannot be asked afterwards — a chart is simply absent from the new bytes, and an absence is not
+ * evidence of anything.
+ *
+ * `duplicateValues` rules are deliberately not mentioned here. Whether a workbook had one is not a fact
+ * the read reports — it reports that conditional formatting is present, not which rule types — so the
+ * only honest place to name them is the confirmation before the first edit, which is exactly where they
+ * are named.
+ *
+ * Null when the save discarded neither, so an ordinary save adds nothing to a caption that already
+ * describes the file correctly.
+ */
+export function savedLossNotice(input: { hadCharts: boolean; replacedFormulas: number }): string | null {
+  const lost: string[] = []
+
+  if (input.hadCharts) lost.push('charts were not kept')
+  if (input.replacedFormulas > 0) {
+    const count = input.replacedFormulas
+    const formula = plural(count, 'formula')
+    lost.push(
+      `${count} ${formula} in the cells you edited ${count === 1 ? 'was' : 'were'} replaced by your value${count === 1 ? '' : 's'}`
+    )
+  }
+
+  return lost.length === 0 ? null : `saved: ${lost.join('; ')}`
 }

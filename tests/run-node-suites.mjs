@@ -58,6 +58,7 @@ const SUITES = [
   { name: 'write baseline', src: 'workspace/write-baseline-test.ts' },
   { name: 'image read', src: 'workspace/image-read-test.ts' },
   { name: 'spreadsheet read', src: 'workspace/spreadsheet-read-test.ts' },
+  { name: 'spreadsheet write', src: 'workspace/spreadsheet-write-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 

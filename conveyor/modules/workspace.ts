@@ -10,7 +10,9 @@ import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 import { IMAGE_TOO_LARGE, imageKindForPath, imageOverCap } from '../protocol/image'
 import { SPREADSHEET_TOO_LARGE, spreadsheetKindForPath, spreadsheetOverCap } from '../protocol/spreadsheet'
+import type { SpreadsheetEdit } from '../protocol/spreadsheet-edit'
 import { parseSpreadsheet } from './spreadsheet-parse'
+import { applySpreadsheetEdits } from './spreadsheet-write'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -52,27 +54,8 @@ export async function writeWorkspaceFile(
 ): Promise<{ path: string; mtimeMs: number | null }> {
   const target = resolveWorkspacePath(rootPath, requested)
 
-  // The guard runs before anything is created or written, so a refused write touches the disk not at
-  // all — no directory made, no file truncated, no event raised. `stat` rather than a cached value:
-  // the whole point is to ask the disk at the last possible moment, because the window between
-  // reading and writing is exactly where the other writer gets in.
-  const baseline = options.baselineMtime ?? null
-  if (baseline !== null) {
-    let diskMtime: number | null = null
-    try {
-      diskMtime = (await stat(target)).mtimeMs
-    } catch {
-      // Absent, which `decideWrite` treats as the disk having moved rather than as unchanged.
-      diskMtime = null
-    }
-
-    if (decideWrite({ baselineMtime: baseline, diskMtime, force: options.force === true }) === WRITE_CONFLICT) {
-      throw new ConveyorError(
-        WRITE_CONFLICT,
-        `${requested} changed on disk since it was read, so it was not overwritten.`
-      )
-    }
-  }
+  // Before anything is created or written, so a refused write touches the disk not at all.
+  await guardAgainstStaleWrite(target, requested, options)
 
   try {
     // Recursive mkdir is idempotent, so this is also the common path where the directory exists.
@@ -100,11 +83,134 @@ export async function writeWorkspaceFile(
   return { path: target, mtimeMs }
 }
 
+/**
+ * The stale-baseline guard both write paths run, in the one place it is written down.
+ *
+ * It is a function rather than a block because the two paths that need it need exactly the same thing —
+ * text and a workbook differ in what gets written, not in when it may be — and a second copy of a
+ * concurrency rule is a second place for it to drift.
+ *
+ * The `stat` is deliberately not cached or taken earlier: the whole point is to ask the disk at the last
+ * possible moment, because the window between reading and writing is exactly where the other writer
+ * gets in. A file that has been deleted reads as absent rather than unchanged, which `decideWrite`
+ * treats as the disk having moved as far as it can. `force` is the user's deliberate override after a
+ * conflict has been shown to them, never an inference from one.
+ *
+ * `requested` is the name to report the refusal under, which is the caller's spelling of the file rather
+ * than the resolved path: the message is read by a person looking at a pane, and an absolute path they
+ * never typed is not what they would recognise.
+ */
+async function guardAgainstStaleWrite(
+  target: string,
+  requested: string,
+  options: { baselineMtime?: number | null; force?: boolean }
+): Promise<void> {
+  const baseline = options.baselineMtime ?? null
+  // Nothing was read, so there is nothing to conflict with: the unguarded path, unchanged.
+  if (baseline === null) return
+
+  let diskMtime: number | null = null
+  try {
+    diskMtime = (await stat(target)).mtimeMs
+  } catch {
+    // Absent, which `decideWrite` treats as the disk having moved rather than as unchanged.
+    diskMtime = null
+  }
+
+  if (decideWrite({ baselineMtime: baseline, diskMtime, force: options.force === true }) === WRITE_CONFLICT) {
+    throw new ConveyorError(
+      WRITE_CONFLICT,
+      `${requested} changed on disk since it was read, so it was not overwritten.`
+    )
+  }
+}
+
+/**
+ * Write a workbook with a value-only edit list applied to what is on disk now.
+ *
+ * Stateless, and that is the design rather than an accident of how it was written: it re-reads the bytes
+ * every time, parses them, applies the list and writes the result, so there is no earlier version of the
+ * file held anywhere to go stale. The edit list describes a grid that was drawn from a read at some
+ * earlier moment, and the only version worth changing is the one the disk has now.
+ *
+ * The order is the read's, the parse's, then the guard, then the write. The guard cannot run earlier — it
+ * exists to close the window between reading and writing, and the parse and the serialization sit inside
+ * that window — and it must not run later, because a check after the bytes are written is a report rather
+ * than a guard. A refused save therefore leaves the file exactly as it was: nothing truncated, no event
+ * raised, and the existing `WRITE_CONFLICT` the pane already knows how to word.
+ *
+ * The path is the one the read returned and is treated the way `readFile` treats it: an absolute path a
+ * pane is looking at, not a path an agent composed. Containment is a rule about the paths the agent can
+ * name — which is why `writeWorkspaceFile` resolves its target under a root and this does not pretend to.
+ *
+ * The return carries the mtime to guard the *next* save with, exactly as the text write's does, plus the
+ * count of formulas the edits replaced. That count is the one fact about this save that the file can no
+ * longer tell anyone afterwards, so the caller is told rather than left to infer it.
+ */
+export async function writeSpreadsheetFile(
+  path: string,
+  edits: readonly SpreadsheetEdit[],
+  options: { baselineMtime?: number | null; force?: boolean } = {}
+): Promise<{ path: string; mtimeMs: number | null; replacedFormulas: number }> {
+  const requested = basename(path)
+
+  let bytes: Buffer
+  try {
+    bytes = await readFileFromDisk(path)
+  } catch {
+    // A workbook that is gone cannot be edited, and FILE_UNAVAILABLE is what the pane already words for
+    // a read that could not happen either.
+    throw new ConveyorError('FILE_UNAVAILABLE', 'This workbook could not be read.')
+  }
+
+  const applied = await applySpreadsheetEdits(bytes, edits)
+
+  await guardAgainstStaleWrite(path, requested, options)
+
+  try {
+    // Bytes rather than a string, which is the one way this write differs from the text one: it is
+    // already serialized, and re-encoding it as utf8 would corrupt it.
+    await writeFileToDisk(path, applied.bytes)
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new ConveyorError('WRITE_FAILED', `Could not write ${requested}. ${reason}`)
+  }
+
+  notifyWorkspaceChanged({ kind: 'written', path })
+
+  // The mtime this write left behind, so a caller guarding its next save has a baseline without a
+  // separate read. A stat that fails here is not worth failing the write over: the bytes are on disk,
+  // and a caller with no mtime simply writes unguarded next time.
+  let mtimeMs: number | null = null
+  try {
+    mtimeMs = (await stat(path)).mtimeMs
+  } catch {
+    mtimeMs = null
+  }
+
+  return { path, mtimeMs, replacedFormulas: applied.replacedFormulas }
+}
+
 /** One child of a listed directory. */
 const directoryEntrySchema = z.object({
   name: z.string(),
   path: z.string(),
   isDirectory: z.boolean(),
+})
+
+/**
+ * One cell edit, as it crosses the boundary.
+ *
+ * Validated for shape and sign only: an integer index at or above zero. The upper bound is deliberately
+ * not here — it is the grid's cap, and it belongs where the grid is, in `spreadsheet-write.ts`, against
+ * the same constants the read shaped that grid with. Writing it twice would be two places to change it
+ * and one to forget.
+ */
+const spreadsheetEditSchema = z.object({
+  sheet: z.number().int().min(0),
+  row: z.number().int().min(0),
+  col: z.number().int().min(0),
+  value: z.string(),
 })
 
 export const workspaceModule = defineModule({
@@ -364,5 +470,39 @@ export const workspaceModule = defineModule({
       })
       return { path: written.path, bytes: Buffer.byteLength(input.content, 'utf8'), mtimeMs: written.mtimeMs }
     }
+  ),
+
+  /**
+   * Write value-only cell edits into a workbook, guarded by the mtime it was read at.
+   *
+   * The renderer sends an edit list and a baseline and nothing else: no bytes, no formula, no style, and
+   * no instruction about what type a typed value takes. That is the boundary this command exists to
+   * keep — the pane knows what the user typed and where, and main owns the workbook, so the mapping from
+   * grid index to cell and the decision about what a typed string becomes both happen on this side.
+   *
+   * `baselineMtime` is optional on the wire and its absence is meaningful rather than a default, exactly
+   * as it is for a text write: a caller that never read the file keeps the unguarded behaviour. `force`
+   * is only ever set by a second, deliberate click after a conflict has been shown.
+   *
+   * The result is deliberately small — the path, the mtime the write left behind, and how many formulas
+   * the edits replaced. The last one is the only thing about this save that the file itself can no longer
+   * tell anyone, and the pane's caption says it out loud.
+   */
+  writeSpreadsheet: command(
+    z.object({
+      path: z.string().min(1),
+      edits: z.array(spreadsheetEditSchema),
+      /**
+       * The mtime the caller read, as a finite number — validated for the same reason the text write
+       * validates it, because an `NaN` would sail through a comparison and silently disable the guard.
+       */
+      baselineMtime: z.number().finite().optional(),
+      force: z.boolean().optional(),
+    }),
+    async ({ input }) =>
+      writeSpreadsheetFile(input.path, input.edits, {
+        baselineMtime: input.baselineMtime ?? null,
+        force: input.force === true,
+      })
   ),
 })
