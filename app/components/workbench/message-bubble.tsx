@@ -1,8 +1,8 @@
 import { memo } from 'react'
-import Markdown from 'react-markdown'
 import { TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AgentActionCard } from './agent-action-card'
+import { MarkdownContent } from './markdown'
 import { MentionChipRow } from './mention-chip'
 import { contextNoticeText } from './mentions'
 import type { AgentTurn } from './agent-session'
@@ -96,52 +96,6 @@ function ContextNoticeRow({ path, code }: { path: string; code: string }) {
         <span className="font-mono break-all text-foreground">{path}</span> {contextNoticeText(code)}{' '}
         <span className="font-mono">({code})</span>
       </p>
-    </div>
-  )
-}
-
-/**
- * Markdown for assistant turns. Styled through Tailwind on the surrounding element rather than a
- * plugin, so no CSS file is needed and the type scale stays the app's.
- */
-function MarkdownContent({ content }: { content: string }) {
-  if (!content) {
-    return <span className="text-muted-foreground">Thinking…</span>
-  }
-
-  return (
-    <div className="space-y-2.5 [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2">
-      <Markdown
-        components={{
-          p: ({ children }) => <p className="break-words whitespace-pre-wrap">{children}</p>,
-          ul: ({ children }) => <ul className="ml-4 list-disc space-y-1">{children}</ul>,
-          ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1">{children}</ol>,
-          h1: ({ children }) => <h1 className="text-[15px] font-semibold">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-[14px] font-semibold">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-[13px] font-semibold">{children}</h3>,
-          blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
-          ),
-          // Fenced blocks keep their own horizontal scroll so a long line cannot widen the bubble.
-          code: ({ children, className }) => (
-            <code className={cn('rounded bg-muted px-1 py-0.5 font-mono text-[12px]', className)}>{children}</code>
-          ),
-          pre: ({ children }) => (
-            <pre className="overflow-x-auto rounded-md border border-border bg-muted p-2.5 font-mono text-[12px]">
-              {children}
-            </pre>
-          ),
-          table: ({ children }) => (
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-[12px]">{children}</table>
-            </div>
-          ),
-          th: ({ children }) => <th className="border border-border px-2 py-1 text-left font-medium">{children}</th>,
-          td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
-        }}
-      >
-        {content}
-      </Markdown>
     </div>
   )
 }

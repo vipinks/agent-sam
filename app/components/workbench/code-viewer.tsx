@@ -12,6 +12,8 @@ import { gutterText } from './gutter'
 import { editorHighlightPlan, skipNote, utf8Bytes } from './highlight'
 import { useHighlightedCode } from './use-highlight'
 import { formatBytes, imageOf, type ImageRead } from './image'
+import { MarkdownContent } from './markdown'
+import { previewablePath } from './preview'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -61,6 +63,14 @@ export function CodeViewer() {
 
   /** True while the textarea is showing rather than the read-only render. */
   const [editing, setEditing] = useState(false)
+  /**
+   * Which of the two read-only views is showing: the source, or the file rendered.
+   *
+   * `code` is the default, so a markdown file looks exactly as it did before this existed, and a path
+   * that cannot be previewed has nothing to switch to. Ephemeral UI state rather than store state: it
+   * says how this pane is drawing one file, which is nobody else's business and not worth persisting.
+   */
+  const [view, setView] = useState<'code' | 'preview'>('code')
   /** The buffer. Null until something has been loaded to edit. */
   const [buffer, setBuffer] = useState<string | null>(null)
   /** What is believed to be on disk: the content last loaded, or last saved. */
@@ -131,6 +141,24 @@ export function CodeViewer() {
   const showingDiff = selectedChange !== null
 
   /**
+   * Whether this file offers the Code | Preview switch at all.
+   *
+   * Four things have to be true, and each of them is about what is actually on screen rather than
+   * about the path alone: the path has to be markdown (`previewablePath`), the pane has to be showing a
+   * file rather than a diff, the read has to have succeeded — a file the viewer could not read has
+   * nothing to render, so a preview of it would be a second way to show the same error — and it must not
+   * be an image, which this pane previews as bytes through a branch of its own.
+   */
+  const previewable =
+    !showingDiff &&
+    !file.error &&
+    !file.isLoading &&
+    image === null &&
+    selectedFile !== null &&
+    previewablePath(selectedFile)
+  const preview = previewable && view === 'preview'
+
+  /**
    * The read view's text, and its tokens.
    *
    * `buffer ?? disk` is the string this pane has always shown in its read-only branch, so the tokens
@@ -144,7 +172,9 @@ export function CodeViewer() {
    * than as a condition inside the render.
    */
   const readContent = buffer ?? file.data?.content ?? ''
-  const plainView = showingDiff || editing
+  // The preview is drawn, not tokenized: there are no tokens to paint, so none are computed while it is
+  // on screen — and, for the same reason, no note about a cap the preview does not have either.
+  const plainView = showingDiff || editing || preview
   const { plan, html } = useHighlightedCode(plainView ? null : selectedFile, plainView ? null : readContent)
   const highlightNote = plan === null ? null : skipNote(plan)
 
@@ -266,6 +296,9 @@ export function CodeViewer() {
     setConflicted(false)
     setSaveConflict(false)
     setEditing(false)
+    // A new file starts in Code, the way an opened file always has: the preview is a choice about the
+    // file in front of the user, and a choice made about one file is not a default for the next.
+    setView('code')
   }, [selectedFile])
 
   // Publish the dirty flag for the change handler, which lives outside React and cannot read state.
@@ -374,6 +407,38 @@ export function CodeViewer() {
         />
       )}
 
+      {/*
+        The Code | Preview switch, offered only for a file that can be rendered as markdown and only
+        while the editor is closed. Preview is read-only by construction — the way to type is to edit —
+        so the two are never both available, which is what keeps "the preview is not an editor" true by
+        the shape of the render rather than by a condition inside it.
+
+        The pressed state is on both buttons rather than on the pair, so a screen reader is told which
+        view is showing as well as what the other one would do.
+      */}
+      {previewable && !editing && (
+        <div role="group" aria-label="Preview mode" className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant={preview ? 'ghost' : 'secondary'}
+            size="xs"
+            aria-pressed={!preview}
+            title="Show the source"
+            onClick={() => setView('code')}
+          >
+            Code
+          </Button>
+          <Button
+            variant={preview ? 'secondary' : 'ghost'}
+            size="xs"
+            aria-pressed={preview}
+            title="Render the markdown"
+            onClick={() => setView('preview')}
+          >
+            Preview
+          </Button>
+        </div>
+      )}
+
       {editing && (
         <Button variant="ghost" size="icon-xs" aria-label="Save file" disabled={!dirty} onClick={() => void onSave()}>
           <Save />
@@ -387,6 +452,11 @@ export function CodeViewer() {
           aria-label={editing ? 'Stop editing' : 'Edit this file'}
           aria-pressed={editing}
           onClick={() => {
+            // Leaving to edit is leaving the preview first: the editor holds the characters, and a
+            // rendering of a file the user is in the middle of changing would be a picture of
+            // something that no longer exists. The view moves even when the toggle is going to be
+            // withdrawn, so coming back from the editor lands in Code rather than in a stale preview.
+            setView('code')
             // Leaving edit mode keeps the buffer exactly as it is: the unsaved text stays, the dirty dot
             // stays, and coming back finds the same characters. Only closing the file drops them.
             setEditing((current) => !current)
@@ -664,6 +734,30 @@ export function CodeViewer() {
                 </div>
               </div>
             </>
+          ) : preview ? (
+            /*
+              The preview: the file's own characters through the renderer the chat already uses, and
+              nothing else. No gutter and no tokens, because neither describes a rendering — the numbers
+              mark place in the source and the tokens are the source's own colouring, and both belong to
+              the view that shows the source.
+
+              Read-only and display-only: there is no field here, and the switch above is the only
+              control over what this branch draws. Nothing is handed to the DOM as markup — the render is
+              the same `<Markdown>` the chat has always trusted, and no `dangerouslySetInnerHTML` was
+              added for a file's contents.
+            */
+            <div data-slot="markdown-preview" className="min-h-0 flex-1 overflow-auto p-4">
+              {/*
+                An empty file has a preview too: nothing to render. The chat's renderer answers empty
+                content with "Thinking…", which is a sentence about a stream that has not started — a
+                file the user opened is not a stream, so the preview says what is true of the file.
+              */}
+              {readContent.trim() === '' ? (
+                <p className="text-[12.5px] text-muted-foreground">This file is empty.</p>
+              ) : (
+                <MarkdownContent content={readContent} />
+              )}
+            </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
               {/*
