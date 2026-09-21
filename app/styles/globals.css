@@ -247,4 +247,66 @@
   .hljs-deletion {
     color: var(--destructive);
   }
+
+  /*
+    GFM constructs.
+
+    A table, a task list's checkbox and a `del` arrive as markup this app does not author: `remark-gfm`
+    writes its own `contains-task-list` and `task-list-item` class names around a bare
+    `<input type="checkbox" disabled>`, and `del` is an element the renderer has no component override
+    for — it is GFM's element, not markdown's, so there is no React mapping to put a utility on. These
+    rules therefore live in the theme file beside the syntax-token ones, for the same reason: the class
+    names are the plugin's and cannot be reached from a component, and every value used below is a token
+    declared above rather than a colour invented here.
+
+    Scoped to `[data-slot='markdown']`, which the renderer puts on the element wrapping every rendering,
+    so the chat and the Code Viewer's preview draw a table and a task list from one definition instead
+    of two that can drift apart. Nothing outside a rendering can match these selectors.
+  */
+  [data-slot='markdown'] table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  [data-slot='markdown'] th,
+  [data-slot='markdown'] td {
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+  }
+
+  /*
+    Header emphasis by weight and a muted fill rather than a brand colour: a table is part of an answer,
+    and tinting its header would make it read as a widget the user could act on.
+  */
+  [data-slot='markdown'] th {
+    background: var(--muted);
+    font-weight: 500;
+  }
+
+  /* A task item's box replaces its bullet rather than being drawn beside one. */
+  [data-slot='markdown'] li.task-list-item {
+    list-style: none;
+  }
+
+  [data-slot='markdown'] li.task-list-item input[type='checkbox'] {
+    margin-right: 0.375rem;
+    vertical-align: middle;
+    accent-color: var(--muted-foreground);
+  }
+
+  /*
+    Disabled, and shown as disabled: an item's state is drawn here, never taken. The muted fade is the
+    visible half of that promise — a box that looked live would invite a click neither surface honours.
+  */
+  [data-slot='markdown'] li.task-list-item input[type='checkbox']:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  [data-slot='markdown'] del {
+    color: var(--muted-foreground);
+    text-decoration: line-through;
+  }
 }

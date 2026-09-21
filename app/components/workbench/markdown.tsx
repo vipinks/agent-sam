@@ -1,4 +1,5 @@
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
 
 /**
@@ -10,8 +11,22 @@ import { cn } from '@/lib/utils'
  * characters become elements. A preview built on its own renderer would be a second safety argument to
  * make, and a second set of type sizes to keep in step with the first.
  *
- * Styled through Tailwind on the surrounding element rather than a plugin, so no CSS file is needed and
- * the type scale stays the app's.
+ * `remark-gfm` is wired here, and only here, for the same reason: both surfaces consume this component,
+ * so a table, a task list, a strikethrough or an autolink is supported in the chat and in the viewer at
+ * once. The alternative — a plugin added at one call site — would have left the two surfaces rendering
+ * the same characters differently, which is the divergence this file exists to prevent.
+ *
+ * GFM is a *parsing* extension and nothing more. It adds syntaxes to the markdown grammar; it does not
+ * add a step that turns markup into elements. `rehype-raw` is still absent from this pipeline, so raw
+ * HTML in a source document continues to arrive as its own characters, which is the property the
+ * renderer's safety rests on. `remark-gfm`'s own tagfilter is not a substitute for that and is not
+ * relied on as one: it removes a handful of dangerous *tags* from an HTML stream, and there is no HTML
+ * stream here to filter.
+ *
+ * Styled through Tailwind on the surrounding element and through the theme file for the constructs whose
+ * markup this file cannot reach — a task list's checkbox and its generated class names, and the `del`
+ * element, which has no component override because it is a GFM element rather than a markdown one. The
+ * type scale stays the app's.
  *
  * `dangerouslySetInnerHTML` appears nowhere in this file, and that is the whole of the safety story: the
  * renderer's pipeline has no raw-HTML step, so markup in the source is not passed through as markup, and
@@ -27,8 +42,11 @@ export function MarkdownContent({ content }: { content: string }) {
   }
 
   return (
-    <div className="space-y-2.5 [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2">
+    // `data-slot` is the hook the theme file scopes its GFM rules to, so the chat and the preview get one
+    // set of table, checkbox and strikethrough styles rather than two that can drift apart.
+    <div data-slot="markdown" className="space-y-2.5 [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2">
       <Markdown
+        remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className="break-words whitespace-pre-wrap">{children}</p>,
           ul: ({ children }) => <ul className="ml-4 list-disc space-y-1">{children}</ul>,
@@ -48,13 +66,14 @@ export function MarkdownContent({ content }: { content: string }) {
               {children}
             </pre>
           ),
+          // Only the scroll wrapper is set here. A table's borders, cell padding and header emphasis live
+          // in the theme file with the rest of the GFM rules, so a wide table scrolls inside the bubble
+          // while its own appearance has one definition rather than two.
           table: ({ children }) => (
             <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-[12px]">{children}</table>
+              <table>{children}</table>
             </div>
           ),
-          th: ({ children }) => <th className="border border-border px-2 py-1 text-left font-medium">{children}</th>,
-          td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
         }}
       >
         {content}

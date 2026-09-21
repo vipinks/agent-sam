@@ -21,6 +21,11 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
  * The safety case is asserted last and hardest, because it is the one an inheritance claim could get
  * wrong: the payload is a fixture, and the assertion is made against the *document* — no element may
  * carry an event-handler attribute, and nothing anywhere may carry a `javascript:` URL.
+ *
+ * The GFM cases sit in the same describe for the same reason the payload does: they are claims about
+ * what the *inherited* renderer does. A pipe table, a task list, a strikethrough and an autolink are
+ * constructs the preview only gained because the shared renderer gained them, so they are asserted
+ * where a change to that renderer would break them.
  */
 
 const ROOT = 'C:/w'
@@ -49,7 +54,11 @@ const MD_SOURCE = [
   '',
 ].join('\n')
 
-/** A piped table, the one construct whose support depends on the renderer's own plugins. */
+/**
+ * A piped table: the construct whose support is whatever plugins the renderer carries, and therefore the
+ * one that says which renderer a surface got. One header row and one body row of two cells each, so the
+ * counts asserted below are this fixture's rather than a count of whatever happened to appear.
+ */
 const TABLE_SOURCE = ['| Name | Value |', '| --- | --- |', '| alpha | 1 |', ''].join('\n')
 
 /**
@@ -59,6 +68,33 @@ const TABLE_SOURCE = ['| Name | Value |', '| --- | --- |', '| alpha | 1 |', ''].
  * that is genuinely present in the file being rendered.
  */
 const PAYLOAD_SOURCE = ['# Pic', '', '<img src=x onerror="alert(1)">', '', '[click](javascript:alert(1))', ''].join(
+  '\n'
+)
+
+/** A task list: two items, one ticked, as GFM spells one. */
+const TASK_SOURCE = ['- [x] shipped', '- [ ] not yet', ''].join('\n')
+
+/** Struck-through words, which GFM writes with tildes and the renderer carries as an element. */
+const DEL_SOURCE = ['A line with ~~removed~~ words.', ''].join('\n')
+
+/**
+ * A GFM autolink: a bare URL with no angle brackets and no link syntax around it.
+ *
+ * Deliberately not `<https://…>`, which CommonMark already autolinks without any plugin — such a case
+ * would pass before this plugin existed and would therefore gate nothing. The literal form is the one
+ * GFM adds, so it is the one that fails without `remark-gfm` and that pins the contract here.
+ */
+const AUTOLINK_SOURCE = ['See https://example.com/gfm-autolink for the details.', ''].join('\n')
+
+/**
+ * The payload once more, where a table cell puts it.
+ *
+ * The cell is the interesting place for it: a table is the construct this commit gained, so a cell is
+ * where a newly-parsed construct could plausibly have become a new way for a file's characters to reach
+ * the document. Spelled out rather than derived from `PAYLOAD_SOURCE`, so the assertions below are made
+ * about a payload genuinely present in this fixture.
+ */
+const TABLE_PAYLOAD_SOURCE = ['| Name | Value |', '| --- | --- |', '| <img src=x onerror="alert(1)"> | 1 |', ''].join(
   '\n'
 )
 
@@ -330,7 +366,7 @@ describe('the renderer the preview inherits', () => {
     expect(container.innerHTML).not.toContain('<img')
   })
 
-  it('renders a pipe table exactly as the chat does: as its text, because neither has a GFM plugin', async () => {
+  it('renders a pipe table as a real table, with the fixture’s own rows and cells', async () => {
     stubViewer(MD_PATH, TABLE_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
@@ -339,19 +375,103 @@ describe('the renderer the preview inherits', () => {
     await userEvent.click(toggle().preview)
 
     /*
-      `remark-gfm` is not in the dependency tree, so the shared renderer does not turn a pipe table into
-      table elements — the rows arrive as a paragraph of literal text, measured directly against
-      `react-markdown` before this test was written. Pinned here rather than left to whichever branch
-      the assertion happened to take, because the claim this preview makes is "what the chat renders",
-      not "a richer rendering than the chat": a preview that quietly supported tables the chat did not
-      would be a second renderer wearing the first one's name.
+      This case used to pin the opposite claim, and the history is worth keeping. `remark-gfm` was not in
+      the dependency tree, so a pipe table arrived as a paragraph of literal text and the assertion said
+      so — deliberately, because the promise this preview makes is "what the chat renders", and a preview
+      that quietly supported tables the chat did not would have been a second renderer wearing the first
+      one's name.
 
-      A failure here means the shared renderer gained GFM support — good news, and the fix is to assert
-      the table instead. Closing the gap properly is one dependency added to `markdown.tsx`, so both
-      surfaces gain it together, not to this branch.
+      The gap has since been closed the way that comment said it should be: one plugin added to the shared
+      renderer in `markdown.tsx`, so both surfaces gained GFM together rather than this pane gaining a
+      parser of its own. The contract is a real table now, and the counts below are stated rather than
+      summed up as "a table element appeared": `TABLE_SOURCE` is one header row and one body row of two
+      cells each, and the assertion is made against exactly that.
     */
-    expect(previewOf(container)?.querySelector('table')).toBeNull()
-    expect(previewOf(container)?.textContent).toContain('| Name | Value |')
-    expect(previewOf(container)?.textContent).toContain('alpha')
+    const table = previewOf(container)?.querySelector('table')
+    expect(table).not.toBeNull()
+
+    expect(table?.querySelectorAll('thead tr')).toHaveLength(1)
+    expect(table?.querySelectorAll('tbody tr')).toHaveLength(1)
+    expect([...(table?.querySelectorAll('thead th') ?? [])].map((cell) => cell.textContent)).toEqual(['Name', 'Value'])
+    expect([...(table?.querySelectorAll('tbody td') ?? [])].map((cell) => cell.textContent)).toEqual(['alpha', '1'])
+
+    // And the pipes are gone from the text: the characters that used to be on screen are markup now,
+    // which is the half of the claim the element counts above cannot make on their own.
+    expect(table?.textContent).not.toContain('|')
+  })
+
+  it('renders a task list as a disabled checkbox per item, because a box here is a reading of one', async () => {
+    stubViewer(MD_PATH, TASK_SOURCE)
+    useWorkbenchStore.setState({ selectedFile: MD_PATH })
+    const { container } = renderViewer()
+    await readView(container)
+
+    await userEvent.click(toggle().preview)
+
+    // A disabled checkbox is the whole of the claim: an item's state is drawn, not offered as a control,
+    // so the rendering cannot disagree with the file the user is reading. This pane is read-only by
+    // construction, and this assertion is what keeps a ticked box from becoming a toggle.
+    const boxes = [...(previewOf(container)?.querySelectorAll('li input[type="checkbox"]') ?? [])] as HTMLInputElement[]
+    expect(boxes).toHaveLength(2)
+    expect(boxes.map((box) => box.disabled)).toEqual([true, true])
+    // And they carry the file's own ticks rather than a default.
+    expect(boxes.map((box) => box.checked)).toEqual([true, false])
+    expect(previewOf(container)?.textContent).toContain('shipped')
+  })
+
+  it('renders strikethrough as a del element rather than as its tildes', async () => {
+    stubViewer(MD_PATH, DEL_SOURCE)
+    useWorkbenchStore.setState({ selectedFile: MD_PATH })
+    const { container } = renderViewer()
+    await readView(container)
+
+    await userEvent.click(toggle().preview)
+
+    expect(previewOf(container)?.querySelector('del')?.textContent).toBe('removed')
+    // The markers are gone: this is a rendering of the line, not the line with its syntax still on it.
+    expect(previewOf(container)?.textContent).not.toContain('~~')
+  })
+
+  it('renders an autolink as an anchor carrying the literal href', async () => {
+    stubViewer(MD_PATH, AUTOLINK_SOURCE)
+    useWorkbenchStore.setState({ selectedFile: MD_PATH })
+    const { container } = renderViewer()
+    await readView(container)
+
+    await userEvent.click(toggle().preview)
+
+    // The URL is both the link and its text, and the href is asserted literally because the inherited
+    // sanitizer is what stands between a file's characters and an attribute: a link that survived it is
+    // the evidence that the same url transform runs over the constructs GFM newly parses.
+    const anchor = previewOf(container)?.querySelector('a')
+    expect(anchor?.getAttribute('href')).toBe('https://example.com/gfm-autolink')
+    expect(anchor?.textContent).toBe('https://example.com/gfm-autolink')
+    // Bare in the source and a link in the render, which is the whole of what GFM's autolink adds.
+    expect(previewOf(container)?.textContent).toContain('See https://example.com/gfm-autolink for the details.')
+  })
+
+  it('does not run the payload a table cell carries either', async () => {
+    stubViewer(MD_PATH, TABLE_PAYLOAD_SOURCE)
+    useWorkbenchStore.setState({ selectedFile: MD_PATH })
+    const { container } = renderViewer()
+    await readView(container)
+
+    await userEvent.click(toggle().preview)
+
+    // The table is real, so the cell genuinely went through the newly-parsed construct rather than being
+    // skipped — the assertions below are about a rendering that ran.
+    expect(previewOf(container)?.querySelector('table')).not.toBeNull()
+
+    // The same document-wide claims as the fixture above, made again because a cell is a new place for a
+    // file's characters to land: no handler attribute anywhere, no `img`, no script.
+    expect(handlerAttributes(container)).toEqual([])
+    expect(scriptUrls(container)).toEqual([])
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('script')).toBeNull()
+
+    // And the markup is inert text inside the cell, on the same element-versus-text distinction the
+    // fixture above makes: an element would serialize as `<img`, escaped characters as `&lt;img`.
+    expect(previewOf(container)?.textContent).toContain('<img src=x onerror="alert(1)">')
+    expect(container.innerHTML).not.toContain('<img')
   })
 })
