@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Braces, FileCode, GitCompare, Lock, Pencil, Save, TriangleAlert, X } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
@@ -8,6 +8,7 @@ import { PaneHeader } from './pane-header'
 import { DiffView } from './diff-view'
 import { gitErrorMessage } from './changes'
 import { canEdit, decideConflict, insertTab, isDirty, writeErrorMessage } from './editing'
+import { gutterText } from './gutter'
 import { skipNote } from './highlight'
 import { useHighlightedCode } from './use-highlight'
 import { useWorkbenchStore } from './store'
@@ -87,6 +88,9 @@ export function CodeViewer() {
    */
   const [saveConflict, setSaveConflict] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // The edit-mode gutter, moved by copying the textarea's scroll offset rather than by scrolling itself:
+  // the textarea owns the scroll position in that mode, and this is the element told about it.
+  const gutterRef = useRef<HTMLDivElement>(null)
 
   // Mirrors of the two contents, so a decision can be read synchronously when a read lands. React
   // state alone would mean nesting one updater inside another to see both at once, which is a shape
@@ -128,6 +132,19 @@ export function CodeViewer() {
   const plainView = showingDiff || editing
   const { plan, html } = useHighlightedCode(plainView ? null : selectedFile, plainView ? null : readContent)
   const highlightNote = plan === null ? null : skipNote(plan)
+
+  /**
+   * The two gutters' text, one per view, each the lines of the string that view is showing.
+   *
+   * Memoized on the content rather than built during the render: numbering a half-megabyte file is a
+   * string of thousands of numbers, and this pane re-renders for reasons that have nothing to do with
+   * its text — tokens arriving, a store change elsewhere.
+   *
+   * The edit gutter is the buffer's; `''` only stands in while no file is loaded, when the textarea and
+   * therefore the gutter are not on screen at all.
+   */
+  const readGutter = useMemo(() => gutterText(readContent), [readContent])
+  const editGutter = useMemo(() => gutterText(buffer ?? ''), [buffer])
 
   /**
    * Adopt freshly read content, or refuse to.
@@ -469,36 +486,62 @@ export function CodeViewer() {
           ) : file.error ? (
             <FileError error={file.error} path={selectedFile} />
           ) : editing && buffer !== null ? (
-            <textarea
-              ref={textareaRef}
-              aria-label={`Edit ${fileName}`}
-              value={buffer}
-              onChange={(e) => setBuffer(e.target.value)}
-              onKeyDown={(e) => {
-                // Tab indents rather than leaving the field. Without this the caret would move out of the
-                // editor and there would be no way to indent at all — the trade a plain textarea editor
-                // has to make, and the reason the rule is a function of its own.
-                if (e.key === 'Tab') {
-                  e.preventDefault()
-                  const { text, caret } = insertTab(
-                    e.currentTarget.value,
-                    e.currentTarget.selectionStart,
-                    e.currentTarget.selectionEnd
-                  )
-                  setBuffer(text)
-                  requestAnimationFrame(() => {
-                    const area = textareaRef.current
-                    if (!area) return
-                    area.setSelectionRange(caret, caret)
-                  })
-                }
-              }}
-              spellCheck={false}
-              // Wrapping off, so a long line scrolls rather than reflowing: the same fidelity the
-              // read-only render had, which is the whole reason highlighting can wait.
-              wrap="off"
-              className="min-h-0 flex-1 resize-none overflow-auto bg-background p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre outline-none"
-            />
+            /*
+              The textarea is the only input here, and the gutter beside it does not change that: it is
+              `aria-hidden`, `select-none` and `overflow-hidden`, so the numbers cannot be typed into,
+              selected or scrolled. It inherits the row's type and matches the textarea's own vertical
+              padding, which is what puts number N on line N.
+
+              The scroll position has one owner — the textarea — and the gutter is moved by copying it,
+              the same shape as the read view having one scroller for both columns.
+            */
+            <div className="flex min-h-0 flex-1 font-mono text-[12.5px] leading-relaxed">
+              <div
+                ref={gutterRef}
+                data-slot="code-gutter"
+                aria-hidden="true"
+                className="shrink-0 overflow-hidden border-r border-border bg-muted py-4 pr-3 pl-4 text-right whitespace-pre text-muted-foreground/70 select-none"
+              >
+                {editGutter}
+              </div>
+
+              <textarea
+                ref={textareaRef}
+                aria-label={`Edit ${fileName}`}
+                value={buffer}
+                onChange={(e) => setBuffer(e.target.value)}
+                onKeyDown={(e) => {
+                  // Tab indents rather than leaving the field. Without this the caret would move out of the
+                  // editor and there would be no way to indent at all — the trade a plain textarea editor
+                  // has to make, and the reason the rule is a function of its own.
+                  if (e.key === 'Tab') {
+                    e.preventDefault()
+                    const { text, caret } = insertTab(
+                      e.currentTarget.value,
+                      e.currentTarget.selectionStart,
+                      e.currentTarget.selectionEnd
+                    )
+                    setBuffer(text)
+                    requestAnimationFrame(() => {
+                      const area = textareaRef.current
+                      if (!area) return
+                      area.setSelectionRange(caret, caret)
+                    })
+                  }
+                }}
+                onScroll={(e) => {
+                  // The offset is copied rather than observed: the gutter's own box cannot scroll, so this
+                  // one assignment is the only thing that can move it.
+                  const gutter = gutterRef.current
+                  if (gutter !== null) gutter.scrollTop = e.currentTarget.scrollTop
+                }}
+                spellCheck={false}
+                // Wrapping off, so a long line scrolls rather than reflowing: the same fidelity the
+                // read-only render had, which is the whole reason highlighting can wait.
+                wrap="off"
+                className="min-h-0 flex-1 resize-none overflow-auto bg-background p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre outline-none"
+              />
+            </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
               {/*
@@ -512,23 +555,48 @@ export function CodeViewer() {
                 </p>
               )}
 
-              <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-relaxed">
-                {html === null ? (
-                  // Plain text, as a React child: the source is escaped by React and never becomes
-                  // markup, which is what the no-tokens path has always been.
-                  <code>{readContent}</code>
-                ) : (
-                  /*
-                    The tokens arrive as a string of escaped HTML rather than as a React tree, which is
-                    the one place this pane hands markup to the DOM. Two reasons, both about size: a
-                    large file is tens of thousands of spans, and building that tree costs more than the
-                    tokenizing did; and highlight.js escapes the source it wraps, so nothing in the file
-                    can become markup. `hljs` on the element is what scopes the theme's token colours
-                    to this render.
-                  */
-                  <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
-                )}
-              </pre>
+              {/*
+                One scroll container for both columns, which is the whole reason the numbers cannot
+                drift from the source: there is a single scroll position, so there is nothing to keep
+                in step. The gutter is a sibling of the code inside it rather than a box of its own,
+                and the row carries the type both columns use, so their line boxes are the same height
+                by construction instead of by two sets of classes matching.
+
+                The row is `w-max` so a long line makes the row wider than the pane and the scroller
+                scrolls horizontally; the numbers are `sticky left-0` so that scroll carries the code
+                past them instead of taking them off screen with it.
+              */}
+              <div className="min-h-0 flex-1 overflow-auto">
+                <div className="flex min-h-full w-max min-w-full font-mono text-[12.5px] leading-relaxed">
+                  <div
+                    data-slot="code-gutter"
+                    // Decoration rather than content: the numbers mark place in the file, they are not
+                    // part of it, and a reader is not told about them.
+                    aria-hidden="true"
+                    className="sticky left-0 shrink-0 border-r border-border bg-muted py-4 pr-3 pl-4 text-right whitespace-pre text-muted-foreground/70 select-none"
+                  >
+                    {readGutter}
+                  </div>
+
+                  <pre className="w-max p-4">
+                    {html === null ? (
+                      // Plain text, as a React child: the source is escaped by React and never becomes
+                      // markup, which is what the no-tokens path has always been.
+                      <code>{readContent}</code>
+                    ) : (
+                      /*
+                        The tokens arrive as a string of escaped HTML rather than as a React tree, which is
+                        the one place this pane hands markup to the DOM. Two reasons, both about size: a
+                        large file is tens of thousands of spans, and building that tree costs more than the
+                        tokenizing did; and highlight.js escapes the source it wraps, so nothing in the file
+                        can become markup. `hljs` on the element is what scopes the theme's token colours
+                        to this render.
+                      */
+                      <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+                    )}
+                  </pre>
+                </div>
+              </div>
             </div>
           )}
         </div>
