@@ -9,7 +9,7 @@ import { DiffView } from './diff-view'
 import { gitErrorMessage } from './changes'
 import { canEdit, decideConflict, insertTab, isDirty, writeErrorMessage } from './editing'
 import { gutterText } from './gutter'
-import { skipNote } from './highlight'
+import { editorHighlightPlan, skipNote, utf8Bytes } from './highlight'
 import { useHighlightedCode } from './use-highlight'
 import { useWorkbenchStore } from './store'
 
@@ -91,6 +91,10 @@ export function CodeViewer() {
   // The edit-mode gutter, moved by copying the textarea's scroll offset rather than by scrolling itself:
   // the textarea owns the scroll position in that mode, and this is the element told about it.
   const gutterRef = useRef<HTMLDivElement>(null)
+  // The edit-mode backdrop, moved the same way: the tokens for the buffer, painted underneath the field
+  // that holds it. It is only ever painted and scrolled — never read back — which is what keeps it from
+  // becoming a second source of truth for the text on screen.
+  const backdropRef = useRef<HTMLPreElement>(null)
 
   // Mirrors of the two contents, so a decision can be read synchronously when a read lands. React
   // state alone would mean nesting one updater inside another to see both at once, which is a shape
@@ -132,6 +136,28 @@ export function CodeViewer() {
   const plainView = showingDiff || editing
   const { plan, html } = useHighlightedCode(plainView ? null : selectedFile, plainView ? null : readContent)
   const highlightNote = plan === null ? null : skipNote(plan)
+
+  /**
+   * The editor's own tokens: the same buffer the textarea holds, through the same module and memo.
+   *
+   * The plan is asked for by *size*, because size is the editor's only question about a file here: a
+   * keystroke in a file over the cap must not pay for tokenizing, and must not render a layer that
+   * could not be kept in step with the field for nothing. A language the viewer has no grammar for
+   * lands in the same place for a different reason — there are no tokens to paint — and the note is
+   * what tells the reader which of the two happened.
+   *
+   * The render branches on `editBackdrop` rather than on the mode: `sync` and `async` both paint
+   * tokens, and differ only in whether they are ready for the render that asked for them. The deferred
+   * ones are handled in the render itself, where the buffer stands in until they arrive.
+   */
+  const editPlan = useMemo(
+    () =>
+      editing && buffer !== null && selectedFile !== null ? editorHighlightPlan(selectedFile, utf8Bytes(buffer)) : null,
+    [editing, buffer, selectedFile]
+  )
+  const editBackdrop = editPlan !== null && editPlan.mode !== 'plain'
+  const editNote = editPlan === null ? null : skipNote(editPlan)
+  const { html: editHtml } = useHighlightedCode(editBackdrop ? selectedFile : null, editBackdrop ? buffer : null)
 
   /**
    * The two gutters' text, one per view, each the lines of the string that view is showing.
@@ -486,62 +512,122 @@ export function CodeViewer() {
           ) : file.error ? (
             <FileError error={file.error} path={selectedFile} />
           ) : editing && buffer !== null ? (
-            /*
-              The textarea is the only input here, and the gutter beside it does not change that: it is
-              `aria-hidden`, `select-none` and `overflow-hidden`, so the numbers cannot be typed into,
-              selected or scrolled. It inherits the row's type and matches the textarea's own vertical
-              padding, which is what puts number N on line N.
+            <>
+              {/*
+                The cap notice for the editor, worded from the same object the read view words its own
+                from: a file the editor did not tokenize gets an opaque field and this sentence, for the
+                same reason the read view gets both — a decision the viewer made, and silence would read
+                as a highlighter that had failed rather than one that had declined.
+              */}
+              {editNote && (
+                <p className="shrink-0 border-b border-border bg-muted px-3 py-1.5 text-[11.5px] text-muted-foreground">
+                  {editNote}
+                </p>
+              )}
 
-              The scroll position has one owner — the textarea — and the gutter is moved by copying it,
-              the same shape as the read view having one scroller for both columns.
-            */
-            <div className="flex min-h-0 flex-1 font-mono text-[12.5px] leading-relaxed">
-              <div
-                ref={gutterRef}
-                data-slot="code-gutter"
-                aria-hidden="true"
-                className="shrink-0 overflow-hidden border-r border-border bg-muted py-4 pr-3 pl-4 text-right whitespace-pre text-muted-foreground/70 select-none"
-              >
-                {editGutter}
+              {/*
+                The textarea is the only input here, and neither the gutter beside it nor the backdrop
+                behind it changes that: the gutter is `aria-hidden`, `select-none` and `overflow-hidden`,
+                so the numbers cannot be typed into, selected or scrolled, and the backdrop is
+                `aria-hidden`, `pointer-events-none` and never read back, so the buffer is still exactly
+                the characters the user typed. Both inherit the row's type and match the textarea's own
+                vertical padding, which is what puts number N on line N and the tokens under the glyphs.
+
+                The scroll position has one owner — the textarea — and the gutter and the backdrop are
+                moved by copying it, the same shape as the read view having one scroller for both columns.
+              */}
+              <div className="flex min-h-0 flex-1 font-mono text-[12.5px] leading-relaxed">
+                <div
+                  ref={gutterRef}
+                  data-slot="code-gutter"
+                  aria-hidden="true"
+                  className="shrink-0 overflow-hidden border-r border-border bg-muted py-4 pr-3 pl-4 text-right whitespace-pre text-muted-foreground/70 select-none"
+                >
+                  {editGutter}
+                </div>
+
+                {/*
+                  The code column: the field, and behind it the same buffer through the same highlighter
+                  and memo the read view uses. A textarea cannot hold markup, so the colour is painted
+                  underneath it and the field's own text is made transparent to let the backdrop through;
+                  the caret is not transparent, and the selection band is the field's own, so both stay
+                  visible whichever way the eye lands on them.
+
+                  The two elements carry the same font, size, line-height, padding and wrapping in the
+                  same box (`inset-0`), so the glyphs coincide by sharing a layout rather than by being
+                  tuned to match. A backdrop that could not line up would be worse than none.
+                */}
+                <div className="relative min-h-0 flex-1 bg-background">
+                  {editBackdrop && (
+                    <pre
+                      ref={backdropRef}
+                      data-slot="code-backdrop"
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 overflow-hidden p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre"
+                    >
+                      {editHtml === null ? (
+                        // The deferred band, before its tokens arrive: with the field's text transparent
+                        // an empty layer would be an invisible buffer, so the plain characters stand in
+                        // for a moment. Uncoloured is the most this may ever degrade to.
+                        <code>{buffer}</code>
+                      ) : (
+                        // The same escaped spans the read view renders, out of the same memo.
+                        <code className="hljs" dangerouslySetInnerHTML={{ __html: editHtml }} />
+                      )}
+                    </pre>
+                  )}
+
+                  <textarea
+                    ref={textareaRef}
+                    aria-label={`Edit ${fileName}`}
+                    value={buffer}
+                    onChange={(e) => setBuffer(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Tab indents rather than leaving the field. Without this the caret would move out of the
+                      // editor and there would be no way to indent at all — the trade a plain textarea editor
+                      // has to make, and the reason the rule is a function of its own.
+                      if (e.key === 'Tab') {
+                        e.preventDefault()
+                        const { text, caret } = insertTab(
+                          e.currentTarget.value,
+                          e.currentTarget.selectionStart,
+                          e.currentTarget.selectionEnd
+                        )
+                        setBuffer(text)
+                        requestAnimationFrame(() => {
+                          const area = textareaRef.current
+                          if (!area) return
+                          area.setSelectionRange(caret, caret)
+                        })
+                      }
+                    }}
+                    onScroll={(e) => {
+                      // The offsets are copied rather than observed: neither the gutter's box nor the
+                      // backdrop's can scroll itself — both are `overflow-hidden` — so these assignments
+                      // are the only things that can move them. The backdrop takes both axes, being the
+                      // field's twin under a line that does not wrap.
+                      const area = e.currentTarget
+                      const gutter = gutterRef.current
+                      if (gutter !== null) gutter.scrollTop = area.scrollTop
+                      const backdrop = backdropRef.current
+                      if (backdrop !== null) {
+                        backdrop.scrollTop = area.scrollTop
+                        backdrop.scrollLeft = area.scrollLeft
+                      }
+                    }}
+                    spellCheck={false}
+                    // Wrapping off, so a long line scrolls rather than reflowing: the same fidelity the
+                    // read-only render had, and the same metric the backdrop is laid out with.
+                    wrap="off"
+                    // Transparent only when there is a backdrop to read instead, and never transparent
+                    // without a caret: the text is the layer below, not the field it is typed into.
+                    className={`absolute inset-0 resize-none overflow-auto p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre outline-none ${
+                      editBackdrop ? 'text-transparent caret-brand' : 'bg-background'
+                    }`}
+                  />
+                </div>
               </div>
-
-              <textarea
-                ref={textareaRef}
-                aria-label={`Edit ${fileName}`}
-                value={buffer}
-                onChange={(e) => setBuffer(e.target.value)}
-                onKeyDown={(e) => {
-                  // Tab indents rather than leaving the field. Without this the caret would move out of the
-                  // editor and there would be no way to indent at all — the trade a plain textarea editor
-                  // has to make, and the reason the rule is a function of its own.
-                  if (e.key === 'Tab') {
-                    e.preventDefault()
-                    const { text, caret } = insertTab(
-                      e.currentTarget.value,
-                      e.currentTarget.selectionStart,
-                      e.currentTarget.selectionEnd
-                    )
-                    setBuffer(text)
-                    requestAnimationFrame(() => {
-                      const area = textareaRef.current
-                      if (!area) return
-                      area.setSelectionRange(caret, caret)
-                    })
-                  }
-                }}
-                onScroll={(e) => {
-                  // The offset is copied rather than observed: the gutter's own box cannot scroll, so this
-                  // one assignment is the only thing that can move it.
-                  const gutter = gutterRef.current
-                  if (gutter !== null) gutter.scrollTop = e.currentTarget.scrollTop
-                }}
-                spellCheck={false}
-                // Wrapping off, so a long line scrolls rather than reflowing: the same fidelity the
-                // read-only render had, which is the whole reason highlighting can wait.
-                wrap="off"
-                className="min-h-0 flex-1 resize-none overflow-auto bg-background p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre outline-none"
-              />
-            </div>
+            </>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
               {/*

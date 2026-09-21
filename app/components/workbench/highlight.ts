@@ -205,21 +205,45 @@ export function utf8Bytes(text: string): number {
 }
 
 /**
- * Decide how a file should be highlighted.
+ * The decision itself: a language, a size in bytes, and what the viewer should do about them.
+ *
+ * Split out so the thresholds live once, because two callers now ask this question about the same file.
+ * The read view holds the text and can measure it; the editor knows how big its buffer is and would be
+ * measuring the same characters again to ask. Sharing this function is what makes the two agree by
+ * construction rather than by recollection — an editor that tokenized a file the read view refuses to
+ * would be the same highlighter contradicting itself.
  *
  * The order of the two questions matters. A language the viewer does not know is settled first, so an
- * enormous `.zip` is not reported as "too large to highlight" when it was never a candidate. Size is
- * then measured once and drives both the skip and the sync/async split, so the two thresholds can
+ * enormous `.zip` is not reported as "too large to highlight" when it was never a candidate. The size
+ * is then compared against both thresholds in one place, so the skip and the sync/async split can
  * never disagree about the same file.
  */
-export function highlightPlan(path: string, content: string): HighlightPlan {
-  const language = languageForPath(path)
+function planForBytes(language: string, bytes: number): HighlightPlan {
   if (language === PLAINTEXT) return { mode: 'plain', reason: 'plaintext' }
-
-  const bytes = utf8Bytes(content)
   if (bytes > MAX_HIGHLIGHT_BYTES) return { mode: 'plain', reason: 'too-large', bytes, limit: MAX_HIGHLIGHT_BYTES }
 
   return bytes > SYNC_HIGHLIGHT_BYTES ? { mode: 'async', language } : { mode: 'sync', language }
+}
+
+/**
+ * Decide how a file should be highlighted, from its text.
+ *
+ * The size this measures is the text's UTF-8 length rather than its `.length`; `utf8Bytes` says why.
+ */
+export function highlightPlan(path: string, content: string): HighlightPlan {
+  return planForBytes(languageForPath(path), utf8Bytes(content))
+}
+
+/**
+ * The same decision for the editor, which knows how big its buffer is without being handed the text.
+ *
+ * The editor asks this on every keystroke, and the answer decides whether a backdrop is rendered at
+ * all: over the cap the field stays opaque and no tokenizing is paid for by a keystroke in a monster
+ * file. Taking the size rather than the text keeps that question cheap to ask, and keeps the rule
+ * callable at either side of the cap without a fixture built out of half a megabyte of padding.
+ */
+export function editorHighlightPlan(path: string, byteLength: number): HighlightPlan {
+  return planForBytes(languageForPath(path), byteLength)
 }
 
 /**

@@ -14,8 +14,10 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
  * Which language a path is, and whether it is worth tokenizing, are tested without a DOM in
  * `highlight-rules.test.ts`. What only a DOM test can see is whether the tokens reach the read view:
  * that a real snippet comes back as token spans, that a file past the cap is deliberately left plain
- * and says so, and that the two views that must *not* be tokenized — the editor and the diff — stay
- * untokenized.
+ * and says so, and that the diff stays untokenized. The editor is the third view in that list and no
+ * longer belongs to it: it now carries tokens of its own, in a backdrop behind the textarea, which is
+ * the subject of `code-viewer-backdrop.test.tsx`. What is left to assert here is the boundary that
+ * turn drew — the tokens are the backdrop's, and the field still holds the raw source.
  *
  * The class names are highlight.js's own public API (`hljs-keyword`, `hljs-string`), so asserting on
  * them is asserting on the contract the stylesheet also keys off; a rename there would break the theme
@@ -175,7 +177,7 @@ describe('the read view', () => {
 })
 
 describe('the views that stay plain', () => {
-  it('renders no tokens in edit mode, where the text is the user’s to change', async () => {
+  it('keeps the editor’s tokens behind the textarea, with the field holding the raw source', async () => {
     stubViewer({ path: PHP_PATH, content: PHP_SOURCE })
     useWorkbenchStore.setState({ selectedFile: PHP_PATH })
     const { container } = renderViewer()
@@ -184,10 +186,17 @@ describe('the views that stay plain', () => {
     await userEvent.click(await screen.findByLabelText('Edit this file'))
     const area = (await screen.findByLabelText('Edit index.php')) as HTMLTextAreaElement
 
-    // A textarea cannot hold markup, and must not try: the buffer is the raw source.
+    // A textarea cannot hold markup, and must not try: the buffer is the raw source, and the only thing
+    // the user types into.
     expect(area.value).toBe(PHP_SOURCE)
-    expect(tokenSpans(container)).toHaveLength(0)
-    expect(container.querySelector('.hljs')).toBeNull()
+    expect(container.querySelectorAll('textarea, input')).toHaveLength(1)
+
+    // The tokens exist, and they are not in the field: they are a hidden layer behind it. Without the
+    // textarea's own text transparent the layer would be invisible, which the backdrop suite asserts.
+    const backdrop = container.querySelector('[data-slot="code-backdrop"]')
+    expect(backdrop).not.toBeNull()
+    expect(tokenSpans(backdrop as HTMLElement).length).toBeGreaterThan(0)
+    expect(area.contains(backdrop)).toBe(false)
   })
 
   it('keeps the diff’s add and remove colouring, with no syntax tokens in it', async () => {

@@ -6,6 +6,7 @@ import {
   SYNTAX_LANGUAGES,
   SYNC_HIGHLIGHT_BYTES,
   createHighlightMemo,
+  editorHighlightPlan,
   extensionOf,
   highlightPlan,
   languageForPath,
@@ -168,6 +169,52 @@ describe('whether to highlight', () => {
     expect(heavy.length).toBeLessThan(MAX_HIGHLIGHT_BYTES)
     expect(utf8Bytes(heavy)).toBeGreaterThan(MAX_HIGHLIGHT_BYTES)
     expect(highlightPlan('C:/work/app.php', heavy)).toMatchObject({ mode: 'plain', reason: 'too-large' })
+  })
+})
+
+describe('the editor’s plan', () => {
+  /**
+   * The rule the edit-mode backdrop hangs on.
+   *
+   * It takes the size rather than the text because the editor's only question about a file is how big
+   * it is: whether the bytes the buffer holds are worth tokenizing at all. Answering it from a number
+   * is what keeps the rule callable at the boundary — a 512 KB string to ask about 512 KB of bytes
+   * would be a fixture paying for what the rule is about.
+   */
+  it('highlights an ordinary file, in the band its size puts it in', () => {
+    expect(editorHighlightPlan('C:/work/app.php', 1024)).toEqual({ mode: 'sync', language: 'php' })
+    expect(editorHighlightPlan('C:/work/app.php', SYNC_HIGHLIGHT_BYTES + 1)).toEqual({
+      mode: 'async',
+      language: 'php',
+    })
+  })
+
+  it(`highlights a file of exactly ${MAX_HIGHLIGHT_BYTES} bytes and skips the one past it`, () => {
+    expect(editorHighlightPlan('C:/work/app.php', MAX_HIGHLIGHT_BYTES)).toEqual({ mode: 'async', language: 'php' })
+
+    const over = editorHighlightPlan('C:/work/app.php', MAX_HIGHLIGHT_BYTES + 1)
+    expect(over).toMatchObject({ mode: 'plain', reason: 'too-large', bytes: MAX_HIGHLIGHT_BYTES + 1 })
+    // The editor's note is worded from the same object the read view's is, so the cap is named once.
+    expect(skipNote(over)).toMatch(/512 KB/)
+  })
+
+  it('does not highlight a language it does not know, however small the file', () => {
+    expect(editorHighlightPlan('C:/work/notes.rst', 12)).toEqual({ mode: 'plain', reason: 'plaintext' })
+  })
+
+  /**
+   * The drift guard, and the reason the rule shares `highlightPlan`'s decision rather than restating
+   * it: the editor and the read view must never disagree about the same file. Size arriving as a
+   * number and size arriving as text are two spellings of one question.
+   */
+  it('answers exactly what highlightPlan answers, for the same file', () => {
+    const at = (bytes: number) => utf8Bytes(phpOfBytes(bytes))
+
+    for (const bytes of [1024, SYNC_HIGHLIGHT_BYTES + 1, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_BYTES + 1]) {
+      expect(editorHighlightPlan('C:/work/app.php', at(bytes))).toEqual(
+        highlightPlan('C:/work/app.php', phpOfBytes(bytes))
+      )
+    }
   })
 })
 
