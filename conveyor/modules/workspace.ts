@@ -8,6 +8,7 @@ import { resolveWorkspacePath } from './workspace-paths'
 import { notifyWorkspaceChanged, workspaceChangedSchema } from '../events'
 import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
+import { IMAGE_TOO_LARGE, imageKindForPath, imageOverCap } from '../protocol/image'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -213,15 +214,28 @@ export const workspaceModule = defineModule({
   }),
 
   /**
-   * Read one file as UTF-8 text. Size is checked before reading, so an oversized file never lands
-   * in memory in the first place.
+   * Read one file, as text or as an image, decided by its name.
+   *
+   * Size is checked before anything is read, so an oversized file never lands in memory in the first
+   * place — and the check uses a different cap per kind, which is why the kind is settled first. A
+   * text read is a string this pane will tokenize; an image read is a data URL it hands to an `img`,
+   * and base64 makes what crosses IPC a third larger than the file. Same shape of decision, two
+   * different numbers.
+   *
+   * The two results are deliberately different objects rather than one object with an optional half.
+   * A text result is exactly what it always was, field for field, so every existing caller and stored
+   * transcript is unaffected; an image result carries `kind`, `mime`, `dataUrl` and `bytes` instead of
+   * `content`, and no caller that understands one can mistake it for the other.
    *
    * `baselineMtime` is the mtime of the bytes being returned, and it is what lets an editor save
    * safely: it sends that number back with its write, and main refuses the write if the disk has moved
    * on since. It is optional and additive, so a caller that ignores it — and any stored transcript
-   * holding an older result — is unaffected.
+   * holding an older result — is unaffected. An image result carries it too, for the same reason the
+   * file's mtime is a fact about the file rather than about how it is displayed.
    */
   readFile: query(z.object({ path: z.string().min(1) }), async ({ input }) => {
+    const mime = imageKindForPath(input.path)
+
     let stats: { size: number; mtimeMs: number }
     try {
       // One `stat` for both the size check and the baseline: the mtime has to describe the bytes that
@@ -229,7 +243,40 @@ export const workspaceModule = defineModule({
       const result = await stat(input.path)
       stats = { size: result.size, mtimeMs: result.mtimeMs }
     } catch {
+      // A missing image and a missing text file are the same failure, and they arrive here before
+      // anything has asked which kind they are — the kind is the name's, so it is known even for a
+      // file the disk no longer has.
       throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
+    }
+
+    if (mime !== null) {
+      if (imageOverCap(stats.size)) {
+        throw new ConveyorError(
+          IMAGE_TOO_LARGE,
+          `${basename(input.path)} is ${(stats.size / 1024 / 1024).toFixed(1)} MB — the viewer caps images at 2 MB.`
+        )
+      }
+
+      let bytes: Buffer
+      try {
+        bytes = await readFileFromDisk(input.path)
+      } catch {
+        throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
+      }
+
+      // A data URL rather than a buffer, because it is the one encoding that crosses IPC as a string
+      // and needs nothing in the renderer. The svg case reads the same way as the rest: the file is
+      // served under its own media type, base64, so the renderer receives *bytes it can only decode as
+      // a picture* — never markup it could be tempted to inject. Nothing here decides that second half;
+      // main's part is to never send a document, only an encoded image.
+      return {
+        kind: 'image' as const,
+        mime,
+        dataUrl: `data:${mime};base64,${bytes.toString('base64')}`,
+        bytes: stats.size,
+        path: input.path,
+        baselineMtime: stats.mtimeMs,
+      }
     }
 
     if (stats.size > MAX_FILE_BYTES) {

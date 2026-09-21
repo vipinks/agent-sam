@@ -56,6 +56,7 @@ const SUITES = [
   { name: 'open root', src: 'workspace/open-root-test.ts' },
   { name: 'recent roots store', src: 'workspace/recent-roots-store-test.ts' },
   { name: 'write baseline', src: 'workspace/write-baseline-test.ts' },
+  { name: 'image read', src: 'workspace/image-read-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 

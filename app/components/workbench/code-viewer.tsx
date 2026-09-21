@@ -11,6 +11,7 @@ import { canEdit, decideConflict, insertTab, isDirty, writeErrorMessage } from '
 import { gutterText } from './gutter'
 import { editorHighlightPlan, skipNote, utf8Bytes } from './highlight'
 import { useHighlightedCode } from './use-highlight'
+import { formatBytes, imageOf, type ImageRead } from './image'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -114,7 +115,17 @@ export function CodeViewer() {
   const saveRef = useRef<() => void>(() => {})
 
   const readCode = file.error instanceof ConveyorError ? file.error.code : null
-  const editable = selectedFile !== null && canEdit(readCode)
+  /**
+   * The image being shown, or null when what is open is text — or when nothing has arrived yet.
+   *
+   * A second kind rather than a flag, and deliberately not derivable from the error: everything this
+   * pane branches on is either "is there an image" or "what error came back", and keeping those apart
+   * is what lets the text branches stay exactly as they were. A file the pane cannot render either way
+   * — an image that is gone, an image over the cap — is an error, not an image, so it lands in the
+   * states that were already here.
+   */
+  const image = imageOf(file.data) ? file.data : null
+  const editable = selectedFile !== null && image === null && canEdit(readCode)
   const dirty = isDirty(baseline, buffer)
 
   const showingDiff = selectedChange !== null
@@ -233,6 +244,10 @@ export function CodeViewer() {
   // Every arriving read: the first one, a refetch after an external change, a reload after a conflict.
   useEffect(() => {
     if (file.data === undefined || selectedFile === null) return
+    // An image read carries no text, and the buffer machinery below is about characters: there is
+    // nothing to adopt, nothing to compare against, and no way for an external change to conflict with
+    // a picture. Skipping it here is what keeps the buffer's states out of the image branch entirely.
+    if (imageOf(file.data)) return
     setSaveError(null)
     // A read that lands is also the way out of a save conflict: the content and the mtime have just
     // been refreshed, so the banner's question has been answered.
@@ -337,8 +352,14 @@ export function CodeViewer() {
 
   const fileName = selectedFile ? (selectedFile.split(/[\\/]/).pop() ?? selectedFile) : ''
 
-  /** The file line: the path, the dirty dot, and the toggle when the file can be edited at all. */
-  const toolbar = !showingDiff && selectedFile && (
+  /**
+   * The file line: the path, the dirty dot, and the toggle when the file can be edited at all.
+   *
+   * Suppressed entirely for an image, which has no text to edit. The path, the dirty dot and the toggle
+   * are a text file's chrome, and the disabled `read-only` fallback would say something different — that
+   * the file was refused — when the truth is that an editor has nothing here to hold.
+   */
+  const toolbar = !showingDiff && selectedFile && image === null && (
     <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-3">
       <p className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground" title={selectedFile}>
         {selectedFile}
@@ -389,7 +410,15 @@ export function CodeViewer() {
     <div className="flex h-full flex-col bg-background">
       <PaneHeader
         icon={showingDiff ? GitCompare : FileCode}
-        title={showingDiff ? 'Diff' : selectedFile ? `Code${editing ? ' · editing' : ''}` : 'Code Viewer'}
+        title={
+          showingDiff
+            ? 'Diff'
+            : image !== null
+              ? 'Image'
+              : selectedFile
+                ? `Code${editing ? ' · editing' : ''}`
+                : 'Code Viewer'
+        }
       >
         {(showingDiff || selectedFile) && (
           <Button
@@ -511,6 +540,13 @@ export function CodeViewer() {
             <div className="flex flex-1 items-center justify-center text-[12.5px] text-muted-foreground">Loading…</div>
           ) : file.error ? (
             <FileError error={file.error} path={selectedFile} />
+          ) : image !== null ? (
+            /*
+              An image, and the only branch of this pane that hands bytes straight to the DOM. The
+              field, the gutter and the backdrop are all *absent* rather than empty: none of the three
+              has anything to show for a picture, and an empty one would be chrome around nothing.
+            */
+            <ImageView image={image} alt={fileName} />
           ) : editing && buffer !== null ? (
             <>
               {/*
@@ -692,11 +728,53 @@ export function CodeViewer() {
 }
 
 /**
- * What the viewer shows when a read fails. The oversized case is expected enough to deserve its own
- * copy, so it is branched on the error code — never on the message string, which is main's to word.
+ * An image, as the pane shows it.
+ *
+ * One `img` of the data URL main sent, centered on the pane, with the file's own name as its `alt` so
+ * the picture is announced as the file it is rather than as "image". The caption underneath is the
+ * pane's one statement about what it is showing: the media type main decided and the size it measured —
+ * the caption's wording is this pane's, so one sentence here says it.
+ *
+ * This element is also the whole of this side's svg story. Main sends an svg base64 inside a data URL —
+ * bytes, never markup — and an `img` cannot run what it displays: the source is decoded and painted, so
+ * a `script` inside the file has no document to execute in. Every other way of drawing those bytes
+ * (inline, or as HTML) would hand them to the DOM as a document, which is the one thing that must not
+ * happen; keeping the render to an `img` is what makes the format safe to offer at all.
+ */
+function ImageView({ image, alt }: { image: ImageRead; alt: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/*
+        The image keeps its own aspect ratio inside whatever box the pane gives it (`object-contain`),
+        and the scroll container is here rather than on the pane so a picture larger than the pane can
+        still be reached instead of being clipped.
+      */}
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+        <img src={image.dataUrl} alt={alt} className="max-h-full max-w-full object-contain" />
+      </div>
+
+      <p
+        data-slot="image-caption"
+        className="shrink-0 border-t border-border bg-muted px-3 py-1.5 text-center font-mono text-[11px] text-muted-foreground"
+      >
+        {`${image.mime} · ${formatBytes(image.bytes)}`}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * What the viewer shows when a read fails. The two cases worth their own copy — a file past the cap,
+ * and an image past its own — are branched on the error code, never on the message string, which is
+ * main's to word.
+ *
+ * The image case is not a refinement of the text one: the limits are different numbers, and the way out
+ * is different for each — a text file over the cap is a preview the viewer declines, an image over it is
+ * one it cannot show. Both take the editor away, which for an image is already the case.
  */
 function FileError({ error, path }: { error: unknown; path: string }) {
-  const tooLarge = error instanceof ConveyorError && error.code === 'FILE_TOO_LARGE'
+  const code = error instanceof ConveyorError ? error.code : null
+  const tooLarge = code === 'FILE_TOO_LARGE' || code === 'IMAGE_TOO_LARGE'
   const name = path.split(/[\\/]/).pop() ?? path
 
   return (
@@ -707,9 +785,11 @@ function FileError({ error, path }: { error: unknown; path: string }) {
           {tooLarge ? `${name} is too large to preview` : 'This file could not be opened'}
         </p>
         <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-          {tooLarge
-            ? 'The viewer caps files at 1 MB so a large read never blocks the window.'
-            : 'It may be binary, moved, or unreadable.'}
+          {code === 'IMAGE_TOO_LARGE'
+            ? 'The viewer caps images at 2 MB so a large read never blocks the window.'
+            : tooLarge
+              ? 'The viewer caps files at 1 MB so a large read never blocks the window.'
+              : 'It may be binary, moved, or unreadable.'}
         </p>
       </div>
     </div>

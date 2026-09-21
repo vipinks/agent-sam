@@ -74,13 +74,16 @@ export function insertTab(text: string, selectionStart: number, selectionEnd: nu
 /**
  * Whether a failure leaves the file editable.
  *
- * Only the read cap takes the control away, and it has to: the reader refuses the file, so the buffer
- * is empty — and an editor opened on an empty buffer would overwrite a file nobody has seen. Every other
- * failure has no contents either, but the component renders its own state for those rather than
- * disabling this one, so the rule stays about the one case that needs a disabled control.
+ * A read the viewer refused has no contents, and an editor opened on an empty buffer would overwrite a
+ * file nobody has seen. Two codes refuse that way, and they are the same refusal at two limits: a text
+ * file past the viewer's 1 MB, and an image past its own 2 MB. An image over the cap never reaches the
+ * image branch at all — it fails before there are bytes to render — so without this second code the pane
+ * would offer to edit a picture it could not show. Every other failure has no contents either, but the
+ * component renders its own state for those rather than disabling this one, so the rule stays about the
+ * cases that need a disabled control.
  */
 export function canEdit(errorCode: string | null): boolean {
-  return errorCode !== 'FILE_TOO_LARGE'
+  return errorCode !== 'FILE_TOO_LARGE' && errorCode !== 'IMAGE_TOO_LARGE'
 }
 
 /**
