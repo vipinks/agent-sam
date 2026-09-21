@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { previewablePath } from '@/app/components/workbench/preview'
+import { defaultViewModeForPath, previewablePath } from '@/app/components/workbench/preview'
 
 /**
  * Which paths the viewer may preview as rendered markdown, without a DOM.
@@ -20,7 +20,7 @@ import { previewablePath } from '@/app/components/workbench/preview'
  * they would arrive at the pane as literal text under a toggle that promised a rendering. Rather than
  * offer a preview of the file's *name*, the extension is left out until the chat can render one.
  *
- * The pane's own wiring — the toggle, what it hides, and that Code is what is shown first — is in
+ * The pane's own wiring — the toggle, what it hides, and which view a path opens in — is in
  * `code-viewer-preview.test.tsx`, because only a rendered pane can fail there.
  */
 describe('previewablePath', () => {
@@ -77,5 +77,60 @@ describe('previewablePath', () => {
     // dot names the file, it does not introduce an extension.
     expect(previewablePath('C:/w/.md')).toBe(false)
     expect(previewablePath('C:/w/.markdown')).toBe(false)
+  })
+})
+
+/**
+ * Which view a path opens in, as a rule rather than as a rendered pane.
+ *
+ * This is the decision the pane makes once per opened file, and it is stated here — as a function over a
+ * path — so that "markdown opens rendered, everything else opens in Code" is a claim a test can make
+ * without a DOM. What only a rendered pane can show is that the pane actually asks this rule; that is in
+ * `code-viewer-preview.test.tsx`.
+ *
+ * The equality with `previewablePath` is the interesting part and is asserted as such: a path with no
+ * second view cannot default to one, so the two rules cannot drift into disagreeing about a file.
+ */
+describe('defaultViewModeForPath', () => {
+  it('opens markdown in the preview, whichever spelling of the extension arrived', () => {
+    expect(defaultViewModeForPath('C:/w/notes.md')).toBe('preview')
+    expect(defaultViewModeForPath('C:/w/README.markdown')).toBe('preview')
+    expect(defaultViewModeForPath('C:\\w\\docs\\intro.md')).toBe('preview')
+    // The case folding is `previewablePath`'s, asserted here because this rule is what the pane calls.
+    expect(defaultViewModeForPath('C:/w/NOTES.MD')).toBe('preview')
+  })
+
+  it('opens every other path in Code', () => {
+    expect(defaultViewModeForPath('C:/w/app.ts')).toBe('code')
+    expect(defaultViewModeForPath('C:/w/index.php')).toBe('code')
+    expect(defaultViewModeForPath('C:/w/notes.txt')).toBe('code')
+    expect(defaultViewModeForPath('C:/w/package.json')).toBe('code')
+    // The kinds this pane draws through branches of their own keep the default that changes nothing for
+    // them: an image and a workbook never consult the view, so Code is the honest answer here.
+    expect(defaultViewModeForPath('C:/w/logo.png')).toBe('code')
+    expect(defaultViewModeForPath('C:/w/report.xlsx')).toBe('code')
+    // The exclusions markdown itself carries — `.mdx` and a file merely called `.md` — are exclusions
+    // from the default too, or the pane would open a view it cannot offer a toggle for.
+    expect(defaultViewModeForPath('C:/w/page.mdx')).toBe('code')
+    expect(defaultViewModeForPath('C:/w/.md')).toBe('code')
+    expect(defaultViewModeForPath('')).toBe('code')
+  })
+
+  it('agrees with previewablePath on every path, so the two cannot disagree', () => {
+    // Stated as one rule rather than as a copy of the list above: the default is derived from the toggle's
+    // rule, and a path that gains or loses a preview must move both together.
+    for (const path of [
+      'C:/w/notes.md',
+      'C:/w/NOTES.MD',
+      'C:/w/README.markdown',
+      'C:/w/app.ts',
+      'C:/w/logo.png',
+      'C:/w/report.xlsx',
+      'C:/w/page.mdx',
+      'C:/w/.md',
+      '',
+    ]) {
+      expect(defaultViewModeForPath(path)).toBe(previewablePath(path) ? 'preview' : 'code')
+    }
   })
 })

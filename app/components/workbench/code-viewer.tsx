@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Braces, FileCode, GitCompare, Lock, Pencil, Save, TriangleAlert, X } from 'lucide-react'
+import { Braces, FileCode, GitCompare, Lock, Maximize2, Minimize2, Pencil, Save, TriangleAlert, X } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -13,7 +13,7 @@ import { editorHighlightPlan, skipNote, utf8Bytes } from './highlight'
 import { useHighlightedCode } from './use-highlight'
 import { formatBytes, imageOf, type ImageRead } from './image'
 import { MarkdownContent } from './markdown'
-import { previewablePath } from './preview'
+import { defaultViewModeForPath, previewablePath, type ViewMode } from './preview'
 import { lossNotice, recordEdit, savedLossNotice, spreadsheetOf, type SpreadsheetEdit } from './spreadsheet'
 import { SpreadsheetView } from './spreadsheet-view'
 import { useWorkbenchStore } from './store'
@@ -41,6 +41,11 @@ export function CodeViewer() {
   const selectedChange = useWorkbenchStore((s) => s.selectedChange)
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
   const setEditorDirty = useWorkbenchStore((s) => s.setEditorDirty)
+  // The expanded layout is the workbench's, not this pane's, but the control that moves it lives here —
+  // so the flag is read from the store the layout writes and reads too, rather than kept local and
+  // reported upward.
+  const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
+  const setViewerExpanded = useWorkbenchStore((s) => s.setViewerExpanded)
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
@@ -69,11 +74,16 @@ export function CodeViewer() {
   /**
    * Which of the two read-only views is showing: the source, or the file rendered.
    *
-   * `code` is the default, so a markdown file looks exactly as it did before this existed, and a path
-   * that cannot be previewed has nothing to switch to. Ephemeral UI state rather than store state: it
-   * says how this pane is drawing one file, which is nobody else's business and not worth persisting.
+   * The starting point is the path's own default (`defaultViewModeForPath`): markdown opens rendered,
+   * everything else opens in Code exactly as it always did, and a path with no second view has nothing
+   * to switch to. Read lazily so the first paint of a markdown file is already the preview rather than a
+   * frame of source that is replaced a moment later.
+   *
+   * Ephemeral UI state rather than store state: it says how this pane is drawing one file, which is
+   * nobody else's business and not worth persisting — and it is dropped when the path changes, because a
+   * choice made about one file is not a default for the next one.
    */
-  const [view, setView] = useState<'code' | 'preview'>('code')
+  const [view, setView] = useState<ViewMode>(() => defaultViewModeForPath(selectedFile ?? ''))
   /** The buffer. Null until something has been loaded to edit. */
   const [buffer, setBuffer] = useState<string | null>(null)
   /** What is believed to be on disk: the content last loaded, or last saved. */
@@ -387,9 +397,10 @@ export function CodeViewer() {
     setWorkbookPrompt(false)
     setWorkbookConfirmed(false)
     setWorkbookSaveNote(null)
-    // A new file starts in Code, the way an opened file always has: the preview is a choice about the
-    // file in front of the user, and a choice made about one file is not a default for the next.
-    setView('code')
+    // The next file starts at its own default: markdown rendered, everything else in Code. Reset here
+    // rather than remembered, for the same reason the buffer is dropped — a view belongs to the file in
+    // front of the user, and the next file gets the one its own path asks for.
+    setView(defaultViewModeForPath(selectedFile ?? ''))
   }, [selectedFile])
 
   // Publish the dirty flag for the change handler, which lives outside React and cannot read state.
@@ -724,6 +735,29 @@ export function CodeViewer() {
                   : 'Code Viewer'
         }
       >
+        {/*
+          The expand control, and the only control there is: no key binding, and deliberately not
+          Escape — a layout that also answered the key that dismisses things would rearrange itself for
+          a reader who was only closing something else.
+
+          It sits in the header rather than in the file toolbar below, because the toolbar belongs to a
+          file while this belongs to the pane: it is offered for a diff, an image and a workbook too,
+          and those have no toolbar of their own to put it in.
+
+          The icon and the tooltip both follow the state, so each direction is named — a label that did
+          not move would describe a button that is no longer on screen.
+        */}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-pressed={viewerExpanded}
+          aria-label={viewerExpanded ? 'Restore the chat column' : 'Expand the viewer'}
+          title={viewerExpanded ? 'Restore the chat column' : 'Expand the viewer over the chat column'}
+          onClick={() => setViewerExpanded(!viewerExpanded)}
+        >
+          {viewerExpanded ? <Minimize2 /> : <Maximize2 />}
+        </Button>
+
         {(showingDiff || selectedFile) && (
           <Button
             variant="ghost"

@@ -1,5 +1,6 @@
 /**
- * The viewer's preview rules: which paths it may render as markdown.
+ * The viewer's preview rules: which paths it may render as markdown, and which view such a path opens
+ * in.
  *
  * Pure and renderer-only, kept out of the component for the reason `editing.ts`, `gutter.ts` and
  * `image.ts` are: it is a decision a test should be able to make by calling a function rather than by
@@ -41,4 +42,26 @@ const PREVIEWABLE_EXTENSIONS: ReadonlySet<string> = new Set(['md', 'markdown'])
  */
 export function previewablePath(path: string): boolean {
   return PREVIEWABLE_EXTENSIONS.has(extensionOf(path))
+}
+
+/** The two read-only views a file can be drawn in. */
+export type ViewMode = 'code' | 'preview'
+
+/**
+ * The view a path opens in.
+ *
+ * Markdown opens rendered: a reader who opened `notes.md` wants the notes, not the asterisks, and the
+ * rendering is the whole reason this pane has a second view. Everything else opens in Code, which is
+ * where every path has always opened — including an image or a workbook, whose branches draw
+ * themselves and ignore the choice entirely, so answering "code" for them changes nothing for them.
+ *
+ * The answer is derived from `previewablePath` rather than from a second extension list: a path that
+ * has no second view cannot default to one, so the two questions have one answer by construction.
+ *
+ * A default, not a mode. The pane applies it once per opened file and the toggle still moves the view
+ * afterwards, which is why nothing here is written anywhere: the next file — and the next launch —
+ * starts from this rule again.
+ */
+export function defaultViewModeForPath(path: string): ViewMode {
+  return previewablePath(path) ? 'preview' : 'code'
 }

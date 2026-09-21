@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { toast } from 'sonner'
 import { ConveyorError } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
@@ -28,6 +29,11 @@ import { useWorkbenchStore } from './store'
  * The secondary panel follows the rail: the explorer keeps the file tree, and the chat shows the
  * conversation list the panel header has always promised.
  *
+ * The chat and the viewer are one split, and the viewer's header control can take the chat's half: while
+ * that is on, the chat column is removed from the group rather than shrunk to nothing, so the viewer is
+ * the only column and owns the width. The flag lives in the workbench store because the control that
+ * sets it is inside the viewer; it is not persisted, so every launch opens split.
+ *
  * The workspace-change subscription lives here rather than in the explorer or the viewer, so a burst
  * of writes from one agent turn invalidates the listings once rather than once per subscriber.
  */
@@ -42,6 +48,8 @@ export function Workbench() {
 function WorkbenchLayout() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
+  // Whether the viewer is taking the chat column's width, as the viewer's header control last left it.
+  const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
   const sessions = useChatSessionsContext()
   useWorkspaceChangeInvalidation(selectedFile)
 
@@ -122,13 +130,32 @@ function WorkbenchLayout() {
 
           <ResizablePanel id="main" minSize={420}>
             <ResizablePanelGroup id="workbench-main" orientation="horizontal">
-              <ResizablePanel id="chat" defaultSize="62" minSize={320}>
-                <ChatPanel />
-              </ResizablePanel>
+              {/*
+                The chat column while the split is showing, and its handle with it. Removed rather than
+                hidden behind a zero width or a class: a column that is still in the tree is still a
+                column the pane is sharing with, and "the viewer spans both" has to be true of the
+                layout rather than of the styling.
 
-              <ResizableHandle />
+                The two branches are keyed, and that is not decoration: without keys React reconciles
+                the group's children by position, so the panel that was the chat's would be re-used —
+                and remounted — as the viewer's. The viewer would then lose everything it was holding,
+                and an edited buffer, a chosen sheet and a rendered preview would all be rebuilt by a
+                click on a layout control. The keys are what make "the pane renders through the layout
+                change" true rather than merely intended.
+              */}
+              {!viewerExpanded && (
+                <Fragment key="chat">
+                  <ResizablePanel id="chat" defaultSize="62" minSize={320}>
+                    <ChatPanel />
+                  </ResizablePanel>
 
-              <ResizablePanel id="code" defaultSize="38" minSize={280}>
+                  <ResizableHandle />
+                </Fragment>
+              )}
+
+              {/* The sole column while expanded, and it needs no size of its own: a group with one panel
+                  gives that panel everything, so the width follows from the chat's absence. */}
+              <ResizablePanel key="code" id="code" defaultSize={viewerExpanded ? '100' : '38'} minSize={280}>
                 <CodeViewer />
               </ResizablePanel>
             </ResizablePanelGroup>

@@ -12,9 +12,9 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
  *
  * Which paths are previewable at all is settled without a DOM in `preview-rules.test.ts`. What only a
  * rendered pane can show is everything the switch does to the pane: that the toggle is offered for a
- * markdown file and absent for every other path, that Code is what is on screen until the user says
- * otherwise, that Preview replaces the numbered, tokenized read view with a rendering of the same
- * characters, that returning to Code puts both back, that entering edit mode lands in the editor
+ * markdown file and absent for every other path, that a markdown file opens in Preview while every other
+ * path opens in Code, that Preview replaces the numbered, tokenized read view with a rendering of the
+ * same characters, that returning to Code puts both back, that entering edit mode lands in the editor
  * rather than in the preview, and that the renderer the chat already trusts is the only thing that
  * turns those characters into elements.
  *
@@ -31,7 +31,11 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
 const ROOT = 'C:/w'
 const MD_PATH = 'C:/w/notes.md'
 const TEXT_PATH = 'C:/w/index.php'
+const TS_PATH = 'C:/w/app.ts'
 const DISK_MTIME = 1_700_000_000_000
+
+/** A language the viewer highlights, so "this path opens in Code" is provable from the tokens. */
+const TS_SOURCE = ['export function add(a: number, b: number): number {', '  return a + b', '}', ''].join('\n')
 
 /**
  * A markdown file with all four of the things the preview has to render: a heading, a list, a fenced
@@ -141,6 +145,21 @@ function previewOf(container: HTMLElement): HTMLElement | null {
   return container.querySelector<HTMLElement>('[data-slot="markdown-preview"]')
 }
 
+/**
+ * Wait for the rendered markdown, which is where a markdown path now starts.
+ *
+ * Distinct from `readView` rather than a looser version of it: a preview of a fenced block contains a
+ * `code` element of its own, so "wait for a `code`" would pass on the very view this helper exists to
+ * tell apart from the read view.
+ */
+async function markdownPreview(container: HTMLElement): Promise<HTMLElement> {
+  return waitFor(() => {
+    const preview = previewOf(container)
+    if (preview === null) throw new Error('the preview has not rendered yet')
+    return preview
+  })
+}
+
 /** The toggle's two buttons, asked for by the name a user reads rather than by position. */
 function toggle(): { code: HTMLElement; preview: HTMLElement } {
   return {
@@ -187,21 +206,27 @@ beforeEach(() => {
 })
 
 describe('the toggle', () => {
-  it('opens a markdown file in Code, and renders the source with its gutter and tokens', async () => {
+  it('opens a markdown file in Preview, with the toggle offering Code', async () => {
     stubViewer(MD_PATH, MD_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
 
-    // Code is the default, so a markdown file looks exactly as it did before this toggle existed: the
-    // numbered read view, with the file's characters and their tokens.
-    expect(toggle().code.getAttribute('aria-pressed')).toBe('true')
-    expect(toggle().preview.getAttribute('aria-pressed')).toBe('false')
+    // The path's own default: a reader who opened `notes.md` wants the notes, not the asterisks, and the
+    // switch is what offers them the source instead. Nothing of the Code view is behind the rendering —
+    // no gutter, no tokens — and the pressed state says which of the two halves is showing.
+    const preview = await markdownPreview(container)
+    expect(toggle().preview.getAttribute('aria-pressed')).toBe('true')
+    expect(toggle().code.getAttribute('aria-pressed')).toBe('false')
+    expect(preview.querySelector('h1')?.textContent).toBe('Release notes')
+    expect(gutterOf(container)).toBeNull()
+    expect(tokenSpans(container)).toBe(0)
+    expect(container.querySelector('code.hljs')).toBeNull()
+
+    // And the other half is one click away: Code is still the numbered, tokenized read view.
+    await userEvent.click(toggle().code)
+    expect(previewOf(container)).toBeNull()
     expect(gutterOf(container)).not.toBeNull()
     expect(tokenSpans(container)).toBeGreaterThan(0)
-    // Nothing is being rendered as markdown yet, so no heading element exists.
-    expect(container.querySelector('h1')).toBeNull()
-    expect(previewOf(container)).toBeNull()
   })
 
   it('is absent for a path that is not markdown', async () => {
@@ -215,6 +240,22 @@ describe('the toggle', () => {
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Code' })).toBeNull()
     expect(previewOf(container)).toBeNull()
+  })
+
+  it('opens a TypeScript file in Code, where there is no switch to offer', async () => {
+    stubViewer(TS_PATH, TS_SOURCE)
+    useWorkbenchStore.setState({ selectedFile: TS_PATH })
+    const { container } = renderViewer()
+    await readView(container)
+
+    // Non-markdown paths keep the default they have always had: the numbered read view, with the file's
+    // characters and their tokens. Only markdown moved.
+    expect(gutterOf(container)).not.toBeNull()
+    expect(tokenSpans(container)).toBeGreaterThan(0)
+    expect(previewOf(container)).toBeNull()
+    // And with nothing to switch to, neither half of the switch is offered.
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Code' })).toBeNull()
   })
 
   it('is absent for an image, which is previewed as bytes rather than as markdown', async () => {
@@ -250,9 +291,7 @@ describe('the preview', () => {
     stubViewer(MD_PATH, MD_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     const preview = previewOf(container)
     expect(preview).not.toBeNull()
@@ -278,13 +317,12 @@ describe('the preview', () => {
     expect(toggle().code.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('puts the gutter and the tokens back when the user switches to Code', async () => {
+  it('returns to Code and back to Preview without leaving anything of the other behind', async () => {
     stubViewer(MD_PATH, MD_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
+    await markdownPreview(container)
 
-    await userEvent.click(toggle().preview)
     await userEvent.click(toggle().code)
 
     // Both halves of the Code view are back, and the rendering is gone — the switch is a view, not a
@@ -295,15 +333,23 @@ describe('the preview', () => {
     expect(tokenSpans(container)).toBeGreaterThan(0)
     // The same characters in both views: the numbers count the file, not the render.
     expect(gutterOf(container)?.textContent?.split('\n')).toHaveLength(MD_SOURCE.split('\n').length)
+
+    // And the way back is the same click in the other direction, which is what makes this a toggle
+    // rather than a default with a one-way door out of it.
+    await userEvent.click(toggle().preview)
+    expect(previewOf(container)?.querySelector('h1')?.textContent).toBe('Release notes')
+    expect(gutterOf(container)).toBeNull()
+    expect(tokenSpans(container)).toBe(0)
   })
 
   it('opens the textarea when the user asks to edit, rather than editing inside the preview', async () => {
     stubViewer(MD_PATH, MD_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
+    await markdownPreview(container)
 
-    await userEvent.click(toggle().preview)
+    // Opened from the preview it now starts in, the editor is still reached through Code: the view moves
+    // before the field arrives, so the pane never tries to type into a rendering.
     await userEvent.click(await screen.findByLabelText('Edit this file'))
 
     // Edit mode is Code mode: the field is there, and the preview — read-only by construction — is not.
@@ -323,9 +369,7 @@ describe('the preview', () => {
     stubViewer(MD_PATH, '')
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     // The chat's renderer answers an empty content with "Thinking…", which is a sentence about a
     // stream. A file the user opened is not a stream, so the viewer answers for itself.
@@ -339,9 +383,7 @@ describe('the renderer the preview inherits', () => {
     stubViewer(MD_PATH, PAYLOAD_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     // The heading is rendered, so the file genuinely went through the renderer rather than being
     // dropped — the assertions below are about a preview that ran, not about one that did not.
@@ -370,9 +412,7 @@ describe('the renderer the preview inherits', () => {
     stubViewer(MD_PATH, TABLE_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     /*
       This case used to pin the opposite claim, and the history is worth keeping. `remark-gfm` was not in
@@ -404,9 +444,7 @@ describe('the renderer the preview inherits', () => {
     stubViewer(MD_PATH, TASK_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     // A disabled checkbox is the whole of the claim: an item's state is drawn, not offered as a control,
     // so the rendering cannot disagree with the file the user is reading. This pane is read-only by
@@ -423,9 +461,7 @@ describe('the renderer the preview inherits', () => {
     stubViewer(MD_PATH, DEL_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     expect(previewOf(container)?.querySelector('del')?.textContent).toBe('removed')
     // The markers are gone: this is a rendering of the line, not the line with its syntax still on it.
@@ -436,9 +472,7 @@ describe('the renderer the preview inherits', () => {
     stubViewer(MD_PATH, AUTOLINK_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     // The URL is both the link and its text, and the href is asserted literally because the inherited
     // sanitizer is what stands between a file's characters and an attribute: a link that survived it is
@@ -454,9 +488,7 @@ describe('the renderer the preview inherits', () => {
     stubViewer(MD_PATH, TABLE_PAYLOAD_SOURCE)
     useWorkbenchStore.setState({ selectedFile: MD_PATH })
     const { container } = renderViewer()
-    await readView(container)
-
-    await userEvent.click(toggle().preview)
+    await markdownPreview(container)
 
     // The table is real, so the cell genuinely went through the newly-parsed construct rather than being
     // skipped — the assertions below are about a rendering that ran.

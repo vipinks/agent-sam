@@ -55,6 +55,18 @@ interface WorkbenchState {
   setEditorDirty: (path: string | null, dirty: boolean) => void
   /** Report that something outside the viewer wrote the open path. */
   noteExternalChange: (path: string) => void
+  /**
+   * Whether the viewer is taking the chat column's width.
+   *
+   * The viewer's header control writes it and the workbench layout reads it, and those two are not the
+   * same component — which is the whole reason it is here rather than a `useState` in either of them.
+   *
+   * Session-scoped by construction: nothing writes it to storage, so it lives exactly as long as this
+   * renderer does and a restart opens split again. That is deliberate rather than unfinished — it is a
+   * way of looking at the thing in front of you, not a setting anyone chose.
+   */
+  viewerExpanded: boolean
+  setViewerExpanded: (expanded: boolean) => void
 }
 
 const TARGET_KEY = 'sam-ai-chat-target'
@@ -108,4 +120,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     set((state) => ({
       editor: { ...state.editor, path, externalNonce: state.editor.externalNonce + 1 },
     })),
+  viewerExpanded: false,
+  setViewerExpanded: (viewerExpanded) => set({ viewerExpanded }),
 }))
