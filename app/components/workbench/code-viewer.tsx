@@ -8,6 +8,8 @@ import { PaneHeader } from './pane-header'
 import { DiffView } from './diff-view'
 import { gitErrorMessage } from './changes'
 import { canEdit, decideConflict, insertTab, isDirty, writeErrorMessage } from './editing'
+import { skipNote } from './highlight'
+import { useHighlightedCode } from './use-highlight'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -106,6 +108,26 @@ export function CodeViewer() {
   const readCode = file.error instanceof ConveyorError ? file.error.code : null
   const editable = selectedFile !== null && canEdit(readCode)
   const dirty = isDirty(baseline, buffer)
+
+  const showingDiff = selectedChange !== null
+
+  /**
+   * The read view's text, and its tokens.
+   *
+   * `buffer ?? disk` is the string this pane has always shown in its read-only branch, so the tokens
+   * describe exactly what is on screen — including a buffer holding unsaved edits, which is still what
+   * the user is reading after leaving edit mode.
+   *
+   * Nothing is tokenized while the textarea or the diff is showing. The diff already carries its own
+   * meaning per line, and colouring its tokens too would be two encodings competing for the same
+   * channel; the editor is the user's own text, where highlighting would cost work on every keystroke
+   * for output a textarea cannot render anyway. Passing null is how that is said once, here, rather
+   * than as a condition inside the render.
+   */
+  const readContent = buffer ?? file.data?.content ?? ''
+  const plainView = showingDiff || editing
+  const { plan, html } = useHighlightedCode(plainView ? null : selectedFile, plainView ? null : readContent)
+  const highlightNote = plan === null ? null : skipNote(plan)
 
   /**
    * Adopt freshly read content, or refuse to.
@@ -270,7 +292,6 @@ export function CodeViewer() {
     if (selectedFile) void conveyor.workspace.readFile.invalidate({ path: selectedFile })
   }, [selectedFile])
 
-  const showingDiff = selectedChange !== null
   const fileName = selectedFile ? (selectedFile.split(/[\\/]/).pop() ?? selectedFile) : ''
 
   /** The file line: the path, the dirty dot, and the toggle when the file can be edited at all. */
@@ -474,9 +495,36 @@ export function CodeViewer() {
               className="min-h-0 flex-1 resize-none overflow-auto bg-background p-4 font-mono text-[12.5px] leading-relaxed whitespace-pre outline-none"
             />
           ) : (
-            <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-relaxed">
-              <code>{buffer ?? file.data?.content}</code>
-            </pre>
+            <div className="flex min-h-0 flex-1 flex-col">
+              {/*
+                The cap notice, and the only thing the viewer explains about its own rendering: a file
+                it did not tokenize is a decision it made, and without a word it would read as a
+                highlighter that had failed rather than one that had declined.
+              */}
+              {highlightNote && (
+                <p className="shrink-0 border-b border-border bg-muted px-3 py-1.5 text-[11.5px] text-muted-foreground">
+                  {highlightNote}
+                </p>
+              )}
+
+              <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-relaxed">
+                {html === null ? (
+                  // Plain text, as a React child: the source is escaped by React and never becomes
+                  // markup, which is what the no-tokens path has always been.
+                  <code>{readContent}</code>
+                ) : (
+                  /*
+                    The tokens arrive as a string of escaped HTML rather than as a React tree, which is
+                    the one place this pane hands markup to the DOM. Two reasons, both about size: a
+                    large file is tens of thousands of spans, and building that tree costs more than the
+                    tokenizing did; and highlight.js escapes the source it wraps, so nothing in the file
+                    can become markup. `hljs` on the element is what scopes the theme's token colours
+                    to this render.
+                  */
+                  <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+                )}
+              </pre>
+            </div>
           )}
         </div>
       )}

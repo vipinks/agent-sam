@@ -69,10 +69,22 @@ function renderViewer() {
   )
 }
 
+/**
+ * The read view's text, whatever the highlighting wrapped it in.
+ *
+ * The viewer tokenizes a `.ts` file, so the source arrives as spans rather than as one text node and a
+ * `getByText` query no longer matches it — the content is still on screen, it is just no longer a
+ * single node. Reading the element's `textContent` asserts what these cases are actually about (the
+ * disk's content is what is shown), without depending on how many elements it was split into.
+ */
+function readText(container: HTMLElement): string {
+  return container.querySelector('code')?.textContent ?? ''
+}
+
 /** Open the viewer with a file selected, and wait for its contents to land. */
 async function openFile() {
   const view = renderViewer()
-  await screen.findByText(/const a = 1/)
+  await waitFor(() => expect(readText(view.container)).toContain('const a = 1'))
   return view
 }
 
@@ -235,13 +247,13 @@ describe('a change on disk', () => {
 
   it('refetches exactly as before when the buffer is clean', async () => {
     const stub = stubViewer()
-    await openFile()
+    const view = await openFile()
 
     const before = stub.callsTo('workspace').filter((call) => call.method === 'readFile').length
     await externalWrite(stub, 'const a = 2\n')
 
     // Adopted, with nothing said: the user had no edits to lose.
-    await waitFor(() => expect(screen.getByText(/const a = 2/)).toBeTruthy())
+    await waitFor(() => expect(readText(view.container)).toContain('const a = 2'))
     expect(stub.callsTo('workspace').filter((call) => call.method === 'readFile').length).toBeGreaterThan(before)
     expect(screen.queryByText(/changed on disk/)).toBeNull()
   })
@@ -281,8 +293,13 @@ describe('a change on disk', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Reload' }))
 
-    // The disk's content is what is shown now, and the banner is gone.
-    await waitFor(() => expect(screen.getByText(/const a = 99/)).toBeTruthy())
+    // The disk's content is what the buffer holds now, and the banner is gone. Asserted on the buffer
+    // rather than on the read view, because edit mode was never left: after a reload the arriving read
+    // refills the buffer, so the textarea is what is on screen and its value is the thing Reload
+    // changed. (The read view's own text is covered in `code-viewer-highlight.test.tsx`.)
+    await waitFor(() =>
+      expect((screen.getByLabelText('Edit app.ts') as HTMLTextAreaElement).value).toContain('const a = 99')
+    )
     expect(screen.queryByText(/changed on disk/)).toBeNull()
     expect(screen.queryByLabelText('app.ts has unsaved changes')).toBeNull()
   })
@@ -432,7 +449,7 @@ describe('the write baseline', () => {
       },
       listDirectory: () => [],
     })
-    await openFile()
+    const view = await openFile()
     const area = await startEditing()
     await userEvent.type(area, 'mine')
     await userEvent.click(screen.getByLabelText('Save file'))
@@ -443,10 +460,19 @@ describe('the write baseline', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Reload' }))
 
     // Both are taken: the disk's content replaces the buffer, and the banner is gone because the
-    // question it asked has been answered.
-    await waitFor(() => expect(screen.getByText(/const a = 99/)).toBeTruthy())
+    // question it asked has been answered. Read off the buffer, which is what is on screen — edit mode
+    // was never left, so the textarea is showing and its value is what the reload replaced.
+    await waitFor(() =>
+      expect((screen.getByLabelText('Edit app.ts') as HTMLTextAreaElement).value).toContain('const a = 99')
+    )
     expect(screen.queryByText(/your save was not written/)).toBeNull()
     expect(screen.queryByLabelText('app.ts has unsaved changes')).toBeNull()
+    // The read view is still the pane's other half, so the refetched content is there to be shown when
+    // edit mode is left — which also keeps `view` meaningful rather than incidental.
+    await userEvent.click(screen.getByLabelText('Stop editing'))
+    await waitFor(() => expect(readText(view.container)).toContain('const a = 99'))
+    await userEvent.click(screen.getByLabelText('Edit this file'))
+    await screen.findByLabelText('Edit app.ts')
 
     // And the refetched mtime is what the next save is guarded against. Edit mode was never left, so
     // the textarea is already there — only the buffer had been dropped.

@@ -69,6 +69,16 @@
     --brand-soft: rgba(255, 92, 58, 0.13);
     --brand-hover: #f04724;
     --success: #16a34a;
+    /*
+      Syntax tokens: three hues, each derived from the palette above — the keyword from the brand
+      coral, the string from the success green, and the number from a warm amber between them —
+      darkened where the light surface needs the contrast. Names and identifiers stay the foreground
+      colour rather than taking a fourth hue, which is what keeps a highlighted file reading as this
+      app's own text rather than as a foreign theme.
+    */
+    --syntax-keyword: #a5320d;
+    --syntax-string: #0f6b41;
+    --syntax-number: #7d5300;
     --radius: 0.5rem;
   }
 
@@ -98,6 +108,10 @@
     --brand-soft: rgba(255, 92, 58, 0.13);
     --brand-hover: #ff7053;
     --success: #4ade80;
+    /* The same three hues, lightened for a near-black surface rather than re-chosen. */
+    --syntax-keyword: #ff8f73;
+    --syntax-string: #7ddba3;
+    --syntax-number: #e3b341;
     --radius: 0.5rem;
   }
 
@@ -143,5 +157,94 @@
   .theme-switching *::before,
   .theme-switching *::after {
     transition: none !important;
+  }
+
+  /*
+    Syntax highlighting.
+
+    This is the one place the app styles class names it does not author. highlight.js returns tokens as
+    `<span class="hljs-…">`, generated at runtime, so the mapping onto the theme cannot be a Tailwind
+    utility on an element this app renders — the markup arrives as a string. It lives in the theme file
+    rather than a stylesheet of its own, beside the scrollbar and view-transition rules, and every value
+    it uses is a token declared above.
+
+    Scoped to `.hljs`, which the viewer puts on the element holding the tokens, so nothing outside a
+    highlighted file can match these selectors. Colour is never the only signal a file carries — the
+    source text itself is the content — which is why two tokens sharing a hue would be a cosmetic loss
+    rather than a lost distinction.
+  */
+  .hljs {
+    color: var(--foreground);
+  }
+
+  /* Structure and commentary recede, so the tokens worth reading are the ones that stand out. */
+  .hljs-comment,
+  .hljs-quote,
+  .hljs-meta,
+  .hljs-punctuation,
+  .hljs-property,
+  .hljs-variable,
+  .hljs-params,
+  .hljs-tag {
+    color: var(--muted-foreground);
+  }
+
+  .hljs-comment,
+  .hljs-quote {
+    font-style: italic;
+  }
+
+  /* Language keywords, and the literals that behave like them. */
+  .hljs-keyword,
+  .hljs-doctag,
+  .hljs-literal,
+  .hljs-selector-tag {
+    color: var(--syntax-keyword);
+  }
+
+  /* Quoted text of every kind: it is data, not code. */
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition,
+  .hljs-attribute,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: var(--syntax-string);
+  }
+
+  /* Values, and the names a language defines for itself. */
+  .hljs-number,
+  .hljs-built_in,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-selector-class,
+  .hljs-selector-id {
+    color: var(--syntax-number);
+  }
+
+  /*
+    Declarations: the names being defined or called, and the attributes being set. Left at full
+    foreground weight so the shape of the code is what the eye lands on.
+  */
+  .hljs-title,
+  .hljs-section,
+  .hljs-name,
+  .hljs-attr {
+    color: var(--foreground);
+    font-weight: 600;
+  }
+
+  /* Markdown's own emphasis, which is a property of the text rather than a hue. */
+  .hljs-emphasis {
+    font-style: italic;
+  }
+
+  .hljs-strong {
+    font-weight: 600;
+  }
+
+  /* A removed line is stated as a loss, in the token the diff pane already uses for one. */
+  .hljs-deletion {
+    color: var(--destructive);
   }
 }
