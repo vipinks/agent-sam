@@ -9,6 +9,8 @@ import { notifyWorkspaceChanged, workspaceChangedSchema } from '../events'
 import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 import { IMAGE_TOO_LARGE, imageKindForPath, imageOverCap } from '../protocol/image'
+import { SPREADSHEET_TOO_LARGE, spreadsheetKindForPath, spreadsheetOverCap } from '../protocol/spreadsheet'
+import { parseSpreadsheet } from './spreadsheet-parse'
 
 /**
  * Local workspace access — the only place in the app that touches the file system. The renderer
@@ -214,24 +216,28 @@ export const workspaceModule = defineModule({
   }),
 
   /**
-   * Read one file, as text or as an image, decided by its name.
+   * Read one file, as text, as an image, or as a workbook, decided by its name.
    *
    * Size is checked before anything is read, so an oversized file never lands in memory in the first
    * place — and the check uses a different cap per kind, which is why the kind is settled first. A
    * text read is a string this pane will tokenize; an image read is a data URL it hands to an `img`,
-   * and base64 makes what crosses IPC a third larger than the file. Same shape of decision, two
-   * different numbers.
+   * and base64 makes what crosses IPC a third larger than the file; a workbook read is a parsed table,
+   * whose useful content is a small fraction of its bytes. Same shape of decision, three different
+   * numbers.
    *
-   * The two results are deliberately different objects rather than one object with an optional half.
+   * The three results are deliberately different objects rather than one object with optional halves.
    * A text result is exactly what it always was, field for field, so every existing caller and stored
    * transcript is unaffected; an image result carries `kind`, `mime`, `dataUrl` and `bytes` instead of
-   * `content`, and no caller that understands one can mistake it for the other.
+   * `content`; a workbook result carries `kind`, `sheets` and `fidelity`. No caller that understands
+   * one can mistake it for another, and the branches are in a deliberate order — image, workbook, then
+   * text — so that the text cap is never applied to a kind whose cap is its own. A 3 MB workbook is
+   * readable even though a 3 MB text file is not, for the same reason a 1.5 MB image is.
    *
    * `baselineMtime` is the mtime of the bytes being returned, and it is what lets an editor save
    * safely: it sends that number back with its write, and main refuses the write if the disk has moved
    * on since. It is optional and additive, so a caller that ignores it — and any stored transcript
-   * holding an older result — is unaffected. An image result carries it too, for the same reason the
-   * file's mtime is a fact about the file rather than about how it is displayed.
+   * holding an older result — is unaffected. Every kind carries it, because a file's mtime is a fact
+   * about the file rather than about how it is displayed.
    */
   readFile: query(z.object({ path: z.string().min(1) }), async ({ input }) => {
     const mime = imageKindForPath(input.path)
@@ -273,6 +279,37 @@ export const workspaceModule = defineModule({
         kind: 'image' as const,
         mime,
         dataUrl: `data:${mime};base64,${bytes.toString('base64')}`,
+        bytes: stats.size,
+        path: input.path,
+        baselineMtime: stats.mtimeMs,
+      }
+    }
+
+    if (spreadsheetKindForPath(input.path) !== null) {
+      if (spreadsheetOverCap(stats.size)) {
+        throw new ConveyorError(
+          SPREADSHEET_TOO_LARGE,
+          `${basename(input.path)} is ${(stats.size / 1024 / 1024).toFixed(1)} MB — the viewer caps workbooks at 8 MB.`
+        )
+      }
+
+      let bytes: Buffer
+      try {
+        bytes = await readFileFromDisk(input.path)
+      } catch {
+        throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
+      }
+
+      // The parse is handed the bytes and nothing else: it reads the container for what the container
+      // knows — encryption, chart parts — and the parser for the sheets. Both refusals it can raise
+      // travel out of here unchanged, because they are already codes the renderer branches on.
+      const parsed = await parseSpreadsheet(bytes)
+
+      return {
+        kind: 'spreadsheet' as const,
+        sheets: parsed.sheets,
+        sheetsOmitted: parsed.sheetsOmitted,
+        fidelity: parsed.fidelity,
         bytes: stats.size,
         path: input.path,
         baselineMtime: stats.mtimeMs,

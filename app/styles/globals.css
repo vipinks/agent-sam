@@ -309,4 +309,80 @@
     color: var(--muted-foreground);
     text-decoration: line-through;
   }
+
+  /*
+    The workbook grid.
+
+    Scoped to `[data-slot='spreadsheet']`, which the grid puts on its own root, so nothing outside a
+    workbook can match these selectors. The component carries the layout — the sheet tabs, the single
+    scroll container, the sticky header — as utilities; what is here is the part a utility cannot express
+    out of the tokens, which is three things: a zebra tint the palette has no token for, the interaction
+    between stickiness and table borders, and cells bounded so a wide sheet scrolls instead of stretching.
+
+    Why the table is `separate` and not `collapse`: with collapsed borders a `th` stops being a positioned
+    box in Chromium's painting order, so the sticky header scrolls away with the rows it exists to stay
+    above. Separate borders with zero spacing keep the grid lines and keep the header stuck.
+  */
+  [data-slot='spreadsheet'] {
+    /*
+      The zebra tint, derived rather than invented: the muted fill at 60% over the surface. There is no
+      token for it and there should not be one — it is not a colour this app uses anywhere but here, it
+      is what this table's alternate rows look like — and computing it from two tokens means a theme
+      change moves it along with everything else instead of leaving one stripe of the old palette behind.
+    */
+    --sheet-zebra: color-mix(in oklab, var(--muted) 60%, var(--background));
+  }
+
+  [data-slot='spreadsheet'] table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  [data-slot='spreadsheet'] th,
+  [data-slot='spreadsheet'] td {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+    /*
+      One line per cell, and a cap on how wide a line may get. A sheet is a grid of short values, so a
+      wrapping cell would turn a row into a paragraph and make every other column unreachable without
+      scrolling past something unrelated; and without the width cap a single long note would make the
+      table arbitrarily wide. The cap is generous enough to hold a readable value and small enough that
+      a 64-column sheet still scrolls in a sane number of screens.
+    */
+    white-space: nowrap;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The pane draws the outer edge, so the grid does not draw a second line just inside it. */
+  [data-slot='spreadsheet'] th:last-child,
+  [data-slot='spreadsheet'] td:last-child {
+    border-right: none;
+  }
+
+  /*
+    The header: the sheet's first row, stuck to the top of the scroll box.
+
+    It needs an opaque fill rather than a translucent one, because the rows pass underneath it and a
+    see-through header would show them through the text it is meant to stay above. `--muted` is the same
+    fill the markdown table's header uses, so a table in a chat and a table in a file read as one object.
+  */
+  [data-slot='spreadsheet'] thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--muted);
+    font-weight: 500;
+  }
+
+  /*
+    Zebra rows, so a wide sheet can be tracked across without the eye losing the line. Body rows only:
+    the header is a `th` outside `tbody`, so the stripes describe the data rather than the chrome.
+  */
+  [data-slot='spreadsheet'] tbody tr:nth-child(even) {
+    background: var(--sheet-zebra);
+  }
 }

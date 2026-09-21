@@ -57,6 +57,7 @@ const SUITES = [
   { name: 'recent roots store', src: 'workspace/recent-roots-store-test.ts' },
   { name: 'write baseline', src: 'workspace/write-baseline-test.ts' },
   { name: 'image read', src: 'workspace/image-read-test.ts' },
+  { name: 'spreadsheet read', src: 'workspace/spreadsheet-read-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 
@@ -90,6 +91,12 @@ for (const suite of SUITES) {
         // can be reached.
         '--external:electron',
         '--external:electron-conveyor/main',
+        // Also external, for a different reason: the workbook parser is a main-process dependency the
+        // app itself externalizes (`externalizeDepsPlugin` in electron.vite.config.ts), and several
+        // suites reach it transitively through `workspace.ts`. Inlining it would bundle two megabytes
+        // into every one of those bundles — paying a per-suite cost for a parser most of them never
+        // call — and would test an artifact the app never runs.
+        '--external:exceljs',
         '--log-level=error',
       ],
       { stdio: 'inherit' }

@@ -14,6 +14,8 @@ import { useHighlightedCode } from './use-highlight'
 import { formatBytes, imageOf, type ImageRead } from './image'
 import { MarkdownContent } from './markdown'
 import { previewablePath } from './preview'
+import { spreadsheetOf } from './spreadsheet'
+import { SpreadsheetView } from './spreadsheet-view'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -135,7 +137,19 @@ export function CodeViewer() {
    * states that were already here.
    */
   const image = imageOf(file.data) ? file.data : null
-  const editable = selectedFile !== null && image === null && canEdit(readCode)
+  /**
+   * The workbook being shown, or null when what is open is something else.
+   *
+   * A third kind alongside the image, and it is a kind rather than a flag for the same reason: the pane
+   * branches on which of the three shapes arrived, not on a boolean that could disagree with what is
+   * actually in `file.data`. A workbook the viewer could not read — over the cap, locked, unparseable —
+   * is an error rather than a workbook, so it lands in the states that were already here instead of
+   * drawing an empty grid over a failure.
+   */
+  const spreadsheet = spreadsheetOf(file.data) ? file.data : null
+  // Neither an image nor a workbook has characters to put in a textarea, so neither offers the editor.
+  // This is the only place the two are treated alike, and they are alike for exactly this reason.
+  const editable = selectedFile !== null && image === null && spreadsheet === null && canEdit(readCode)
   const dirty = isDirty(baseline, buffer)
 
   const showingDiff = selectedChange !== null
@@ -146,14 +160,16 @@ export function CodeViewer() {
    * Four things have to be true, and each of them is about what is actually on screen rather than
    * about the path alone: the path has to be markdown (`previewablePath`), the pane has to be showing a
    * file rather than a diff, the read has to have succeeded — a file the viewer could not read has
-   * nothing to render, so a preview of it would be a second way to show the same error — and it must not
-   * be an image, which this pane previews as bytes through a branch of its own.
+   * nothing to render, so a preview of it would be a second way to show the same error — and it must
+   * not be an image or a workbook, which this pane draws through branches of their own. A markdown
+   * preview of a spreadsheet is the rendering that would make least sense.
    */
   const previewable =
     !showingDiff &&
     !file.error &&
     !file.isLoading &&
     image === null &&
+    spreadsheet === null &&
     selectedFile !== null &&
     previewablePath(selectedFile)
   const preview = previewable && view === 'preview'
@@ -170,11 +186,20 @@ export function CodeViewer() {
    * channel; the editor is the user's own text, where highlighting would cost work on every keystroke
    * for output a textarea cannot render anyway. Passing null is how that is said once, here, rather
    * than as a condition inside the render.
+   *
+   * The string is read only from a result that actually carries one, and *checked* rather than assumed.
+   * The client's inferred result type carries the three kinds' fields as optional — `mime` and `dataUrl`
+   * on the image result, `sheets` on the workbook one, and `content` here — so the compiler sees
+   * `string | undefined` where the domain says a text result always has a string. The check is what
+   * reconciles the two, and it is the same shape `imageOf` and `spreadsheetOf` use: ask at runtime, then
+   * use.
    */
-  const readContent = buffer ?? file.data?.content ?? ''
-  // The preview is drawn, not tokenized: there are no tokens to paint, so none are computed while it is
-  // on screen — and, for the same reason, no note about a cap the preview does not have either.
-  const plainView = showingDiff || editing || preview
+  const readText = file.data !== undefined && typeof file.data.content === 'string' ? file.data.content : ''
+  const readContent = buffer ?? readText
+  // The preview and the workbook are drawn, not tokenized: there are no tokens to paint, so none are
+  // computed while either is on screen — and, for the same reason, no note about a cap neither of them
+  // has either.
+  const plainView = showingDiff || editing || preview || spreadsheet !== null
   const { plan, html } = useHighlightedCode(plainView ? null : selectedFile, plainView ? null : readContent)
   const highlightNote = plan === null ? null : skipNote(plan)
 
@@ -278,11 +303,21 @@ export function CodeViewer() {
     // nothing to adopt, nothing to compare against, and no way for an external change to conflict with
     // a picture. Skipping it here is what keeps the buffer's states out of the image branch entirely.
     if (imageOf(file.data)) return
+    // A workbook is the same case for a different reason: a sheet is not characters either, so there is
+    // no buffer to hold it and no edit to lose. It is skipped rather than adopted as a string, which is
+    // also why opening a workbook over an unsaved buffer cannot raise a conflict banner — the buffer is
+    // dropped when the path changes, and a path change is the only way to reach this branch.
+    if (spreadsheetOf(file.data)) return
+    const content = file.data.content
+    // A read with no text is a read this machinery has nothing to do with. The two guards above cover the
+    // kinds this pane draws itself; this one covers the shape of the result rather than the kind, and it
+    // is a check rather than a cast because the field is optional in the client's inferred result type.
+    if (typeof content !== 'string') return
     setSaveError(null)
     // A read that lands is also the way out of a save conflict: the content and the mtime have just
     // been refreshed, so the banner's question has been answered.
     setSaveConflict(false)
-    applyRead(file.data.content, file.data.baselineMtime ?? null)
+    applyRead(content, file.data.baselineMtime ?? null)
   }, [file.data, file.dataUpdatedAt, selectedFile, applyRead])
 
   /** Everything the buffer holds, dropped when the file changes. A buffer belongs to one path. */
@@ -391,6 +426,11 @@ export function CodeViewer() {
    * Suppressed entirely for an image, which has no text to edit. The path, the dirty dot and the toggle
    * are a text file's chrome, and the disabled `read-only` fallback would say something different — that
    * the file was refused — when the truth is that an editor has nothing here to hold.
+   *
+   * A workbook keeps the line but not the fallback. The path is worth showing — it is how a reader knows
+   * which of several similar files is open — and a grid has no dirty dot to have, so the line is the path
+   * and nothing else. What it must not show is `read-only`: that label is the viewer saying it declined
+   * to open a text file, and a workbook was never a text file to decline.
    */
   const toolbar = !showingDiff && selectedFile && image === null && (
     <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-3">
@@ -466,9 +506,10 @@ export function CodeViewer() {
         >
           {editing ? <Lock /> : <Pencil />}
         </Button>
-      ) : (
+      ) : spreadsheet !== null ? null : (
         // A file the reader refused: there are no contents to edit, and an editor over an empty buffer
-        // would overwrite a file nobody has seen.
+        // would overwrite a file nobody has seen. A workbook takes the null branch above rather than this
+        // one: nothing was refused, so there is nothing to say about a refusal.
         <span className="shrink-0 text-[10.5px] text-muted-foreground" title="Too large to edit">
           read-only
         </span>
@@ -485,9 +526,11 @@ export function CodeViewer() {
             ? 'Diff'
             : image !== null
               ? 'Image'
-              : selectedFile
-                ? `Code${editing ? ' · editing' : ''}`
-                : 'Code Viewer'
+              : spreadsheet !== null
+                ? 'Spreadsheet'
+                : selectedFile
+                  ? `Code${editing ? ' · editing' : ''}`
+                  : 'Code Viewer'
         }
       >
         {(showingDiff || selectedFile) && (
@@ -617,6 +660,18 @@ export function CodeViewer() {
               has anything to show for a picture, and an empty one would be chrome around nothing.
             */
             <ImageView image={image} alt={fileName} />
+          ) : spreadsheet !== null ? (
+            /*
+              A workbook, drawn as a grid. Read-only by construction, like the image branch above and for
+              a related reason: there is nothing here that could be typed into, so there is no mode to be
+              in and no toggle to offer. The gutter and the backdrop are as absent as they are for a
+              picture — they number lines and paint tokens, and a table has neither.
+
+              `key` on the path, so opening another workbook remounts the grid and the sheet on screen is
+              sheet one of the file that is actually open. Without it React would keep the old component's
+              state and a reader could land on sheet four of a workbook they had never seen.
+            */
+            <SpreadsheetView key={selectedFile} read={spreadsheet} />
           ) : editing && buffer !== null ? (
             <>
               {/*
@@ -858,33 +913,49 @@ function ImageView({ image, alt }: { image: ImageRead; alt: string }) {
 }
 
 /**
- * What the viewer shows when a read fails. The two cases worth their own copy — a file past the cap,
- * and an image past its own — are branched on the error code, never on the message string, which is
- * main's to word.
+ * What the viewer shows when a read fails. The cases worth their own copy — a file past the cap, an image
+ * past its own, a workbook past its own, a locked workbook, a workbook that will not parse — are branched
+ * on the error code, never on the message string, which is main's to word.
  *
- * The image case is not a refinement of the text one: the limits are different numbers, and the way out
- * is different for each — a text file over the cap is a preview the viewer declines, an image over it is
- * one it cannot show. Both take the editor away, which for an image is already the case.
+ * The cases are not refinements of each other: the limits are different numbers, and the way out differs
+ * for each — a text file over the cap is a preview the viewer declines, an image over it is one it cannot
+ * show, and a locked workbook is neither damaged nor oversized, so telling its reader it "could not be
+ * opened" would be a statement about the bytes that happens to be false. A workbook that will not parse
+ * is the one place this pane names a format limit outright, because the honest reason a `.xls` fails here
+ * is that this parser reads the modern container and not the binary one.
+ *
+ * All of them take the editor away, which for a picture and a workbook is already the case.
  */
 function FileError({ error, path }: { error: unknown; path: string }) {
   const code = error instanceof ConveyorError ? error.code : null
-  const tooLarge = code === 'FILE_TOO_LARGE' || code === 'IMAGE_TOO_LARGE'
+  const encrypted = code === 'SPREADSHEET_ENCRYPTED'
+  const tooLarge = code === 'FILE_TOO_LARGE' || code === 'IMAGE_TOO_LARGE' || code === 'SPREADSHEET_TOO_LARGE'
   const name = path.split(/[\\/]/).pop() ?? path
+
+  const title = encrypted
+    ? `${name} is password protected`
+    : tooLarge
+      ? `${name} is too large to preview`
+      : 'This file could not be opened'
+
+  const detail = encrypted
+    ? 'It can be opened in a spreadsheet program, where it can be unlocked.'
+    : code === 'SPREADSHEET_TOO_LARGE'
+      ? 'The viewer caps workbooks at 8 MB so a large read never blocks the window.'
+      : code === 'SPREADSHEET_PARSE_FAILED'
+        ? 'This viewer reads modern .xlsx workbooks; a legacy binary .xls is not one of them.'
+        : code === 'IMAGE_TOO_LARGE'
+          ? 'The viewer caps images at 2 MB so a large read never blocks the window.'
+          : tooLarge
+            ? 'The viewer caps files at 1 MB so a large read never blocks the window.'
+            : 'It may be binary, moved, or unreadable.'
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
       <TriangleAlert className="size-6 text-muted-foreground/50" />
       <div>
-        <p className="text-[13px] font-medium">
-          {tooLarge ? `${name} is too large to preview` : 'This file could not be opened'}
-        </p>
-        <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-          {code === 'IMAGE_TOO_LARGE'
-            ? 'The viewer caps images at 2 MB so a large read never blocks the window.'
-            : tooLarge
-              ? 'The viewer caps files at 1 MB so a large read never blocks the window.'
-              : 'It may be binary, moved, or unreadable.'}
-        </p>
+        <p className="text-[13px] font-medium">{title}</p>
+        <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">{detail}</p>
       </div>
     </div>
   )
