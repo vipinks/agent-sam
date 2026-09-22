@@ -21,7 +21,7 @@ import {
 } from '../ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
-import { ACTIVITIES } from './icon-rail'
+import { DrawerChevron, activityById } from './icon-rail'
 import { useWorkbenchStore } from './store'
 import { formatRelativeTime } from './relative-time'
 import { isSearchable, planVisibleSessions, snippetsFor } from './session-search'
@@ -64,7 +64,7 @@ export function SessionListPanel({
 }) {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
-  const activity = ACTIVITIES.find((a) => a.id === 'chat') ?? ACTIVITIES[1]
+  const activity = activityById('chat')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   // The row being renamed, and the text in its editor. Held here rather than in the row so that only
@@ -143,6 +143,12 @@ export function SessionListPanel({
         <Button variant="ghost" size="icon-xs" aria-label="New chat" title="New chat" onClick={onCreate}>
           <Plus />
         </Button>
+        {/*
+          The way out of the drawer, trailing the row it shares with the search and the new-chat control.
+          It states the same direction as the rail's own control, and cannot state the other one: this
+          header is inside the drawer, so while the drawer is away there is no header here to hold it.
+        */}
+        <DrawerChevron />
       </PaneHeader>
 
       {sessions.length === 0 ? (

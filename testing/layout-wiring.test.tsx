@@ -208,6 +208,31 @@ describe('the workbench columns', () => {
   })
 })
 
+describe('the drawer, put away and back', () => {
+  it('takes its panel out of the group, and declares the state’s own width again when it returns', () => {
+    // The two halves of the collapse, read from what the group is handed rather than from the mode of
+    // the window: while the drawer is away the outer group holds one panel, and when it comes back the
+    // share declared for the drawer is the one that state was dragged to — not a default, and certainly
+    // not a zero, which would look plausible on screen and be wrong on the next launch.
+    const dragged: LayoutSizes = { outer: { drawer: 44, main: 56 }, main: { chat: 40, viewer: 60 } }
+    act(() => useWorkbenchStore.getState().saveLayout('windowed', dragged))
+
+    const { container } = renderWorkbench()
+    expect(columns(container, 'workbench').map((panel) => panel.id)).toEqual(['secondary', 'main'])
+
+    act(() => useWorkbenchStore.getState().setDrawerCollapsed(true))
+    // One panel, and it is handed everything: the group's declared layout names two panels and this
+    // group has one, which is the same fallback the viewer's expansion relies on.
+    expect(columns(container, 'workbench')).toEqual([{ id: 'main', defaultSize: percentSize(100) }])
+
+    act(() => useWorkbenchStore.getState().setDrawerCollapsed(false))
+    expect(columns(container, 'workbench')).toEqual([
+      { id: 'secondary', defaultSize: percentSize(dragged.outer.drawer) },
+      { id: 'main', defaultSize: percentSize(dragged.outer.main) },
+    ])
+  })
+})
+
 describe('the window state the layout is for', () => {
   it('lays a windowed window out at the windowed set', () => {
     renderWorkbench()

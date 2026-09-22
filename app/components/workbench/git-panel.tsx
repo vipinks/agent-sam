@@ -2,7 +2,7 @@ import { FolderTree } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { PaneHeader } from './pane-header'
-import { ACTIVITIES } from './icon-rail'
+import { activityById, DrawerChevron } from './icon-rail'
 import { ChangesSection } from './changes-section'
 
 /**
@@ -20,17 +20,23 @@ import { ChangesSection } from './changes-section'
  * box, the refresh, the branch switch, and the not-a-repository state. None of it is duplicated here,
  * so the two can never disagree about what the working tree holds.
  *
+ * The chevron beside the heading puts the drawer away, and it is the header's rather than this panel's:
+ * every panel the drawer shows offers the same control, so the way out of the drawer is in the header of
+ * whatever is in it rather than only at the rail's head.
+ *
  * No folder open is a state of this panel rather than an empty section: there would be nothing to
  * report on, and the section's reads would be aimed at a path that does not exist.
  */
 export function GitPanel() {
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
   // The item's own label, so the header and the rail button say the same thing.
-  const activity = ACTIVITIES.find((a) => a.id === 'git') ?? ACTIVITIES[1]
+  const activity = activityById('git')
 
   return (
     <div className="flex h-full flex-col bg-card">
-      <PaneHeader icon={activity.icon} title={activity.panelTitle} />
+      <PaneHeader icon={activity.icon} title={activity.panelTitle}>
+        <DrawerChevron />
+      </PaneHeader>
 
       {rootPath === null ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

@@ -91,6 +91,19 @@ interface WorkbenchState {
   setThemeId: (themeId: ThemeId) => void
   setBrightness: (brightness: number) => void
   /**
+   * Whether the drawer is put away, leaving the icon rail alone beside the main area.
+   *
+   * A preference rather than a way of looking at something, which is the line between it and
+   * `viewerExpanded` beside it: a reader who works with the drawer away is describing how they work, so
+   * this one is written to the settings slice and a restart opens the way the last session ended. It
+   * lives in the record the two layout sets already occupy — one more key in a record that is already
+   * being stored, not a key of its own — and it is stored as present-or-absent: expanded is the absence
+   * of the key rather than a `false` in it, so a record written before the drawer could be put away is
+   * read as the state it describes.
+   */
+  drawerCollapsed: boolean
+  setDrawerCollapsed: (collapsed: boolean) => void
+  /**
    * The layout each window state was last dragged to, one set per state, either of them absent.
    *
    * A preference rather than a fact about anything, so it lives here beside the theme and the chat
@@ -161,39 +174,80 @@ function saveThemePreference(themeId: ThemeId, brightness: number): void {
 const LAYOUT_KEY = 'sam-ai-layout-preferences'
 
 /**
- * The two layout sets as they were stored, each read on its own.
+ * The record stored under `LAYOUT_KEY`: the two layout sets, and whether the drawer is away.
+ *
+ * One record rather than a second key, because the two are written by the same two kinds of event — a
+ * drag and a collapse — and two keys would mean two writers that could each drop the other's half. It
+ * is additive in the sense that matters: a reader of either half reads it on its own, so a record
+ * written by a version that had only the sets stays perfectly good, and so does one written by this
+ * version read by a version that does not know the flag.
+ */
+interface StoredWorkbenchPreferences extends StoredLayoutSets {
+  /** Present only when the drawer was left away; absent means expanded. */
+  drawerCollapsed?: boolean
+}
+
+/**
+ * The two layout sets and the collapse flag as they were stored, each read on its own.
  *
  * Read the way the theme preference is, and for the same reason: a record written before both sets
  * existed, or one whose windowed half was corrupted, must not cost the user the half that is still
  * meaningful. Each key is sanitised separately, and a value that is not a set at all is simply absent —
- * which `layoutFor` then resolves to that state's defaults.
+ * which `layoutFor` then resolves to that state's defaults. The flag is read the same way, one step
+ * stricter: only a stored `true` puts the drawer away, because "expanded" is what every other value —
+ * absent, `false`, or unreadable — means, and it is the state a first launch opens in.
  */
-function initialLayoutPreferences(): StoredLayoutSets {
+function initialLayoutPreferences(): { sets: StoredLayoutSets; drawerCollapsed: boolean } {
   try {
     const saved = localStorage.getItem(LAYOUT_KEY)
     if (saved) {
-      const parsed = JSON.parse(saved) as { layoutWindowed?: unknown; layoutMaximized?: unknown }
+      const parsed = JSON.parse(saved) as StoredWorkbenchPreferences
       const windowed = sanitizeLayoutSizes(parsed.layoutWindowed)
       const maximized = sanitizeLayoutSizes(parsed.layoutMaximized)
       return {
-        ...(windowed ? { layoutWindowed: windowed } : {}),
-        ...(maximized ? { layoutMaximized: maximized } : {}),
+        sets: {
+          ...(windowed ? { layoutWindowed: windowed } : {}),
+          ...(maximized ? { layoutMaximized: maximized } : {}),
+        },
+        drawerCollapsed: parsed.drawerCollapsed === true,
       }
     }
   } catch {
     // Unreadable preference — fall through to no saved sets rather than failing to start.
   }
-  return {}
+  return { sets: {}, drawerCollapsed: false }
 }
 
-/** Persist the two layout sets, tolerating a storage that refuses to write. */
-function saveLayoutPreferences(sets: StoredLayoutSets): void {
+/**
+ * Persist the record, tolerating a storage that refuses to write.
+ *
+ * `mergeSavedLayout`'s output for the sets, so the writer cannot drop one of them, and the flag
+ * written only when it is set — the absence of the key is what "expanded" is stored as. Both callers
+ * hand in the half they are not changing, which is what makes a drag during a collapse write
+ * `layoutWindowed` *and* leave `drawerCollapsed` true, and a collapse leave both sets exactly as they
+ * were.
+ */
+function saveWorkbenchPreferences(sets: StoredLayoutSets, drawerCollapsed: boolean): void {
+  const record: StoredWorkbenchPreferences = {
+    ...(sets.layoutWindowed ? { layoutWindowed: sets.layoutWindowed } : {}),
+    ...(sets.layoutMaximized ? { layoutMaximized: sets.layoutMaximized } : {}),
+    ...(drawerCollapsed ? { drawerCollapsed: true } : {}),
+  }
   try {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify(sets))
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(record))
   } catch {
-    // A full or blocked localStorage must not break dragging a separator.
+    // A full or blocked localStorage must not break dragging a separator or putting the drawer away.
   }
 }
+
+/**
+ * The record as this launch found it, read once when the module is evaluated.
+ *
+ * Once, because that is when a launch reads anything: both settings it carries have to be in force for
+ * the first render — the sets so the groups open at the right proportions, the flag so a window that was
+ * left collapsed opens collapsed rather than flashing the drawer and taking it away again.
+ */
+const launchPreferences = initialLayoutPreferences()
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   activeActivity: 'chat',
@@ -242,18 +296,30 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       saveThemePreference(state.themeId, next)
       return { brightness: next }
     }),
+  drawerCollapsed: launchPreferences.drawerCollapsed,
+  /**
+   * The flag is written with the sets beside it, read from the store at the moment of the write rather
+   * than closed over: a collapse and a drag reach this record through the same writer, and neither may
+   * drop the other's half of it.
+   */
+  setDrawerCollapsed: (drawerCollapsed) =>
+    set((current) => {
+      saveWorkbenchPreferences(current.layoutPreferences, drawerCollapsed)
+      return { drawerCollapsed }
+    }),
   // Present even when nothing was ever saved, so a reader always has a record to resolve against rather
   // than an absent field it would have to treat as an empty one itself.
-  layoutPreferences: initialLayoutPreferences(),
+  layoutPreferences: launchPreferences.sets,
   /**
    * The merge is `mergeSavedLayout`'s, not this setter's: which state a set belongs to, and what happens
    * to the other state's set, is a rule about layouts rather than about storage, and the pure suite
-   * asserts it directly.
+   * asserts it directly. The collapse flag travels with the write, so a drag cannot reopen a drawer the
+   * user put away.
    */
   saveLayout: (state, sizes) =>
     set((current) => {
       const layoutPreferences = mergeSavedLayout(current.layoutPreferences, state, sizes)
-      saveLayoutPreferences(layoutPreferences)
+      saveWorkbenchPreferences(layoutPreferences, current.drawerCollapsed)
       return { layoutPreferences }
     }),
 }))

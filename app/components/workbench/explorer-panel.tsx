@@ -16,7 +16,7 @@ import {
 } from '../ui/alert-dialog'
 import { Button } from '../ui/button'
 import { PaneHeader } from './pane-header'
-import { ACTIVITIES } from './icon-rail'
+import { activityById, DrawerChevron } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
 import { RootSwitcher } from './root-switcher'
 import { rootErrorMessage, rootTail } from './recent-roots'
@@ -38,7 +38,7 @@ import { useWorkbenchStore } from './store'
  */
 export function ExplorerPanel() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
-  const activity = ACTIVITIES.find((a) => a.id === activeActivity) ?? ACTIVITIES[0]
+  const activity = activityById(activeActivity)
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
   const recentRoots = useConveyorStore(workspaceStore, (s) => s.recentRoots)
@@ -143,6 +143,8 @@ export function ExplorerPanel() {
           onForget={forgetRoot}
           onOpenFolder={() => void onOpenFolder()}
         />
+        {/* The way out of the drawer, beside the folder it is showing. */}
+        <DrawerChevron />
       </PaneHeader>
 
       {rootPath === null ? (

@@ -99,18 +99,19 @@ beforeEach(() => {
 })
 
 describe('the rail', () => {
-  it('carries four activity items, with git after the explorer', async () => {
+  it('carries the collapse control and the four activity items, in the order the registry reads', async () => {
     stubWorkbench()
     renderWorkbench()
 
-    // Every item states its label through `aria-label`, because the buttons are icons. The foot
-    // control is listed with them and is not one of the four: Settings is a place you visit and
-    // leave, and the four above it are the views you work in.
+    // Every item states its label through `aria-label`, because the buttons are icons. The collapse
+    // control leads the five, and the foot control is listed with them and is not one of them:
+    // Settings is a place you visit and leave, and the five above it are the drawer and the views you
+    // work in.
     const nav = screen.getByRole('navigation', { name: 'Workbench' })
     const labels = [...nav.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
 
-    expect(labels).toEqual(['Explorer', 'Git', 'Chat', 'Terminal', 'Settings'])
-    expect(labels.filter((label) => label !== 'Settings')).toHaveLength(4)
+    expect(labels).toEqual(['Collapse drawer', 'Chat', 'Explorer', 'Git', 'Terminal', 'Settings'])
+    expect(labels.filter((label) => label !== 'Settings')).toHaveLength(5)
   })
 
   it('marks the git item as the current view once it is selected', async () => {
