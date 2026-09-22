@@ -5,6 +5,7 @@ import { windowModule, setupWindowEvents } from './modules/window'
 import { webModule } from './modules/web'
 import { workspaceModule } from './modules/workspace'
 import { settingsModule } from './modules/settings'
+import { providerModule } from './modules/provider'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
 import { agentModule } from './modules/agent'
@@ -31,6 +32,7 @@ export const router = createRouter(
     web: webModule,
     workspace: workspaceModule,
     settings: settingsModule,
+    provider: providerModule,
     llm: llmModule,
     terminal: terminalModule,
     agent: agentModule,

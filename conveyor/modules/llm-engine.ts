@@ -1,4 +1,5 @@
 import { ConveyorError } from 'electron-conveyor/main'
+import { chatCompletionsUrl, customProviderSchema, type CustomProvider } from '../protocol/custom-provider'
 
 /**
  * Provider plumbing for the chat stream: where each provider lives, how to shape a request for it,
@@ -56,14 +57,32 @@ export interface ProviderRequest {
 /**
  * Shape the HTTPS request for a provider. Anthropic is its own dialect: the system prompt is a
  * top-level field rather than a message, and auth is a header instead of a bearer token.
+ *
+ * `provider` is the descriptor a turn was handed for a custom provider, and it wins when it is there: a
+ * descriptor is a statement about *this* turn's provider, while `providerId` names one the built-in
+ * table might also know. Absent, invalid, or present-but-not-a-descriptor are three different facts,
+ * and two of them are failures — `UNKNOWN_PROVIDER` for an id nothing describes, `INVALID_PROVIDER` for
+ * a descriptor that cannot be run.
  */
 export function buildRequest(
   providerId: string,
   apiKey: string,
   model: string,
   messages: ChatMessage[],
-  tools?: ToolDefinition[]
+  tools?: ToolDefinition[],
+  provider?: unknown
 ): ProviderRequest {
+  // A provider the user added, which the built-in table knows nothing about. It speaks the OpenAI
+  // dialect — that is what the descriptor says, and the only dialect this build can speak for one.
+  const custom = resolveCustomProvider(provider)
+  if (custom) {
+    return {
+      url: chatCompletionsUrl(custom.baseUrl),
+      headers: openAiHeaders(custom.apiKey),
+      body: openAiBody(model, messages, tools),
+    }
+  }
+
   if (providerId === 'anthropic') {
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content)
     const turns = messages.filter((m) => m.role !== 'system')
@@ -87,25 +106,61 @@ export function buildRequest(
   const url = OPENAI_COMPATIBLE_URLS[providerId]
   if (!url) throw new ConveyorError('UNKNOWN_PROVIDER', `No endpoint configured for '${providerId}'.`)
 
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    authorization: `Bearer ${apiKey}`,
-  }
+  const headers = openAiHeaders(apiKey)
   // OpenRouter attributes traffic by referer; harmless elsewhere but only sent where it means
   // something.
   if (providerId === 'openrouter') headers['x-title'] = 'Sam AI'
 
+  return { url, headers, body: openAiBody(model, messages, tools) }
+}
+
+/**
+ * The descriptor a turn was handed, or null when it was handed none.
+ *
+ * A malformed descriptor throws rather than reading as absent: an object that is not a descriptor is not
+ * the same fact as no object at all, and the caller has to be told which one it is. The failure carries
+ * a code — `INVALID_PROVIDER` — so a caller branches on that rather than on the sentence, which is what
+ * the rest of this engine's errors are for.
+ */
+export function resolveCustomProvider(provider: unknown): CustomProvider | null {
+  if (provider === undefined || provider === null) return null
+
+  const parsed = customProviderSchema.safeParse(provider)
+  if (!parsed.success) {
+    throw new ConveyorError(
+      'INVALID_PROVIDER',
+      'This turn names a custom provider, but its descriptor is not one this app can run.'
+    )
+  }
+  return parsed.data
+}
+
+/**
+ * The headers every OpenAI-dialect request carries.
+ *
+ * The bearer is only sent when there is a key to send: a custom provider may be a server on the user's
+ * own machine that wants no credential, and `Bearer ` with nothing after it is a header such a server
+ * may reject. A predefined provider always has a key by the time a request is built, so this is their
+ * header exactly as it was.
+ */
+function openAiHeaders(apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`
+  return headers
+}
+
+/**
+ * The OpenAI-dialect body.
+ *
+ * Tools are sent only when there are some: some gateways reject an empty array, and omitting the keys
+ * entirely is what keeps an ordinary chat request shaped exactly as it was before tools.
+ */
+function openAiBody(model: string, messages: ChatMessage[], tools?: ToolDefinition[]): Record<string, unknown> {
   return {
-    url,
-    headers,
-    body: {
-      model,
-      stream: true,
-      messages,
-      // Only sent when there are tools: some gateways reject an empty array, and omitting the keys
-      // entirely is what keeps an ordinary chat request shaped exactly as it was before tools.
-      ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
-    },
+    model,
+    stream: true,
+    messages,
+    ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
   }
 }
 
@@ -328,10 +383,16 @@ export async function* streamDeltas(options: {
   tools?: ToolDefinition[]
   signal: AbortSignal
   fetchImpl?: FetchLike
+  /**
+   * The custom provider this turn runs against, when it runs against one. Validated here rather than
+   * trusted: this is where a turn's provider is decided, so a descriptor that cannot be run has to fail
+   * at the same boundary as an id nothing describes — and it fails with a code, not a sentence.
+   */
+  provider?: unknown
 }): AsyncGenerator<StreamDelta, void, undefined> {
-  const { providerId, apiKey, model, messages, tools, signal } = options
+  const { providerId, apiKey, model, messages, tools, signal, provider } = options
   const doFetch: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init))
-  const request = buildRequest(providerId, apiKey, model, messages, tools)
+  const request = buildRequest(providerId, apiKey, model, messages, tools, provider)
 
   let response: Response
   try {
@@ -383,6 +444,8 @@ export async function* streamChat(options: {
   messages: ChatMessage[]
   signal: AbortSignal
   fetchImpl?: FetchLike
+  /** See `streamDeltas`: the same descriptor, for the same turn. */
+  provider?: unknown
 }): AsyncGenerator<string, void, undefined> {
   for await (const delta of streamDeltas(options)) {
     if (delta.text) yield delta.text

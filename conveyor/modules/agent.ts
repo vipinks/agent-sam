@@ -582,6 +582,14 @@ interface LoopOptions {
   providerId: string
   apiKey: string
   model: string
+  /**
+   * The descriptor of a provider the user added, when this run's provider is one.
+   *
+   * Unvalidated here on purpose: this loop is handed whatever a caller has, and the descriptor is
+   * checked where it is used — in `llm-engine`, at the same boundary that decides between a built-in
+   * provider and a custom one, so there is exactly one place that says what a runnable descriptor is.
+   */
+  provider?: unknown
   workspaceRoot: string | null
   messages: ChatMessage[]
   autoApprove: boolean
@@ -758,6 +766,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         tools: TOOL_DEFINITIONS,
         signal: opts.signal,
         fetchImpl: opts.fetchImpl,
+        provider: opts.provider,
       })) {
         if (opts.signal.aborted) return
 

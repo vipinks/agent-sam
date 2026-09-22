@@ -37,6 +37,7 @@ const SUITES = [
   { name: 'workspace events', src: 'agent/events-test.ts' },
   { name: 'engine tests', src: 'llm/engine-test.ts' },
   { name: 'models engine', src: 'llm/models-test.ts' },
+  { name: 'custom providers (routing + model list)', src: 'llm/custom-provider-test.ts' },
   { name: 'custom providers (store slice)', src: 'providers/provider-config-store-test.ts' },
   { name: 'terminal module', src: 'llm/terminal-test.ts' },
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
