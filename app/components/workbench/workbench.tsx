@@ -15,13 +15,18 @@ import { TerminalPanel } from './terminal-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
+import { initialLayoutSizes, percentSize } from './layout'
 import { useWorkbenchStore } from './store'
 
 /**
  * The workbench: icon rail, secondary panel, and a main area split between the chat and the code
- * viewer. The panel proportions are the window's starting point; dragging the handles owns them
- * from then on. Pane minimums are in pixels so they hold when the window is narrowed — the group
- * itself still needs at least one panel that can absorb the remainder.
+ * viewer. The secondary panel and the main area open at 20 and 80 of the window, and the main area's
+ * own split at 62.5 and 37.5 — so the viewer opens at 30 percent of the window and the chat at 50.
+ * Not one of those numbers is visible from the panel it sizes, which is why they live together in
+ * `initialLayoutSizes` rather than as literals here. They are the window's starting point; dragging
+ * the handles owns them from then on, and the drawer keeps its pixel width when the window itself is
+ * resized rather than its share of it. Pane minimums are in pixels so they hold when the window is
+ * narrowed — the group itself still needs at least one panel that can absorb the remainder.
  *
  * Two rail items take the whole main area rather than the secondary panel, because they are places
  * you go rather than things you glance at: Settings (a screen you leave when done) and Terminal (a
@@ -51,6 +56,9 @@ function WorkbenchLayout() {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
   // Whether the viewer is taking the chat column's width, as the viewer's header control last left it.
   const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
+  // The proportions both groups open with. Read once per render from a pure helper, so the two levels
+  // of the layout can never be given defaults that were written down apart from each other.
+  const sizes = initialLayoutSizes()
   const sessions = useChatSessionsContext()
   useWorkspaceChangeInvalidation(selectedFile)
 
@@ -91,7 +99,7 @@ function WorkbenchLayout() {
   const secondaryPanel = (
     <ResizablePanel
       id="secondary"
-      defaultSize={250}
+      defaultSize={percentSize(sizes.outer.drawer)}
       minSize={180}
       maxSize={520}
       groupResizeBehavior="preserve-pixel-size"
@@ -131,7 +139,7 @@ function WorkbenchLayout() {
 
           <ResizableHandle />
 
-          <ResizablePanel id="main" minSize={420}>
+          <ResizablePanel id="main" defaultSize={percentSize(sizes.outer.main)} minSize={420}>
             <ResizablePanelGroup id="workbench-main" orientation="horizontal">
               {/*
                 The chat column while the split is showing, and its handle with it. Removed rather than
@@ -148,7 +156,7 @@ function WorkbenchLayout() {
               */}
               {!viewerExpanded && (
                 <Fragment key="chat">
-                  <ResizablePanel id="chat" defaultSize="62" minSize={320}>
+                  <ResizablePanel id="chat" defaultSize={percentSize(sizes.main.chat)} minSize={320}>
                     <ChatPanel />
                   </ResizablePanel>
 
@@ -158,7 +166,12 @@ function WorkbenchLayout() {
 
               {/* The sole column while expanded, and it needs no size of its own: a group with one panel
                   gives that panel everything, so the width follows from the chat's absence. */}
-              <ResizablePanel key="code" id="code" defaultSize={viewerExpanded ? '100' : '38'} minSize={280}>
+              <ResizablePanel
+                key="code"
+                id="code"
+                defaultSize={viewerExpanded ? percentSize(100) : percentSize(sizes.main.viewer)}
+                minSize={280}
+              >
                 <CodeViewer />
               </ResizablePanel>
             </ResizablePanelGroup>
