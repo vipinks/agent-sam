@@ -8,6 +8,7 @@ import { ChatPanel } from './chat-panel'
 import { CodeViewer } from './code-viewer'
 import { IconRail } from './icon-rail'
 import { ExplorerPanel } from './explorer-panel'
+import { GitPanel } from './git-panel'
 import { SessionListPanel } from './session-list-panel'
 import { SettingsView } from './settings-view'
 import { TerminalPanel } from './terminal-panel'
@@ -26,8 +27,8 @@ import { useWorkbenchStore } from './store'
  * you go rather than things you glance at: Settings (a screen you leave when done) and Terminal (a
  * transcript that wants the width).
  *
- * The secondary panel follows the rail: the explorer keeps the file tree, and the chat shows the
- * conversation list the panel header has always promised.
+ * The secondary panel follows the rail: the explorer keeps the file tree, git keeps the working tree's
+ * state, and the chat shows the conversation list the panel header has always promised.
  *
  * The chat and the viewer are one split, and the viewer's header control can take the chat's half: while
  * that is on, the chat column is removed from the group rather than shrunk to nothing, so the viewer is
@@ -104,6 +105,8 @@ function WorkbenchLayout() {
           onDelete={(id) => void sessions.deleteSession(id)}
           error={sessions.error}
         />
+      ) : activeActivity === 'git' ? (
+        <GitPanel />
       ) : (
         <ExplorerPanel />
       )}

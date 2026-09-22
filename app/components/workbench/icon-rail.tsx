@@ -1,4 +1,4 @@
-import { Folder, MessageSquare, Settings, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Folder, GitBranch, MessageSquare, Settings, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkbenchStore } from './store'
 
@@ -11,8 +11,14 @@ export interface Activity {
   panelTitle: string
 }
 
+/**
+ * The activity views the workbench switches between, in the order they are read: the folder, the state
+ * of that folder, the conversation about it, and the shell beside it. Settings is deliberately not one
+ * of them — it is a place you visit and leave, and it comes last for the same reason.
+ */
 export const ACTIVITIES: Activity[] = [
   { id: 'files', label: 'Explorer', icon: Folder, panelTitle: 'Explorer' },
+  { id: 'git', label: 'Git', icon: GitBranch, panelTitle: 'Git Changes' },
   { id: 'chat', label: 'Chat', icon: MessageSquare, panelTitle: 'Chat Sessions' },
   { id: 'terminal', label: 'Terminal', icon: SquareTerminal, panelTitle: 'Terminal' },
 ]

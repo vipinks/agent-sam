@@ -7,8 +7,8 @@ import { create } from 'zustand'
  */
 interface WorkbenchState {
   /**
-   * Id of the active entry in `ACTIVITIES`. `settings` is a view of its own rather than a fourth
-   * activity: it takes over the whole main area instead of the secondary panel.
+   * Id of the active entry in `ACTIVITIES`. `settings` is a view of its own rather than one of them:
+   * it takes over the whole main area instead of the secondary panel.
    */
   activeActivity: string
   setActiveActivity: (id: string) => void

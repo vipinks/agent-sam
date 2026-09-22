@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { ExplorerPanel } from '@/app/components/workbench/explorer-panel'
+import { GitPanel } from '@/app/components/workbench/git-panel'
 import { CodeViewer } from '@/app/components/workbench/code-viewer'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { ConveyorError } from 'electron-conveyor/react'
@@ -17,6 +17,10 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
  * — is tested directly in `changes-rules.test.ts`. What is left here is the part a rule test cannot
  * see: whether the section asks the registered queries, whether a click reaches the right command
  * with the right arguments, and whether the not-a-repository state is a state rather than an error.
+ *
+ * Render GitPanel rather than the section alone, because that is what the app renders: the section is
+ * the git rail item's panel body, and the folder it reports on arrives from the same panel the way it
+ * does in the app.
  *
  * The transport is the real conveyor client over a stubbed bridge, so the payloads asserted below are
  * the payloads main would receive.
@@ -57,11 +61,11 @@ function stubRepo(overrides: Record<string, (input: unknown) => unknown> = {}): 
   return stub
 }
 
-/** Render the explorer panel, which is where the section lives. */
-function renderExplorer() {
+/** Render the git panel, which is where the section lives. */
+function renderGitPanel() {
   return render(
     <QueryClientProvider client={queryClient}>
-      <ExplorerPanel />
+      <GitPanel />
     </QueryClientProvider>
   )
 }
@@ -92,7 +96,7 @@ beforeEach(() => {
 describe('the changes section', () => {
   it('renders the branch, its divergence, and both groups', async () => {
     stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     // The branch line, with the counts the upstream block reported. `getAllByText` because the name
     // is also one of the entries in the branch picker, which is a different thing on screen.
@@ -110,7 +114,7 @@ describe('the changes section', () => {
 
   it('stages the row that was clicked, naming that path and no other', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     await userEvent.click(await screen.findByLabelText('Stage src/edited.ts'))
 
@@ -122,7 +126,7 @@ describe('the changes section', () => {
 
   it('unstages a staged row', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     await userEvent.click(await screen.findByLabelText('Unstage src/staged.ts'))
 
@@ -133,7 +137,7 @@ describe('the changes section', () => {
 
   it('sends the commit message that was typed', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     const box = await screen.findByLabelText('Commit message')
     await userEvent.type(box, 'feat(git): a message')
@@ -149,7 +153,7 @@ describe('the changes section', () => {
 
   it('will not commit an empty message or with nothing staged', async () => {
     stubRepo({ status: () => [STATUS[1]] })
-    renderExplorer()
+    renderGitPanel()
 
     const button = (await screen.findByLabelText('Commit staged changes')) as HTMLButtonElement
     expect(button.disabled).toBe(true)
@@ -161,7 +165,7 @@ describe('the changes section', () => {
 
   it('asks before discarding, naming the paths', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     await userEvent.click(await screen.findByLabelText('Discard changes to src/edited.ts'))
 
@@ -184,7 +188,7 @@ describe('the changes section', () => {
 
   it('does nothing when the discard is cancelled', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     await userEvent.click(await screen.findByLabelText('Discard changes to src/edited.ts'))
     await userEvent.click(await screen.findByRole('button', { name: 'Keep them' }))
@@ -195,7 +199,7 @@ describe('the changes section', () => {
 
   it('offers the refresh control, which asks git again', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     // Waited for rather than clicked straight away: the control is disabled while a read is in
     // flight, so a click before the first render settles would simply be ignored.
@@ -212,7 +216,7 @@ describe('the changes section', () => {
 
   it('switches to a branch the repository actually has', async () => {
     const stub = stubRepo()
-    renderExplorer()
+    renderGitPanel()
 
     await userEvent.selectOptions(await screen.findByLabelText('Switch branch'), 'feature/panel')
 
@@ -233,7 +237,7 @@ describe('a workspace with no repository', () => {
         throw new ConveyorError('GIT_NOT_REPO', 'This folder is not a git repository.')
       },
     })
-    renderExplorer()
+    renderGitPanel()
 
     // A state, in our own words, with no toast and no retry for something that is not broken.
     expect(await screen.findByText('This folder is not a git repository.')).toBeTruthy()
@@ -249,7 +253,7 @@ describe('a workspace with no repository', () => {
         throw new ConveyorError('GIT_NOT_INSTALLED', 'Git is not installed, or is not on PATH.')
       },
     })
-    renderExplorer()
+    renderGitPanel()
 
     expect(await screen.findByText('Git is not installed, or is not on your PATH.')).toBeTruthy()
   })
