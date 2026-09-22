@@ -77,7 +77,7 @@ function WorkbenchLayout() {
   const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
   // The window state this window is in, and the set both groups open with for it. Read once per
   // render, so the two levels of the layout can never be given sizes that were resolved apart.
-  const { state, sizes } = useWorkbenchLayout()
+  const { state, sizes, onOuterLayoutChanged, onInnerLayoutChanged } = useWorkbenchLayout()
   const sessions = useChatSessionsContext()
   useWorkspaceChangeInvalidation(selectedFile)
 
@@ -161,6 +161,7 @@ function WorkbenchLayout() {
           key={state}
           orientation="horizontal"
           defaultLayout={outerGroupLayout(sizes)}
+          onLayoutChanged={onOuterLayoutChanged}
         >
           {secondaryPanel}
 
@@ -174,6 +175,7 @@ function WorkbenchLayout() {
               key={state}
               orientation="horizontal"
               defaultLayout={mainGroupLayout(sizes)}
+              onLayoutChanged={onInnerLayoutChanged}
             >
               {/*
                 The chat column while the split is showing, and its handle with it. Removed rather than

@@ -64,6 +64,102 @@ export function mainGroupLayout(sizes: LayoutSizes): Record<string, number> {
 }
 
 /**
+ * The stored key one state's set is written and read under.
+ *
+ * Named by the state rather than left to the call site, because the write and the read are in different
+ * files: a key spelled out at one of them and misspelled at the other is a memory that silently never
+ * applies.
+ */
+export function layoutSetKey(state: WindowState): LayoutSetKey {
+  return state === 'maximized' ? 'layoutMaximized' : 'layoutWindowed'
+}
+
+/** The key one state's set is stored under. */
+export type LayoutSetKey = 'layoutWindowed' | 'layoutMaximized'
+
+/**
+ * The two sets as they were persisted: one per window state, either of them absent.
+ *
+ * Both optional, and the values read as unknown because that is what they are — a record written by
+ * an older version, or hand-edited, is not a `LayoutSizes` until something has checked it. `layoutFor`
+ * is the one place that checking happens, so no caller has to decide what a half-formed set means.
+ */
+export interface StoredLayoutSets {
+  layoutWindowed?: LayoutSizes
+  layoutMaximized?: LayoutSizes
+}
+
+/** A share of a group that could have been measured, or null. */
+function shareOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 100 ? value : null
+}
+
+/**
+ * A stored set, or null when it is not one.
+ *
+ * Strict on purpose. A set has to name both groups, both panels of each, with positive finite shares
+ * that fill their group exactly — because that is the shape a real drag produces, and anything else is
+ * a record the app cannot faithfully restore. Being lenient here would mean guessing which half of a
+ * stale record to keep, and a guess that is wrong looks like a layout bug rather than a bad record.
+ */
+export function sanitizeLayoutSizes(value: unknown): LayoutSizes | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as { outer?: unknown; main?: unknown }
+  if (!candidate.outer || typeof candidate.outer !== 'object') return null
+  if (!candidate.main || typeof candidate.main !== 'object') return null
+
+  const outer = candidate.outer as { drawer?: unknown; main?: unknown }
+  const main = candidate.main as { chat?: unknown; viewer?: unknown }
+  const drawer = shareOf(outer.drawer)
+  const outerMain = shareOf(outer.main)
+  const chat = shareOf(main.chat)
+  const viewer = shareOf(main.viewer)
+  if (drawer === null || outerMain === null || chat === null || viewer === null) return null
+
+  // Each group has to fill its own width: the library normalises a layout to 100, so a stored set that
+  // does not add up is a record of some other shape rather than a smaller version of this one.
+  if (!fills(drawer + outerMain)) return null
+  if (!fills(chat + viewer)) return null
+
+  return { outer: { drawer, main: outerMain }, main: { chat, viewer } }
+}
+
+/** Whether two shares fill their group, within the rounding a percentage drag leaves behind. */
+function fills(total: number): boolean {
+  return Math.abs(total - 100) < 0.001
+}
+
+/**
+ * The sizes one window state opens with: what was dragged in that state, or its defaults.
+ *
+ * Saved-over-default, and per state: a set was dragged in one window state and says nothing about the
+ * other, so the fallback is that state's own default rather than a shared one. The answer is a fresh
+ * object either way — a caller that resolves a layout must not be able to write through it into what
+ * was stored.
+ */
+export function layoutFor(state: WindowState, saved: StoredLayoutSets): LayoutSizes {
+  const stored = sanitizeLayoutSizes(saved[layoutSetKey(state)])
+  if (!stored) return defaultLayoutForState(state)
+  return { outer: { ...stored.outer }, main: { ...stored.main } }
+}
+
+/**
+ * The record with one state's set replaced.
+ *
+ * One state's set and only that one: a drag while windowed is a fact about windowed, and writing it
+ * must leave what the maximized window was dragged to exactly as it was — which is also why the record
+ * is rebuilt rather than edited. A merge that dropped the other key would make the first maximize after
+ * any drag open on the other state's defaults, which is the behaviour this phase exists to replace.
+ */
+export function mergeSavedLayout(saved: StoredLayoutSets, state: WindowState, sizes: LayoutSizes): StoredLayoutSets {
+  return {
+    ...(saved.layoutWindowed ? { layoutWindowed: saved.layoutWindowed } : {}),
+    ...(saved.layoutMaximized ? { layoutMaximized: saved.layoutMaximized } : {}),
+    [layoutSetKey(state)]: { outer: { ...sizes.outer }, main: { ...sizes.main } },
+  }
+}
+
+/**
  * A share written the way the resize library reads it as a percentage.
  *
  * The trap this names: `react-resizable-panels` reads a bare number as *pixels* — `defaultSize={20}`

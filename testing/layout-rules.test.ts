@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest'
 import {
   WINDOW_STATES,
   defaultLayoutForState,
+  layoutFor,
+  layoutSetKey,
   mainGroupLayout,
+  mergeSavedLayout,
   outerGroupLayout,
   percentSize,
+  type LayoutSizes,
+  type StoredLayoutSets,
   type WindowState,
 } from '@/app/components/workbench/layout'
+import { layoutChangeFor } from '@/app/components/workbench/layout-memory'
 
 /**
  * The workbench's starting proportions, per window state, as arithmetic rather than as markup.
@@ -112,6 +118,180 @@ describe('the layouts the workbench declares to each group', () => {
 
     expect(outerGroupLayout(sizes)).toEqual({ secondary: sizes.outer.drawer, main: sizes.outer.main })
     expect(mainGroupLayout(sizes)).toEqual({ chat: sizes.main.chat, code: sizes.main.viewer })
+  })
+})
+
+describe('a window’s state and a window’s saved set', () => {
+  it('names one stored key per state, so a set is written and read under the same name', () => {
+    expect(layoutSetKey('windowed')).toBe('layoutWindowed')
+    expect(layoutSetKey('maximized')).toBe('layoutMaximized')
+  })
+
+  it('resolves to that state’s defaults when nothing was ever saved', () => {
+    expect(layoutFor('windowed', {})).toEqual(defaultLayoutForState('windowed'))
+    expect(layoutFor('maximized', {})).toEqual(defaultLayoutForState('maximized'))
+  })
+
+  it('prefers a saved set to the default, per state and not across states', () => {
+    // The whole point of two keys: what was dragged in a windowed window says nothing about the
+    // maximized one, and a single record could only ever answer for one of them.
+    const saved: StoredLayoutSets = {
+      layoutWindowed: { outer: { drawer: 40, main: 60 }, main: { chat: 55, viewer: 45 } },
+    }
+
+    expect(layoutFor('windowed', saved)).toEqual({ outer: { drawer: 40, main: 60 }, main: { chat: 55, viewer: 45 } })
+    expect(layoutFor('maximized', saved)).toEqual(defaultLayoutForState('maximized'))
+  })
+
+  it('answers with a fresh set rather than the stored object, so a caller cannot write through it', () => {
+    const saved: StoredLayoutSets = {
+      layoutWindowed: { outer: { drawer: 40, main: 60 }, main: { chat: 55, viewer: 45 } },
+    }
+
+    const resolved = layoutFor('windowed', saved)
+
+    expect(resolved).not.toBe(saved.layoutWindowed)
+    expect(resolved.outer).not.toBe(saved.layoutWindowed?.outer)
+  })
+
+  describe('a saved set that is malformed', () => {
+    // Every one of these is a record some earlier version — or a hand edit — could have left behind,
+    // and each resolves to the state's defaults rather than to a half-applied layout.
+    const malformed: Record<string, unknown> = {
+      'not an object': 'windowed',
+      'an array': [34, 66],
+      'no outer group': { main: { chat: 50, viewer: 50 } },
+      'an outer group that is not an object': { outer: 34, main: { chat: 50, viewer: 50 } },
+      'a share that is a string': { outer: { drawer: '34', main: 66 }, main: { chat: 50, viewer: 50 } },
+      'a share that is not finite': { outer: { drawer: Number.NaN, main: 66 }, main: { chat: 50, viewer: 50 } },
+      'a share that is not positive': { outer: { drawer: 0, main: 100 }, main: { chat: 50, viewer: 50 } },
+      'a group that does not fill 100': { outer: { drawer: 34, main: 50 }, main: { chat: 50, viewer: 50 } },
+      'a missing panel in the inner group': { outer: { drawer: 34, main: 66 }, main: { chat: 50 } },
+    }
+
+    for (const [what, value] of Object.entries(malformed)) {
+      it(`resolves ${what} to the defaults rather than to it`, () => {
+        const saved = { layoutWindowed: value } as StoredLayoutSets
+
+        expect(layoutFor('windowed', saved)).toEqual(defaultLayoutForState('windowed'))
+      })
+    }
+  })
+
+  it('fills each group of a saved set exactly, so a stored set and a default are the same kind of number', () => {
+    const saved: StoredLayoutSets = {
+      layoutMaximized: { outer: { drawer: 25, main: 75 }, main: { chat: 60, viewer: 40 } },
+    }
+
+    const resolved = layoutFor('maximized', saved)
+
+    expect(resolved.outer.drawer + resolved.outer.main).toBe(100)
+    expect(resolved.main.chat + resolved.main.viewer).toBe(100)
+  })
+})
+
+describe('writing a dragged set back', () => {
+  const windowed = { outer: { drawer: 34, main: 66 }, main: { chat: 50, viewer: 50 } }
+  const maximized = { outer: { drawer: 20, main: 80 }, main: { chat: 53.75, viewer: 46.25 } }
+
+  it('replaces the named state’s set and leaves the other state’s set alone', () => {
+    // The rule that keeps a swap honest: a drag in one window state is a fact about that state, and a
+    // record written for it must not touch — or drop — what the other state was dragged to.
+    const saved: StoredLayoutSets = { layoutWindowed: windowed, layoutMaximized: maximized }
+    const next = { outer: { drawer: 45, main: 55 }, main: { chat: 50, viewer: 50 } }
+
+    const merged = mergeSavedLayout(saved, 'windowed', next)
+
+    expect(merged.layoutWindowed).toEqual(next)
+    expect(merged.layoutMaximized).toEqual(maximized)
+    // Nor the record that was handed in: the stored sets are replaced, not edited in place.
+    expect(saved.layoutWindowed).toEqual(windowed)
+  })
+
+  it('keeps a saved state’s set when the other state is written', () => {
+    const merged = mergeSavedLayout({ layoutWindowed: windowed }, 'maximized', maximized)
+
+    expect(merged).toEqual({ layoutWindowed: windowed, layoutMaximized: maximized })
+  })
+
+  it('turns an outer drag into the active state’s set, with the inner group as it already was', () => {
+    const change = layoutChangeFor({
+      active: 'windowed',
+      sizes: defaultLayoutForState('windowed'),
+      group: 'outer',
+      layout: { secondary: 42, main: 58 },
+      viewerExpanded: false,
+    })
+
+    expect(change).toEqual({
+      state: 'windowed',
+      sizes: { outer: { drawer: 42, main: 58 }, main: { chat: 50, viewer: 50 } },
+    })
+  })
+
+  it('turns an inner drag into the active state’s set, with the outer group as it already was', () => {
+    const change = layoutChangeFor({
+      active: 'maximized',
+      sizes: defaultLayoutForState('maximized'),
+      group: 'main',
+      layout: { chat: 30, code: 70 },
+      viewerExpanded: false,
+    })
+
+    expect(change).toEqual({
+      state: 'maximized',
+      sizes: { outer: { drawer: 20, main: 80 }, main: { chat: 30, viewer: 70 } },
+    })
+  })
+
+  it('writes nothing for an inner drag while the viewer is expanded, because that group has one panel', () => {
+    // Phase 21: the chat column is removed rather than narrowed, so the inner group holds one panel
+    // while expanded. Its layout is then the viewer's own width and says nothing about the 50/50 split
+    // of two columns — a fact that would overwrite the split the user comes back to.
+    const change = layoutChangeFor({
+      active: 'windowed',
+      sizes: defaultLayoutForState('windowed'),
+      group: 'main',
+      layout: { code: 100 },
+      viewerExpanded: true,
+    })
+
+    expect(change).toBeNull()
+  })
+
+  it('still writes the outer group while the viewer is expanded, because that group is unchanged by it', () => {
+    const change = layoutChangeFor({
+      active: 'windowed',
+      sizes: defaultLayoutForState('windowed'),
+      group: 'outer',
+      layout: { secondary: 30, main: 70 },
+      viewerExpanded: true,
+    })
+
+    expect(change).toEqual({
+      state: 'windowed',
+      sizes: { outer: { drawer: 30, main: 70 }, main: { chat: 50, viewer: 50 } },
+    })
+  })
+
+  it('writes nothing for a drag the library reports unusably', () => {
+    // The library hands back panel id to share, so a report missing a panel — or carrying a share that
+    // is not a positive number — describes no layout that could be restored. Writing it would replace a
+    // good set with one that resolves to a default.
+    const sizes: LayoutSizes = defaultLayoutForState('windowed')
+
+    expect(
+      layoutChangeFor({ active: 'windowed', sizes, group: 'outer', layout: { secondary: 34 }, viewerExpanded: false })
+    ).toBeNull()
+    expect(
+      layoutChangeFor({
+        active: 'windowed',
+        sizes,
+        group: 'main',
+        layout: { chat: 0, code: 100 },
+        viewerExpanded: false,
+      })
+    ).toBeNull()
   })
 })
 

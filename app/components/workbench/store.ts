@@ -1,4 +1,11 @@
 import { create } from 'zustand'
+import {
+  mergeSavedLayout,
+  sanitizeLayoutSizes,
+  type LayoutSizes,
+  type StoredLayoutSets,
+  type WindowState,
+} from './layout'
 import { BRIGHTNESS_DEFAULT, clampBrightness } from './theme-engine'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
 
@@ -83,6 +90,17 @@ interface WorkbenchState {
   /** Set the theme, keeping the brightness — the two are one preference, chosen separately. */
   setThemeId: (themeId: ThemeId) => void
   setBrightness: (brightness: number) => void
+  /**
+   * The layout each window state was last dragged to, one set per state, either of them absent.
+   *
+   * A preference rather than a fact about anything, so it lives here beside the theme and the chat
+   * target rather than in main: the numbers are the renderer's own resize library's output, and main has
+   * nothing to do with a separator position. Two keys rather than one because a set dragged while
+   * windowed is a fact about that window and not about the maximized one.
+   */
+  layoutPreferences: StoredLayoutSets
+  /** Record what one window state's layout was dragged to, keeping the other state's set as it was. */
+  saveLayout: (state: WindowState, sizes: LayoutSizes) => void
 }
 
 const TARGET_KEY = 'sam-ai-chat-target'
@@ -140,6 +158,43 @@ function saveThemePreference(themeId: ThemeId, brightness: number): void {
   }
 }
 
+const LAYOUT_KEY = 'sam-ai-layout-preferences'
+
+/**
+ * The two layout sets as they were stored, each read on its own.
+ *
+ * Read the way the theme preference is, and for the same reason: a record written before both sets
+ * existed, or one whose windowed half was corrupted, must not cost the user the half that is still
+ * meaningful. Each key is sanitised separately, and a value that is not a set at all is simply absent —
+ * which `layoutFor` then resolves to that state's defaults.
+ */
+function initialLayoutPreferences(): StoredLayoutSets {
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved) as { layoutWindowed?: unknown; layoutMaximized?: unknown }
+      const windowed = sanitizeLayoutSizes(parsed.layoutWindowed)
+      const maximized = sanitizeLayoutSizes(parsed.layoutMaximized)
+      return {
+        ...(windowed ? { layoutWindowed: windowed } : {}),
+        ...(maximized ? { layoutMaximized: maximized } : {}),
+      }
+    }
+  } catch {
+    // Unreadable preference — fall through to no saved sets rather than failing to start.
+  }
+  return {}
+}
+
+/** Persist the two layout sets, tolerating a storage that refuses to write. */
+function saveLayoutPreferences(sets: StoredLayoutSets): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(sets))
+  } catch {
+    // A full or blocked localStorage must not break dragging a separator.
+  }
+}
+
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   activeActivity: 'chat',
   setActiveActivity: (activeActivity) => set({ activeActivity }),
@@ -186,5 +241,19 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       const next = clampBrightness(brightness)
       saveThemePreference(state.themeId, next)
       return { brightness: next }
+    }),
+  // Present even when nothing was ever saved, so a reader always has a record to resolve against rather
+  // than an absent field it would have to treat as an empty one itself.
+  layoutPreferences: initialLayoutPreferences(),
+  /**
+   * The merge is `mergeSavedLayout`'s, not this setter's: which state a set belongs to, and what happens
+   * to the other state's set, is a rule about layouts rather than about storage, and the pure suite
+   * asserts it directly.
+   */
+  saveLayout: (state, sizes) =>
+    set((current) => {
+      const layoutPreferences = mergeSavedLayout(current.layoutPreferences, state, sizes)
+      saveLayoutPreferences(layoutPreferences)
+      return { layoutPreferences }
     }),
 }))

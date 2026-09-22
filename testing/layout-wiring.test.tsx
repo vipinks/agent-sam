@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { Workbench } from '@/app/components/workbench/workbench'
-import { defaultLayoutForState, percentSize, type LayoutSizes } from '@/app/components/workbench/layout'
+import { defaultLayoutForState, layoutFor, percentSize, type LayoutSizes } from '@/app/components/workbench/layout'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { queryClient } from '@/conveyor/client'
 import { createBridgeStub, setActiveStub, stubStore } from './bridge-stub'
@@ -118,6 +118,24 @@ function declared(groupId: string): Record<string, number> | undefined {
 }
 
 /**
+ * Drag a separator in one group, as the library reports a completed drag.
+ *
+ * Called with `isUserInteraction: true`, which is the field the library sets for a pointer or keyboard
+ * resize and clears for its own mount — the difference between "the user chose this" and "the group
+ * computed a layout because it had to", and the only one worth remembering.
+ */
+function dragGroup(groupId: string, layout: Record<string, number>): void {
+  const group = standIn.groups.get(groupId)
+  if (!group?.onLayoutChanged) throw new Error(`group #${groupId} was given no layout listener`)
+  act(() => group.onLayoutChanged?.(layout, { isUserInteraction: true }))
+}
+
+/** The stored layout record, as the renderer's settings slice holds it. */
+function storedLayouts(): Record<string, unknown> {
+  return JSON.parse(localStorage.getItem('sam-ai-layout-preferences') ?? '{}') as Record<string, unknown>
+}
+
+/**
  * The panels of one group, in the order the group was built with, as id and declared size.
  *
  * Scoped to the group's own direct children for the same reason the viewer's expand test is: how many
@@ -140,12 +158,14 @@ const MAXIMIZED: LayoutSizes = defaultLayoutForState('maximized')
 
 beforeEach(() => {
   standIn.groups.clear()
+  localStorage.clear()
   useWorkbenchStore.setState({
     activeActivity: 'files',
     selectedFile: null,
     selectedChange: null,
     commitMessage: '',
     viewerExpanded: false,
+    layoutPreferences: {},
   })
   queryClient.clear()
 })
@@ -223,5 +243,143 @@ describe('the window state the layout is for', () => {
       expect(declared('workbench-main')).toEqual({ chat: 50, code: 50 })
     })
     expect(declared('workbench')).toEqual({ secondary: 34, main: 66 })
+  })
+
+  it('applies the other state’s saved set on a maximize, and the active state’s on the way back', async () => {
+    // The memory, end to end: the set a window state was dragged to is what a window in that state opens
+    // with, whether it arrived there by launching or by being maximized. The saved maximized set is
+    // deliberately not the default one, so applying the default would read as a pass only by accident.
+    const draggedWindowed: LayoutSizes = { outer: { drawer: 44, main: 56 }, main: { chat: 40, viewer: 60 } }
+    const draggedMaximized: LayoutSizes = { outer: { drawer: 12, main: 88 }, main: { chat: 65, viewer: 35 } }
+    act(() => {
+      const store = useWorkbenchStore.getState()
+      store.saveLayout('windowed', draggedWindowed)
+      store.saveLayout('maximized', draggedMaximized)
+    })
+
+    const { stub } = renderWorkbench()
+    expect(declared('workbench')).toEqual({ secondary: 44, main: 56 })
+
+    act(() => stub.emit('conveyor:event:window:onMaximizeChange', true))
+    await waitFor(() => {
+      expect(declared('workbench')).toEqual({ secondary: 12, main: 88 })
+    })
+    expect(declared('workbench-main')).toEqual({ chat: 65, code: 35 })
+
+    act(() => stub.emit('conveyor:event:window:onMaximizeChange', false))
+    await waitFor(() => {
+      expect(declared('workbench')).toEqual({ secondary: 44, main: 56 })
+    })
+    expect(declared('workbench-main')).toEqual({ chat: 40, code: 60 })
+    // And the swap wrote nothing: a window changing state is not a drag, so neither saved set moved.
+    expect(storedLayouts()).toEqual({ layoutWindowed: draggedWindowed, layoutMaximized: draggedMaximized })
+  })
+})
+
+describe('a saved set, at launch', () => {
+  it('applies the stored windowed set instead of the windowed defaults', async () => {
+    // Read at the moment the store is created, which is what a launch is: the record has to be in
+    // storage before the module is evaluated, and a fresh module graph is the only way to reach that
+    // — the store reads storage once, like the theme preference beside it.
+    const stored: LayoutSizes = { outer: { drawer: 48, main: 52 }, main: { chat: 41, viewer: 59 } }
+    localStorage.setItem('sam-ai-layout-preferences', JSON.stringify({ layoutWindowed: stored }))
+
+    vi.resetModules()
+    const freshStore = await import('@/app/components/workbench/store')
+    const { Workbench: FreshWorkbench } = await import('@/app/components/workbench/workbench')
+    const freshClient = await import('@/conveyor/client')
+
+    expect(freshStore.useWorkbenchStore.getState().layoutPreferences).toEqual({ layoutWindowed: stored })
+    expect(layoutFor('windowed', { layoutWindowed: stored })).toEqual(stored)
+
+    const stub = createBridgeStub({
+      isMaximized: () => false,
+      readFile: () => ({ path: '', content: '', baselineMtime: 0 }),
+      listDirectory: () => [],
+      status: () => [],
+      branch: () => ({ name: 'main', detached: false, upstream: null, ahead: 0, behind: 0 }),
+      log: () => [],
+      localBranches: () => ['main'],
+      diff: () => ({ lines: [], added: 0, removed: 0, truncated: false }),
+      listProviders: () => [],
+      defaultModels: () => ({}),
+      listConfigured: () => [],
+      listFilesFlat: () => [],
+    })
+    stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
+    setActiveStub(stub)
+
+    render(
+      <QueryClientProvider client={freshClient.queryClient}>
+        <FreshWorkbench />
+      </QueryClientProvider>
+    )
+
+    expect(declared('workbench')).toEqual({ secondary: 48, main: 52 })
+    expect(declared('workbench-main')).toEqual({ chat: 41, code: 59 })
+  })
+})
+
+describe('a dragged separator', () => {
+  it('writes the active window state’s set, and only that one', async () => {
+    const otherSaved: LayoutSizes = { outer: { drawer: 15, main: 85 }, main: { chat: 70, viewer: 30 } }
+    act(() => useWorkbenchStore.getState().saveLayout('maximized', otherSaved))
+
+    renderWorkbench()
+    dragGroup('workbench', { secondary: 40, main: 60 })
+
+    // Debounced, so the write lands a moment after the drag rather than on every pointer move.
+    await waitFor(() => {
+      expect(storedLayouts().layoutWindowed).toEqual({
+        outer: { drawer: 40, main: 60 },
+        main: { chat: 50, viewer: 50 },
+      })
+    })
+    // The state the drag did not happen in keeps what it had.
+    expect(storedLayouts().layoutMaximized).toEqual(otherSaved)
+  })
+
+  it('writes the inner group for a drag in the split, which is the state’s own inner set', async () => {
+    renderWorkbench()
+    dragGroup('workbench-main', { chat: 62, code: 38 })
+
+    await waitFor(() => {
+      expect(storedLayouts().layoutWindowed).toEqual({
+        outer: { drawer: 34, main: 66 },
+        main: { chat: 62, viewer: 38 },
+      })
+    })
+  })
+
+  it('writes no inner set for a drag while the viewer is expanded', async () => {
+    // Phase 21's expansion removes the chat column, so the inner group holds one panel and its layout is
+    // the viewer's own width. Recording that as the state's split would replace the two-column split the
+    // user comes back to with a one-panel fact.
+    renderWorkbench()
+    act(() => useWorkbenchStore.getState().setViewerExpanded(true))
+
+    dragGroup('workbench-main', { code: 100 })
+    // The outer group is unaffected by the expansion, so a drag there is still the state's own fact.
+    dragGroup('workbench', { secondary: 30, main: 70 })
+
+    await waitFor(() => {
+      expect(storedLayouts().layoutWindowed).toEqual({
+        outer: { drawer: 30, main: 70 },
+        main: { chat: 50, viewer: 50 },
+      })
+    })
+    // Nothing was written for the expanded group at all: its share of the state's set is still the
+    // split of two columns, not the viewer's 100.
+    expect((storedLayouts().layoutWindowed as LayoutSizes).main).toEqual({ chat: 50, viewer: 50 })
+  })
+
+  it('writes nothing for a drag the library reports unusably', async () => {
+    renderWorkbench()
+
+    dragGroup('workbench', { secondary: 40 })
+
+    // Given a moment longer than the debounce, so an absence is an absence rather than a race.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(localStorage.getItem('sam-ai-layout-preferences')).toBeNull()
   })
 })
