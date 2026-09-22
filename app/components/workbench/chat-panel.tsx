@@ -30,6 +30,7 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
+import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
   applyAgentChunk,
   currentEndNotice,
@@ -153,6 +154,19 @@ export function ChatPanel() {
   // opens with it off.
   const autoApprove = sessions.autoApprove
   const [pending, setPending] = useState<PendingApproval | null>(null)
+
+  /**
+   * Whether a message on screen may be edited.
+   *
+   * Not while a run is in flight: that run is writing the very turns an edit would remove, and it
+   * would go on writing them into a transcript that no longer has the message it is answering. Not
+   * while a decision is pending either, for the same reason — a pause has not ended its turn, so the
+   * conversation is still moving.
+   *
+   * Derived rather than stored, so it cannot be missed at one of the places the pane starts or ends a
+   * run: it is true exactly when nothing is happening.
+   */
+  const editAllowed = !isStreaming && pending === null
 
   /**
    * The files the next send will attach, in the order they were added.
@@ -510,31 +524,38 @@ export function ChatPanel() {
   )
 
   const sendText = useCallback(
-    async (raw: string) => {
+    async (raw: string, options: { mentionPaths?: readonly string[]; keepComposer?: boolean } = {}) => {
       const text = raw.trim()
       if (!text || isStreaming || pending) return
 
       // The chips as they stand: the payload and the transcript both read this one list, so what is
-      // sent and what the bubble shows afterwards cannot disagree.
-      const chips = mentionPathsRef.current
+      // sent and what the bubble shows afterwards cannot disagree. An edit passes its own, because the
+      // chips it changed belong to the message being sent again rather than to the composer.
+      const chips = options.mentionPaths ?? mentionPathsRef.current
+      // A resend did not come from the composer, so it must not empty it: the user's half-written next
+      // message is still theirs, and the chips in it were never part of the send that just happened.
+      const fromComposer = options.keepComposer !== true
 
       // Sending with no session open is normal: a session is created for the message, and named from
       // it. This is what makes the composer work before the user has ever touched the session list.
       sessionsRef.current.ensureSession(text)
 
       // The history sent is text-only: the agent owns the provider-shaped history, including tool
-      // turns, and hands it back on a pause.
+      // turns, and hands it back on a pause. It is read after any truncation, so a resend's history is
+      // the conversation that is left rather than the one the removed turns belonged to.
       const history = toHistory(messagesRef.current)
 
       const userTurn = startUserTurn(text, chips)
       const assistantTurn = startAssistantTurn()
       streamingTurnIdRef.current = assistantTurn.id
-      setDraft('')
-      // The chips belonged to that message. Main reads the paths from the payload, so clearing here
-      // cannot take them away from the send that is starting — only from the next one.
-      setChips([])
-      setMention({ token: null, dismissed: false })
-      setMentionNote(null)
+      if (fromComposer) {
+        setDraft('')
+        // The chips belonged to that message. Main reads the paths from the payload, so clearing here
+        // cannot take them away from the send that is starting — only from the next one.
+        setChips([])
+        setMention({ token: null, dismissed: false })
+        setMentionNote(null)
+      }
       updateMessages([...messagesRef.current, userTurn, assistantTurn])
       requestAnimationFrame(stickToBottom)
 
@@ -547,7 +568,9 @@ export function ChatPanel() {
           autoApprove,
           // Paths only. Main reads the files and appends the context section, so the renderer never
           // carries file contents and a path the user attached is the only thing crossing this boundary.
-          mentionPaths: chips.length > 0 ? chips : undefined,
+          // Copied rather than handed over as it stands: the chips are read-only where they came from,
+          // and the payload is the wire's own array.
+          mentionPaths: chips.length > 0 ? [...chips] : undefined,
         }),
         assistantTurn.id
       )
@@ -575,6 +598,29 @@ export function ChatPanel() {
   const sendDraft = useCallback(() => {
     void sendText(draft)
   }, [draft, sendText])
+
+  /**
+   * Send an edited message again, in place of everything that followed it.
+   *
+   * The cut first, then the save, then the send, in that order and awaited: what the user asked for is
+   * a conversation in which the removed turns never happened, so the file is written before the new
+   * message can fail. The send itself is the ordinary one — same function the composer calls — with the
+   * edited text and the chips the editor was left with, which is what keeps an edited message from
+   * being a second kind of message with its own way of being sent.
+   *
+   * The pane is the only thing that can do this: it holds both the transcript and the send path, and an
+   * edit that cut the transcript without knowing how to send would leave the user with a message gone.
+   */
+  const resendEditedMessage = useCallback(
+    (turnId: string, text: string, chips: readonly string[]) => {
+      void (async () => {
+        updateMessages(truncateFromTurn(messagesRef.current, turnId))
+        await sessionsRef.current.saveNow()
+        await sendText(text, { mentionPaths: chips, keepComposer: true })
+      })()
+    },
+    [sendText, updateMessages]
+  )
 
   /**
    * Begin a drag of the composer's top edge.
@@ -846,8 +892,14 @@ export function ChatPanel() {
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${item.start}px)` }}
               >
+                {/* An edit is unavailable while the conversation is moving: a run in flight is producing
+                    the turns an edit would remove, and a paused decision belongs to a turn that has not
+                    ended. Both are facts about the pane, so it is the pane that decides. */}
                 <MessageBubble
                   message={messages[item.index]}
+                  canEdit={editAllowed}
+                  laterTurns={messages.length - item.index - 1}
+                  onResend={resendEditedMessage}
                   onApprove={() => void decide(true)}
                   onDeny={() => void decide(false)}
                 />
