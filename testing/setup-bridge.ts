@@ -42,6 +42,37 @@ if (!('ResizeObserver' in globalThis)) {
   } as unknown as typeof ResizeObserver
 }
 
+/**
+ * jsdom implements no media queries either, and the shell's theme store reads two of them.
+ *
+ * `initialTheme` asks whether the OS prefers light, and `withTransition` asks whether motion is turned
+ * down before it reaches for a view transition. Without this, the second read is a `ReferenceError`
+ * thrown from inside `toggle()` — a theme flip that cannot be exercised at all, which is why this is a
+ * prerequisite for testing the toggle rather than a convenience.
+ *
+ * `matches: false` for every query is the honest answer for a headless document: no preference is
+ * expressed for anything, so the code takes the branch it takes when a user has expressed none — the OS
+ * preference defaults to dark and the motion path falls through to the instant swap, because jsdom has
+ * no `document.startViewTransition` either.
+ *
+ * Guarded on `typeof`, not on `'matchMedia' in globalThis`. jsdom defines the property as a stub that
+ * throws when called, so an `in` test sees it as present and leaves it in place — which is how the first
+ * run of the toggle suite failed with "matchMedia is not a function". What matters is whether it can be
+ * called, so that is what is checked.
+ */
+if (typeof globalThis.matchMedia !== 'function') {
+  globalThis.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof matchMedia
+}
+
 beforeEach(() => {
   setActiveStub(createBridgeStub())
 })

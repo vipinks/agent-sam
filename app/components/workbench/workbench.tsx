@@ -16,6 +16,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resi
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
 import { initialLayoutSizes, percentSize } from './layout'
+import { useThemeApplication } from './theme-apply'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -42,8 +43,16 @@ import { useWorkbenchStore } from './store'
  *
  * The workspace-change subscription lives here rather than in the explorer or the viewer, so a burst
  * of writes from one agent turn invalidates the listings once rather than once per subscriber.
+ *
+ * The theme application is mounted here too, beside the shell's `.dark` class toggle, because the two
+ * are the two halves of one thing: the class says which mode the window is in, and the inline
+ * properties say what colours that mode is made of. Keeping them apart — the class in the shell, the
+ * variables in the feature — is what lets the class stay exactly where it was while the palette becomes
+ * data.
  */
 export function Workbench() {
+  useThemeApplication()
+
   return (
     <ChatSessionsProvider>
       <WorkbenchLayout />
