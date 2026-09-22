@@ -59,6 +59,19 @@ function mentionRefusalNote(refusal: MentionRefusal): string {
     : `One message can attach at most ${MAX_MENTION_PATHS} files.`
 }
 
+/**
+ * The files the message a run is about to answer had attached.
+ *
+ * A regenerate sends no message of its own, so the run's context comes from the turn the discarded reply
+ * was answering: the last turn the cut left, when it is the user's. Read off the transcript rather than
+ * remembered, because the chips live on the turn — and empty when the cut left nothing or left a reply,
+ * which is what keeps a payload from claiming files that no message named.
+ */
+function lastAskMentions(turns: readonly AgentTurn[]): string[] {
+  const ask = turns[turns.length - 1]
+  return ask?.role === 'user' ? [...(ask.mentionPaths ?? [])] : []
+}
+
 /** Stream failures, in the user's terms, branched on the error code rather than the message text. */
 function streamErrorMessage(error: unknown, providerName: string): string {
   if (error instanceof ConveyorError) {
@@ -156,15 +169,16 @@ export function ChatPanel() {
   const [pending, setPending] = useState<PendingApproval | null>(null)
 
   /**
-   * Whether a message on screen may be edited.
+   * Whether the controls that act on a message are available: the edit, and the regenerate.
    *
-   * Not while a run is in flight: that run is writing the very turns an edit would remove, and it
+   * Not while a run is in flight: that run is writing the very turns either control would remove, and it
    * would go on writing them into a transcript that no longer has the message it is answering. Not
    * while a decision is pending either, for the same reason — a pause has not ended its turn, so the
    * conversation is still moving.
    *
    * Derived rather than stored, so it cannot be missed at one of the places the pane starts or ends a
-   * run: it is true exactly when nothing is happening.
+   * run: it is true exactly when nothing is happening. One value for both controls because they rest on
+   * the same fact, and two ways of answering it could disagree.
    */
   const editAllowed = !isStreaming && pending === null
 
@@ -523,6 +537,53 @@ export function ChatPanel() {
     [drainNow, enqueue, providerName, stickToBottom, updateMessages]
   )
 
+  /**
+   * Drive one agent turn on a history that is already settled.
+   *
+   * The one entry every run starts through. A message sent from the composer and a reply regenerated
+   * differ in what they hand over and in nothing else: both need the same turn opened, the same stream
+   * driven to its end, the same plan reconciled when it ends and the same save at the boundary. A second
+   * copy of that for the regenerate would be a second place for the payload to drift, and it is the run
+   * the user gets that would differ.
+   *
+   * The turns are the transcript this run continues from, already carrying the message it is answering
+   * — a new one for a send, the one the discarded reply answered for a regenerate. The provider-shaped
+   * history is read from them, text-only: the agent owns the history with its tool turns and hands it
+   * back on a pause, so rebuilding that here would be a second source of truth. `mentionPaths` goes out
+   * exactly as a send carries it, which is what lets a file attached to the message being answered be
+   * read again on a regenerate.
+   */
+  const runAgentTurn = useCallback(
+    async (turns: AgentTurn[], mentionPaths: readonly string[]) => {
+      const assistantTurn = startAssistantTurn()
+      streamingTurnIdRef.current = assistantTurn.id
+      updateMessages([...turns, assistantTurn])
+      requestAnimationFrame(stickToBottom)
+
+      await runStream(
+        conveyor.agent.chatWithTools({
+          providerId: activeProviderId,
+          model: activeModel,
+          messages: toHistory(turns),
+          workspaceRoot: rootPath,
+          autoApprove,
+          // Paths only. Main reads the files and appends the context section, so the renderer never
+          // carries file contents and a path the user attached is the only thing crossing this boundary.
+          // Copied rather than handed over as it stands: the chips are read-only where they came from,
+          // and the payload is the wire's own array.
+          mentionPaths: mentionPaths.length > 0 ? [...mentionPaths] : undefined,
+        }),
+        assistantTurn.id
+      )
+
+      // A turn boundary: what was sent and the reply to it are now a complete unit, so this is when the
+      // transcript is worth writing. Never per token — the run above may have produced hundreds of
+      // chunks, and this is one save.
+      sessionsRef.current.scheduleSave()
+    },
+    [activeModel, activeProviderId, autoApprove, rootPath, runStream, stickToBottom, updateMessages]
+  )
+
   const sendText = useCallback(
     async (raw: string, options: { mentionPaths?: readonly string[]; keepComposer?: boolean } = {}) => {
       const text = raw.trim()
@@ -540,14 +601,6 @@ export function ChatPanel() {
       // it. This is what makes the composer work before the user has ever touched the session list.
       sessionsRef.current.ensureSession(text)
 
-      // The history sent is text-only: the agent owns the provider-shaped history, including tool
-      // turns, and hands it back on a pause. It is read after any truncation, so a resend's history is
-      // the conversation that is left rather than the one the removed turns belonged to.
-      const history = toHistory(messagesRef.current)
-
-      const userTurn = startUserTurn(text, chips)
-      const assistantTurn = startAssistantTurn()
-      streamingTurnIdRef.current = assistantTurn.id
       if (fromComposer) {
         setDraft('')
         // The chips belonged to that message. Main reads the paths from the payload, so clearing here
@@ -556,42 +609,13 @@ export function ChatPanel() {
         setMention({ token: null, dismissed: false })
         setMentionNote(null)
       }
-      updateMessages([...messagesRef.current, userTurn, assistantTurn])
-      requestAnimationFrame(stickToBottom)
 
-      await runStream(
-        conveyor.agent.chatWithTools({
-          providerId: activeProviderId,
-          model: activeModel,
-          messages: [...history, { role: 'user' as const, content: text }],
-          workspaceRoot: rootPath,
-          autoApprove,
-          // Paths only. Main reads the files and appends the context section, so the renderer never
-          // carries file contents and a path the user attached is the only thing crossing this boundary.
-          // Copied rather than handed over as it stands: the chips are read-only where they came from,
-          // and the payload is the wire's own array.
-          mentionPaths: chips.length > 0 ? [...chips] : undefined,
-        }),
-        assistantTurn.id
-      )
-
-      // A turn boundary: the user's message and its finished assistant turn are now a complete unit,
-      // so this is when the transcript is worth writing. Never per token — the run above may have
-      // produced hundreds of chunks, and this is one save.
-      sessionsRef.current.scheduleSave()
+      // The message goes on the end of the transcript as it stands — after any truncation an edit made,
+      // so a resend continues the conversation that is left rather than the one the removed turns
+      // belonged to — and that whole list is what the run is handed.
+      await runAgentTurn([...messagesRef.current, startUserTurn(text, chips)], chips)
     },
-    [
-      activeModel,
-      activeProviderId,
-      autoApprove,
-      isStreaming,
-      pending,
-      rootPath,
-      runStream,
-      setChips,
-      stickToBottom,
-      updateMessages,
-    ]
+    [isStreaming, pending, runAgentTurn, setChips]
   )
 
   /** Send what is in the composer. */
@@ -620,6 +644,39 @@ export function ChatPanel() {
       })()
     },
     [sendText, updateMessages]
+  )
+
+  /**
+   * Answer the message again, in place of the reply being regenerated.
+   *
+   * The cut first, then the save, then the run, in the same order and for the same reason a resend does
+   * it: what the user asked for is a conversation in which the discarded turn never happened, so the
+   * record is written before the new run can fail.
+   *
+   * Nothing is sent on the user's behalf. The turns the cut left already end with the message that reply
+   * was answering, so the run continues that conversation — appending a copy of the message would put
+   * words in the user's mouth, and a regenerate is not a new question.
+   *
+   * The cut is at the reply itself rather than after it, by the same rule that counted the turns in the
+   * dialog: the reply is what is being replaced, and it goes with everything written in answer to it.
+   *
+   * Only a reply is regenerated, and the pane checks the id rather than trusting it: the control lives on
+   * agent bubbles, and an id that names anything else here is a stale one.
+   */
+  const regenerateReply = useCallback(
+    (turnId: string) => {
+      void (async () => {
+        if (isStreaming || pending) return
+        const target = messagesRef.current.find((turn) => turn.id === turnId)
+        if (!target || target.role !== 'assistant') return
+
+        const kept = truncateFromTurn(messagesRef.current, turnId)
+        updateMessages(kept)
+        await sessionsRef.current.saveNow()
+        await runAgentTurn(kept, lastAskMentions(kept))
+      })()
+    },
+    [isStreaming, pending, runAgentTurn, updateMessages]
   )
 
   /**
@@ -892,14 +949,16 @@ export function ChatPanel() {
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${item.start}px)` }}
               >
-                {/* An edit is unavailable while the conversation is moving: a run in flight is producing
-                    the turns an edit would remove, and a paused decision belongs to a turn that has not
-                    ended. Both are facts about the pane, so it is the pane that decides. */}
+                {/* The controls that would cut the transcript are unavailable while the conversation is
+                    moving: a run in flight is producing the turns an edit or a regenerate would remove, and
+                    a paused decision belongs to a turn that has not ended. Both are facts about the pane, so
+                    it is the pane that decides. */}
                 <MessageBubble
                   message={messages[item.index]}
                   canEdit={editAllowed}
                   laterTurns={messages.length - item.index - 1}
                   onResend={resendEditedMessage}
+                  onRegenerate={regenerateReply}
                   onApprove={() => void decide(true)}
                   onDeny={() => void decide(false)}
                 />

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { Check, Copy, Pencil, TriangleAlert } from 'lucide-react'
+import { Check, Copy, Pencil, RefreshCw, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import {
@@ -33,20 +33,21 @@ export const MessageBubble = memo(function MessageBubble({
   canEdit,
   laterTurns,
   onResend,
+  onRegenerate,
 }: {
   message: AgentTurn
   onApprove?: (callId: string) => void
   onDeny?: (callId: string) => void
   /**
-   * Whether a message may be edited at all right now.
+   * Whether the controls that act on a message are available at all right now.
    *
    * The pane decides this rather than the bubble, because it is a fact about the conversation: a run
-   * in flight or a decision waiting is producing the very turns an edit would remove. Defaulted off, so
-   * a bubble rendered on its own — as the copy tests do — offers no control whose effect it cannot
-   * perform.
+   * in flight or a decision waiting is producing the very turns an edit or a regenerate would remove.
+   * Defaulted off, so a bubble rendered on its own — as the copy tests do — offers no control whose
+   * effect it cannot perform.
    */
   canEdit?: boolean
-  /** How many turns follow this one, which is how many an edit would remove. */
+  /** How many turns follow this one, which is how many an edit or a regenerate would remove. */
   laterTurns?: number
   /**
    * Send this message again, with the words and the files it ended up with.
@@ -55,6 +56,14 @@ export const MessageBubble = memo(function MessageBubble({
    * a bubble holding a stale copy of its own turn could not describe it.
    */
   onResend?: (turnId: string, text: string, mentionPaths: string[]) => void
+  /**
+   * Answer this reply again, from the history that led to it.
+   *
+   * The id for the same reason a resend takes one: the replacement is built by the pane's ordinary run
+   * out of the turns left after the cut, and a bubble holding its own copy of the turn could not
+   * describe what is being replaced.
+   */
+  onRegenerate?: (turnId: string) => void
 }) {
   const isUser = message.role === 'user'
   const steps = message.steps
@@ -71,6 +80,14 @@ export const MessageBubble = memo(function MessageBubble({
   const [editText, setEditText] = useState('')
   const [editChips, setEditChips] = useState<string[]>([])
   const [confirming, setConfirming] = useState(false)
+  /**
+   * The regenerate confirmation, kept apart from the editor's.
+   *
+   * Two questions with two answers: the editor's asks about text the user has just rewritten, this one
+   * about a reply they asked to replace. One flag for both would let a cancel of either dismiss the
+   * other, and there is no editor here for a cancel to return to.
+   */
+  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false)
 
   const startEditing = () => {
     setEditText(message.content)
@@ -101,6 +118,23 @@ export const MessageBubble = memo(function MessageBubble({
       return
     }
     resend()
+  }
+
+  /** Replace this reply with a fresh run over the question it answered. */
+  const regenerate = () => {
+    setConfirmingRegenerate(false)
+    onRegenerate?.(message.id)
+  }
+
+  const askToRegenerate = () => {
+    // The same rule the editor follows, and for the same reason: with nothing after this reply there is
+    // nothing to remove, so there is nothing to ask about. Otherwise the count is named once, before
+    // anything is cut.
+    if ((laterTurns ?? 0) > 0) {
+      setConfirmingRegenerate(true)
+      return
+    }
+    regenerate()
   }
 
   /*
@@ -217,6 +251,10 @@ export const MessageBubble = memo(function MessageBubble({
           )}
         </div>
         {!isUser && copyButton}
+        {/* And the control that replaces the reply, on the reply's own side and for the same reason. Only
+            with a callback behind it: a bubble that cannot reach the pane offers no control whose effect
+            it cannot perform. */}
+        {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={askToRegenerate} />}
       </div>
 
       {/*
@@ -231,12 +269,34 @@ export const MessageBubble = memo(function MessageBubble({
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Resend this message?</AlertDialogTitle>
-              <AlertDialogDescription>{resendConfirmText(laterTurns ?? 0)}</AlertDialogDescription>
+              <AlertDialogDescription>{removedTurnsText(laterTurns ?? 0)}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction aria-label="Resend" onClick={resend}>
                 Resend
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {/*
+        The same question for a reply, and the same sentence counting the answer: what follows this
+        reply was written in answer to it, so replacing it removes those turns — and that removal is not
+        visible in the act, which is why the count is named before the click rather than after it.
+      */}
+      {confirmingRegenerate && (
+        <AlertDialog open onOpenChange={(open) => (!open ? setConfirmingRegenerate(false) : undefined)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Regenerate this reply?</AlertDialogTitle>
+              <AlertDialogDescription>{removedTurnsText(laterTurns ?? 0)}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction aria-label="Regenerate" onClick={regenerate}>
+                Regenerate
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -250,13 +310,15 @@ export const MessageBubble = memo(function MessageBubble({
 const COPIED_MS = 1500
 
 /**
- * How many later turns a resend would remove, in a sentence.
+ * How many later turns a cut would remove, in a sentence.
  *
  * One is spelled out because "1 later turns" is the kind of sentence a user distrusts a dialog for,
- * and the count is the whole of what this dialog has to say. The number is the length of the cut
- * rather than a promise about it: the same rule that counts here is the one the send applies.
+ * and the count is the whole of what these dialogs have to say. The number is the length of the cut
+ * rather than a promise about it: the same rule that counts here is the one the send applies. Written
+ * once for both dialogs — a resend and a regenerate remove the same turns for the same reason, so a
+ * second sentence would only be a second chance to count differently.
  */
-function resendConfirmText(laterTurns: number): string {
+function removedTurnsText(laterTurns: number): string {
   return laterTurns === 1
     ? 'One later turn will be removed from this conversation.'
     : `${laterTurns} later turns will be removed from this conversation.`
@@ -281,6 +343,30 @@ function EditMessageButton({ onEdit }: { onEdit: () => void }) {
       className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <Pencil className="size-3.5" />
+    </button>
+  )
+}
+
+/**
+ * Asks for the reply beside it to be written again.
+ *
+ * The same treatment as the edit control on the other side of the transcript: hidden until the bubble
+ * is hovered, revealed by focus as well, and revealed rather than disabled — an affordance only a
+ * pointer can reach is not an affordance, and `opacity-0` leaves this in the tab order for exactly
+ * that reason.
+ *
+ * The label names the action rather than the message, like the two buttons it sits with: "Regenerate
+ * reply" is what this does, and the reply is the thing the user's focus has just arrived next to.
+ */
+function RegenerateButton({ onRegenerate }: { onRegenerate: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Regenerate reply"
+      onClick={onRegenerate}
+      className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      <RefreshCw className="size-3.5" />
     </button>
   )
 }
