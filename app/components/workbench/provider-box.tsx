@@ -1,0 +1,193 @@
+import type { ReactNode } from 'react'
+import { Check, KeyRound, Loader2, Trash2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { ModelList, type ModelEntry } from './model-list'
+
+/**
+ * One provider's box, in Settings: the controls every provider has, whether it ships with the app or
+ * was added by someone typing a URL.
+ *
+ * Extracted so the two kinds cannot drift. A custom provider's box is not a lookalike of a predefined
+ * one — it is the same box, rendered from the same markup, which is the only form of parity a test can
+ * assert without asserting the same thing twice. What differs between the two kinds is *wiring*: which
+ * command a key is saved through, and what the actions beside the name do. Both arrive as props, so
+ * this component never has to know which kind it is drawing.
+ *
+ * The slot names below are that parity, stated as data. A box renders the controls it is given state
+ * for — a key row always, the saved badge and the clear button once there is a key, the model list once
+ * there is a catalogue — and a suite compares those slots between the two kinds rather than comparing
+ * markup, which would pass on a box that had quietly lost a control.
+ */
+export const PROVIDER_BOX_CONTROLS = [
+  'provider-key-input',
+  'provider-key-save',
+  'provider-actions',
+  'provider-saved-badge',
+  'provider-key-clear',
+  'provider-enabled-models',
+  'provider-model-list',
+] as const
+
+/** The subset of the above that is present whatever the box's state is. */
+export const PROVIDER_BOX_CORE_CONTROLS = ['provider-key-input', 'provider-key-save', 'provider-actions'] as const
+
+/**
+ * The two affordances only a provider the user added carries: asking the server itself for its
+ * catalogue, and removing the provider. A predefined provider is asked through this app's own
+ * `settings` module and removed by editing nothing — it is not the user's to delete.
+ */
+export const CUSTOM_PROVIDER_ONLY_CONTROLS = ['provider-fetch-models', 'provider-delete'] as const
+
+export function ProviderBox({
+  id,
+  name,
+  kind,
+  configured,
+  disabled,
+  keyValue,
+  onKeyChange,
+  onSaveKey,
+  saving,
+  onClearKey,
+  clearing = false,
+  enabledModels,
+  models,
+  modelsOpen = false,
+  onToggleModel,
+  actions,
+  notice,
+}: {
+  id: string
+  name: string
+  kind: 'predefined' | 'custom'
+  configured: boolean
+  /** True when this system cannot hold a secret, so the key controls say so by being unusable. */
+  disabled: boolean
+  keyValue: string
+  onKeyChange: (value: string) => void
+  onSaveKey: () => void
+  saving: boolean
+  /** Absent for a kind whose key cannot be forgotten from here. */
+  onClearKey?: () => void
+  clearing?: boolean
+  /** The models switched on, in the order they were switched on. */
+  enabledModels: string[]
+  /** The catalogue to show, in the order the provider listed it. */
+  models: ModelEntry[]
+  /** Opened on the render right after a fetch, so the thing just asked for is visible. */
+  modelsOpen?: boolean
+  onToggleModel: (modelId: string) => void
+  /** The provider-shaped controls beside the name: a fetch, a delete, whatever this kind offers. */
+  actions: ReactNode
+  /**
+   * What a failed call said, in this app's words.
+   *
+   * Kept in the box rather than toasted: it stands until the next attempt says something newer, which
+   * is what a user retrying after a fix needs to see change.
+   */
+  notice?: string | null
+}) {
+  return (
+    <div
+      data-slot="provider-box"
+      data-provider-kind={kind}
+      data-provider-id={id}
+      className="rounded-lg border border-border bg-card px-3.5 py-3"
+    >
+      <div className="flex items-center gap-2">
+        <KeyRound className={cn('size-3.5 shrink-0', configured ? 'text-brand' : 'text-muted-foreground')} />
+        <span className="text-[13px] font-medium">{name}</span>
+        {configured && (
+          <span
+            data-slot="provider-saved-badge"
+            className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10.5px] font-medium text-brand"
+          >
+            <Check className="size-2.5" />
+            saved
+          </span>
+        )}
+
+        <div data-slot="provider-actions" className="ml-auto flex items-center gap-0.5">
+          {actions}
+        </div>
+      </div>
+
+      <div className="mt-2.5 flex items-center gap-2">
+        <Input
+          data-slot="provider-key-input"
+          type="password"
+          value={keyValue}
+          disabled={disabled || saving}
+          autoComplete="off"
+          spellCheck={false}
+          aria-label={`${name} API key`}
+          placeholder={configured ? 'Replace the saved key…' : 'Paste your API key'}
+          onChange={(event) => onKeyChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onSaveKey()
+          }}
+          className="h-8 font-mono text-[12px]"
+        />
+        <Button
+          data-slot="provider-key-save"
+          size="sm"
+          disabled={disabled || !keyValue.trim() || saving}
+          onClick={onSaveKey}
+        >
+          {saving && <Loader2 className="animate-spin" />}
+          Save
+        </Button>
+        {configured && onClearKey && (
+          <Button
+            data-slot="provider-key-clear"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`Remove ${name} key`}
+            disabled={clearing}
+            onClick={onClearKey}
+          >
+            <Trash2 />
+          </Button>
+        )}
+      </div>
+
+      {notice && (
+        <p data-slot="provider-notice" role="status" className="mt-2.5 text-[12px] leading-relaxed text-destructive">
+          {notice}
+        </p>
+      )}
+
+      {/* Enabled models, always visible: this is what the chat picker will actually offer. */}
+      {enabledModels.length > 0 && (
+        <div
+          data-slot="provider-enabled-models"
+          className="mt-2.5 flex flex-wrap items-center gap-1.5"
+          aria-label={`Enabled ${name} models`}
+        >
+          {enabledModels.map((modelId) => (
+            <span
+              key={modelId}
+              className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-[10.5px] text-foreground/80"
+            >
+              <span className="truncate">{modelId}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {models.length > 0 && (
+        <div data-slot="provider-model-list">
+          <ModelList
+            providerName={name}
+            models={models}
+            enabled={enabledModels}
+            defaultOpen={modelsOpen}
+            onToggle={onToggleModel}
+          />
+        </div>
+      )}
+    </div>
+  )
+}

@@ -926,13 +926,23 @@ export const agentModule = defineModule({
        * mentions.
        */
       mentionPaths: z.array(z.string()).max(MAX_MENTION_PATHS).optional(),
+      /**
+       * The descriptor of a provider the user added, when this run's provider is one.
+       *
+       * `unknown` on purpose: the loop is handed whatever a caller has, and what makes a descriptor
+       * runnable is decided where it is used — in `llm-engine`, at the boundary that chooses between a
+       * built-in provider and a custom one. Validating it here as well would be a second answer to the
+       * same question, and the two would eventually disagree.
+       */
+      provider: z.unknown().optional(),
     }),
     async function* ({ input, signal }) {
-      const apiKey = await requireApiKey(input.providerId)
+      const { apiKey, provider } = await resolveRun(input.providerId, input.provider)
       yield* runAgentLoop({
         providerId: input.providerId,
         apiKey,
         model: input.model,
+        provider,
         workspaceRoot: input.workspaceRoot,
         messages: input.messages as ChatMessage[],
         autoApprove: input.autoApprove ?? false,
@@ -966,13 +976,16 @@ export const agentModule = defineModule({
       calls: z.array(callSchema).min(1, 'At least one call must be answered'),
       steps: z.number().int().min(0).optional(),
       decision: z.enum(['approved', 'denied']),
+      /** The same descriptor the run started with: a resumed turn is the same turn. */
+      provider: z.unknown().optional(),
     }),
     async function* ({ input, signal }) {
-      const apiKey = await requireApiKey(input.providerId)
+      const { apiKey, provider } = await resolveRun(input.providerId, input.provider)
       yield* runAgentLoop({
         providerId: input.providerId,
         apiKey,
         model: input.model,
+        provider,
         workspaceRoot: input.workspaceRoot,
         messages: input.messages as ChatMessage[],
         autoApprove: input.autoApprove ?? false,
@@ -987,14 +1000,40 @@ export const agentModule = defineModule({
   ),
 })
 
-/** The key is read here rather than passed in, so the renderer never holds one. */
-async function requireApiKey(providerId: string): Promise<string> {
-  const apiKey = await readApiKey(providerId)
-  if (!apiKey) {
-    throw new ConveyorError(
-      'NO_API_KEY',
-      `No API key is saved for ${providerId}. Add one in Settings to start chatting.`
-    )
+/**
+ * The credential and the descriptor a run goes out with.
+ *
+ * The key is read here rather than passed in, so the renderer never holds one. What "a key" means
+ * differs between the two kinds of provider, and that is the whole reason this is one function rather
+ * than two calls at the two stream handlers:
+ *
+ * - A provider that ships with the app needs a key. There is no route to it without one, so a missing
+ *   key is `NO_API_KEY` — the failure the user can act on, since Settings is one click away.
+ *
+ * - A provider the user added may have none, and for a server on their own machine that is the ordinary
+ *   case rather than an unfinished setup. So the descriptor's own `apiKey` is filled in from the key
+ *   store rather than trusted from the payload: the renderer sends the descriptor it holds, where that
+ *   field is always empty, because the list it comes from is mirrored to every window.
+ */
+async function resolveRun(providerId: string, descriptor: unknown): Promise<{ apiKey: string; provider: unknown }> {
+  const stored = await readApiKey(providerId)
+
+  if (descriptor === undefined || descriptor === null) {
+    if (!stored) {
+      throw new ConveyorError(
+        'NO_API_KEY',
+        `No API key is saved for ${providerId}. Add one in Settings to start chatting.`
+      )
+    }
+    return { apiKey: stored, provider: undefined }
   }
-  return apiKey
+
+  // Not an object: handed through untouched, for the engine to refuse with `INVALID_PROVIDER`. Nothing
+  // here can fold a key into something that is not a descriptor, and guessing at one would be the
+  // second validator the engine's own check exists to avoid.
+  if (typeof descriptor !== 'object' || Array.isArray(descriptor)) {
+    return { apiKey: stored ?? '', provider: descriptor }
+  }
+
+  return { apiKey: stored ?? '', provider: { ...descriptor, apiKey: stored ?? '' } }
 }

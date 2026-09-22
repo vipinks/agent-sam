@@ -79,7 +79,15 @@ const MANIFEST: Record<string, Record<string, string>> = {
     listProviders: 'query',
     defaultModels: 'query',
     listConfigured: 'query',
+    isEncryptionAvailable: 'query',
+    saveApiKey: 'command',
+    clearApiKey: 'command',
+    fetchModels: 'command',
   },
+  // The catalogue of a provider the user added. A command, like `settings.fetchModels` above it, so the
+  // client dispatches it the way main registered it: a member missing from this map is refused by the
+  // client's own manifest check before any handler is reached.
+  provider: { listModels: 'command' },
   workspace: {
     listDirectory: 'query',
     readFile: 'query',

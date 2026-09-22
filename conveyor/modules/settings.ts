@@ -40,6 +40,30 @@ export const DEFAULT_MODELS: Record<string, Array<{ id: string; name?: string }>
   PROVIDERS.map((p) => [p.id, [{ id: p.defaultModel, name: p.defaultModel }]])
 )
 
+/**
+ * Which provider ids may hold a key.
+ *
+ * A provider the user added holds one too — its box in Settings asks for the same thing a predefined
+ * one's does — so this cannot be the static list alone. The ids live in the `provider-config` store,
+ * which main registers in `router.ts` beside the modules defined here, so the reader is installed from
+ * there once the router exists: a module that reached for the router directly would close an import
+ * cycle, and `setWorkspaceChangeSink` beside it is the same shape for the same reason.
+ *
+ * Until it is installed this answers "predefined only", which is the honest reading for a process that
+ * has not yet loaded its state — and the question is only ever asked about a provider that exists.
+ */
+let customProviderIds: () => readonly string[] = () => []
+
+/** Install the reader. Called once from `router.ts`, after `createRouter` has assigned store ids. */
+export function setCustomProviderIds(source: () => readonly string[]): void {
+  customProviderIds = source
+}
+
+/** Whether a key may be stored for this provider: one that ships here, or one the user added. */
+function isKnownProvider(providerId: string): boolean {
+  return PROVIDERS.some((p) => p.id === providerId) || customProviderIds().includes(providerId)
+}
+
 /** On-disk shape: provider id → base64 ciphertext. Keeping it a map means one file, not five. */
 type KeyFile = Record<string, string>
 
@@ -97,6 +121,9 @@ export const settingsModule = defineModule({
   /**
    * Encrypt and store a key. The plaintext key is used here and never written to disk, never
    * logged, and never returned to the renderer.
+   *
+   * A provider the user added stores its key the same way, under the id the add form derived from its
+   * name — `readApiKey` never knew the difference, so one key file still answers for both kinds.
    */
   saveApiKey: command(
     z.object({
@@ -106,8 +133,9 @@ export const settingsModule = defineModule({
     async ({ input }) => {
       assertEncryption()
 
-      const known = PROVIDERS.some((p) => p.id === input.providerId)
-      if (!known) throw new ConveyorError('UNKNOWN_PROVIDER', `No provider named '${input.providerId}'.`)
+      if (!isKnownProvider(input.providerId)) {
+        throw new ConveyorError('UNKNOWN_PROVIDER', `No provider named '${input.providerId}'.`)
+      }
 
       const file = await readKeyFile()
       file[input.providerId] = safeStorage.encryptString(input.apiKey).toString('base64')

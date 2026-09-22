@@ -6,6 +6,7 @@ import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
+import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor } from '../ui/popover'
@@ -259,6 +260,10 @@ export function ChatPanel() {
   // The user's intent, from the persisted store: the dropdown offers exactly these.
   const configs = useConveyorStore(providerConfigStore, (s) => s.providers)
 
+  // The providers the user added, in the order they added them. Read from the same store Settings
+  // writes, so the picker and the screen that fills it can never disagree about what exists.
+  const customProviders = useConveyorStore(providerConfigStore, (s) => s.customProviders)
+
   // Whether the selected provider has a key. Undefined while the query is in flight, which must
   // not read as "missing" — a warning that flashes on load is worse than none.
   const configured = conveyor.settings.listConfigured.useQuery()
@@ -270,6 +275,29 @@ export function ChatPanel() {
     // The seeded catalogue carries names as well as ids; the composer only needs the ids.
     return (defaultModels.data?.[providerId] ?? []).map((m) => m.id)
   }
+
+  /**
+   * The models a provider the user added offers, by the same rule a predefined one follows: what the
+   * user switched on, and the catalogue itself while nothing has been switched on.
+   *
+   * The same rule rather than "all of them", because the switches in Settings have to mean something
+   * here: a box whose toggles changed nothing would be a control that lies. A provider with no models
+   * and nothing switched on yields an empty list, which is the case the picker names rather than drops.
+   */
+  const customModelsFor = (provider: CustomProvider): string[] => {
+    const enabled = configs[provider.id]?.enabledModels
+    if (enabled && enabled.length > 0) return enabled
+    return provider.models
+  }
+
+  /**
+   * The descriptor this run goes out with, or undefined when the pick is a built-in provider.
+   *
+   * Undefined rather than an empty descriptor, because the two are different facts to main: absent
+   * means the built-in table answers for the id, while a descriptor is a statement about this turn's
+   * provider that overrides the table.
+   */
+  const runProvider = customProviders.find((provider) => provider.id === activeProviderId)
   const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
 
   //
@@ -564,6 +592,9 @@ export function ChatPanel() {
         conveyor.agent.chatWithTools({
           providerId: activeProviderId,
           model: activeModel,
+          // The descriptor of a provider the user added, when this is one. Absent for a built-in, whose
+          // route main already knows by id.
+          provider: runProvider,
           messages: toHistory(turns),
           workspaceRoot: rootPath,
           autoApprove,
@@ -581,7 +612,7 @@ export function ChatPanel() {
       // chunks, and this is one save.
       sessionsRef.current.scheduleSave()
     },
-    [activeModel, activeProviderId, autoApprove, rootPath, runStream, stickToBottom, updateMessages]
+    [activeModel, activeProviderId, autoApprove, rootPath, runProvider, runStream, stickToBottom, updateMessages]
   )
 
   const sendText = useCallback(
@@ -754,6 +785,9 @@ export function ChatPanel() {
         conveyor.agent.resume({
           providerId: activeProviderId,
           model: activeModel,
+          // The same descriptor the run started with: a resumed turn is the same turn, and main has to
+          // route it to the same provider it was routed to before the pause.
+          provider: runProvider,
           // The history the loop paused with and the model's own calls — both handed back exactly as
           // they came, so nothing is rebuilt from the display layer. The queue goes back whole while
           // the decision answers its head, which is how the loop knows what to present next.
@@ -777,6 +811,7 @@ export function ChatPanel() {
       isStreaming,
       pending,
       rootPath,
+      runProvider,
       runStream,
       stickToBottom,
       updateMessages,
@@ -900,6 +935,35 @@ export function ChatPanel() {
                     models.map((model) => (
                       <SelectItem key={model} value={`${provider.id}::${model}`}>
                         <span className="font-mono">{model}</span>
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectGroup>
+              )
+            })}
+
+            {/*
+              The providers the user added, after every one that ships. Grouped the same way, and each
+              line carries its provider's name: two providers can offer the same model id, and the id on
+              its own would not say which server a line would run against.
+            */}
+            {customProviders.map((provider) => {
+              const models = customModelsFor(provider)
+              return (
+                <SelectGroup key={provider.id}>
+                  <SelectLabel>{provider.name}</SelectLabel>
+                  {models.length === 0 ? (
+                    // Named rather than dropped: a provider missing from this list would be one the user
+                    // added and cannot find, so it stays and says what it is waiting for.
+                    <SelectItem value={`${provider.id}::`} disabled>
+                      <span className="text-muted-foreground">{provider.name} · No models yet</span>
+                    </SelectItem>
+                  ) : (
+                    models.map((model) => (
+                      <SelectItem key={model} value={`${provider.id}::${model}`}>
+                        <span className="font-mono">
+                          {provider.name} · {model}
+                        </span>
                       </SelectItem>
                     ))
                   )}

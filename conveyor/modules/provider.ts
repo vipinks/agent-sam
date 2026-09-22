@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { defineModule, command } from '../init'
 import { modelsUrl, normalizeBaseUrl } from '../protocol/custom-provider'
 import { parseModels, type FetchLike } from './models-engine'
+import { readApiKey } from './settings'
 
 /**
  * The one thing a custom provider is asked for before anything is sent to it: what models it offers.
@@ -93,11 +94,26 @@ const baseUrlSchema = z
 
 export const providerModule = defineModule({
   /**
-   * The catalogue of a provider this app has no descriptor for. The URL and the key arrive together
-   * because that is all main needs to ask: a custom provider's configuration lives in the settings slice
-   * and its key in the credentials settings owns, and neither is read here.
+   * The catalogue of a provider this app has no descriptor for.
+   *
+   * The URL arrives because only the caller knows which server this is about. The key arrives because
+   * the user may be holding it right now — the box in Settings keeps it while they type, and a custom
+   * provider is often configured and fetched in one sitting. The id arrives for the case where they are
+   * not: a key saved on an earlier run is in main and nowhere else, so without it a provider already set
+   * up would have to be given its key again just to be asked what it offers.
+   *
+   * The id is a fallback rather than a second route. `readApiKey` is consulted only when no key came with
+   * the call, so a typed key is never silently replaced by a stored one.
    */
-  listModels: command(z.object({ baseUrl: baseUrlSchema, apiKey: z.string() }), async ({ input }) =>
-    listProviderModels(input.baseUrl, input.apiKey)
+  listModels: command(
+    z.object({
+      baseUrl: baseUrlSchema,
+      apiKey: z.string(),
+      providerId: z.string().min(1).optional(),
+    }),
+    async ({ input }) => {
+      const apiKey = input.apiKey || (input.providerId ? ((await readApiKey(input.providerId)) ?? '') : '')
+      return listProviderModels(input.baseUrl, apiKey)
+    }
   ),
 })

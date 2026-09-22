@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
-import { Check, KeyRound, Loader2, RefreshCw, Settings as SettingsIcon, ShieldAlert, Trash2 } from 'lucide-react'
+import { Loader2, RefreshCw, Settings as SettingsIcon, ShieldAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
-import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
-import { Input } from '../ui/input'
 import { PaneHeader } from './pane-header'
-import { ModelList } from './model-list'
+import { ProviderBox } from './provider-box'
+import { CustomProviders } from './custom-provider-settings'
+import { keySaveErrorMessage } from './provider-notices'
 
 /**
  * Settings: one row per provider, each holding its own key and its own model list.
@@ -17,6 +17,10 @@ import { ModelList } from './model-list'
  * is kept in renderer state beyond the input the user is typing into, and the save clears it
  * immediately. Model choices are different: they are the user's intent, so they live in the
  * persisted `provider-config` store and are written the moment a switch is flipped.
+ *
+ * Both kinds of provider are drawn by one sub-component, `ProviderBox`: a provider the user added is
+ * the same box with different wiring, not a lookalike of it, and the parity suite compares the two
+ * through the slots that sub-component renders.
  */
 export function SettingsView() {
   const providers = conveyor.settings.listProviders.useQuery()
@@ -63,6 +67,14 @@ export function SettingsView() {
                 onKeyChanged={() => void configured.refetch()}
               />
             ))}
+
+            {/* After the ones that ship, because a provider the user added is an addition to that list —
+                and the button between them is where the list grows. */}
+            <CustomProviders
+              configured={configured.data ?? []}
+              disabled={encryptionAvailable.data === false}
+              onProvidersChanged={() => void configured.refetch()}
+            />
           </div>
         </div>
       </div>
@@ -89,23 +101,6 @@ function fetchErrorMessage(error: unknown, name: string): string {
     }
   }
   return 'The model list could not be fetched.'
-}
-
-/** The error copy for a failed save, branched on the code rather than on the message text. */
-function saveErrorMessage(error: unknown): string {
-  if (error instanceof ConveyorError) {
-    switch (error.code) {
-      case 'ENCRYPTION_UNAVAILABLE':
-        return 'No OS keychain is available, so this key was not saved.'
-      case 'UNKNOWN_PROVIDER':
-        return 'That provider is not supported.'
-      case 'INVALID_INPUT':
-        return 'That key does not look valid. Check it and try again.'
-      default:
-        return 'The key could not be saved.'
-    }
-  }
-  return 'The key could not be saved.'
 }
 
 function ProviderCard({
@@ -149,7 +144,7 @@ function ProviderCard({
       toast.success(`${name} key saved`, { description: 'Encrypted and stored on this machine.' })
       onKeyChanged()
     } catch (err) {
-      toast.error(`${name} key was not saved`, { description: saveErrorMessage(err) })
+      toast.error(`${name} key was not saved`, { description: keySaveErrorMessage(err) })
     }
   }
 
@@ -177,84 +172,34 @@ function ProviderCard({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card px-3.5 py-3">
-      <div className="flex items-center gap-2">
-        <KeyRound className={cn('size-3.5 shrink-0', configured ? 'text-brand' : 'text-muted-foreground')} />
-        <span className="text-[13px] font-medium">{name}</span>
-        {configured && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10.5px] font-medium text-brand">
-            <Check className="size-2.5" />
-            saved
-          </span>
-        )}
-
+    <ProviderBox
+      id={id}
+      name={name}
+      kind="predefined"
+      configured={configured}
+      disabled={disabled}
+      keyValue={value}
+      onKeyChange={setValue}
+      onSaveKey={() => void onSave()}
+      saving={save.isPending}
+      onClearKey={() => void onClear()}
+      clearing={clear.isPending}
+      enabledModels={enabled}
+      models={fetched}
+      modelsOpen={justFetched}
+      onToggleModel={(modelId) => toggleModel({ providerId: id, modelId })}
+      actions={
         <Button
+          data-slot="provider-refresh"
           size="icon-sm"
           variant="ghost"
-          className="ml-auto"
           aria-label={`Fetch ${name} models`}
           disabled={fetchModels.isPending}
           onClick={() => void onFetch()}
         >
           {fetchModels.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
         </Button>
-      </div>
-
-      <div className="mt-2.5 flex items-center gap-2">
-        <Input
-          type="password"
-          value={value}
-          disabled={disabled || save.isPending}
-          autoComplete="off"
-          spellCheck={false}
-          aria-label={`${name} API key`}
-          placeholder={configured ? 'Replace the saved key…' : 'Paste your API key'}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void onSave()
-          }}
-          className="h-8 font-mono text-[12px]"
-        />
-        <Button size="sm" disabled={disabled || !value.trim() || save.isPending} onClick={() => void onSave()}>
-          {save.isPending && <Loader2 className="animate-spin" />}
-          Save
-        </Button>
-        {configured && (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={`Remove ${name} key`}
-            disabled={clear.isPending}
-            onClick={() => void onClear()}
-          >
-            <Trash2 />
-          </Button>
-        )}
-      </div>
-
-      {/* Enabled models, always visible: this is what the chat picker will actually offer. */}
-      {enabled.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5" aria-label={`Enabled ${name} models`}>
-          {enabled.map((modelId) => (
-            <span
-              key={modelId}
-              className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-[10.5px] text-foreground/80"
-            >
-              <span className="truncate">{modelId}</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {fetched.length > 0 && (
-        <ModelList
-          providerName={name}
-          models={fetched}
-          enabled={enabled}
-          defaultOpen={justFetched}
-          onToggle={(modelId) => toggleModel({ providerId: id, modelId })}
-        />
-      )}
-    </div>
+      }
+    />
   )
 }

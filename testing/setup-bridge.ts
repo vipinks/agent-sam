@@ -73,6 +73,24 @@ if (typeof globalThis.matchMedia !== 'function') {
   })) as unknown as typeof matchMedia
 }
 
+/**
+ * jsdom implements no pointer capture, and Radix's Select takes it on its trigger as it opens.
+ *
+ * The picker cannot be opened at all without this: the take throws inside Radix's own pointer
+ * handler, which React reports as an error during the click rather than as a missing method. A no-op is
+ * the honest stand-in — nothing here asserts on capture, and a headless document has no pointer to lose.
+ * `scrollIntoView` is jsdom's other hole and is reached the moment a listbox with a highlighted item
+ * mounts, so it is filled in beside it.
+ */
+if (typeof HTMLElement.prototype.setPointerCapture !== 'function') {
+  HTMLElement.prototype.setPointerCapture = () => {}
+  HTMLElement.prototype.releasePointerCapture = () => {}
+  HTMLElement.prototype.hasPointerCapture = () => false
+}
+if (typeof HTMLElement.prototype.scrollIntoView !== 'function') {
+  HTMLElement.prototype.scrollIntoView = () => {}
+}
+
 beforeEach(() => {
   setActiveStub(createBridgeStub())
 })

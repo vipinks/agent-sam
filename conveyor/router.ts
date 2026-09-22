@@ -4,7 +4,7 @@ import { windows, openAppWindow } from '@/lib/main/app'
 import { windowModule, setupWindowEvents } from './modules/window'
 import { webModule } from './modules/web'
 import { workspaceModule } from './modules/workspace'
-import { settingsModule } from './modules/settings'
+import { settingsModule, setCustomProviderIds } from './modules/settings'
 import { providerModule } from './modules/provider'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
@@ -81,6 +81,16 @@ void sweepOrphanedTranscripts(router.stores['chat-sessions'].getState().sessions
  */
 const emitWorkspaceChanged = createEmitter(workspaceModule, () => windows.broadcast())
 setWorkspaceChangeSink(emitWorkspaceChanged.onChanged)
+
+/**
+ * Tell the settings module which providers the user has added, so a key may be saved for one.
+ *
+ * Installed here for the same reason the sink above is: the store does not exist until `createRouter`
+ * has returned, and `settings.ts` is imported *by* this file — a module reaching for the router would
+ * close the cycle. Read through a function rather than handed over as a list, because the list a user
+ * adds to is not the list this file saw at startup.
+ */
+setCustomProviderIds(() => router.stores['provider-config'].getState().customProviders.map((p) => p.id))
 
 /** Wire per-window push events. Call once per created window. */
 export function setupEvents(win: BrowserWindow): void {
