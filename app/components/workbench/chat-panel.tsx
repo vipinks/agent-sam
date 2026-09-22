@@ -4,6 +4,7 @@ import { MessageSquare, Paperclip, SendHorizontal, ShieldCheck, Square, Triangle
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
+import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Button } from '../ui/button'
@@ -12,6 +13,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { COMPOSER_MIN_HEIGHT, clampComposerHeight, composerBounds } from './composer-resize'
 import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
@@ -174,6 +176,29 @@ export function ChatPanel() {
   const [pickerIndex, setPickerIndex] = useState(0)
   const composerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // The pane itself, for the ceiling on a drag: the limit is a share of how tall the chat column
+  // actually is, and only the DOM knows that number.
+  const paneRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * The composer's height, remembered per session and only for as long as the window lives.
+   *
+   * Not persisted, deliberately: the height a user dragged to is a fact about this window's layout
+   * rather than about the conversation, and a transcript carrying it would store something no reader
+   * of that record has a use for. Per session because one long message should not leave every other
+   * conversation's composer stretched.
+   */
+  const [composerHeights, setComposerHeights] = useState<Record<string, number>>({})
+  /** The drag in progress: which session it is measured against, and where the pointer and edge began. */
+  const [composerDrag, setComposerDrag] = useState<{ key: string; startY: number; startHeight: number } | null>(null)
+  // Which session the pane is showing. The composer's height is keyed by it, so a drag belongs to the
+  // conversation it was made in rather than to the pane.
+  const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
+  // Before the first session exists the composer is still draggable, and the height it is given then is
+  // kept under the empty key. A session with none of its own falls back to that one, which is what stops
+  // the composer from snapping back to its opening height the moment the first message creates a session.
+  const composerKey = activeSessionId ?? ''
+  const composerHeight = composerHeights[composerKey] ?? composerHeights[''] ?? COMPOSER_MIN_HEIGHT
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
@@ -550,6 +575,55 @@ export function ChatPanel() {
   }, [draft, sendText])
 
   /**
+   * Begin a drag of the composer's top edge.
+   *
+   * The height the drag starts from is captured here and the pointer's movement is applied to it, rather
+   * than the height being nudged per event: a drag that runs into a clamp and comes back out again then
+   * returns to the height the pointer is asking for. Accumulating deltas would lose everything the pointer
+   * asked for while it was pinned, and the composer would stay stuck where it had been held.
+   */
+  const startComposerDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    // The drag belongs to the edge, not to the pane: without this a drag lands as a text selection in the
+    // transcript or the textarea behind it.
+    event.preventDefault()
+    setComposerDrag({ key: composerKey, startY: event.clientY, startHeight: composerHeight })
+  }
+
+  /**
+   * Follow a drag, and end it.
+   *
+   * The listeners live on the window for as long as the drag lasts rather than on the handle: most drags
+   * leave the few pixels the pointer started on, and a handle that listened only to itself would stop
+   * resizing the moment it did.
+   */
+  useEffect(() => {
+    if (!composerDrag) return
+
+    const onMove = (event: PointerEvent) => {
+      const bounds = composerBounds(paneRef.current?.clientHeight ?? 0)
+      // Dragging up makes the composer taller, so the pointer's downward movement is subtracted.
+      const requested = composerDrag.startHeight - (event.clientY - composerDrag.startY)
+      const next = clampComposerHeight(requested, bounds.min, bounds.max)
+      setComposerHeights((current) =>
+        current[composerDrag.key] === next ? current : { ...current, [composerDrag.key]: next }
+      )
+    }
+    const end = () => setComposerDrag(null)
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', end)
+    // A cancelled pointer — a window losing focus mid-drag — ends the drag as well, rather than leaving the
+    // pane resizing itself at whatever the next move reports.
+    window.addEventListener('pointercancel', end)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+  }, [composerDrag])
+
+  /**
    * Answer a pause.
    *
    * Approval and denial travel the same path: the decision goes to `resume`, which either runs the
@@ -650,7 +724,7 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div ref={paneRef} className="flex h-full flex-col bg-background">
       <PaneHeader icon={MessageSquare} title="Chat">
         {/*
           Auto-approve sits beside the model picker because it is the other thing that decides what a
@@ -804,7 +878,21 @@ export function ChatPanel() {
         />
       </div>
 
-      <div ref={composerRef} className="shrink-0 border-t border-border p-3">
+      <div ref={composerRef} className="relative shrink-0 border-t border-border p-3">
+        {/*
+          The composer's top edge, as a grab target. A separator rather than a button because what it
+          does is resize the region below it, and `cursor-row-resize` is the cursor that says so before
+          anyone has started dragging. It straddles the border rather than sitting under it, so the strip
+          does not eat the first line of the textarea's hit area, and `touch-none` keeps a touch drag from
+          being read as a scroll of the transcript.
+        */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize the composer"
+          className="absolute inset-x-0 -top-1 h-2 cursor-row-resize touch-none"
+          onPointerDown={startComposerDrag}
+        />
         <Popover
           open={pickerOpen}
           onOpenChange={(next) => {
@@ -839,7 +927,14 @@ export function ChatPanel() {
                 onKeyDown={onKeyDown}
                 placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'}
                 aria-label="Message"
-                className="min-h-20 resize-none pt-2.5 pr-20 text-[13px]"
+                // `field-sizing-fixed` is the whole of the behaviour change: the primitive ships
+                // `field-sizing-content`, which grows the box with its content, and the composer wants the
+                // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
+                // the primitive's own floor so the height below is the height, not a suggestion.
+                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-20 text-[13px]"
+                // The height is state rather than styling — it is the number the drag produces — so it is the
+                // one thing here that cannot be a class.
+                style={{ height: composerHeight }}
               />
               <Button
                 size="icon-sm"
