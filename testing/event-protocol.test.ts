@@ -5,10 +5,11 @@ import { createBridgeStub, setActiveStub } from './bridge-stub'
 /**
  * Pins the event-subscription protocol the stub depends on.
  *
- * The stub delivers events to *every* subscriber rather than by channel, deliberately: conveyor's
- * event channel naming is internal, and a stub keyed on it would break silently on an upgrade. What
- * still has to hold is that a subscription reaches the bridge and that unsubscribing is honoured —
- * otherwise the workspace-change tests could pass while leaking listeners.
+ * The stub now delivers by channel, as main's transport does, so what has to hold is that a
+ * subscription reaches the bridge, that a payload emitted on the channel it subscribed to arrives, and
+ * that unsubscribing is honoured — otherwise the workspace-change tests could pass while leaking
+ * listeners. The channel name itself is still conveyor's business and is taken from the subscription
+ * rather than written down here: a stub that hardcoded it would break silently on an upgrade.
  */
 describe('event protocol', () => {
   it('subscribes and unsubscribes through the bridge', () => {
@@ -34,12 +35,14 @@ describe('event protocol', () => {
     expect(seen.length).toBe(1)
     expect(seen[0]).toMatch(/^conveyor:/)
 
-    stub.emit('', true)
+    // Emitted on the channel the subscription asked for: a payload pushed to any other channel
+    // reaches this listener not at all, which is what the channel key means.
+    stub.emit(seen[0], true)
     expect(received).toEqual([true])
 
     // Unsubscribing stops delivery: without this a leaked listener would see later events.
     unsubscribe()
-    stub.emit('', false)
+    stub.emit(seen[0], false)
     expect(received).toEqual([true])
   })
 })

@@ -15,19 +15,29 @@ import { TerminalPanel } from './terminal-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
-import { initialLayoutSizes, percentSize } from './layout'
+import { mainGroupLayout, outerGroupLayout, percentSize } from './layout'
+import { useWorkbenchLayout } from './use-workbench-layout'
 import { useThemeApplication } from './theme-apply'
 import { useWorkbenchStore } from './store'
 
 /**
  * The workbench: icon rail, secondary panel, and a main area split between the chat and the code
- * viewer. The secondary panel and the main area open at 20 and 80 of the window, and the main area's
- * own split at 62.5 and 37.5 — so the viewer opens at 30 percent of the window and the chat at 50.
- * Not one of those numbers is visible from the panel it sizes, which is why they live together in
- * `initialLayoutSizes` rather than as literals here. They are the window's starting point; dragging
- * the handles owns them from then on, and the drawer keeps its pixel width when the window itself is
- * resized rather than its share of it. Pane minimums are in pixels so they hold when the window is
- * narrowed — the group itself still needs at least one panel that can absorb the remainder.
+ * viewer. The sizes both groups open with belong to the window state the window is in, so they are
+ * read from `useWorkbenchLayout`: 34/66 and 50/50 in a windowed window, 20/80 and 53.75/46.25 in a
+ * maximized one. Not one of those numbers is visible from the panel it sizes, which is why they live
+ * together in `layout.ts` rather than as literals here, and why each group is handed its own set
+ * through the resize library's `defaultLayout` — the group is what the library computes a layout for.
+ * They are the state's starting point; dragging the handles owns them from then on, and the drawer
+ * keeps its pixel width when the window itself is resized rather than its share of it. Pane minimums
+ * are in pixels so they hold when the window is narrowed — the group itself still needs at least one
+ * panel that can absorb the remainder.
+ *
+ * Each group is keyed on the window state, and that is not decoration: the library takes the declared
+ * layout once, on the group's first layout effect, and owns the layout from then on — so a new state's
+ * sizes only arrive with a new group. Keying the outer group is enough for the structure (its subtree
+ * is new), and the inner group carries the key too because its sizes come from the same state, which
+ * is what a reader of either group should be able to see. The cost that buys is named where it is
+ * paid: a maximize or a restore remounts the panes under them.
  *
  * Two rail items take the whole main area rather than the secondary panel, because they are places
  * you go rather than things you glance at: Settings (a screen you leave when done) and Terminal (a
@@ -65,9 +75,9 @@ function WorkbenchLayout() {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
   // Whether the viewer is taking the chat column's width, as the viewer's header control last left it.
   const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
-  // The proportions both groups open with. Read once per render from a pure helper, so the two levels
-  // of the layout can never be given defaults that were written down apart from each other.
-  const sizes = initialLayoutSizes()
+  // The window state this window is in, and the set both groups open with for it. Read once per
+  // render, so the two levels of the layout can never be given sizes that were resolved apart.
+  const { state, sizes } = useWorkbenchLayout()
   const sessions = useChatSessionsContext()
   useWorkspaceChangeInvalidation(selectedFile)
 
@@ -143,13 +153,28 @@ function WorkbenchLayout() {
           <TerminalPanel />
         </div>
       ) : (
-        <ResizablePanelGroup id="workbench" orientation="horizontal">
+        <ResizablePanelGroup
+          id="workbench"
+          // The window state is this group's identity: a new state is a new group, which is how the
+          // library is made to take the declared layout for it rather than keeping the one it computed
+          // at mount.
+          key={state}
+          orientation="horizontal"
+          defaultLayout={outerGroupLayout(sizes)}
+        >
           {secondaryPanel}
 
           <ResizableHandle />
 
           <ResizablePanel id="main" defaultSize={percentSize(sizes.outer.main)} minSize={420}>
-            <ResizablePanelGroup id="workbench-main" orientation="horizontal">
+            <ResizablePanelGroup
+              id="workbench-main"
+              // Keyed for the same reason, and for its own sizes: the nested group remounts with the
+              // outer one either way, and the pair states where each group's layout comes from.
+              key={state}
+              orientation="horizontal"
+              defaultLayout={mainGroupLayout(sizes)}
+            >
               {/*
                 The chat column while the split is showing, and its handle with it. Removed rather than
                 hidden behind a zero width or a class: a column that is still in the tree is still a
@@ -174,7 +199,12 @@ function WorkbenchLayout() {
               )}
 
               {/* The sole column while expanded, and it needs no size of its own: a group with one panel
-                  gives that panel everything, so the width follows from the chat's absence. */}
+                  gives that panel everything, so the width follows from the chat's absence.
+
+                  Each panel states its own size as well as the group stating the set, and while expanded
+                  that is the only statement that applies: the group's declared layout names two panels
+                  and the group has one, so the library sets it aside and falls back to the panel's own
+                  share — which is what makes the two branches agree instead of a stale set winning. */}
               <ResizablePanel
                 key="code"
                 id="code"

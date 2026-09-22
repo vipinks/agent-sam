@@ -20,6 +20,16 @@ export const windowModule = defineModule({
   isMinimizable: query(({ ctx }) => ctx.window?.isMinimizable() ?? false),
   isMaximizable: query(({ ctx }) => ctx.window?.isMaximizable() ?? false),
 
+  /**
+   * Whether the window this call came from is maximized, right now.
+   *
+   * `onMaximizeChange` carries every change *after* a renderer subscribes, and nothing about the window
+   * a launch already found — so a window that is maximized before the first paint would never be
+   * reported as such. This is the read that answers for the window as it already is; the event keeps
+   * the answer current from then on.
+   */
+  isMaximized: query(({ ctx }) => ctx.window?.isMaximized() ?? false),
+
   minimize: command(({ ctx }) => {
     ctx.window?.minimize()
   }),

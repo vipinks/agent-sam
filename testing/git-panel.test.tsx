@@ -45,6 +45,8 @@ const DIFF = {
 /** The whole workbench over a repository with the open folder already set. */
 function stubWorkbench(overrides: Record<string, (input: unknown) => unknown> = {}): BridgeStub {
   const stub = createBridgeStub({
+    // The window state the workbench lays out for. Windowed, which is the window the app opens.
+    isMaximized: () => false,
     readFile: () => ({ path: '', content: '', baselineMtime: 0 }),
     listDirectory: () => [],
     status: () => STATUS,

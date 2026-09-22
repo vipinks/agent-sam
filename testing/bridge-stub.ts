@@ -44,17 +44,17 @@ export interface BridgeStub {
    * current.
    */
   handlers: Map<string, (input: unknown, channel: string) => unknown>
-  /** Push an event payload, as main would. */
+  /** Push an event payload, as main would — to the subscribers of that channel and no others. */
   emit: (channel: string, payload: unknown) => void
   /**
-   * Deliver a store change to every subscriber, as main's store broadcast does.
+   * Deliver a store change on the channel main broadcasts it on.
    *
    * conveyor's store mirror caches itself per store id at module scope and fetches state only once,
    * so seeding a *second* test through `invoke` alone has no effect — the mirror already holds the
    * first test's state. This is the route main actually uses to broadcast a change, and the only one
    * that reaches an already-cached mirror.
    */
-  pushToSubscribers: (payload: unknown) => void
+  pushToChannel: (channel: string, payload: unknown) => void
 }
 
 /**
@@ -96,7 +96,7 @@ const MANIFEST: Record<string, Record<string, string>> = {
   },
   terminal: { execute: 'stream', shell: 'query' },
   llm: { chat: 'stream' },
-  window: { init: 'query', onFocusChange: 'event', onMaximizeChange: 'event' },
+  window: { init: 'query', isMaximized: 'query', onFocusChange: 'event', onMaximizeChange: 'event' },
   // The mention picker's only read. Listed so the composer's call is dispatched as the query main
   // registered rather than as an unlisted member, which is what the client's Proxy does with an
   // unknown name.
@@ -162,22 +162,37 @@ export function channelFor(moduleId: string): string {
 }
 
 /**
- * Every subscriber registered, for the lifetime of the test file.
+ * Every subscriber registered, for the lifetime of the test file, keyed by the channel it asked for.
  *
  * Deliberately module-global rather than per-stub. conveyor's store mirror subscribes once, on first
  * use, and caches itself per store id at module scope — so that subscription belongs to whichever
  * stub happened to exist then. A per-stub registry would leave later stubs unable to reach it, which
  * is how a second test ended up seeing the first test's state. It also mirrors reality: the set of
  * listening windows is global, not a property of one bridge object.
+ *
+ * Keyed by channel rather than held as one set, because one set meant one broadcast. The mirror
+ * subscribes to `conveyor:store:<id>:changed` and takes whatever arrives as its whole state, so an
+ * event pushed to every subscriber landed in it as state — emitting the window's `true` for "maximized"
+ * replaced the workspace store with a boolean, and the explorer of a rendered workbench then read
+ * `recentRoots` off it. Main addresses each channel separately; so does this now.
  */
-const allSubscribers = new Set<(payload: unknown) => void>()
+const broadcastSubscribers = new Map<string, Set<(payload: unknown) => void>>()
+
+/** The subscriber set for a channel, made on first use. */
+function subscribersOn(channel: string): Set<(payload: unknown) => void> {
+  const existing = broadcastSubscribers.get(channel)
+  if (existing) return existing
+  const created = new Set<(payload: unknown) => void>()
+  broadcastSubscribers.set(channel, created)
+  return created
+}
 
 /**
  * Stream subscribers, keyed by the stream channel they registered on.
  *
- * Kept apart from the broadcast registry above because a stream subscriber parses its payload
- * strictly: it reads `msg.type`, and anything that is not a stream envelope becomes an error. A
- * store or event broadcast reaching it therefore crashes its parser — which is exactly what produced
+ * Kept apart from the subscribers above as well as keyed, because a stream subscriber parses its
+ * payload strictly: it reads `msg.type`, and anything that is not a stream envelope becomes an error.
+ * A store or event payload reaching it therefore crashes its parser — which is exactly what produced
  * `Cannot read properties of undefined (reading 'code')`, since the failure is turned into
  * `ConveyorError.from(msg.error)` with nothing to read. Main never pushes a store payload down a
  * stream channel, so keeping the two apart is the honest simulation.
@@ -246,18 +261,18 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
       throw new Error(`no stub for ${channel}.${method}`)
     },
     subscribe: (channel, cb) => {
-      // A stream subscriber is keyed by its channel, because its payload parser is strict and must not
-      // receive another channel's traffic. Everything else keeps the tolerant broadcast described in
-      // the registry note above: delivery is to every subscriber, because the library's event channel
-      // naming is an internal detail and a stub that depended on it would break silently.
+      // Keyed by the channel, exactly as main's own transport is, and for the reason the registry note
+      // gives: one shared set meant one broadcast, and a store mirror takes whatever arrives on its
+      // own channel as its whole state.
       if (channel.startsWith(STREAM_PREFIX)) {
         const set = streamSubscribers.get(channel) ?? new Set()
         set.add(cb)
         streamSubscribers.set(channel, set)
         return () => set.delete(cb)
       }
-      allSubscribers.add(cb)
-      return () => allSubscribers.delete(cb)
+      const set = subscribersOn(channel)
+      set.add(cb)
+      return () => set.delete(cb)
     },
     manifest: () => MANIFEST,
   }
@@ -286,16 +301,15 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
         for (const cb of streamSubscribers.get(channel) ?? []) cb(payload)
         return
       }
-      // Delivered to every broadcast subscriber rather than by channel: the library's event channel
-      // naming is an internal detail, and a stub that depends on it would break silently on an upgrade.
-      for (const cb of allSubscribers) cb(payload)
-      // A stream subscriber is reached only on its own channel, for the strict-parser reason above.
-      for (const cb of streamSubscribers.get(channel) ?? []) cb(payload)
+      // Event payloads included: a payload handed to a channel nobody is listening on reaches nobody,
+      // which is what main does, and what a store mirror depends on — it takes whatever arrives on its
+      // own channel as its whole state.
+      for (const cb of broadcastSubscribers.get(channel) ?? []) cb(payload)
     },
-    pushToSubscribers: (payload) => {
-      // A store-changed broadcast belongs to the store mirrors, which are broadcast subscribers. It is
-      // deliberately not routed at stream channels: main would never send it there.
-      for (const cb of allSubscribers) cb(payload)
+    pushToChannel: (channel, payload) => {
+      // A store change, on the channel the mirror subscribed to. Not routed at stream channels: main
+      // would never send it there.
+      for (const cb of broadcastSubscribers.get(channel) ?? []) cb(payload)
     },
   }
 }
@@ -329,8 +343,9 @@ export function stubStore(stub: BridgeStub, storeId: string, state: unknown): vo
   }
 
   // Push the same state to anyone already subscribed, so a mirror cached by an earlier test still
-  // receives it. Deferred a tick, because the subscriber registers after the initial read.
-  queueMicrotask(() => stub.pushToSubscribers(state))
+  // receives it. Deferred a tick, because the subscriber registers after the initial read. On the
+  // channel the mirror subscribed to, and only there: it takes whatever arrives as its whole state.
+  queueMicrotask(() => stub.pushToChannel(`conveyor:store:${storeId}:changed`, state))
 }
 
 /** The chat session store's id, as `defineStore('chat-sessions', ...)` declares it. */

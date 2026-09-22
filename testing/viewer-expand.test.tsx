@@ -195,6 +195,8 @@ const KINDS: Kind[] = [
  */
 function stubWorkbench(kind: Kind): BridgeStub {
   const stub = createBridgeStub({
+    // The window state the workbench lays out for. Windowed, which is the window the app opens.
+    isMaximized: () => false,
     readFile: kind.read ?? (() => textResult('', '')),
     listDirectory: () => [],
     status: () => [],

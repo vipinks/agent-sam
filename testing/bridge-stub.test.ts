@@ -46,10 +46,34 @@ describe('bridge stub', () => {
     const client = appClient()
     client.window.onFocusChange.subscribe((payload) => received.push(payload))
 
-    stub.emit(channelFor('window'), true)
+    stub.emit('conveyor:event:window:onFocusChange', true)
 
     // If the channel were wrong this would stay empty, and every event-driven test would be vacuous.
     expect(received).toEqual([true])
+  })
+
+  it('keeps one channel’s payload out of another channel’s subscriber', () => {
+    // The defect this pins: delivery used to be one broadcast to every subscriber, and a store mirror
+    // is a subscriber too — subscribed to `conveyor:store:<id>:changed`, taking whatever arrives as its
+    // whole state. An event payload therefore arrived in it as state: emitting the window's `true` for
+    // "maximized" replaced the workspace store with a boolean, and the explorer of the workbench that
+    // was being rendered read `recentRoots` off it.
+    const stub = createBridgeStub()
+    setActiveStub(stub)
+
+    const events: unknown[] = []
+    const storeChanges: unknown[] = []
+    const client = appClient()
+    client.window.onMaximizeChange.subscribe((payload) => events.push(payload))
+    ;(window.conveyor as unknown as { subscribe: (channel: string, cb: (payload: unknown) => void) => void }).subscribe(
+      'conveyor:store:workspace:changed',
+      (payload) => storeChanges.push(payload)
+    )
+
+    stub.emit('conveyor:event:window:onMaximizeChange', true)
+
+    expect(events).toEqual([true])
+    expect(storeChanges).toEqual([])
   })
 
   it('opens a stream on the stream-start channel, with the member in the payload', async () => {
