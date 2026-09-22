@@ -31,6 +31,13 @@ export interface ChatSessions {
   transcript: TranscriptState
   /** Replaces the transcript, e.g. as a run streams. Marks it dirty. */
   setTranscript: (next: TranscriptState) => void
+  /**
+   * Whether this conversation runs tools without asking. Off for a session with no stored value, which
+   * is every session whose user has never touched the toggle.
+   */
+  autoApprove: boolean
+  /** Turn it on or off for the session on screen, and write the choice down. */
+  setAutoApprove: (value: boolean) => void
   /** The session whose transcript failed to load. */
   error: SessionError | null
   createSession: () => string
@@ -91,9 +98,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     const id = activeIdRef.current
     if (!id) return
     const snapshot = serializeTranscript(transcriptRef.current)
-    // An empty conversation is never written: a session the user created and left is not a session
-    // with a transcript.
-    if (snapshot.turns.length === 0) return
+    // An empty conversation is never written: a session the user created and left is not a session with a
+    // transcript. The exception is the one `isDirty` names — a session whose user turned auto-approve on
+    // has a choice to remember even before it has a message.
+    if (snapshot.turns.length === 0 && snapshot.autoApprove !== true) return
     if (savedRef.current && !isDirty(transcriptRef.current, savedRef.current)) return
 
     try {
@@ -114,6 +122,26 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const scheduleSave = useCallback(() => {
     debounced.current.schedule()
   }, [])
+
+  // The session's consent setting, read off the transcript on screen: the record owns it, so the live
+  // state is only ever a copy of what was loaded or of what the user has just set.
+  const autoApprove = transcript.autoApprove === true
+
+  /**
+   * Write the consent setting onto the conversation.
+   *
+   * Saved the moment it changes rather than at the next turn boundary: the toggle is a deliberate act
+   * with no run behind it to wait for, and a session the user toggled and then left would otherwise
+   * carry no record of the choice until its next message. The save is guarded by `isDirty`, so turning
+   * the toggle to where it already was costs nothing.
+   */
+  const setAutoApprove = useCallback(
+    (value: boolean) => {
+      setTranscript({ ...transcriptRef.current, autoApprove: value })
+      void saveNow()
+    },
+    [saveNow, setTranscript]
+  )
 
   // Best-effort saves on the two ways a window can go away. Neither is guaranteed to complete, which
   // is why the debounced save exists as the primary path — these only narrow the window.
@@ -330,6 +358,8 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   return {
     transcript,
     setTranscript,
+    autoApprove,
+    setAutoApprove,
     error,
     createSession,
     openSession,

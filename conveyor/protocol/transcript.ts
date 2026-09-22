@@ -111,6 +111,20 @@ export const transcriptSnapshotSchema = z.object({
   version: z.number().int(),
   turns: z.array(turnSchema),
   interrupted: z.boolean(),
+  /**
+   * Whether this conversation runs tools without asking.
+   *
+   * On the session rather than on the turn, because consent is a property of the conversation and not of
+   * one exchange in it: a user who turned it on for a conversation that touches their disk is saying
+   * something about that conversation, and the next message in it is covered by the same choice.
+   *
+   * Optional, and it did not bump the version for the same reason the plan and the instructions record did
+   * not: a file written before the setting existed simply has no key, and an absent optional key is
+   * stripped rather than defaulted, so old files stay valid reads and a new file read by an older build
+   * loses only a field it never knew about. Absence means off — the state of every session whose user has
+   * never touched the toggle, which is also what a session with no file at all shows.
+   */
+  autoApprove: z.boolean().optional(),
 })
 
 export type TranscriptSnapshot = z.infer<typeof transcriptSnapshotSchema>

@@ -23,6 +23,14 @@ export interface TranscriptState {
   turns: AgentTurn[]
   /** True when a turn was cut off and the conversation should say so. */
   interrupted: boolean
+  /**
+   * Whether this conversation runs tools without asking.
+   *
+   * Optional, like its counterpart on the record: a state that has never had the setting touched carries
+   * no key, and off is what absence means. The toggle has nothing to interpret — it reads through
+   * `serializeTranscript`'s own rule rather than re-deciding what a missing value is.
+   */
+  autoApprove?: boolean
 }
 
 /** How a turn's incompleteness is described on screen. */
@@ -73,7 +81,16 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     ...(turn.endNotice !== undefined ? { endNotice: { cause: turn.endNotice.cause } } : {}),
   }))
 
-  return { version: TRANSCRIPT_VERSION, turns, interrupted }
+  return {
+    version: TRANSCRIPT_VERSION,
+    turns,
+    interrupted,
+    // Written only when it is on, which is the same additive rule the optional turn fields follow: a
+    // session with the setting off carries no key at all, so its file is byte for byte the file an
+    // earlier build wrote for it. A stored `false` would say the user had decided something, and the
+    // session that has merely never had the toggle touched has decided nothing.
+    ...(state.autoApprove === true ? { autoApprove: true } : {}),
+  }
 }
 
 /**
@@ -106,7 +123,15 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     ...(turn.endNotice !== undefined ? { endNotice: { cause: turn.endNotice.cause, resumable: false } } : {}),
   }))
 
-  return { turns, interrupted: snapshot.interrupted }
+  return {
+    turns,
+    interrupted: snapshot.interrupted,
+    // Resolved to a boolean here rather than carried across as it was stored: absence means off, and the
+    // two are not the same thing to a caller that has to render a toggle. Reading it once, where the
+    // record is read, is what keeps "never set" and "set to off" from having to be told apart anywhere
+    // else in the UI.
+    autoApprove: snapshot.autoApprove === true,
+  }
 }
 
 /** A snapshot for a session with no saved file. */

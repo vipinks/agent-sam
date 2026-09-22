@@ -148,8 +148,10 @@ export function ChatPanel() {
 
   const [draft, setDraft] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  // Off by default: a tool that writes to disk should be a deliberate choice, not a default.
-  const [autoApprove, setAutoApprove] = useState(false)
+  // Whether the agent acts without asking. Read from the session rather than held here: the record owns
+  // the setting, so a conversation that had it on opens with it on, and one that has never had it set
+  // opens with it off.
+  const autoApprove = sessions.autoApprove
   const [pending, setPending] = useState<PendingApproval | null>(null)
 
   /**
@@ -739,7 +741,7 @@ export function ChatPanel() {
                 <Switch
                   size="sm"
                   checked={autoApprove}
-                  onCheckedChange={setAutoApprove}
+                  onCheckedChange={sessions.setAutoApprove}
                   aria-label="Auto-approve tool actions"
                 />
               </label>

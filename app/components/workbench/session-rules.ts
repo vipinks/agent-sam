@@ -20,10 +20,15 @@ export { TITLE_MAX, titleFromMessage, UNTITLED } from '@/conveyor/protocol/sessi
  * Streaming is the reason this exists: a session is saved at turn boundaries, and this is the guard
  * that keeps a no-op save — an empty conversation, or one that has not changed since the last write
  * — from touching the disk at all.
+ *
+ * The one empty conversation worth a file is one whose user turned auto-approve on. That is a choice
+ * the user made rather than a by-product of sending a message, and a session toggled on and then left
+ * without one should still open with it on — so "nothing has ever been written" is not the same
+ * question as "there is nothing to write".
  */
 export function isDirty(state: TranscriptState, lastSaved: TranscriptSnapshot | null): boolean {
   const current = serializeTranscript(state)
-  if (!lastSaved) return current.turns.length > 0
+  if (!lastSaved) return current.turns.length > 0 || current.autoApprove === true
   // Comparing the serialised forms is what makes this exact: they are the same shape that is written
   // to disk, so a difference here is a difference that would land in the file.
   return JSON.stringify(current) !== JSON.stringify(lastSaved)
