@@ -1,15 +1,21 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect } from 'react'
 import { Minus, Square, Copy, X, Sun, Moon } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { cn } from '@/lib/utils'
 import { useWindowStore } from './window-store'
 import { useThemeStore } from './theme-store'
 import { TitlebarMenu } from './titlebar-menu'
+import { ControlButton } from './control-button'
+import { BrightnessButton, ThemeButton } from './theme-controls'
 
 /**
  * Custom window titlebar: core shell chrome, styled with Tailwind on the theme tokens (no legacy
  * window.css). A conveyor consumer itself: the menu + controls call the window/web modules. macOS
  * keeps its native inset traffic lights; win32/linux render these controls.
+ *
+ * The theme chooser and the brightness control sit beside the light/dark toggle, in that order: the
+ * three of them are one subject — what the window looks like — and the toggle is the one that decides
+ * which mode the other two are chosen for.
  */
 export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
   const platform = useWindowStore((s) => s.platform)
@@ -50,6 +56,8 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
 
       <div className="ml-auto flex items-center [-webkit-app-region:no-drag]">
         <ThemeToggle />
+        <ThemeButton />
+        <BrightnessButton />
         {!isMac && <WindowControls />}
       </div>
     </header>
@@ -88,31 +96,5 @@ function WindowControls() {
         <X className="size-4" />
       </ControlButton>
     </div>
-  )
-}
-
-function ControlButton({
-  children,
-  label,
-  onClick,
-  destructive,
-}: {
-  children: ReactNode
-  label: string
-  onClick: () => void
-  destructive?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className={cn(
-        'flex h-10 w-11 items-center justify-center text-foreground/60 transition-colors',
-        destructive ? 'hover:bg-destructive hover:text-white' : 'hover:bg-accent hover:text-foreground'
-      )}
-    >
-      {children}
-    </button>
   )
 }
