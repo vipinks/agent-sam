@@ -17,6 +17,7 @@ import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
 import { MentionChipRow } from './mention-chip'
 import { PlanChecklist } from './plan-checklist'
+import { TurnEndNotice } from './turn-end-notice'
 import { useChatSessionsContext } from './chat-sessions-context'
 import {
   activeMentionToken,
@@ -29,6 +30,7 @@ import {
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
 import {
   applyAgentChunk,
+  currentEndNotice,
   currentPlan,
   endTurnPlan,
   noteContextSkip,
@@ -39,6 +41,7 @@ import {
   type AgentTurn,
   type PendingCall,
 } from './agent-session'
+import { RESUME_MESSAGE } from '@/conveyor/protocol/turn-end'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -130,6 +133,16 @@ export function ChatPanel() {
    * the checklist renders nothing for it.
    */
   const plan = currentPlan(messages)
+
+  /**
+   * The turn-end notice the card shows: the last turn's, when it stopped early.
+   *
+   * Derived from the transcript for the same reason the plan is, and that is also what settles the
+   * one question the card has to answer: whether to offer the button. A live run writes `resumable`
+   * onto the turn; a transcript read back from disk never does, so a reopened conversation shows the
+   * reason and nothing to click.
+   */
+  const endNotice = currentEndNotice(messages)
 
   const [draft, setDraft] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -441,65 +454,72 @@ export function ChatPanel() {
     [drainNow, enqueue, providerName, stickToBottom, updateMessages]
   )
 
-  const send = useCallback(async () => {
-    const text = draft.trim()
-    if (!text || isStreaming || pending) return
+  const sendText = useCallback(
+    async (raw: string) => {
+      const text = raw.trim()
+      if (!text || isStreaming || pending) return
 
-    // The chips as they stand: the payload and the transcript both read this one list, so what is
-    // sent and what the bubble shows afterwards cannot disagree.
-    const chips = mentionPathsRef.current
+      // The chips as they stand: the payload and the transcript both read this one list, so what is
+      // sent and what the bubble shows afterwards cannot disagree.
+      const chips = mentionPathsRef.current
 
-    // Sending with no session open is normal: a session is created for the message, and named from
-    // it. This is what makes the composer work before the user has ever touched the session list.
-    sessionsRef.current.ensureSession(text)
+      // Sending with no session open is normal: a session is created for the message, and named from
+      // it. This is what makes the composer work before the user has ever touched the session list.
+      sessionsRef.current.ensureSession(text)
 
-    // The history sent is text-only: the agent owns the provider-shaped history, including tool
-    // turns, and hands it back on a pause.
-    const history = toHistory(messagesRef.current)
+      // The history sent is text-only: the agent owns the provider-shaped history, including tool
+      // turns, and hands it back on a pause.
+      const history = toHistory(messagesRef.current)
 
-    const userTurn = startUserTurn(text, chips)
-    const assistantTurn = startAssistantTurn()
-    streamingTurnIdRef.current = assistantTurn.id
-    setDraft('')
-    // The chips belonged to that message. Main reads the paths from the payload, so clearing here
-    // cannot take them away from the send that is starting — only from the next one.
-    setChips([])
-    setMention({ token: null, dismissed: false })
-    setMentionNote(null)
-    updateMessages([...messagesRef.current, userTurn, assistantTurn])
-    requestAnimationFrame(stickToBottom)
+      const userTurn = startUserTurn(text, chips)
+      const assistantTurn = startAssistantTurn()
+      streamingTurnIdRef.current = assistantTurn.id
+      setDraft('')
+      // The chips belonged to that message. Main reads the paths from the payload, so clearing here
+      // cannot take them away from the send that is starting — only from the next one.
+      setChips([])
+      setMention({ token: null, dismissed: false })
+      setMentionNote(null)
+      updateMessages([...messagesRef.current, userTurn, assistantTurn])
+      requestAnimationFrame(stickToBottom)
 
-    await runStream(
-      conveyor.agent.chatWithTools({
-        providerId: activeProviderId,
-        model: activeModel,
-        messages: [...history, { role: 'user' as const, content: text }],
-        workspaceRoot: rootPath,
-        autoApprove,
-        // Paths only. Main reads the files and appends the context section, so the renderer never
-        // carries file contents and a path the user attached is the only thing crossing this boundary.
-        mentionPaths: chips.length > 0 ? chips : undefined,
-      }),
-      assistantTurn.id
-    )
+      await runStream(
+        conveyor.agent.chatWithTools({
+          providerId: activeProviderId,
+          model: activeModel,
+          messages: [...history, { role: 'user' as const, content: text }],
+          workspaceRoot: rootPath,
+          autoApprove,
+          // Paths only. Main reads the files and appends the context section, so the renderer never
+          // carries file contents and a path the user attached is the only thing crossing this boundary.
+          mentionPaths: chips.length > 0 ? chips : undefined,
+        }),
+        assistantTurn.id
+      )
 
-    // A turn boundary: the user's message and its finished assistant turn are now a complete unit,
-    // so this is when the transcript is worth writing. Never per token — the run above may have
-    // produced hundreds of chunks, and this is one save.
-    sessionsRef.current.scheduleSave()
-  }, [
-    activeModel,
-    activeProviderId,
-    autoApprove,
-    draft,
-    isStreaming,
-    pending,
-    rootPath,
-    runStream,
-    setChips,
-    stickToBottom,
-    updateMessages,
-  ])
+      // A turn boundary: the user's message and its finished assistant turn are now a complete unit,
+      // so this is when the transcript is worth writing. Never per token — the run above may have
+      // produced hundreds of chunks, and this is one save.
+      sessionsRef.current.scheduleSave()
+    },
+    [
+      activeModel,
+      activeProviderId,
+      autoApprove,
+      isStreaming,
+      pending,
+      rootPath,
+      runStream,
+      setChips,
+      stickToBottom,
+      updateMessages,
+    ]
+  )
+
+  /** Send what is in the composer. */
+  const sendDraft = useCallback(() => {
+    void sendText(draft)
+  }, [draft, sendText])
 
   /**
    * Answer a pause.
@@ -597,7 +617,7 @@ export function ChatPanel() {
     // Enter sends; Shift+Enter is a newline, the convention for a composer.
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      void send()
+      sendDraft()
     }
   }
 
@@ -744,6 +764,16 @@ export function ChatPanel() {
       */}
       <div className="shrink-0 px-3">
         <PlanChecklist plan={plan} />
+        {/*
+          The other thing that is about now: a turn that stopped before it was done. Below the plan,
+          because it is the immediate question — the plan says what the work is, this says that the
+          work has just stopped. Continuing sends the resume text through the ordinary send path, so a
+          resumed turn is an ordinary turn in the transcript rather than a special case.
+        */}
+        <TurnEndNotice
+          notice={endNotice}
+          {...(endNotice?.resumable ? { onContinue: () => void sendText(RESUME_MESSAGE) } : {})}
+        />
       </div>
 
       <div ref={composerRef} className="shrink-0 border-t border-border p-3">
@@ -810,7 +840,7 @@ export function ChatPanel() {
                   className="absolute right-11 bottom-2"
                   aria-label="Send message"
                   disabled={!draft.trim() || pending !== null}
-                  onClick={() => void send()}
+                  onClick={() => void sendDraft()}
                 >
                   <SendHorizontal />
                 </Button>

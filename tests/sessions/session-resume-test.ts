@@ -8,7 +8,11 @@
  */
 import { strict as assert } from 'node:assert'
 import { deriveRepairTitle, planFirstSend, planResume, planIsNoop } from '../../app/components/workbench/session-resume'
-import { serializeTranscript, type TranscriptState } from '../../app/components/workbench/session-transcript'
+import {
+  rehydrateTranscript,
+  serializeTranscript,
+  type TranscriptState,
+} from '../../app/components/workbench/session-transcript'
 import { titleFromMessage, UNTITLED } from '../../app/components/workbench/session-rules'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '../../conveyor/protocol/transcript'
 
@@ -133,7 +137,11 @@ function switchingSavesFirst() {
   const plan = planResume({
     requestedId: B,
     hydratedId: A,
-    transcript: { turns: onScreen.turns, interrupted: false },
+    // What is on screen, as the pane holds it: a stored transcript is read back through the same
+    // rehydrate a reopen uses, because that — not the file — is what the dirty check is handed. The
+    // two differ only in fields the live turn carries and the record does not, so this is the shape
+    // the pane actually walks into `planResume` with rather than a looser one that happens to fit.
+    transcript: rehydrateTranscript({ ...onScreen, interrupted: false }),
     // Nothing written yet, so it is dirty.
     savedSnapshot: null,
     loaded,

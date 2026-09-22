@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { planStepSchema } from './plan'
+import { TURN_END_CAUSES } from './turn-end'
 
 /**
  * The shape of a saved transcript, and its version.
@@ -84,6 +85,19 @@ const turnSchema = z.object({
    * rather than defaulted, so old files stay valid reads.
    */
   plan: z.array(planStepSchema).optional(),
+  /**
+   * How this turn's reply ended, when it ended early enough to say so.
+   *
+   * The cause only, never the live flag: a notice in a file is history, and the run a Continue button
+   * would continue is gone by the time anyone reads it. That is a fact about the record rather than
+   * about the ending, so it belongs to the stored shape — which is why an absent key here means
+   * "nothing to say" and a present one means "this turn stopped early", with no third state.
+   *
+   * Optional, and it did not bump the version for the same reason the plan and the instructions record
+   * did not: a file written before this existed simply has no key, and an absent optional key is
+   * stripped rather than defaulted, so old files stay valid reads.
+   */
+  endNotice: z.object({ cause: z.enum(TURN_END_CAUSES) }).optional(),
 })
 
 /**

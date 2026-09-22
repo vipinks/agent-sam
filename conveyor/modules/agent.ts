@@ -12,7 +12,8 @@ import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
-import { instructionsFileName, planSystemInjection } from '../protocol/context'
+import { instructionsFileName, planAgentPrompt, planSystemInjection } from '../protocol/context'
+import { isResumable, isToolCallCut, turnEndCause, type TurnEndCause } from '../protocol/turn-end'
 import { assembleMentionContext, MAX_MENTION_PATHS, type MentionSkipCode } from '../protocol/mentions'
 import { MAX_PLAN_STEPS, mergePlan, normalizePlan, planStepSchema, type Plan, type PlanStep } from '../protocol/plan'
 import { readMentions } from './mentions'
@@ -409,6 +410,26 @@ export type AgentChunk =
       /** Steps consumed so far, so the budget spans approvals rather than resetting on each one. */
       steps: number
     }
+  /**
+   * How the assistant's reply ended, for every turn that ends by the model's own answering rather
+   * than by a pause or the step budget.
+   *
+   * Yielded whether or not anything went wrong, because "the model finished" is a diagnosis too and
+   * the one the renderer must be able to distinguish from the two that went wrong. Nothing is
+   * recorded from this chunk: the ordinary ending needs no memory, and the two endings that do are
+   * carried by the notice below.
+   */
+  | { type: 'turn_end'; cause: TurnEndCause }
+  /**
+   * A turn that died: the provider cut the reply off, or the reply stopped arriving.
+   *
+   * Sent only for those two causes, and only when the turn is over — so it is both the announcement
+   * that a stop was not silent and the only chunk a transcript keeps about it. `resumable` is what
+   * the Continue button reads, and it stays off the auto-continue path deliberately: the app never
+   * sends the next message on its own, and a turn that continued itself would spend the user's
+   * budget on a conversation they did not ask to continue.
+   */
+  | { type: 'turn_end_notice'; cause: TurnEndCause; resumable: boolean }
   | { type: 'done'; reason: 'complete' | 'max_steps'; steps: number }
 
 /** A tool call as it is being assembled from stream fragments. */
@@ -607,6 +628,12 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // the folder it happened in. That is why this is a read per send rather than a stored field.
   const instructions = await readProjectInstructions(opts.workspaceRoot)
   const injection = planSystemInjection(history, instructions?.text ?? null)
+  // The agent's own standing instruction, decided from the same untouched history: the two messages
+  // are independent, so a workspace with no instructions file still gets this one. Read before
+  // either is unshifted, because both rules answer "is it already there" and the first unshift would
+  // answer for the second.
+  const agentPrompt = planAgentPrompt(history)
+
   if (injection) {
     // Position 0, before the conversation: the provider treats a system message as standing context
     // for everything after it, and a leading one is the only place that is unambiguously true.
@@ -618,6 +645,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     const file = instructionsFileName(instructions?.path ?? null)
     if (file) yield { type: 'project_instructions', file, truncated: instructions?.truncated ?? false }
   }
+
+  // And ahead of it, the instruction that holds in every workspace: how to pace itself between tool
+  // calls. Unshifted after the project's so it reads first, which is where standing context for the
+  // whole conversation belongs.
+  if (agentPrompt) history.unshift({ role: 'system', content: agentPrompt.content })
 
   // The files the user attached, read here and appended to the last user turn.
   //
@@ -703,32 +735,48 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // accumulated by index and only interpreted once the stream has ended.
     const text: string[] = []
     const partials = new Map<number, PartialCall>()
+    // What the provider said about its own ending, and whether the reply broke instead. Collected per
+    // round-trip, because each reply is diagnosed on its own facts.
+    const finishReasons: string[] = []
+    let streamErrorCode: string | undefined
 
-    for await (const delta of streamDeltas({
-      providerId: opts.providerId,
-      apiKey: opts.apiKey,
-      model: opts.model,
-      messages: history,
-      tools: TOOL_DEFINITIONS,
-      signal: opts.signal,
-      fetchImpl: opts.fetchImpl,
-    })) {
-      if (opts.signal.aborted) return
+    try {
+      for await (const delta of streamDeltas({
+        providerId: opts.providerId,
+        apiKey: opts.apiKey,
+        model: opts.model,
+        messages: history,
+        tools: TOOL_DEFINITIONS,
+        signal: opts.signal,
+        fetchImpl: opts.fetchImpl,
+      })) {
+        if (opts.signal.aborted) return
 
-      if (delta.text) {
-        text.push(delta.text)
-        yield { type: 'text_delta', text: delta.text }
+        if (delta.finishReason) finishReasons.push(delta.finishReason)
+
+        if (delta.text) {
+          text.push(delta.text)
+          yield { type: 'text_delta', text: delta.text }
+        }
+
+        // Every fragment in the frame, not just the first: a provider may batch several calls into one
+        // `tool_calls` array, and a call that never gets accumulated is a call that never gets answered.
+        for (const fragment of delta.toolCalls ?? []) {
+          const existing = partials.get(fragment.index) ?? { index: fragment.index, args: '' }
+          if (fragment.id) existing.id = fragment.id
+          if (fragment.name) existing.name = fragment.name
+          if (fragment.argumentsDelta) existing.args += fragment.argumentsDelta
+          partials.set(fragment.index, existing)
+        }
       }
-
-      // Every fragment in the frame, not just the first: a provider may batch several calls into one
-      // `tool_calls` array, and a call that never gets accumulated is a call that never gets answered.
-      for (const fragment of delta.toolCalls ?? []) {
-        const existing = partials.get(fragment.index) ?? { index: fragment.index, args: '' }
-        if (fragment.id) existing.id = fragment.id
-        if (fragment.name) existing.name = fragment.name
-        if (fragment.argumentsDelta) existing.args += fragment.argumentsDelta
-        partials.set(fragment.index, existing)
-      }
+    } catch (err) {
+      // Only a reply that stopped arriving is diagnosed here. A provider that refused the request
+      // outright — no key, a rejected key, a rate limit, a bad model — threw before any of the answer
+      // existed, and that is a failure to report rather than a turn to continue: it propagates
+      // unchanged, so the wording the renderer already has for it stays what the user sees. Branched
+      // on the code, never on the message.
+      if (!(err instanceof ConveyorError) || err.code !== 'STREAM_ERROR') throw err
+      streamErrorCode = err.code
     }
 
     const calls = finalizeCalls(partials)
@@ -742,8 +790,30 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       ...(calls.length ? { tool_calls: calls } : {}),
     })
 
+    // Before anything is done with them: did this reply actually finish? Every ending is diagnosed,
+    // including the ordinary one — "the model stopped" is a fact the caller has to be able to tell
+    // apart from a reply that was cut off, and a diagnosis that only spoke up on failure would leave
+    // the two indistinguishable.
+    const cause = turnEndCause({
+      finishReasons,
+      toolCallCut: isToolCallCut([...partials.values()].map((partial) => partial.args)),
+      streamErrorCode,
+    })
+
+    // A turn that died announces itself before it ends, and a turn that was cut off is over whatever
+    // the model asked for: the calls it asked for in the same breath arrived alongside a reply the
+    // provider had already stopped writing, so running them would be acting on half a request. The
+    // notice is the announcement; whether to continue is the user's click, and `resumable` is what
+    // the button reads.
+    if (cause !== 'model_stop') {
+      yield { type: 'turn_end', cause }
+      yield { type: 'turn_end_notice', cause, resumable: isResumable(cause) }
+      return
+    }
+
     // No tools asked for: this is the model's answer, and the loop is finished.
     if (calls.length === 0) {
+      yield { type: 'turn_end', cause }
       yield { type: 'done', reason: 'complete', steps }
       return
     }

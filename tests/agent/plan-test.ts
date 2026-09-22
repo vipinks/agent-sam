@@ -132,7 +132,7 @@ async function declaredPlan() {
 
   assert.deepEqual(
     chunks.map((c) => c.type),
-    ['tool_call_start', 'tool_result', 'plan', 'text_delta', 'done'],
+    ['tool_call_start', 'tool_result', 'plan', 'text_delta', 'turn_end', 'done'],
     `unexpected chunk sequence: ${JSON.stringify(chunks.map((c) => c.type))}`
   )
 

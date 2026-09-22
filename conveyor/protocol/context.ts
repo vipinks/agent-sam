@@ -21,6 +21,22 @@
 export const INSTRUCTIONS_CANDIDATES = ['SAMAI.md', 'AGENTS.md', 'CLAUDE.md'] as const
 
 /**
+ * The agent's own standing instruction, sent on every send regardless of the workspace.
+ *
+ * Separate from the project instructions because it is not one: this is how the agent is asked to
+ * pace itself, and it holds in a folder that has never heard of this app. It earns its place in the
+ * budget by paying for itself — a model that narrates its plan for four paragraphs before it emits
+ * the call spends the output limit on prose, and a reply cut off at that limit is exactly the dead
+ * turn the notice exists to report. Asking for the call early removes the cause rather than
+ * announcing it.
+ *
+ * One line, and deliberately concrete: "two sentences or fewer" is a budget the model can count
+ * against, where "be concise" is a preference it can agree with and then ignore.
+ */
+export const AGENT_SYSTEM_PROMPT =
+  'Keep any narration between tool calls to two sentences or fewer, and emit the tool call early.'
+
+/**
  * How much of an instructions file is read.
  *
  * 16 KB is a byte budget, not a character one: the point is to bound what main reads off the disk
@@ -113,4 +129,24 @@ export function planSystemInjection(
 ): { content: string } | null {
   if (messages.some((m) => m.role === 'system')) return null
   return assembleSystemContext(instructionsText)
+}
+
+/**
+ * Whether to inject the agent's standing instruction into an outgoing conversation.
+ *
+ * Refused when the conversation already carries it, which is the resumed case: the pause hands the
+ * provider-shaped history back verbatim, including the system messages the original send put at its
+ * head, so injecting again would send the same line twice. The history is inspected rather than a
+ * flag passed, for the same reason `planSystemInjection` inspects it: "is it already there" is a
+ * fact about the array in hand, where a flag would have to be kept correct on both entry points.
+ *
+ * Matched on the text rather than on the presence of any system message, because the two injections
+ * are decided independently: a workspace with no instructions file has no instruction message and
+ * must still get this one.
+ */
+export function planAgentPrompt(
+  messages: ReadonlyArray<{ role: string; content?: string }>
+): { content: string } | null {
+  if (messages.some((m) => m.role === 'system' && m.content === AGENT_SYSTEM_PROMPT)) return null
+  return { content: AGENT_SYSTEM_PROMPT }
 }

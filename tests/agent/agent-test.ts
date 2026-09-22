@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeTool, needsApproval, runAgentLoop, TOOL_DEFINITIONS } from '../../conveyor/modules/agent'
+import { AGENT_SYSTEM_PROMPT } from '../../conveyor/protocol/context'
 import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
 import { resolveWorkspacePath } from '../../conveyor/modules/workspace-paths'
 
@@ -101,7 +102,7 @@ async function reactLoop() {
     const types = chunks.map((c) => c.type)
     assert.deepEqual(
       types,
-      ['tool_call_start', 'tool_result', 'text_delta', 'text_delta', 'done'],
+      ['tool_call_start', 'tool_result', 'text_delta', 'text_delta', 'turn_end', 'done'],
       `unexpected chunk sequence: ${JSON.stringify(types)}`
     )
 
@@ -382,7 +383,7 @@ async function resumeAfterApproval() {
     )
 
     const types = chunks.map((c) => c.type)
-    assert.deepEqual(types, ['tool_result', 'text_delta', 'done'], `unexpected: ${JSON.stringify(types)}`)
+    assert.deepEqual(types, ['tool_result', 'text_delta', 'turn_end', 'done'], `unexpected: ${JSON.stringify(types)}`)
     assert.equal(readFileSync(join(root, 'x.txt'), 'utf8'), 'hi', 'approving must actually run the tool')
 
     // The regression guard: the provider must receive exactly one assistant turn for this call.
@@ -443,7 +444,7 @@ async function resumeAfterDenial() {
     assert.ok(toolTurn, 'the denial must be fed back so the model can explain it')
     assert.deepEqual(
       chunks.map((c) => c.type),
-      ['tool_result', 'text_delta', 'done']
+      ['tool_result', 'text_delta', 'turn_end', 'done']
     )
 
     results.push('a denied call is fed back as its result, so the model can explain the failure')
@@ -694,12 +695,17 @@ async function instructionsReachTheProvider() {
     )
 
     const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
-    assert.equal(sent[0].role, 'system', 'the instructions arrive as a system message')
-    assert.ok(sent[0].content.includes('House rules'), 'carrying the file text')
-    assert.ok(/project instructions/i.test(sent[0].content), 'labelled as project instructions')
+    // The agent's own instruction leads, and the project's follows it: both are system messages, and
+    // the project's text is the more specific of the two, so it sits closest to the conversation it
+    // governs. Neither replaces the other — a workspace with instructions gets both.
+    assert.equal(sent[0].role, 'system', 'the system messages arrive first')
+    assert.equal(sent[0].content, AGENT_SYSTEM_PROMPT, "the agent's own instruction leads")
+    assert.equal(sent[1].role, 'system', 'the instructions arrive as a system message')
+    assert.ok(sent[1].content.includes('House rules'), 'carrying the file text')
+    assert.ok(/project instructions/i.test(sent[1].content), 'labelled as project instructions')
     // Before the conversation, not after it.
-    assert.equal(sent[1].role, 'user', 'the system message precedes the first user turn')
-    assert.equal(sent[1].content, 'hello')
+    assert.equal(sent[2].role, 'user', 'the system messages precede the first user turn')
+    assert.equal(sent[2].content, 'hello')
 
     // And the renderer is told what was read, so the turn can record it. The name only: the text the
     // transcript deliberately does not keep must not be on the wire either.
@@ -735,8 +741,12 @@ async function noInstructionsMeansNoSystemMessage() {
         fetchImpl: oneRoundFetch(log) as never,
       })
     )
-    const sent = (log[0] as { body: { messages: Array<{ role: string }> } }).body.messages
-    assert.ok(!sent.some((m) => m.role === 'system'), 'nothing is injected to say nothing')
+    const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
+    assert.deepEqual(
+      sent.filter((m) => m.role === 'system').map((m) => m.content),
+      [AGENT_SYSTEM_PROMPT],
+      'no instructions file means no instructions message, and nothing else is invented'
+    )
 
     // And no folder open is the same outcome rather than an error.
     const noRoot: unknown[] = []
@@ -752,9 +762,13 @@ async function noInstructionsMeansNoSystemMessage() {
         fetchImpl: oneRoundFetch(noRoot) as never,
       })
     )
-    const sentNoRoot = (noRoot[0] as { body: { messages: Array<{ role: string }> } }).body.messages
-    assert.ok(!sentNoRoot.some((m) => m.role === 'system'), 'no workspace, no injection')
-    results.push('a workspace with no instructions sends no system message at all')
+    const sentNoRoot = (noRoot[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
+    assert.deepEqual(
+      sentNoRoot.filter((m) => m.role === 'system').map((m) => m.content),
+      [AGENT_SYSTEM_PROMPT],
+      'no workspace, no instructions message'
+    )
+    results.push('a workspace with no instructions injects no instructions message')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -776,6 +790,9 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
         model: 'test-model',
         workspaceRoot: root,
         messages: [
+          // The head of the history the pause handed back, verbatim: the agent's instruction and the
+          // project's, exactly as the original send wrote them.
+          { role: 'system', content: AGENT_SYSTEM_PROMPT },
           { role: 'system', content: 'The following are the project instructions…\n\n# House rules' },
           { role: 'user', content: 'go' },
           {
@@ -797,9 +814,13 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
       })
     )
 
-    const sent = (log[0] as { body: { messages: Array<{ role: string }> } }).body.messages
+    const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
     const systems = sent.filter((m) => m.role === 'system')
-    assert.equal(systems.length, 1, 'exactly one system message, not two')
+    assert.deepEqual(
+      systems.map((m) => m.content),
+      [AGENT_SYSTEM_PROMPT, 'The following are the project instructions…\n\n# House rules'],
+      'each system message is sent exactly once, so neither is duplicated on a resume'
+    )
     // And nothing is announced either: the turn already carries the record from the original send, and
     // a second announcement would restate a file the transcript has already named.
     assert.equal(chunks.filter((c) => c.type === 'project_instructions').length, 0, 'a resumed run announces no record')

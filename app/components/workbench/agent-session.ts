@@ -1,6 +1,7 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
+import { TURN_END_CAUSES, type TurnEndCause } from '@/conveyor/protocol/turn-end'
 
 /** The call exactly as the model sent it, as the pause hands it over. */
 export interface PendingCall {
@@ -87,6 +88,20 @@ export interface AgentTurn {
    * the ordinary case — a conversation that needed none renders nothing for it.
    */
   plan?: PlanStep[]
+  /**
+   * How this turn ended, when it ended badly enough to say so.
+   *
+   * Absent for the ordinary ending, which is most turns: a turn the model finished needs no record,
+   * and recording one for every answer would put a row above the composer under every reply. Set from
+   * the notice chunk the loop sends when the reply was cut off or the stream broke, and written to the
+   * transcript, because a conversation reopened tomorrow should still say that its last answer stopped
+   * in the middle.
+   *
+   * `resumable` is the live half of the record: only a notice this session's own run produced carries
+   * it, so a card read back from disk offers no button — the run it would continue is gone. See
+   * `session-transcript.ts`, which is where that distinction is written down.
+   */
+  endNotice?: { cause: TurnEndCause; resumable: boolean }
 }
 
 /** A file a send asked for that could not be attached, named with the code main reported. */
@@ -126,6 +141,21 @@ export interface AgentChunkEffect {
     diff?: FileDiff
   }
   done?: { reason: 'complete' | 'max_steps' }
+  /**
+   * How the turn's reply ended, reported for every ending including the ordinary one.
+   *
+   * Reported rather than acted on, like every other effect here: the component is the side that
+   * knows whether an ending is worth saying anything about, and for `model_stop` the answer is
+   * nothing at all.
+   */
+  turnEnd?: { cause: TurnEndCause }
+  /**
+   * A turn that died, with the flag the Continue button reads.
+   *
+   * Separate from `turnEnd` because the two are shown differently: the cause is the diagnosis, and
+   * this is the decision to put it in front of the user.
+   */
+  turnEndNotice?: { cause: TurnEndCause; resumable: boolean }
 }
 
 let counter = 0
@@ -327,6 +357,30 @@ export function applyAgentChunk(
       }
     }
 
+    case 'turn_end': {
+      // Reported, never recorded. Every ending is diagnosed, so the reducer has to answer for the
+      // ordinary one — but a turn the model finished is the normal case, and a transcript that kept a
+      // row for it would grow a field on every reply to say nothing happened. The two endings that do
+      // need saying arrive as the notice below.
+      const cause = asTurnEndCause(c.cause)
+      if (!cause) return { turns, effect: {} }
+      return { turns, effect: { turnEnd: { cause } } }
+    }
+
+    case 'turn_end_notice': {
+      // Recorded on the turn, which is what puts the card above the composer and what a save writes.
+      // The cause is read through the vocabulary rather than trusted: the chunk crosses IPC, so a
+      // value this build does not know must leave the turn untouched rather than render an unworded
+      // card, and the fallback is the same forward compatibility the default case below relies on.
+      const cause = asTurnEndCause(c.cause)
+      if (!cause) return { turns, effect: {} }
+      const resumable = c.resumable === true
+      return {
+        turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, endNotice: { cause, resumable } })),
+        effect: { turnEndNotice: { cause, resumable } },
+      }
+    }
+
     case 'done': {
       const reason = c.reason === 'max_steps' ? 'max_steps' : 'complete'
       return { turns, effect: { done: { reason } } }
@@ -336,6 +390,19 @@ export function applyAgentChunk(
       // Forward-compatible: a chunk type this build does not know is not an error.
       return { turns, effect: {} }
   }
+}
+
+/**
+ * Read a turn-end cause out of something that crossed a boundary.
+ *
+ * The vocabulary is main's and the renderer's at once, so an unknown value reads as no cause at all
+ * rather than as a bug: a chunk from a newer build should leave the transcript exactly as a clean
+ * stop would, which is the same forward compatibility the default case above relies on.
+ */
+function asTurnEndCause(value: unknown): TurnEndCause | null {
+  return typeof value === 'string' && (TURN_END_CAUSES as readonly string[]).includes(value)
+    ? (value as TurnEndCause)
+    : null
 }
 
 /**
@@ -395,6 +462,19 @@ export function noteContextSkip(turns: AgentTurn[], turnId: string, notice: Cont
  */
 export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
   return replaceTurn(turns, turnId, (turn) => (turn.plan ? { ...turn, plan: reconcilePlanOnTurnEnd(turn.plan) } : turn))
+}
+
+/**
+ * The turn-end notice the card above the composer shows: the last turn's, if it has one.
+ *
+ * Derived from the transcript rather than held beside it, for the same reason `currentPlan` is: the
+ * turns are where a turn's ending belongs, and a second copy in component state is a second thing to
+ * keep in step. The *last* turn deliberately, not the newest notice anywhere: once the user sends
+ * anything, the conversation has moved on and the newest turn is the one in flight — so the card
+ * clears itself by the ordinary act of continuing, in a sentence or with the button.
+ */
+export function currentEndNotice(turns: readonly AgentTurn[]): { cause: TurnEndCause; resumable: boolean } | null {
+  return turns[turns.length - 1]?.endNotice ?? null
 }
 
 /**

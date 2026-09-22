@@ -66,6 +66,11 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // carries no key — the same reason the instructions record is conditional — and copied rather than
     // referenced so a later edit to the live turn cannot reach back into what was just written.
     ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
+    // How the turn ended, when it ended early — written with the cause alone, because actionability
+    // is a property of the live session rather than of the record. A card read back from disk offers
+    // no Continue button: the run it would continue is gone. Dropping the flag here rather than
+    // storing and re-reading it is what gives "history is not actionable" one place to be true.
+    ...(turn.endNotice !== undefined ? { endNotice: { cause: turn.endNotice.cause } } : {}),
   }))
 
   return { version: TRANSCRIPT_VERSION, turns, interrupted }
@@ -95,6 +100,10 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is
     // a fact about the file rather than something the reader has to work out.
     ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
+    // Carried back as history: the card says the answer stopped early and offers nothing to click,
+    // because the run behind it is not in this process any more. `false` rather than absent, so the
+    // card has one flag to read and no third state to handle.
+    ...(turn.endNotice !== undefined ? { endNotice: { cause: turn.endNotice.cause, resumable: false } } : {}),
   }))
 
   return { turns, interrupted: snapshot.interrupted }

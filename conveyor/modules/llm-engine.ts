@@ -127,6 +127,15 @@ export interface StreamDelta {
    * provider's "every tool_call_id must be answered" contract.
    */
   toolCalls?: ToolCallFragment[]
+  /**
+   * Why the provider stopped, on the frames that carry it.
+   *
+   * The last thing a reply says and the first thing anyone diagnosing it needs: `stop` and
+   * `tool_calls` mean the model finished, `length` means the provider ran out of output room and cut
+   * the reply off mid-sentence. Reported raw and mapped nowhere here — the vocabulary differs per
+   * provider, and the one place that knows what a value means is `protocol/turn-end.ts`.
+   */
+  finishReason?: string
 }
 
 /** One call's fragment within a frame. */
@@ -160,6 +169,11 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
       const delta = e.delta as Record<string, unknown> | undefined
       if (delta && typeof delta.text === 'string') return { text: delta.text }
     }
+    // Anthropic says why it stopped on a `message_delta` of its own, after the text is done.
+    if (e.type === 'message_delta') {
+      const delta = e.delta as Record<string, unknown> | undefined
+      if (delta && typeof delta.stop_reason === 'string') return { finishReason: delta.stop_reason }
+    }
     return null
   }
 
@@ -167,13 +181,21 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
   if (e.error) throw inStreamError(e.error)
 
   const choices = e.choices as Array<Record<string, unknown>> | undefined
-  const delta = choices?.[0]?.delta as Record<string, unknown> | undefined
-  if (!delta) return null
+  const choice = choices?.[0]
+  const delta = choice?.delta as Record<string, unknown> | undefined
+  if (!delta && !choice) return null
 
   const result: StreamDelta = {}
-  if (typeof delta.content === 'string' && delta.content) result.text = delta.content
+  // The finish reason sits on the choice rather than in the delta, and the frame that closes the
+  // reply usually carries an empty delta beside it — so it is read before the delta is, and a frame
+  // with one and no delta at all is still a frame worth reporting.
+  if (typeof choice?.finish_reason === 'string' && choice.finish_reason) {
+    result.finishReason = choice.finish_reason
+  }
 
-  const calls = delta.tool_calls as Array<Record<string, unknown>> | undefined
+  if (typeof delta?.content === 'string' && delta.content) result.text = delta.content
+
+  const calls = delta?.tool_calls as Array<Record<string, unknown>> | undefined
   if (calls?.length) {
     result.toolCalls = calls.map((call) => {
       const fn = call.function as Record<string, unknown> | undefined
@@ -186,7 +208,9 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
     })
   }
 
-  return result.text !== undefined || result.toolCalls !== undefined ? result : null
+  return result.text !== undefined || result.toolCalls !== undefined || result.finishReason !== undefined
+    ? result
+    : null
 }
 
 /** An error object embedded in a 200 response body, e.g. `{"error":{"message":"..."}}`. */
@@ -331,7 +355,19 @@ export async function* streamDeltas(options: {
     throw new ConveyorError('NETWORK_ERROR', `${hostOf(request.url)} returned an empty response.`)
   }
 
-  yield* parseSse(response.body, providerId)
+  // Everything past the response being accepted is the reply arriving rather than the provider
+  // deciding about the request, and a failure there is a different fact with a different next step:
+  // the request went through and the answer stopped. `STREAM_ERROR` is that fact, and it exists so
+  // the caller can branch on a code — `NETWORK_ERROR` and `PROVIDER_ERROR` are also what a refused
+  // request produces, and telling the two apart by reading the message is what the codes are for.
+  try {
+    yield* parseSse(response.body, providerId)
+  } catch (err) {
+    // An abort is the user's own doing and has nothing to report.
+    if (signal.aborted) return
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new ConveyorError('STREAM_ERROR', `${hostOf(request.url)} stopped sending the reply. ${reason}`)
+  }
 }
 
 /**
