@@ -186,6 +186,14 @@ export function ChatPanel() {
   // Chunks land here and drain on a frame; `frameRef` also prevents scheduling more than one.
   const bufferRef = useRef('')
   const frameRef = useRef<number | null>(null)
+  /**
+   * Whether the piece of prose now being buffered follows a card rather than more prose.
+   *
+   * Set when the buffer starts, because that is when the seam is known: text that lands on top of text
+   * already buffered is the same piece. A card drains the buffer before it is applied, so a piece
+   * starting after one begins an empty buffer — which is exactly the case this marks.
+   */
+  const breakRef = useRef(false)
   // The live iterator, so the Stop button can cancel at the source.
   const iteratorRef = useRef<AsyncIterator<unknown> | null>(null)
 
@@ -338,16 +346,27 @@ export function ChatPanel() {
     const chunk = bufferRef.current
     if (!chunk) return
     bufferRef.current = ''
+    // Read and cleared together: the mark belongs to the piece being flushed, and the next piece
+    // decides for itself.
+    const paragraph = breakRef.current
+    breakRef.current = false
     const turnId = streamingTurnIdRef.current
     if (turnId === null) return
-    const { turns } = applyAgentChunk(messagesRef.current, turnId, { type: 'text_delta', text: chunk })
+    const { turns } = applyAgentChunk(messagesRef.current, turnId, { type: 'text_delta', text: chunk, paragraph })
     updateMessages(turns)
     stickToBottom()
   }, [stickToBottom, updateMessages])
 
-  /** Queue text. Calls inside one frame coalesce into a single render. */
+  /**
+   * Queue text. Calls inside one frame coalesce into a single render.
+   *
+   * `paragraph` says whether this text starts a new piece of narration — true when a card landed since
+   * the last one. It is recorded only when the buffer is empty, so a coalesced run of chunks is one
+   * piece and takes at most one break.
+   */
   const enqueue = useCallback(
-    (chunk: string) => {
+    (chunk: string, paragraph: boolean) => {
+      if (bufferRef.current === '') breakRef.current = paragraph
       bufferRef.current += chunk
       frameRef.current ??= requestAnimationFrame(flush)
     },
@@ -392,6 +411,10 @@ export function ChatPanel() {
       // the turn — the decision resumes it — so the plan must be left alone for the checklist above,
       // while every other way out of this loop ends the turn and reconciles it.
       let paused = false
+      // Whether the chunk before this one was prose. The first piece of a run is not a continuation of
+      // anything in this stream, so it opens a piece of its own: after a resume the model's prose
+      // follows a tool result, and the rule ignores a leading break on an empty message.
+      let narration = false
 
       try {
         for (;;) {
@@ -402,10 +425,15 @@ export function ChatPanel() {
           // Text is buffered for the frame; everything else applies immediately, because a card or a
           // pause is a discrete event and should not wait on a frame.
           if (chunk.type === 'text_delta' && typeof chunk.text === 'string') {
-            enqueue(chunk.text)
+            enqueue(chunk.text, !narration)
+            narration = true
             continue
           }
 
+          // Anything else is a card or a pause: a discrete event that ends the current piece of prose
+          // and should not wait on a frame. The drain comes first so the piece is complete before the
+          // card it refers to is applied.
+          narration = false
           drainNow()
           const { turns, effect } = applyAgentChunk(messagesRef.current, turnId, chunk)
           updateMessages(turns)

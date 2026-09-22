@@ -48,6 +48,41 @@ function textAccumulates() {
   results.push('text deltas accumulate into the assistant turn')
 }
 
+/**
+ * Prose either side of a card, as the seam the panel marks reaches the message.
+ *
+ * The panel is the side that sees the stream in order, so it is the side that knows a tool chunk
+ * landed between two flushes; the reducer owns what that seam does to the assembled prose. This is the
+ * live defect stated as a value: text before a call and text after it are two pieces of commentary,
+ * while the fragments inside one piece still concatenate, because a provider splits a sentence
+ * mid-word and joining every pair of chunks would shred it.
+ */
+function narrationSeamsBecomeParagraphs() {
+  const { turns } = run([
+    { type: 'text_delta', text: 'Let me look at the parser. ' },
+    { type: 'tool_call_start', callId: 'a1', tool: 'read_file', args: { path: 'src/app.ts' } },
+    { type: 'tool_result', callId: 'a1', tool: 'read_file', ok: true, output: 'body' },
+    { type: 'text_delta', text: 'Now the fix.', paragraph: true },
+    { type: 'text_delta', text: ' It is in.' },
+    { type: 'text_delta', text: 'Done.', paragraph: true },
+  ])
+
+  assert.equal(
+    turns[1].content,
+    'Let me look at the parser.\n\nNow the fix. It is in.\n\nDone.',
+    'the trailing space before the card is absorbed by the break, not stacked with it'
+  )
+
+  // Without the seam there is no break at all, which is what a token stream depends on.
+  const plain = run([
+    { type: 'text_delta', text: 'Read' },
+    { type: 'text_delta', text: 'ing now.' },
+  ])
+  assert.equal(plain.turns[1].content, 'Reading now.', 'chunks of one piece are joined, never separated')
+
+  results.push('a marked seam becomes a paragraph break, and fragments within a piece still concatenate')
+}
+
 // ---------------------------------------------------------------- tool steps
 
 function toolLifecycle() {
@@ -397,6 +432,7 @@ function doneIsReported() {
 
 function main() {
   step('text', textAccumulates)
+  step('narration seam', narrationSeamsBecomeParagraphs)
   step('tool lifecycle', toolLifecycle)
   step('failed result', failedResult)
   step('unknown call', resultForAnUnknownCallIsIgnored)

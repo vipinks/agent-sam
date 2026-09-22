@@ -37,6 +37,35 @@ export const AGENT_SYSTEM_PROMPT =
   'Keep any narration between tool calls to two sentences or fewer, and emit the tool call early.'
 
 /**
+ * The one extra line a Windows machine needs: what its terminal actually is.
+ *
+ * Live use found this the expensive way — most Windows sessions opened with a bash-ism (`&&`, `ls`,
+ * `2>/dev/null`, `python3`), which fails before the model has any reason to suspect the shell rather
+ * than the command, so it spent a step or two adapting to something it could have been told. The
+ * terminal is not a guess: `shellFor` spawns `powershell.exe` on win32, so this line states a fact
+ * about the machine rather than a preference about style.
+ *
+ * One line, and concrete in the same way the pacing line is: it names the shell and says the syntax
+ * follows from it, where "be careful with the shell" is a caution the model can agree with and then
+ * ignore.
+ */
+export const POWERSHELL_SHELL_NOTE =
+  'On this machine the terminal is Windows PowerShell, so shell commands must use PowerShell syntax.'
+
+/**
+ * The agent's standing instruction as the platform composes it.
+ *
+ * The base line plus, on Windows only, the shell note: a platform-detected addition rather than a
+ * second message, so the injection rule still decides one thing — is the standing instruction already
+ * in this history — instead of one thing per platform. The platform is a required argument rather
+ * than a defaulted `process.platform` because this module is shared with the renderer, where
+ * `process` is not the main process's; the caller that runs in main is the side that knows.
+ */
+export function agentSystemPrompt(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? `${AGENT_SYSTEM_PROMPT}\n${POWERSHELL_SHELL_NOTE}` : AGENT_SYSTEM_PROMPT
+}
+
+/**
  * How much of an instructions file is read.
  *
  * 16 KB is a byte budget, not a character one: the point is to bound what main reads off the disk
@@ -142,11 +171,15 @@ export function planSystemInjection(
  *
  * Matched on the text rather than on the presence of any system message, because the two injections
  * are decided independently: a workspace with no instructions file has no instruction message and
- * must still get this one.
+ * must still get this one. The text is the *composed* prompt, because that is the string a send
+ * actually wrote: matching the base line instead would fail to recognise this machine's own message
+ * on a resume and inject the shell note a second time.
  */
 export function planAgentPrompt(
-  messages: ReadonlyArray<{ role: string; content?: string }>
+  messages: ReadonlyArray<{ role: string; content?: string }>,
+  platform: NodeJS.Platform
 ): { content: string } | null {
-  if (messages.some((m) => m.role === 'system' && m.content === AGENT_SYSTEM_PROMPT)) return null
-  return { content: AGENT_SYSTEM_PROMPT }
+  const prompt = agentSystemPrompt(platform)
+  if (messages.some((m) => m.role === 'system' && m.content === prompt)) return null
+  return { content: prompt }
 }

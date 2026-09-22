@@ -226,8 +226,8 @@ function replaceTurn(turns: AgentTurn[], id: string, mutate: (turn: AgentTurn) =
   return next
 }
 
-function appendText(turns: AgentTurn[], turnId: string, text: string): AgentTurn[] {
-  return replaceTurn(turns, turnId, (turn) => ({ ...turn, content: turn.content + text }))
+function appendText(turns: AgentTurn[], turnId: string, text: string, paragraph: boolean): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => ({ ...turn, content: joinNarrationChunk(turn.content, text, paragraph) }))
 }
 
 function updateStep(
@@ -243,6 +243,44 @@ function updateStep(
     steps[index] = mutate(steps[index])
     return { ...turn, steps }
   })
+}
+
+/**
+ * The break between two pieces of narration, as the bubble's markdown reads it.
+ *
+ * A blank line, not a newline: the prose is rendered as markdown, where a single newline is a line
+ * break *inside* one paragraph and only an empty line starts a new one. Two trailing spaces would be
+ * the other way to write it and would be invisible in the source, which is why it is a constant here.
+ */
+export const NARRATION_BREAK = '\n\n'
+
+/**
+ * Append one streamed text chunk to the narration assembled so far.
+ *
+ * A model narrates between its tool calls — "let me look at the parser", then a call and its result,
+ * then "the bug is on line 12" — and those two pieces of commentary used to arrive here as one string,
+ * so a multi-step answer rendered as a single run-on wall with the cards interleaved through it. The
+ * panel marks the seam (`paragraph`) because it is the side that sees the stream in order; this is
+ * where the seam becomes a break.
+ *
+ * Why the join is conditional rather than universal: within one piece the provider splits a sentence
+ * wherever its own token boundaries fall, so `Read` + `ing now.` must still be `Reading now.`. Joining
+ * every pair of chunks would shred every answer into fragments — the opposite defect, and the reason
+ * "always join" is not the fix.
+ *
+ * Trailing whitespace on the assembled side is absorbed by the break rather than left in front of it,
+ * because a chunk ending in the space before a call is the ordinary case, and `…parser. \n\n` would
+ * leave a ragged line in the rendered paragraph. A whitespace-only chunk is spacing and takes no break
+ * in either direction: it carries no narration to separate.
+ *
+ * The rule reads only the two strings it is given, so the assembled message is a function of the chunks
+ * and nothing else. That is also what makes a rehydrated turn render identically — the break is written
+ * into the stored content rather than recomputed at draw time from state the transcript does not keep.
+ */
+export function joinNarrationChunk(current: string, chunk: string, paragraph: boolean): string {
+  if (!chunk) return current
+  if (!paragraph || current === '' || current.trim() === '' || chunk.trim() === '') return current + chunk
+  return `${current.replace(/\s+$/, '')}${NARRATION_BREAK}${chunk.replace(/^\s+/, '')}`
 }
 
 /**
@@ -263,7 +301,11 @@ export function applyAgentChunk(
   switch (c.type) {
     case 'text_delta': {
       const text = typeof c.text === 'string' ? c.text : ''
-      return { turns: appendText(turns, turnId, text), effect: { textDelta: text } }
+      // `paragraph` is set by the panel, which is the side that sees the stream in order and so the only
+      // side that knows a card landed since the last piece of prose. It is a marker, not content: the
+      // reducer decides what a seam does to the message, and a chunk from main never carries it.
+      const paragraph = c.paragraph === true
+      return { turns: appendText(turns, turnId, text, paragraph), effect: { textDelta: text } }
     }
 
     case 'project_instructions': {

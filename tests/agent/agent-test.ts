@@ -12,11 +12,21 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeTool, needsApproval, runAgentLoop, TOOL_DEFINITIONS } from '../../conveyor/modules/agent'
-import { AGENT_SYSTEM_PROMPT } from '../../conveyor/protocol/context'
+import { AGENT_SYSTEM_PROMPT, agentSystemPrompt, POWERSHELL_SHELL_NOTE } from '../../conveyor/protocol/context'
 import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
 import { resolveWorkspacePath } from '../../conveyor/modules/workspace-paths'
 
 const results: string[] = []
+
+/**
+ * The agent's standing instruction as this machine's platform composes it.
+ *
+ * The prompt is platform-detected — a Windows machine's terminal is PowerShell — so the assertions
+ * below compare against what a send from *this* host must carry rather than against the base line,
+ * which is the whole prompt only off win32. The base constant is still asserted where it is the
+ * subject; the win32 composition has its own suite below.
+ */
+const HOST_AGENT_PROMPT = agentSystemPrompt(process.platform)
 
 /** Build a Response whose body is the given SSE text, chunked however the caller likes. */
 function sseResponse(frames: string[], chunkSize = 64): Response {
@@ -699,7 +709,7 @@ async function instructionsReachTheProvider() {
     // the project's text is the more specific of the two, so it sits closest to the conversation it
     // governs. Neither replaces the other — a workspace with instructions gets both.
     assert.equal(sent[0].role, 'system', 'the system messages arrive first')
-    assert.equal(sent[0].content, AGENT_SYSTEM_PROMPT, "the agent's own instruction leads")
+    assert.equal(sent[0].content, HOST_AGENT_PROMPT, "the agent's own instruction leads")
     assert.equal(sent[1].role, 'system', 'the instructions arrive as a system message')
     assert.ok(sent[1].content.includes('House rules'), 'carrying the file text')
     assert.ok(/project instructions/i.test(sent[1].content), 'labelled as project instructions')
@@ -744,7 +754,7 @@ async function noInstructionsMeansNoSystemMessage() {
     const sent = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
     assert.deepEqual(
       sent.filter((m) => m.role === 'system').map((m) => m.content),
-      [AGENT_SYSTEM_PROMPT],
+      [HOST_AGENT_PROMPT],
       'no instructions file means no instructions message, and nothing else is invented'
     )
 
@@ -765,7 +775,7 @@ async function noInstructionsMeansNoSystemMessage() {
     const sentNoRoot = (noRoot[0] as { body: { messages: Array<{ role: string; content: string }> } }).body.messages
     assert.deepEqual(
       sentNoRoot.filter((m) => m.role === 'system').map((m) => m.content),
-      [AGENT_SYSTEM_PROMPT],
+      [HOST_AGENT_PROMPT],
       'no workspace, no instructions message'
     )
     results.push('a workspace with no instructions injects no instructions message')
@@ -792,7 +802,7 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
         messages: [
           // The head of the history the pause handed back, verbatim: the agent's instruction and the
           // project's, exactly as the original send wrote them.
-          { role: 'system', content: AGENT_SYSTEM_PROMPT },
+          { role: 'system', content: HOST_AGENT_PROMPT },
           { role: 'system', content: 'The following are the project instructions…\n\n# House rules' },
           { role: 'user', content: 'go' },
           {
@@ -818,7 +828,7 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
     const systems = sent.filter((m) => m.role === 'system')
     assert.deepEqual(
       systems.map((m) => m.content),
-      [AGENT_SYSTEM_PROMPT, 'The following are the project instructions…\n\n# House rules'],
+      [HOST_AGENT_PROMPT, 'The following are the project instructions…\n\n# House rules'],
       'each system message is sent exactly once, so neither is duplicated on a resume'
     )
     // And nothing is announced either: the turn already carries the record from the original send, and
@@ -828,6 +838,93 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+}
+
+// ---------------------------------------------------------------- the shell
+
+/**
+ * The platform-primed shell line, from the pure rule to the wire.
+ *
+ * Live use opens most Windows sessions with a bash-ism that fails before the model adapts, so the
+ * standing instruction now says which shell the terminal is. That is a fact about the machine the
+ * loop runs on, which is why the platform is an option here: the assertions below mean the same thing
+ * on any host that runs the suite.
+ */
+async function windowsIsToldItsShell() {
+  // The rule first. One line, on win32 only, and once — a prompt that said it twice would spend the
+  // same budget twice on one sentence.
+  const win = agentSystemPrompt('win32')
+  assert.ok(win.startsWith(AGENT_SYSTEM_PROMPT), 'the standing instruction still leads the prompt')
+  assert.equal(win.split(POWERSHELL_SHELL_NOTE).length - 1, 1, 'the shell line appears exactly once on win32')
+  assert.ok(/powershell/i.test(POWERSHELL_SHELL_NOTE), 'and names the shell the terminal actually is')
+  assert.equal(agentSystemPrompt('linux'), AGENT_SYSTEM_PROMPT, 'off win32 the prompt is the base line alone')
+  assert.equal(agentSystemPrompt('darwin'), AGENT_SYSTEM_PROMPT, 'on every other platform too')
+
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    // One send, on a platform pinned to win32.
+    const log: unknown[] = []
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        platform: 'win32',
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = systemMessages(log)
+    assert.equal(sent.length, 1, 'the standing instruction is the only system message here')
+    assert.equal(sent[0].split(POWERSHELL_SHELL_NOTE).length - 1, 1, 'the shell line reaches the provider exactly once')
+
+    // And a resumed run re-enters with the history the pause handed back, which already carries the
+    // composed prompt: the injection is refused on that fact, so the line is not sent a second time.
+    const resumed: unknown[] = []
+    const calls = [
+      { id: 'c1', type: 'function' as const, function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+    ]
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [
+          { role: 'system', content: agentSystemPrompt('win32') },
+          { role: 'user', content: 'go' },
+          { role: 'assistant', content: '', tool_calls: calls },
+        ],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        platform: 'win32',
+        steps: 1,
+        pending: { calls, denied: true },
+        fetchImpl: oneRoundFetch(resumed) as never,
+      })
+    )
+
+    const systems = systemMessages(resumed)
+    assert.equal(systems.length, 1, 'a resumed run does not inject the standing instruction again')
+    assert.equal(
+      systems[0].split(POWERSHELL_SHELL_NOTE).length - 1,
+      1,
+      'so the shell line is on the wire exactly once across the pause'
+    )
+    results.push('win32 sends the PowerShell line once, and a resume does not send it again')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/** The system messages of the first request in a log, in order. */
+function systemMessages(log: unknown[]): string[] {
+  const body = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body
+  return body.messages.filter((m) => m.role === 'system').map((m) => m.content)
 }
 
 // ---------------------------------------------------------------- mentions
@@ -984,6 +1081,7 @@ async function main() {
   await step('instructions reach the provider', instructionsReachTheProvider)
   await step('no instructions, no system message', noInstructionsMeansNoSystemMessage)
   await step('resume does not re-inject', aResumeDoesNotInjectTheInstructionsTwice)
+  await step('win32 is told its shell', windowsIsToldItsShell)
   await step('consent rules', approvalRules)
   await step('ReAct loop with a mocked provider', reactLoop)
   await step('write_file tool', writeThenRead)

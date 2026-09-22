@@ -597,6 +597,15 @@ interface LoopOptions {
   mentionPaths?: string[]
   steps?: number
   pending?: PendingDecision
+  /**
+   * The platform the run is on, which decides what the terminal is.
+   *
+   * Injected for the same reason `fetchImpl` is: the standing instruction's shell line is
+   * platform-detected, so the suite that pins it has to be able to say which platform it is pinning —
+   * a rule keyed on the machine running the test could only ever be verified on one kind of machine.
+   * The module members leave it unset, and main's own `process.platform` is the real value.
+   */
+  platform?: NodeJS.Platform
   /** Injected so the loop can be driven from a test; the module members leave it unset. */
   fetchImpl?: FetchLike
   spawnImpl?: typeof import('child_process').spawn
@@ -632,7 +641,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // are independent, so a workspace with no instructions file still gets this one. Read before
   // either is unshifted, because both rules answer "is it already there" and the first unshift would
   // answer for the second.
-  const agentPrompt = planAgentPrompt(history)
+  const agentPrompt = planAgentPrompt(history, opts.platform ?? process.platform)
 
   if (injection) {
     // Position 0, before the conversation: the provider treats a system message as standing context
