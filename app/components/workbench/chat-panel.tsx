@@ -146,7 +146,40 @@ export function ChatPanel() {
    */
   const endNotice = currentEndNotice(messages)
 
-  const [draft, setDraft] = useState('')
+  /**
+   * The composer's in-progress state, read from the session layer rather than held here.
+   *
+   * The workbench keys its resize groups on the window state, so a maximize or a restore remounts this
+   * pane — and everything the user had not sent yet went with it. Held above the key, it survives the
+   * swap: the draft, the chips attached to it, the note under the box and the height they dragged it to.
+   * One destructure rather than four, because they are one thing from the user's side and a remount
+   * restores or loses them together.
+   */
+  const { text: draft, mentionPaths, mentionNote, heights: composerHeights } = sessions.composer
+
+  // The session API is read through a ref so the callbacks built from it keep a stable identity: several
+  // of them are dependencies of the stream callbacks, and a new identity per render would restart a run on
+  // every chunk — exactly what this pane is built to avoid.
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+
+  /**
+   * Write the draft through the session layer, keeping the ref this pane's own handlers read in step.
+   *
+   * The mirror is what a handler writing twice in one event reads back — the picker committing a path and
+   * then removing the token it came from — without the write having to wait for a re-render.
+   */
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const setDraft = useCallback((next: string) => {
+    draftRef.current = next
+    sessionsRef.current.setComposer({ text: next })
+  }, [])
+
+  /** The heights a drag writes, mirrored for the same reason `draftRef` is. */
+  const composerHeightsRef = useRef(composerHeights)
+  composerHeightsRef.current = composerHeights
+
   const [isStreaming, setIsStreaming] = useState(false)
   // Whether the agent acts without asking. Read from the session rather than held here: the record owns
   // the setting, so a conversation that had it on opens with it on, and one that has never had it set
@@ -170,16 +203,14 @@ export function ChatPanel() {
   const editAllowed = !isStreaming && pending === null
 
   /**
-   * The files the next send will attach, in the order they were added.
+   * The files the next send will attach, with the ref `send` reads.
    *
-   * Renderer-local, because it is what the user is composing rather than a fact about the workspace
-   * — and the ref beside it is what `send` reads, so the payload is built from the chips that are
-   * on screen without re-creating the send callback on every keystroke.
+   * Renderer-local in effect and session-owned in fact: the list belongs to what the user is composing,
+   * and the ref beside it is what `send` reads, so the payload is built from the chips that are on
+   * screen without re-creating the send callback on every keystroke.
    */
-  const [mentionPaths, setMentionPaths] = useState<string[]>([])
   const mentionPathsRef = useRef<string[]>(mentionPaths)
-  /** Why the last attach attempt was refused, shown under the composer. Cleared by the next one. */
-  const [mentionNote, setMentionNote] = useState<string | null>(null)
+  mentionPathsRef.current = mentionPaths
   /**
    * The `@` token at the caret, and whether the picker has been dismissed for it.
    *
@@ -198,15 +229,11 @@ export function ChatPanel() {
   const paneRef = useRef<HTMLDivElement>(null)
 
   /**
-   * The composer's height, remembered per session and only for as long as the window lives.
+   * The drag in progress: which session it is measured against, and where the pointer and edge began.
    *
-   * Not persisted, deliberately: the height a user dragged to is a fact about this window's layout
-   * rather than about the conversation, and a transcript carrying it would store something no reader
-   * of that record has a use for. Per session because one long message should not leave every other
-   * conversation's composer stretched.
+   * The one piece of composer state that stays here, because it is a pointer that is currently down:
+   * there is no drag to restore after a swap, only a drag that has ended.
    */
-  const [composerHeights, setComposerHeights] = useState<Record<string, number>>({})
-  /** The drag in progress: which session it is measured against, and where the pointer and edge began. */
   const [composerDrag, setComposerDrag] = useState<{ key: string; startY: number; startHeight: number } | null>(null)
   // Which session the pane is showing. The composer's height is keyed by it, so a drag belongs to the
   // conversation it was made in rather than to the pane.
@@ -305,7 +332,7 @@ export function ChatPanel() {
   /** Replace the chip row, keeping the ref `send` reads in step with what is on screen. */
   const setChips = useCallback((next: string[]) => {
     mentionPathsRef.current = next
-    setMentionPaths(next)
+    sessionsRef.current.setComposer({ mentionPaths: next })
   }, [])
 
   /**
@@ -318,7 +345,7 @@ export function ChatPanel() {
     (path: string) => {
       const applied = addMentionPath(mentionPathsRef.current, path)
       setChips(applied.paths)
-      setMentionNote(applied.refused ? mentionRefusalNote(applied.refused) : null)
+      sessionsRef.current.setComposer({ mentionNote: applied.refused ? mentionRefusalNote(applied.refused) : null })
     },
     [setChips]
   )
@@ -336,7 +363,7 @@ export function ChatPanel() {
       const token = mention.token
       applyMentionPath(path)
       if (token) {
-        setDraft((current) => current.slice(0, token.start) + current.slice(token.end))
+        setDraft(draftRef.current.slice(0, token.start) + draftRef.current.slice(token.end))
         requestAnimationFrame(() => {
           const area = textareaRef.current
           if (!area) return
@@ -346,7 +373,7 @@ export function ChatPanel() {
       }
       setMention({ token: null, dismissed: false })
     },
-    [applyMentionPath, mention.token]
+    [applyMentionPath, mention.token, setDraft]
   )
 
   /** Add whatever the code viewer has open. Disabled when nothing is open, so the guard is a UI fact too. */
@@ -358,7 +385,7 @@ export function ChatPanel() {
   const removeMention = useCallback(
     (path: string) => {
       setChips(removeMentionPath(mentionPathsRef.current, path))
-      setMentionNote(null)
+      sessionsRef.current.setComposer({ mentionNote: null })
     },
     [setChips]
   )
@@ -392,12 +419,6 @@ export function ChatPanel() {
     estimateSize: () => 92,
     overscan: 8,
   })
-
-  // The session API is read through a ref so `updateMessages` keeps a stable identity: it is a
-  // dependency of the stream callbacks, and a new identity per render would restart the run on every
-  // chunk — exactly what this pane is built to avoid.
-  const sessionsRef = useRef(sessions)
-  sessionsRef.current = sessions
 
   const updateMessages = useCallback((next: AgentTurn[]) => {
     messagesRef.current = next
@@ -641,7 +662,7 @@ export function ChatPanel() {
         // cannot take them away from the send that is starting — only from the next one.
         setChips([])
         setMention({ token: null, dismissed: false })
-        setMentionNote(null)
+        sessionsRef.current.setComposer({ mentionNote: null })
       }
 
       // The message goes on the end of the transcript as it stands — after any truncation an edit made,
@@ -649,7 +670,7 @@ export function ChatPanel() {
       // belonged to — and that whole list is what the run is handed.
       await runAgentTurn([...messagesRef.current, startUserTurn(text, chips)], chips, sessionId)
     },
-    [isStreaming, pending, runAgentTurn, setChips]
+    [isStreaming, pending, runAgentTurn, setChips, setDraft]
   )
 
   /** Send what is in the composer. */
@@ -744,9 +765,10 @@ export function ChatPanel() {
       // Dragging up makes the composer taller, so the pointer's downward movement is subtracted.
       const requested = composerDrag.startHeight - (event.clientY - composerDrag.startY)
       const next = clampComposerHeight(requested, bounds.min, bounds.max)
-      setComposerHeights((current) =>
-        current[composerDrag.key] === next ? current : { ...current, [composerDrag.key]: next }
-      )
+      const current = composerHeightsRef.current
+      if (current[composerDrag.key] === next) return
+      composerHeightsRef.current = { ...current, [composerDrag.key]: next }
+      sessionsRef.current.setComposer({ heights: composerHeightsRef.current })
     }
     const end = () => setComposerDrag(null)
 

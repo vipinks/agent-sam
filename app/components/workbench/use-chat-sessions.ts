@@ -80,6 +80,41 @@ export interface PendingApproval {
   plan: PlanStep[]
 }
 
+/**
+ * What the composer is holding but has not sent.
+ *
+ * One object rather than several fields on the session state, because these are one thing from the
+ * user's side — the message they are in the middle of writing, with the files they attached to it and
+ * the height they gave the box — and a remount restores or loses them together.
+ */
+export interface ComposerState {
+  /**
+   * The text in the box.
+   *
+   * Not keyed by session, and not cleared by a session switch: a draft is the user's unfinished thought
+   * rather than part of any conversation, and that is how it behaved before this moved.
+   */
+  text: string
+  /** The files the next send will attach. */
+  mentionPaths: string[]
+  /** Why the last attach attempt was refused, or null. Cleared by the next one. */
+  mentionNote: string | null
+  /**
+   * The height the user dragged the composer to, per session key.
+   *
+   * Not persisted, deliberately: the height a user dragged to is a fact about this window's layout
+   * rather than about the conversation, and a transcript carrying it would store something no reader of
+   * that record has a use for. Per session because one long message should not leave every other
+   * conversation's composer stretched.
+   */
+  heights: Record<string, number>
+}
+
+/** The composer as it opens: nothing typed, nothing attached, every session at the default height. */
+function emptyComposer(): ComposerState {
+  return { text: '', mentionPaths: [], mentionNote: null, heights: {} }
+}
+
 export interface ChatSessions {
   /** The live transcript on screen. */
   transcript: TranscriptState
@@ -94,6 +129,17 @@ export interface ChatSessions {
    * caller cannot drop what it was never handed.
    */
   setTurns: (turns: AgentTurn[]) => void
+  /**
+   * The composer's in-progress state: what the user has typed and not sent, and what goes with it.
+   *
+   * Held here for the same reason the consent pause is: the workbench keys its resize groups on the
+   * window state, so a maximize or a restore remounts every pane under them — and a draft held in the
+   * pane was deleted by the swap. The pane is not the conversation, and a half-written message is
+   * exactly as much the user's as an unanswered question is.
+   */
+  composer: ComposerState
+  /** Merge a change into the composer state. */
+  setComposer: (patch: Partial<ComposerState>) => void
   /**
    * Whether this conversation runs tools without asking. Off for a session with no stored value, which
    * is every session whose user has never touched the toggle.
@@ -156,6 +202,23 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const [transcript, setTranscriptState] = useState<TranscriptState>({ turns: [], interrupted: false })
   const [error, setError] = useState<SessionError | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
+
+  /**
+   * The composer's in-progress state, and the ref behind it.
+   *
+   * The same two-store shape as the pauses below, and for the same reason: the mirror is what a handler
+   * that writes twice in one event reads back — the picker committing a path and then removing the
+   * token it came from — and the state is what the render reads. Nothing here is serialised; it is a
+   * fact about this window, held where a window-state swap cannot reach it.
+   */
+  const composerRef = useRef<ComposerState>(emptyComposer())
+  const [composer, setComposerState] = useState<ComposerState>(emptyComposer)
+
+  const setComposer = useCallback((patch: Partial<ComposerState>) => {
+    const next = { ...composerRef.current, ...patch }
+    composerRef.current = next
+    setComposerState(next)
+  }, [])
 
   /**
    * The conversations whose consent pause this process is still holding, and what each is paused on.
@@ -499,6 +562,8 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   return {
     transcript,
     setTurns,
+    composer,
+    setComposer,
     autoApprove,
     setAutoApprove,
     error,
