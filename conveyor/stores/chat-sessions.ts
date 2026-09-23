@@ -20,6 +20,19 @@ export interface ChatSession {
   updatedAt: number
   providerId: string
   model: string
+  /**
+   * The folder this conversation was last used in, or absent when it has never had a turn.
+   *
+   * Absent rather than defaulted, deliberately: "no project yet" is a state the app has to be able to
+   * tell apart from "this project", because selecting the first keeps the window where it is and
+   * selecting the second moves it. An empty string would read as a project nobody can open, which is
+   * why nothing writes one.
+   *
+   * Stamped at turn starts and only when it differs from what is stored, so a value here is a record
+   * of where the work actually happened rather than a guess at where it might. It is additive: an
+   * entry written before this field existed simply has no key, and behaves the way it did before it.
+   */
+  lastRoot?: string
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -63,6 +76,9 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       title: z.string().min(1).optional(),
       providerId: z.string().min(1).optional(),
       model: z.string().min(1).optional(),
+      // Min one, so a blank path cannot become a project: the field's whole meaning is that it names
+      // a folder, and absence is how "none" is spelled.
+      lastRoot: z.string().min(1).optional(),
     }),
     removeSession: z.object({ id: sessionIdSchema }),
     setActive: z.object({ id: sessionIdSchema.nullable() }),
@@ -84,9 +100,11 @@ export const chatSessionsStore = defineStore('chat-sessions', {
      * Record that a session was used.
      *
      * `title` is only ever set by the caller when it should change — the first user message names a
-     * session once, and later messages must not rename it.
+     * session once, and later messages must not rename it. `lastRoot` is passed the same way and for
+     * the same reason: the caller compares it against what is stored before asking, so a touch that
+     * says nothing about the project leaves the recorded one exactly as it was.
      */
-    touchSession: (state, { id, title, providerId, model }) => {
+    touchSession: (state, { id, title, providerId, model, lastRoot }) => {
       const index = state.sessions.findIndex((s) => s.id === id)
       if (index === -1) return
       state.sessions = sortByRecency(
@@ -98,6 +116,7 @@ export const chatSessionsStore = defineStore('chat-sessions', {
                 ...(title !== undefined ? { title } : {}),
                 ...(providerId !== undefined ? { providerId } : {}),
                 ...(model !== undefined ? { model } : {}),
+                ...(lastRoot !== undefined ? { lastRoot } : {}),
               }
             : s
         )

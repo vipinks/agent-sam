@@ -66,6 +66,7 @@ const SUITES = [
   { name: 'image read', src: 'workspace/image-read-test.ts' },
   { name: 'spreadsheet read', src: 'workspace/spreadsheet-read-test.ts' },
   { name: 'spreadsheet write', src: 'workspace/spreadsheet-write-test.ts' },
+  { name: 'session project rules', src: 'sessions/session-project-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
 ]
 
