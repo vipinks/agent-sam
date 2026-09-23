@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CircleAlert, Download, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleAlert, Download, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
 import { chatSessionsStore, type ChatSession } from '@/conveyor/stores/chat-sessions'
+import { workspaceStore } from '@/conveyor/stores/workspace'
 import { SEARCH_MIN_TERM } from '@/conveyor/protocol/search'
 import type { ExportFormat } from '@/conveyor/protocol/export'
 import { cn } from '@/lib/utils'
@@ -25,6 +26,13 @@ import { DrawerChevron, activityById } from './icon-rail'
 import { useWorkbenchStore } from './store'
 import { formatRelativeTime } from './relative-time'
 import { isSearchable, planVisibleSessions, snippetsFor } from './session-search'
+import {
+  groupSessionsByRoot,
+  isGroupCollapsed,
+  planGroupCollapse,
+  sessionGroupKey,
+  sessionGroupLabel,
+} from './session-project'
 import { planRename } from './rename'
 import type { SessionError } from './use-chat-sessions'
 
@@ -115,6 +123,33 @@ export function SessionListPanel({
 
   const visible = useMemo(() => planVisibleSessions(sessions, query, bodyMatchIds), [sessions, query, bodyMatchIds])
 
+  // The folder this window is showing: the group the list leads with, and the one a conversation
+  // started from this panel belongs to.
+  const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
+  // The groups the user has put away, and their writer. Read from the settings slice rather than held
+  // here, because a preference about how someone works outlives the component that was on screen when
+  // they set it.
+  const collapsedKeys = useWorkbenchStore((s) => s.collapsedSessionGroups)
+  const setCollapsedKeys = useWorkbenchStore((s) => s.setCollapsedSessionGroups)
+
+  /**
+   * Whether the field is narrowing the list at all.
+   *
+   * Any non-blank term filters — `planVisibleSessions` compares titles from the first character — so
+   * this is the same condition the filter itself applies. It is also what suspends the collapses: a
+   * search is a question about every conversation the user has, so a group they had put away must not
+   * be allowed to hide a match inside it.
+   */
+  const searching = query.trim() !== ''
+
+  /**
+   * The rows on screen, arranged by project.
+   *
+   * Arranged from the *filtered* rows rather than the whole list, so a group exists exactly when it has
+   * a row to draw: an empty header would claim a project is empty when the search is merely narrow.
+   */
+  const groups = useMemo(() => groupSessionsByRoot(visible, rootPath), [visible, rootPath])
+
   /**
    * Commit the row's editor: write the new title, or leave the session alone.
    *
@@ -177,137 +212,184 @@ export function SessionListPanel({
             </p>
           </div>
         </div>
-      ) : visible.length === 0 ? (
+      ) : groups.length === 0 ? (
         // A filter with no survivors is not an empty list of conversations, and saying so is what
         // keeps the user from thinking their sessions are gone.
         <div className="flex flex-1 items-start justify-center px-6 pt-6 text-center">
           <p className="text-[12.5px] text-muted-foreground">No conversations match “{query.trim()}”.</p>
         </div>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-auto py-1">
-          {visible.map((session) => {
-            const isActive = session.id === activeSessionId
-            const isBroken = error?.id === session.id
-            const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
+        <div className="min-h-0 flex-1 overflow-auto py-1">
+          {groups.map((group) => {
+            const label = sessionGroupLabel(group.root)
+            const count = group.sessions.length
+            const collapsed = isGroupCollapsed({ root: group.root, collapsedKeys, searching })
 
             return (
-              <li key={session.id}>
-                <div
-                  className={cn(
-                    'group relative flex items-start gap-2 px-3 py-2 transition-colors',
-                    isActive ? 'bg-brand-soft' : 'hover:bg-accent'
-                  )}
+              <section key={`group:${sessionGroupKey(group.root)}`} aria-label={label}>
+                {/*
+                One project's header: its folder, how many conversations are under it, and the control
+                that puts them away. A button rather than a static heading because it is the only
+                thing that can act on the group, and `aria-expanded` is what states which way it is
+                currently pointing to everything that is not a pointer.
+                */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCollapsedKeys(planGroupCollapse({ root: group.root, collapsedKeys, collapsed: !collapsed }))
+                  }
+                  aria-expanded={!collapsed}
+                  aria-label={`${label}, ${count} ${count === 1 ? 'conversation' : 'conversations'}`}
+                  className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 >
-                  {editingId === session.id ? (
-                    <RenameField
-                      value={draft}
-                      onChange={setDraft}
-                      onCommit={() => commitRename(session)}
-                      onCancel={() => setEditingId(null)}
-                    />
+                  {collapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => onOpen(session.id)}
-                      aria-current={isActive ? 'true' : undefined}
-                      className="min-w-0 flex-1 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                    >
-                      <p className={cn('truncate text-[12.5px] font-medium', isActive && 'text-foreground')}>
-                        {session.title}
-                      </p>
-                      <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <span>{formatRelativeTime(session.updatedAt, Date.now())}</span>
-                        <span aria-hidden="true">·</span>
-                        <span className="truncate font-mono" title={`${session.providerId} · ${session.model}`}>
-                          {session.providerId}/{session.model}
-                        </span>
-                      </p>
-                      {isBroken && (
-                        // An inline note, not only a toast: a toast is gone before the user can act on
-                        // it, and this row is the thing they need to decide about.
-                        <p className="mt-1 flex items-center gap-1 text-[11px] text-destructive">
-                          <CircleAlert className="size-3 shrink-0" />
-                          {error.message}
-                        </p>
-                      )}
-                    </button>
+                    <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
                   )}
+                  {/* The full path on the label, so the tail it shows is never the only spelling
+                  of the folder on offer. */}
+                  <span className="min-w-0 flex-1 truncate" title={group.root ?? undefined}>
+                    {label}
+                  </span>
+                  {/* The number of rows this group is showing, so it stays true while a search is
+                  narrowing the group. */}
+                  <span className="shrink-0 tabular-nums">{count}</span>
+                </button>
 
-                  {/* Row actions. Hidden until hover, but revealed on focus as well so they are
-                      reachable by keyboard rather than being a pointer-only affordance. */}
-                  {editingId !== session.id && (
-                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                      <IconButton
-                        label={`Rename ${session.title}`}
-                        tooltip="Rename"
-                        onClick={() => {
-                          setDraft(session.title)
-                          setEditingId(session.id)
-                        }}
-                      >
-                        <Pencil />
-                      </IconButton>
+                {!collapsed && (
+                  <ul>
+                    {group.sessions.map((session) => {
+                      const isActive = session.id === activeSessionId
+                      const isBroken = error?.id === session.id
+                      const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
 
-                      <ExportButton
-                        title={session.title}
-                        onExport={(format) => onExport(session.id, format, session.title)}
-                      />
-
-                      <AlertDialog
-                        open={pendingDelete === session.id}
-                        onOpenChange={(open) => setPendingDelete(open ? session.id : null)}
-                      >
-                        <AlertDialogTrigger asChild>
-                          <IconButton
-                            label={`Delete ${session.title}`}
-                            tooltip="Delete"
-                            className="data-[state=open]:opacity-100"
+                      return (
+                        <li key={session.id}>
+                          <div
+                            className={cn(
+                              'group relative flex items-start gap-2 px-3 py-2 transition-colors',
+                              isActive ? 'bg-brand-soft' : 'hover:bg-accent'
+                            )}
                           >
-                            <Trash2 />
-                          </IconButton>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              “{session.title}” and its transcript will be removed. This cannot be undone.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => {
-                                setPendingDelete(null)
-                                onDelete(session.id)
-                              }}
-                            >
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  )}
-                </div>
+                            {editingId === session.id ? (
+                              <RenameField
+                                value={draft}
+                                onChange={setDraft}
+                                onCommit={() => commitRename(session)}
+                                onCancel={() => setEditingId(null)}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => onOpen(session.id)}
+                                aria-current={isActive ? 'true' : undefined}
+                                className="min-w-0 flex-1 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                              >
+                                <p className={cn('truncate text-[12.5px] font-medium', isActive && 'text-foreground')}>
+                                  {session.title}
+                                </p>
+                                <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                  <span>{formatRelativeTime(session.updatedAt, Date.now())}</span>
+                                  <span aria-hidden="true">·</span>
+                                  <span
+                                    className="truncate font-mono"
+                                    title={`${session.providerId} · ${session.model}`}
+                                  >
+                                    {session.providerId}/{session.model}
+                                  </span>
+                                </p>
+                                {isBroken && (
+                                  // An inline note, not only a toast: a toast is gone before the user can act on
+                                  // it, and this row is the thing they need to decide about.
+                                  <p className="mt-1 flex items-center gap-1 text-[11px] text-destructive">
+                                    <CircleAlert className="size-3 shrink-0" />
+                                    {error.message}
+                                  </p>
+                                )}
+                              </button>
+                            )}
 
-                {match && match.snippets.length > 0 && (
-                  <div className="border-l-2 border-border pr-3 pl-4 pb-2">
-                    {match.snippets.map((snippet, index) => (
-                      <p key={index} className="truncate text-[11px] text-muted-foreground" title={snippet}>
-                        {snippet}
-                      </p>
-                    ))}
-                    {match.matchCount > match.snippets.length && (
-                      // The count covers occurrences the snippets do not show, which is the reason it
-                      // is sent at all.
-                      <p className="text-[10.5px] text-muted-foreground/70">{match.matchCount} matches</p>
-                    )}
-                  </div>
+                            {/* Row actions. Hidden until hover, but revealed on focus as well so they are
+                      reachable by keyboard rather than being a pointer-only affordance. */}
+                            {editingId !== session.id && (
+                              <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                <IconButton
+                                  label={`Rename ${session.title}`}
+                                  tooltip="Rename"
+                                  onClick={() => {
+                                    setDraft(session.title)
+                                    setEditingId(session.id)
+                                  }}
+                                >
+                                  <Pencil />
+                                </IconButton>
+
+                                <ExportButton
+                                  title={session.title}
+                                  onExport={(format) => onExport(session.id, format, session.title)}
+                                />
+
+                                <AlertDialog
+                                  open={pendingDelete === session.id}
+                                  onOpenChange={(open) => setPendingDelete(open ? session.id : null)}
+                                >
+                                  <AlertDialogTrigger asChild>
+                                    <IconButton
+                                      label={`Delete ${session.title}`}
+                                      tooltip="Delete"
+                                      className="data-[state=open]:opacity-100"
+                                    >
+                                      <Trash2 />
+                                    </IconButton>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        “{session.title}” and its transcript will be removed. This cannot be undone.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        onClick={() => {
+                                          setPendingDelete(null)
+                                          onDelete(session.id)
+                                        }}
+                                      >
+                                        Delete
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              </div>
+                            )}
+                          </div>
+
+                          {match && match.snippets.length > 0 && (
+                            <div className="border-l-2 border-border pr-3 pl-4 pb-2">
+                              {match.snippets.map((snippet, index) => (
+                                <p key={index} className="truncate text-[11px] text-muted-foreground" title={snippet}>
+                                  {snippet}
+                                </p>
+                              ))}
+                              {match.matchCount > match.snippets.length && (
+                                // The count covers occurrences the snippets do not show, which is the reason it
+                                // is sent at all.
+                                <p className="text-[10.5px] text-muted-foreground/70">{match.matchCount} matches</p>
+                              )}
+                            </div>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
                 )}
-              </li>
+              </section>
             )
           })}
-        </ul>
+        </div>
       )}
     </div>
   )

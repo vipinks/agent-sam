@@ -70,6 +70,10 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       title: z.string().min(1),
       providerId: z.string().min(1),
       model: z.string().min(1),
+      // The same field and rule as `touchSession` carries below: a conversation created while a folder
+      // is open is created in that folder, and one created with nothing open has none. Min one, so a
+      // blank path cannot become a project; absent is how "no project yet" is spelled.
+      lastRoot: z.string().min(1).optional(),
     }),
     touchSession: z.object({
       id: sessionIdSchema,
@@ -85,14 +89,25 @@ export const chatSessionsStore = defineStore('chat-sessions', {
   },
 
   actions: {
-    addSession: (state, { id, title, providerId, model }) => {
+    addSession: (state, { id, title, providerId, model, lastRoot }) => {
       const now = Date.now()
       // Idempotent: a re-add of an id that already exists would otherwise give the list two rows
       // with one transcript between them.
       if (state.sessions.some((s) => s.id === id)) return
       state.sessions = sortByRecency([
         ...state.sessions,
-        { id, title, createdAt: now, updatedAt: now, providerId, model },
+        // The project travels with the row rather than being stamped by a second action: a create
+        // followed by a stamp would have a moment between them in which the conversation belongs to
+        // nowhere, and the list would draw it under the wrong header if the second write were lost.
+        {
+          id,
+          title,
+          createdAt: now,
+          updatedAt: now,
+          providerId,
+          model,
+          ...(lastRoot !== undefined ? { lastRoot } : {}),
+        },
       ])
     },
 

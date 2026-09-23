@@ -211,3 +211,85 @@ export function groupSessionsByRoot(sessions: ChatSession[], currentRoot: string
 
   return [...(open ? [open] : []), ...others, ...unstamped]
 }
+
+/**
+ * The key a group's collapse is stored under.
+ *
+ * A folder's own path, or the empty string for the conversations that have no project yet — the one
+ * value a path cannot be, because `lastRoot` is written with a minimum length of one. Deriving the key
+ * from the group rather than from its position means a collapse follows the project: a group that
+ * moves because another folder was opened last is still the same group, and keeps its own state.
+ */
+export const UNSTAMPED_GROUP_KEY = ''
+
+/** The key one group's collapse is written under. */
+export function sessionGroupKey(root: string | null): string {
+  return root ?? UNSTAMPED_GROUP_KEY
+}
+
+/**
+ * What a group's header calls it: the folder's own last segment, or what the conversations without one
+ * are.
+ *
+ * The tail rather than the whole path, for the reason the switcher's entries show one: the drawer is a
+ * few hundred pixels wide, and the last segment is the part that tells two projects apart. The full
+ * path is still on the header, as its title, so nothing about which folder this is has to be guessed.
+ */
+export function sessionGroupLabel(root: string | null): string {
+  return root === null ? 'No project yet' : rootTail(root)
+}
+
+/**
+ * Whether two stored keys name the same group.
+ *
+ * Folders by the store's own rule, so a group put away under one spelling stays put away when the same
+ * folder arrives spelled another way. The unstamped key is compared as itself: an empty string is not
+ * a folder, and no folder is an empty string.
+ */
+function sameGroupKey(a: string, b: string): boolean {
+  if (a === UNSTAMPED_GROUP_KEY || b === UNSTAMPED_GROUP_KEY) return a === b
+  return sameRoot(a, b)
+}
+
+/**
+ * Whether a group's rows are hidden right now.
+ *
+ * A search overrides a collapse, which is the reason this is a rule rather than a lookup: the user is
+ * asking about every conversation they have, so a group they had put away is not one the search may
+ * skip past — its matching rows come back under its header, which is where they are looked for. The
+ * collapse is suspended rather than undone: clearing the field puts the rows away again.
+ */
+export function isGroupCollapsed(input: {
+  /** The group's project, or null for the conversations with none. */
+  root: string | null
+  /** The keys the settings slice holds, as they were read back. */
+  collapsedKeys: string[]
+  /** Whether a search is narrowing the list. */
+  searching: boolean
+}): boolean {
+  if (input.searching) return false
+
+  const key = sessionGroupKey(input.root)
+  return input.collapsedKeys.some((existing) => sameGroupKey(existing, key))
+}
+
+/**
+ * The keys after one group is put away or opened again.
+ *
+ * The whole list rather than a mutation, because what is stored is the set of collapsed groups and the
+ * caller holds one of its readers: the writer and the reader have to agree on what a key is, so
+ * neither spells one itself. Opening removes the group's key in every spelling that names it — a list
+ * holding an older spelling would otherwise leave the group collapsed with nothing on screen
+ * explaining why.
+ */
+export function planGroupCollapse(input: {
+  root: string | null
+  collapsedKeys: string[]
+  /** The state the group is being put into. */
+  collapsed: boolean
+}): string[] {
+  const key = sessionGroupKey(input.root)
+  const without = input.collapsedKeys.filter((existing) => !sameGroupKey(existing, key))
+
+  return input.collapsed ? [...without, key] : without
+}

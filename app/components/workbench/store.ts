@@ -104,6 +104,24 @@ interface WorkbenchState {
   drawerCollapsed: boolean
   setDrawerCollapsed: (collapsed: boolean) => void
   /**
+   * The conversation-list groups whose rows were left hidden, by group key.
+   *
+   * A preference rather than a way of looking at something, on the same side of the line as
+   * `drawerCollapsed`: someone who keeps one project's history folded away is describing how they work,
+   * so it is written to the settings slice and a restart opens the way the last session ended. It
+   * shares the record with the layout sets and the drawer flag rather than taking a key of its own,
+   * because it is written by the same kind of event — a click on a control that puts something away —
+   * and a second key would mean a second writer that could drop this one's half.
+   *
+   * Empty is the ordinary state and is stored as the absence of the key, so a record written before
+   * groups could be put away reads as the state it describes. What a key is — a folder's path, or the
+   * empty string for conversations with no project — belongs to `session-project`, which is the only
+   * place that spells one.
+   */
+  collapsedSessionGroups: string[]
+  /** Replace the set of put-away groups. Holds no opinion about what a key looks like. */
+  setCollapsedSessionGroups: (keys: string[]) => void
+  /**
    * The layout each window state was last dragged to, one set per state, either of them absent.
    *
    * A preference rather than a fact about anything, so it lives here beside the theme and the chat
@@ -185,6 +203,25 @@ const LAYOUT_KEY = 'sam-ai-layout-preferences'
 interface StoredWorkbenchPreferences extends StoredLayoutSets {
   /** Present only when the drawer was left away; absent means expanded. */
   drawerCollapsed?: boolean
+  /**
+   * The groups whose rows were left hidden, by key.
+   *
+   * Present only when at least one group was put away; absent means every group was open, which is how
+   * a first launch opens and how a record written before groups could be put away reads.
+   */
+  collapsedSessionGroups?: string[]
+}
+
+/**
+ * The stored groups, read as a list of keys and nothing else.
+ *
+ * Read the way the rest of the record is: a value that is not a list of strings is not a set of
+ * put-away groups, and must not cost the user the layout sets stored beside it. Anything else in there
+ * is dropped rather than repaired — a key that is not a string names no group.
+ */
+function collapsedGroupsFrom(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((key): key is string => typeof key === 'string')
 }
 
 /**
@@ -197,7 +234,11 @@ interface StoredWorkbenchPreferences extends StoredLayoutSets {
  * stricter: only a stored `true` puts the drawer away, because "expanded" is what every other value —
  * absent, `false`, or unreadable — means, and it is the state a first launch opens in.
  */
-function initialLayoutPreferences(): { sets: StoredLayoutSets; drawerCollapsed: boolean } {
+function initialLayoutPreferences(): {
+  sets: StoredLayoutSets
+  drawerCollapsed: boolean
+  collapsedSessionGroups: string[]
+} {
   try {
     const saved = localStorage.getItem(LAYOUT_KEY)
     if (saved) {
@@ -210,33 +251,36 @@ function initialLayoutPreferences(): { sets: StoredLayoutSets; drawerCollapsed: 
           ...(maximized ? { layoutMaximized: maximized } : {}),
         },
         drawerCollapsed: parsed.drawerCollapsed === true,
+        collapsedSessionGroups: collapsedGroupsFrom(parsed.collapsedSessionGroups),
       }
     }
   } catch {
     // Unreadable preference — fall through to no saved sets rather than failing to start.
   }
-  return { sets: {}, drawerCollapsed: false }
+  return { sets: {}, drawerCollapsed: false, collapsedSessionGroups: [] }
 }
 
 /**
  * Persist the record, tolerating a storage that refuses to write.
  *
- * `mergeSavedLayout`'s output for the sets, so the writer cannot drop one of them, and the flag
- * written only when it is set — the absence of the key is what "expanded" is stored as. Both callers
- * hand in the half they are not changing, which is what makes a drag during a collapse write
- * `layoutWindowed` *and* leave `drawerCollapsed` true, and a collapse leave both sets exactly as they
- * were.
+ * `mergeSavedLayout`'s output for the sets, so the writer cannot drop one of them, and each of the two
+ * flags written only when it is set — the absence of a key is what "expanded" and "nothing put away"
+ * are stored as. Every caller hands in the halves it is not changing, which is what makes a drag during
+ * a collapse write `layoutWindowed` *and* leave `drawerCollapsed` true, and a group put away leave both
+ * sets and the drawer flag exactly as they were.
  */
-function saveWorkbenchPreferences(sets: StoredLayoutSets, drawerCollapsed: boolean): void {
+function saveWorkbenchPreferences(sets: StoredLayoutSets, drawerCollapsed: boolean, collapsedGroups: string[]): void {
   const record: StoredWorkbenchPreferences = {
     ...(sets.layoutWindowed ? { layoutWindowed: sets.layoutWindowed } : {}),
     ...(sets.layoutMaximized ? { layoutMaximized: sets.layoutMaximized } : {}),
     ...(drawerCollapsed ? { drawerCollapsed: true } : {}),
+    ...(collapsedGroups.length > 0 ? { collapsedSessionGroups: collapsedGroups } : {}),
   }
   try {
     localStorage.setItem(LAYOUT_KEY, JSON.stringify(record))
   } catch {
-    // A full or blocked localStorage must not break dragging a separator or putting the drawer away.
+    // A full or blocked localStorage must not break dragging a separator, putting the drawer away, or
+    // putting a group away.
   }
 }
 
@@ -304,8 +348,20 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
    */
   setDrawerCollapsed: (drawerCollapsed) =>
     set((current) => {
-      saveWorkbenchPreferences(current.layoutPreferences, drawerCollapsed)
+      saveWorkbenchPreferences(current.layoutPreferences, drawerCollapsed, current.collapsedSessionGroups)
       return { drawerCollapsed }
+    }),
+  collapsedSessionGroups: launchPreferences.collapsedSessionGroups,
+  /**
+   * The set of put-away groups is resolved by `planGroupCollapse`, not here: which key names a group,
+   * and what opening one does to a key written another way, is a rule about grouping rather than about
+   * storage. Both other halves travel with the write, so putting a group away cannot reopen the drawer
+   * or forget a layout.
+   */
+  setCollapsedSessionGroups: (collapsedSessionGroups) =>
+    set((current) => {
+      saveWorkbenchPreferences(current.layoutPreferences, current.drawerCollapsed, collapsedSessionGroups)
+      return { collapsedSessionGroups }
     }),
   // Present even when nothing was ever saved, so a reader always has a record to resolve against rather
   // than an absent field it would have to treat as an empty one itself.
@@ -319,7 +375,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   saveLayout: (state, sizes) =>
     set((current) => {
       const layoutPreferences = mergeSavedLayout(current.layoutPreferences, state, sizes)
-      saveWorkbenchPreferences(layoutPreferences, current.drawerCollapsed)
+      saveWorkbenchPreferences(layoutPreferences, current.drawerCollapsed, current.collapsedSessionGroups)
       return { layoutPreferences }
     }),
 }))

@@ -468,7 +468,13 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     // `crypto.randomUUID` in the renderer is fine for an id: it only has to be unique and safe as a
     // filename, and the module validates the shape again before it touches the disk.
     const id = crypto.randomUUID()
-    addSession({ id, title: UNTITLED, providerId, model })
+    // The folder the conversation is created in, decided by the rule a turn start uses rather than by a
+    // second one: a session's project is where its work happened, and a conversation started while a
+    // folder is open has happened in that folder. With nothing open there is no project to record —
+    // which is the same absent field a conversation with no turns has, and the reason a brand-new row
+    // is not silently pinned to the last folder anyone opened.
+    const lastRoot = planRootStamp({ sessionLastRoot: undefined, windowRoot: rootPathRef.current })
+    addSession({ id, title: UNTITLED, providerId, model, ...(lastRoot === null ? {} : { lastRoot }) })
     setActive({ id })
     activeIdRef.current = id
     savedRef.current = null

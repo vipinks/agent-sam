@@ -18,12 +18,17 @@ import { chatSessionsStore, type ChatSession } from '../../conveyor/stores/chat-
 import { backdateStore, createStoreHarness } from './chat-sessions-store-harness'
 import {
   groupSessionsByRoot,
+  isGroupCollapsed,
+  planGroupCollapse,
   planRootStamp,
   planSelectRoot,
   planSessionSwitch,
   selectNotice,
+  sessionGroupKey,
+  sessionGroupLabel,
   SELECT_REFUSED_DECISION,
   SELECT_REFUSED_TURN,
+  UNSTAMPED_GROUP_KEY,
 } from '../../app/components/workbench/session-project'
 import { WORKSPACE_MISSING } from '../../conveyor/protocol/recent-roots'
 
@@ -292,6 +297,114 @@ function aGroupIsLabelledWithTheSpellingItsNewestSessionCarries() {
   results.push('grouping: a group takes the newest spelling it holds')
 }
 
+function aGroupIsNamedByItsFolderAndPutAwayByItsKey() {
+  assert.equal(sessionGroupLabel(SAM), 'sam-ai', 'a header names the folder by its last segment')
+  assert.equal(sessionGroupLabel('C:/work/notes/'), 'notes', 'a trailing separator still names the folder')
+  assert.equal(sessionGroupLabel(null), 'No project yet')
+  // The key rather than the label, because the label is not unique: two projects can end in `notes`,
+  // and a collapse written under one of their tails would put both of them away.
+  assert.equal(sessionGroupKey(SAM), SAM)
+  assert.equal(sessionGroupKey(null), UNSTAMPED_GROUP_KEY)
+  results.push('groups: a header is named by its folder, and a collapse is keyed by the project')
+}
+
+function aCollapseIsWrittenUnderTheProjectAndIsTheProjectsOwn() {
+  const collapsed = planGroupCollapse({ root: NOTES, collapsedKeys: [], collapsed: true })
+
+  assert.deepEqual(collapsed, [NOTES])
+  assert.equal(isGroupCollapsed({ root: NOTES, collapsedKeys: collapsed, searching: false }), true)
+  assert.equal(
+    isGroupCollapsed({ root: SAM, collapsedKeys: collapsed, searching: false }),
+    false,
+    'one project’s choice is that project’s alone'
+  )
+  // The same folder spelled another way is the same group: a collapse that stopped applying because
+  // the path arrived with different case would read as the list forgetting what the user just did.
+  assert.equal(isGroupCollapsed({ root: 'c:/WORK/notes', collapsedKeys: collapsed, searching: false }), true)
+  assert.deepEqual(
+    planGroupCollapse({ root: 'c:/WORK/notes', collapsedKeys: collapsed, collapsed: false }),
+    [],
+    'and opening it clears the key however it was spelled'
+  )
+  // The unstamped key names the conversations without a project and no folder at all — the reason it
+  // is the one string a path cannot be.
+  assert.equal(isGroupCollapsed({ root: null, collapsedKeys: [UNSTAMPED_GROUP_KEY], searching: false }), true)
+  assert.equal(
+    isGroupCollapsed({ root: SAM, collapsedKeys: [UNSTAMPED_GROUP_KEY], searching: false }),
+    false,
+    'the open project is not put away by the unstamped group’s key'
+  )
+  results.push('groups: a collapse is the project’s own, and survives another spelling of it')
+}
+
+function aSearchLooksInsideACollapsedGroupAndLeavesItShut() {
+  const collapsed = planGroupCollapse({ root: NOTES, collapsedKeys: [], collapsed: true })
+
+  assert.equal(
+    isGroupCollapsed({ root: NOTES, collapsedKeys: collapsed, searching: true }),
+    false,
+    'a search reaches inside a group the user had put away'
+  )
+  assert.equal(
+    isGroupCollapsed({ root: NOTES, collapsedKeys: collapsed, searching: false }),
+    true,
+    'and the group is still shut once the field is cleared — suspended, not undone'
+  )
+  results.push('search: a search suspends a collapse rather than undoing it')
+}
+
+/**
+ * The create path writes the project with the row.
+ *
+ * A conversation is created in the folder the user is working in, and it carries it from its first
+ * moment: a create followed by a stamp would leave a window in which the new row belongs to nowhere,
+ * and the list would draw it under the wrong header for as long as that lasted.
+ */
+function aConversationIsCreatedInTheFolderItWasStartedIn() {
+  const schema = (chatSessionsStore.schemas as unknown as { addSession: ParsedSchema }).addSession
+
+  const without = schema.safeParse({ id: FIRST, title: 'a title', providerId: 'deepseek', model: 'deepseek-chat' })
+  assert.ok(without.success, 'a conversation created with no folder open is still valid')
+  assert.equal('lastRoot' in (without.data ?? {}), false, 'and no project is invented for it')
+
+  const withRoot = schema.safeParse({
+    id: FIRST,
+    title: 'a title',
+    providerId: 'deepseek',
+    model: 'deepseek-chat',
+    lastRoot: NOTES,
+  })
+  assert.ok(withRoot.success)
+  assert.equal(withRoot.data?.lastRoot, NOTES)
+  assert.equal(
+    schema.safeParse({ id: FIRST, title: 'a title', providerId: 'deepseek', model: 'deepseek-chat', lastRoot: '' })
+      .success,
+    false,
+    'an empty path is not a project'
+  )
+
+  // And the row keeps it, which is what puts it in the open project's group rather than in the one for
+  // the conversations that have no project.
+  const harness = createStoreHarness()
+  harness.run('addSession', {
+    id: THIRD,
+    title: 'work',
+    providerId: 'deepseek',
+    model: 'deepseek-chat',
+    lastRoot: NOTES,
+  })
+  assert.equal(harness.state().sessions.find((row) => row.id === THIRD)?.lastRoot, NOTES)
+  // Additive, like the field itself: an entry written before a create could carry a project is read
+  // back with none, and behaves exactly as it did.
+  harness.run('addSession', { id: SECOND, title: 'legacy', providerId: 'deepseek', model: 'deepseek-chat' })
+  assert.equal(
+    'lastRoot' in (harness.state().sessions.find((row) => row.id === SECOND) ?? {}),
+    false,
+    'a conversation created with nothing open has no project key at all'
+  )
+  results.push('create: a conversation created in a folder belongs to it from its first moment')
+}
+
 // ---------------------------------------------------------------- harness
 
 function main(): void {
@@ -313,6 +426,10 @@ function main(): void {
   step('grouping: order', theOpenProjectComesFirstThenByActivityThenUnstamped)
   step('grouping: one folder', oneFolderIsOneGroupWhateverItsCase)
   step('grouping: label', aGroupIsLabelledWithTheSpellingItsNewestSessionCarries)
+  step('groups: named and keyed', aGroupIsNamedByItsFolderAndPutAwayByItsKey)
+  step('groups: collapse', aCollapseIsWrittenUnderTheProjectAndIsTheProjectsOwn)
+  step('search: collapsed group', aSearchLooksInsideACollapsedGroupAndLeavesItShut)
+  step('create: in the open folder', aConversationIsCreatedInTheFolderItWasStartedIn)
 
   console.log(`session project: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)
