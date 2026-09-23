@@ -187,6 +187,76 @@ describe('the turn-end notice', () => {
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
 
+  it('says the plan is unfinished when the model stopped with steps left, and continues from there', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'plan',
+      plan: [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the table', status: 'interrupted' },
+        { id: 'tests', text: 'Add tests', status: 'pending' },
+      ],
+    })
+    chunk(stub, channel, { type: 'text_delta', text: 'I have started on the table.' })
+    chunk(stub, channel, { type: 'turn_end', cause: 'model_stop' })
+    // The one ending the cause copy words nothing for: the reply arrived complete, and the work did not.
+    chunk(stub, channel, { type: 'turn_end_notice', cause: 'model_stop', resumable: true, unfinishedSteps: 2 })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 2 })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText('Ended with the plan unfinished — 2 steps remain')).toBeTruthy()
+    // No cause line beside it: there is no cut-off reply to explain, and inventing one would be worse
+    // than saying less.
+    expect(screen.queryByText(/Ended early/)).toBeNull()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(starts(stub).length).toBe(2))
+    expect(starts(stub)[1].input?.messages?.at(-1)).toEqual({ role: 'user', content: RESUME_MESSAGE })
+  })
+
+  it('names both when a cut-off reply also left the plan unfinished', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, { type: 'plan', plan: [{ id: 'read', text: 'Read the parser', status: 'in_progress' }] })
+    chunk(stub, channel, { type: 'turn_end', cause: 'truncated' })
+    chunk(stub, channel, { type: 'turn_end_notice', cause: 'truncated', resumable: true, unfinishedSteps: 1 })
+    stub.emit(channel, { type: 'end' })
+
+    // One card, two facts: the reply was cut off, and the work is not done. A user reading either of
+    // them needs the other, and two cards would read as two events.
+    expect(await screen.findByText('Ended early: the reply was cut off (output limit)')).toBeTruthy()
+    expect(await screen.findByText('Ended with the plan unfinished — 1 step remain')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+  })
+
+  it('says a reopened transcript stopped with work on the plan, with nothing to click', async () => {
+    const snapshot: TranscriptSnapshot = {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        { id: 'user-1', role: 'user', content: 'refactor the parser', steps: [] },
+        {
+          id: 'assistant-2',
+          role: 'assistant',
+          content: 'I have started on the table.',
+          steps: [],
+          // What a transcript keeps: the notice without the live flag, so what is read back is news
+          // about a turn that ended rather than an offer about a run that is gone.
+          endNotice: { cause: 'model_stop', unfinishedSteps: 3 },
+        },
+      ],
+    }
+
+    stubChat({ loadTranscript: () => snapshot })
+    renderChat()
+
+    expect(await screen.findByText('Ended with the plan unfinished — 3 steps remain')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
   it('shows the reason a reopened transcript stored, with nothing to click', async () => {
     const snapshot: TranscriptSnapshot = {
       version: TRANSCRIPT_VERSION,

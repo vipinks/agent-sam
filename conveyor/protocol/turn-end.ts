@@ -1,3 +1,5 @@
+import type { PlanStep } from './plan'
+
 /**
  * How a turn ended, and whether there is anything left to continue.
  *
@@ -110,6 +112,56 @@ export function isToolCallCut(payloads: readonly string[]): boolean {
  */
 export function isResumable(cause: TurnEndCause): boolean {
   return cause !== 'model_stop'
+}
+
+/**
+ * What a turn owes the user when it ends with work still on its plan.
+ *
+ * The rule exists because a plan is the one part of a turn that can say "there is more" in the user's
+ * own terms, and a turn that stopped partway through one used to be indistinguishable from a turn that
+ * had finished: the checklist sat there with steps still pending and nothing on screen said the run was
+ * over. A plan that rots quietly is worse than one that failed loudly.
+ *
+ * `cause` is part of the question rather than a switch over the answer. The verdict does not depend on
+ * it — unfinished work is unfinished whether the reply stopped on its own or was cut off, and a rule
+ * that only spoke up for the dramatic ending would be silent exactly where it is needed most — so it is
+ * echoed into the payload and the caller merges one object rather than pairing a payload with the fact
+ * it came from. Said plainly here because it is the sort of parameter a later reader would otherwise
+ * add branches to.
+ */
+export interface PlanUnfinishedNotice {
+  /** The ending this notice belongs to, as it was diagnosed. */
+  cause: TurnEndCause
+  /**
+   * How many steps are not done: work still pending, plus work a reconciled plan marked interrupted.
+   *
+   * Counted from the plan the caller reconciled, never from the plan as it was declared — a step the
+   * turn was midway through is unfinished work, and calling it anything else would report a stopped
+   * turn as having finished what it started.
+   */
+  unfinishedSteps: number
+  /**
+   * Always true, and the reason this notice is said apart from the cause copy.
+   *
+   * An unfinished plan is work that can be picked up whatever the reply did, so the model stopping on
+   * its own is not the end of the matter. `isResumable` answers about the *reply* — a complete answer
+   * has nothing to continue — and this answers about the *work*, which is a different question with a
+   * different answer. Continue is still the user's click: nothing here sends anything.
+   */
+  resumable: true
+}
+
+/**
+ * The notice a plan-shaped ending has earned, or null when there is nothing to announce.
+ *
+ * Null for a turn with no plan and for a plan with every step done, which is what keeps the card off
+ * the overwhelming majority of turns: a notice under every answer is a notice nobody reads.
+ */
+export function planUnfinishedNotice(plan: readonly PlanStep[], cause: TurnEndCause): PlanUnfinishedNotice | null {
+  const unfinishedSteps = plan.filter((step) => step.status !== 'done').length
+  if (unfinishedSteps === 0) return null
+
+  return { cause, unfinishedSteps, resumable: true }
 }
 
 /**

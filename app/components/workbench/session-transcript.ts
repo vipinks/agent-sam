@@ -84,6 +84,7 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
           endNotice: {
             cause: turn.endNotice.cause,
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
+            ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),
           },
         }
       : {}),
@@ -134,6 +135,7 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
             cause: turn.endNotice.cause,
             resumable: false,
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
+            ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),
           },
         }
       : {}),

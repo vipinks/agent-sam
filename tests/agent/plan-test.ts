@@ -130,11 +130,16 @@ const DECLARED: PlanStep[] = [
 async function declaredPlan() {
   const chunks = await runLoop([planCallFrames('call_1', DECLARED), proseFrames('Planned.')])
 
+  // The notice is part of the sequence now, and the plan in it is why: this turn declared two steps
+  // and finished neither, so the ordinary ending is not silent about it any more. The order is what is
+  // asserted — the notice lands between the ending and the `done`, so a client that stopped reading at
+  // `turn_end` would still be handed it.
   assert.deepEqual(
     chunks.map((c) => c.type),
-    ['tool_call_start', 'tool_result', 'plan', 'text_delta', 'turn_end', 'done'],
+    ['tool_call_start', 'tool_result', 'plan', 'text_delta', 'turn_end', 'turn_end_notice', 'done'],
     `unexpected chunk sequence: ${JSON.stringify(chunks.map((c) => c.type))}`
   )
+  assert.equal((chunks[5].unfinishedSteps as number) ?? null, 2, 'and it names the two steps the turn left open')
 
   // The exemption, asserted rather than assumed: an ungated call is the whole reason a plan can be
   // declared mid-turn without the run stopping to ask.

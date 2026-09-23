@@ -12,7 +12,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeTool, needsApproval, runAgentLoop, TOOL_DEFINITIONS } from '../../conveyor/modules/agent'
-import { AGENT_SYSTEM_PROMPT, agentSystemPrompt, POWERSHELL_SHELL_NOTE } from '../../conveyor/protocol/context'
+import {
+  AGENT_SYSTEM_PROMPT,
+  agentSystemPrompt,
+  PLAN_DISCIPLINE_NOTE,
+  POWERSHELL_SHELL_NOTE,
+} from '../../conveyor/protocol/context'
 import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
 import { resolveWorkspacePath } from '../../conveyor/modules/workspace-paths'
 
@@ -852,13 +857,28 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
  */
 async function windowsIsToldItsShell() {
   // The rule first. One line, on win32 only, and once — a prompt that said it twice would spend the
-  // same budget twice on one sentence.
+  // same budget twice on one sentence. The plan-discipline line is part of the same composed prompt
+  // and is on every platform, so it is asserted beside the shell line rather than separately: what
+  // matters here is that one message carries each of them exactly once.
   const win = agentSystemPrompt('win32')
   assert.ok(win.startsWith(AGENT_SYSTEM_PROMPT), 'the standing instruction still leads the prompt')
   assert.equal(win.split(POWERSHELL_SHELL_NOTE).length - 1, 1, 'the shell line appears exactly once on win32')
   assert.ok(/powershell/i.test(POWERSHELL_SHELL_NOTE), 'and names the shell the terminal actually is')
-  assert.equal(agentSystemPrompt('linux'), AGENT_SYSTEM_PROMPT, 'off win32 the prompt is the base line alone')
-  assert.equal(agentSystemPrompt('darwin'), AGENT_SYSTEM_PROMPT, 'on every other platform too')
+  assert.equal(
+    win.split(PLAN_DISCIPLINE_NOTE).length - 1,
+    1,
+    'and the plan-discipline line appears exactly once, beside it'
+  )
+  assert.equal(
+    agentSystemPrompt('linux'),
+    `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}`,
+    'off win32 the prompt is the two platform-independent lines'
+  )
+  assert.equal(
+    agentSystemPrompt('darwin'),
+    agentSystemPrompt('linux'),
+    'and on every other platform too — the shell line is the only platform-detected part'
+  )
 
   const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
   try {
@@ -881,6 +901,11 @@ async function windowsIsToldItsShell() {
     const sent = systemMessages(log)
     assert.equal(sent.length, 1, 'the standing instruction is the only system message here')
     assert.equal(sent[0].split(POWERSHELL_SHELL_NOTE).length - 1, 1, 'the shell line reaches the provider exactly once')
+    assert.equal(
+      sent[0].split(PLAN_DISCIPLINE_NOTE).length - 1,
+      1,
+      'and the plan-discipline line does too, in the same message'
+    )
 
     // And a resumed run re-enters with the history the pause handed back, which already carries the
     // composed prompt: the injection is refused on that fact, so the line is not sent a second time.

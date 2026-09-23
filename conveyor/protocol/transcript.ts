@@ -105,11 +105,22 @@ const turnSchema = z.object({
    * conversation is reopened, and it is not derivable from the reply's own cause — a turn can be cut
    * off, or asked a question, or both.
    *
-   * Optional, and it did not bump the version for the same reason the plan and the instructions record
-   * did not: a file written before this existed simply has no key, and an absent optional key is
+   * `unfinishedSteps` is the other, and it is stored for the same reason: a reopened conversation
+   * should still say that the turn stopped with work on the plan, which is the one thing about it a
+   * reader cannot reconstruct from the reply.
+   *
+   * Optional, and neither flag bumped the version for the same reason the plan and the instructions
+   * record did not: a file written before this existed simply has no key, and an absent optional key is
    * stripped rather than defaulted, so old files stay valid reads.
    */
-  endNotice: z.object({ cause: z.enum(TURN_END_CAUSES), lostPending: z.boolean().optional() }).optional(),
+  endNotice: z
+    .object({
+      cause: z.enum(TURN_END_CAUSES),
+      lostPending: z.boolean().optional(),
+      /** Positive by construction: a notice saying zero steps remain is the absent key. */
+      unfinishedSteps: z.number().int().positive().optional(),
+    })
+    .optional(),
 })
 
 /**

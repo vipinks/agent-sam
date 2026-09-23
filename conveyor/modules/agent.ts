@@ -13,9 +13,17 @@ import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
 import { instructionsFileName, planAgentPrompt, planSystemInjection } from '../protocol/context'
-import { isResumable, isToolCallCut, turnEndCause, type TurnEndCause } from '../protocol/turn-end'
+import { isResumable, isToolCallCut, planUnfinishedNotice, turnEndCause, type TurnEndCause } from '../protocol/turn-end'
 import { assembleMentionContext, MAX_MENTION_PATHS, type MentionSkipCode } from '../protocol/mentions'
-import { MAX_PLAN_STEPS, mergePlan, normalizePlan, planStepSchema, type Plan, type PlanStep } from '../protocol/plan'
+import {
+  MAX_PLAN_STEPS,
+  mergePlan,
+  normalizePlan,
+  planStepSchema,
+  reconcilePlanOnTurnEnd,
+  type Plan,
+  type PlanStep,
+} from '../protocol/plan'
 import { readMentions } from './mentions'
 
 /**
@@ -395,6 +403,14 @@ export type AgentChunk =
        */
       diff?: FileDiff
       /**
+       * The plan the turn had in hand when it paused, as the checklist is showing it.
+       *
+       * Carried because the run does not survive the pause: the resumed stream is a new generator,
+       * and a turn that came back with an empty plan would finish mid-plan and report nothing about
+       * it. Handed back untouched on resume, like the history beside it.
+       */
+      plan: PlanStep[]
+      /**
        * The conversation so far, including the assistant turn that asked for this call. The renderer
        * hands this back untouched on resume, so the provider-shaped history never has to be
        * reconstructed on the UI side.
@@ -428,8 +444,14 @@ export type AgentChunk =
    * the Continue button reads, and it stays off the auto-continue path deliberately: the app never
    * sends the next message on its own, and a turn that continued itself would spend the user's
    * budget on a conversation they did not ask to continue.
+   *
+   * `unfinishedSteps` is what a plan-shaped ending adds to the same chunk rather than travelling in a
+   * second one: a cut-off reply under an unfinished plan is one ending with two things true about it,
+   * and two cards would read as two events. Its presence is what tells the card to say the work is not
+   * done, and — unlike `resumable` — a complete answer can carry it, because work left undone is a
+   * reason to continue that has nothing to do with how the reply ended.
    */
-  | { type: 'turn_end_notice'; cause: TurnEndCause; resumable: boolean }
+  | { type: 'turn_end_notice'; cause: TurnEndCause; resumable: boolean; unfinishedSteps?: number }
   | { type: 'done'; reason: 'complete' | 'max_steps'; steps: number }
 
 /** A tool call as it is being assembled from stream fragments. */
@@ -544,7 +566,8 @@ async function presentCall(
   queue: ToolCall[],
   history: ChatMessage[],
   steps: number,
-  workspaceRoot: string | null
+  workspaceRoot: string | null,
+  plan: readonly PlanStep[]
 ): Promise<AgentChunk> {
   const call = queue[0]
   const tool = call.function.name
@@ -557,8 +580,52 @@ async function presentCall(
     diff: await previewWriteDiff(workspaceRoot, tool, call.function.arguments),
     calls: queue,
     messages: history.map((m) => ({ ...m })),
+    plan: plan.map((step) => ({ ...step })),
     steps,
   }
+}
+
+/**
+ * End the turn here, and say what the ending owes the user.
+ *
+ * The one place a turn ends in this loop: an ending that runs out of output room, an ending that is
+ * the model's own answer, and an ending that hits the step budget all come through here, so no way
+ * out can leave a plan claiming work is under way while another way out would have reconciled it. A
+ * pause does not come through here — a pause ends the stream, not the turn — which is why the caller
+ * that presents a call returns before reaching this.
+ *
+ * The plan is reconciled rather than reported as declared: a turn that has ended cannot have a step
+ * in progress, and the notice counts the reconciled plan, so a step stopped midway through is counted
+ * as the unfinished work it is instead of being reported as done.
+ */
+async function* finishTurn(
+  plan: Plan,
+  cause: TurnEndCause,
+  steps: number,
+  reason: 'complete' | 'max_steps' | null
+): AsyncGenerator<AgentChunk, void, undefined> {
+  const reconciled = reconcilePlanOnTurnEnd(plan)
+  yield { type: 'turn_end', cause }
+
+  // Two ways a turn earns something said about it, merged into one card: the reply that stopped
+  // arriving, and the work that is not done. A turn can be both, and a user reading one of them still
+  // needs the other, so they travel in the same chunk rather than as two rows.
+  const unfinished = planUnfinishedNotice(reconciled, cause)
+  if (unfinished) {
+    yield {
+      type: 'turn_end_notice',
+      cause,
+      resumable: unfinished.resumable,
+      unfinishedSteps: unfinished.unfinishedSteps,
+    }
+  } else if (cause !== 'model_stop') {
+    // The reply's own ending, when there is no plan to speak for. An ordinary ending with a finished
+    // plan is still the one ending that says nothing: the card exists for the turns that need
+    // explaining, and a row under every answer is how it stops being read.
+    yield { type: 'turn_end_notice', cause, resumable: isResumable(cause) }
+  }
+
+  if (reason !== null) yield { type: 'done', reason, steps }
 }
 
 /**
@@ -606,6 +673,13 @@ interface LoopOptions {
   steps?: number
   pending?: PendingDecision
   /**
+   * The plan the turn had in hand when it paused, on a resumed run.
+   *
+   * A resumed run is the same turn continuing, so its plan comes back with it: a resume that started
+   * from an empty plan would report a turn that had done nothing as having nothing left to do.
+   */
+  plan?: readonly PlanStep[]
+  /**
    * The platform the run is on, which decides what the terminal is.
    *
    * Injected for the same reason `fetchImpl` is: the standing instruction's shell line is
@@ -633,9 +707,10 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
 
   // The plan in hand, carried across the round-trips of this run so each declaration merges over the
   // last rather than replacing it. A frame that names three of six steps therefore cannot shrink the
-  // checklist to three. It starts empty and is not persisted here: the renderer owns the turn, and a
-  // turn is what a transcript stores.
-  let plan: Plan = []
+  // checklist to three. It is not persisted here: the renderer owns the turn, and a turn is what a
+  // transcript stores. A resumed run starts from the plan the pause handed back, because it is the
+  // same turn continuing — starting empty would let a turn finish mid-plan and say nothing about it.
+  let plan: Plan = opts.plan ? opts.plan.map((step) => ({ ...step })) : []
 
   // The project instructions, read fresh on every send rather than kept anywhere.
   //
@@ -736,14 +811,18 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
 
     if (next.kind === 'present') {
       const index = queue.findIndex((call) => call.id === next.callId)
-      yield await presentCall(queue.slice(index), history, steps, opts.workspaceRoot)
+      yield await presentCall(queue.slice(index), history, steps, opts.workspaceRoot, plan)
       return
     }
   }
 
   for (;;) {
     if (steps >= MAX_STEPS) {
-      yield { type: 'done', reason: 'max_steps', steps }
+      // The budget ran out, which is an ending like any other: whatever the plan still holds is work
+      // the turn did not do, and this is the ending a user is least able to see for themselves. The
+      // cause is the ordinary one — the last reply arrived complete; it was the loop that stopped —
+      // so the cause copy says nothing and the plan is what the card is about.
+      yield* finishTurn(plan, 'model_stop', steps, 'max_steps')
       return
     }
     steps += 1
@@ -822,17 +901,17 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // the model asked for: the calls it asked for in the same breath arrived alongside a reply the
     // provider had already stopped writing, so running them would be acting on half a request. The
     // notice is the announcement; whether to continue is the user's click, and `resumable` is what
-    // the button reads.
+    // the button reads. A cut-off turn asked for no further work, so it yields no `done` chunk.
     if (cause !== 'model_stop') {
-      yield { type: 'turn_end', cause }
-      yield { type: 'turn_end_notice', cause, resumable: isResumable(cause) }
+      yield* finishTurn(plan, cause, steps, null)
       return
     }
 
-    // No tools asked for: this is the model's answer, and the loop is finished.
+    // No tools asked for: this is the model's answer, and the loop is finished. It is still an ending
+    // a plan can make unfinished — a model that stops on its own mid-plan has stopped mid-task — and
+    // that is the case the card exists for.
     if (calls.length === 0) {
-      yield { type: 'turn_end', cause }
-      yield { type: 'done', reason: 'complete', steps }
+      yield* finishTurn(plan, cause, steps, 'complete')
       return
     }
 
@@ -876,7 +955,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // presented. `resume` answers that one call, then presents the next, and so on until the frame is
     // settled — so the run continues rather than restarting this round-trip.
     if (gated.length > 0) {
-      yield await presentCall(gated, history, steps, opts.workspaceRoot)
+      yield await presentCall(gated, history, steps, opts.workspaceRoot, plan)
       return
     }
   }
@@ -975,6 +1054,14 @@ export const agentModule = defineModule({
        */
       calls: z.array(callSchema).min(1, 'At least one call must be answered'),
       steps: z.number().int().min(0).optional(),
+      /**
+       * The plan the pause handed over, handed straight back.
+       *
+       * Validated as a plan and not trusted: this crosses the IPC boundary, and the checklist it
+       * becomes is rendered from it. Capped like a declaration, because the two are the same list seen
+       * at two moments.
+       */
+      plan: z.array(planStepSchema).max(MAX_PLAN_STEPS).optional(),
       decision: z.enum(['approved', 'denied']),
       /** The same descriptor the run started with: a resumed turn is the same turn. */
       provider: z.unknown().optional(),
@@ -991,6 +1078,9 @@ export const agentModule = defineModule({
         autoApprove: input.autoApprove ?? false,
         signal,
         steps: input.steps ?? 0,
+        // The plan the pause handed back, so the turn that continues is the turn it was. Absent on a
+        // resume from a turn that had declared none, which is a turn with nothing to carry.
+        ...(input.plan ? { plan: input.plan } : {}),
         pending: {
           calls: input.calls as ToolCall[],
           denied: input.decision === 'denied',

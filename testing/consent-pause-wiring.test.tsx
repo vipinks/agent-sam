@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider, useChatSessionsContext } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '@/conveyor/protocol/transcript'
+import { agentSystemPrompt, PLAN_DISCIPLINE_NOTE } from '@/conveyor/protocol/context'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -166,9 +167,26 @@ function plan(steps: Array<{ id: string; text: string; status: string }>) {
   return { type: 'plan', plan: steps }
 }
 
-/** The pause chunk, with whatever the shape under test puts in it. */
+/**
+ * A pause as main sends one.
+ *
+ * The messages are the provider-shaped history main was holding, standing instruction and all — that
+ * is what the decision hands back, so a stub that sent an empty list would test the queue and not the
+ * echo.
+ */
 function pause(overrides: Record<string, unknown>): Record<string, unknown> {
-  return { type: 'awaiting_approval', tool: 'write_file', args: {}, messages: [], steps: 1, ...overrides }
+  return {
+    type: 'awaiting_approval',
+    tool: 'write_file',
+    args: {},
+    messages: [
+      { role: 'system', content: agentSystemPrompt(process.platform) },
+      { role: 'user', content: 'refactor the parser' },
+    ],
+    steps: 1,
+    plan: [],
+    ...overrides,
+  }
 }
 
 /** The content the composer is offering to send, which is how a blocked pane shows itself. */
@@ -236,6 +254,14 @@ describe('a consent pause', () => {
     expect(resume.member.startsWith('agent.resume#')).toBe(true)
     expect(resume.input.decision).toBe('approved')
     expect((resume.input.calls as Array<{ id: string }>).map((c) => c.id)).toEqual(['c1', 'c2'])
+
+    // The history goes back exactly as main handed it over — including the standing instruction main
+    // composed into it. The renderer injects nothing of its own, which is what keeps a resumed run
+    // from being sent the same prompt twice; the line is asserted here because *this* echo is the
+    // renderer's only opportunity to get it wrong.
+    const echoed = resume.input.messages as Array<{ role: string; content: string }>
+    expect(echoed.filter((m) => m.role === 'system').length).toBe(1)
+    expect(echoed.filter((m) => m.content.includes(PLAN_DISCIPLINE_NOTE)).length).toBe(1)
   })
 
   it('advances the queue when the head is answered', async () => {

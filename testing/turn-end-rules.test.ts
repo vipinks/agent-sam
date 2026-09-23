@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 import {
   isResumable,
   isToolCallCut,
+  planUnfinishedNotice,
   RESUME_MESSAGE,
   TURN_END_CAUSES,
   turnEndCause,
@@ -104,6 +106,42 @@ describe('isResumable', () => {
   it('answers for every cause in the vocabulary, so a new one cannot be forgotten', () => {
     const answers = TURN_END_CAUSES.map((cause: TurnEndCause) => isResumable(cause))
     expect(answers).toEqual([false, true, true])
+  })
+})
+
+describe('planUnfinishedNotice', () => {
+  const step = (id: string, status: PlanStep['status']): PlanStep => ({ id, text: id, status })
+
+  it('announces a plan that stopped partway, and counts what is left', () => {
+    const plan = reconcilePlanOnTurnEnd([step('a', 'done'), step('b', 'in_progress'), step('c', 'pending')])
+    expect(planUnfinishedNotice(plan, 'model_stop')).toEqual({
+      cause: 'model_stop',
+      unfinishedSteps: 2,
+      resumable: true,
+    })
+  })
+
+  it('counts a step the turn was midway through as unfinished, not as work it finished', () => {
+    const plan = reconcilePlanOnTurnEnd([step('a', 'in_progress')])
+    expect(plan.map((s) => s.status)).toEqual(['interrupted'])
+    expect(planUnfinishedNotice(plan, 'model_stop')?.unfinishedSteps).toBe(1)
+  })
+
+  it('speaks up for every cause, including the ordinary ending', () => {
+    // The whole reason this rule is not folded into the cause copy: a model that stops on its own
+    // with work left on the plan has stopped mid-task, and that is exactly the turn that used to end
+    // in silence.
+    const plan = [step('a', 'pending')]
+    for (const cause of TURN_END_CAUSES) {
+      expect(planUnfinishedNotice(plan, cause)?.resumable).toBe(true)
+      expect(planUnfinishedNotice(plan, cause)?.cause).toBe(cause)
+    }
+  })
+
+  it('says nothing for a plan with every step done, or for no plan at all', () => {
+    expect(planUnfinishedNotice([step('a', 'done'), step('b', 'done')], 'model_stop')).toBeNull()
+    expect(planUnfinishedNotice([], 'truncated')).toBeNull()
+    expect(planUnfinishedNotice([], 'model_stop')).toBeNull()
   })
 })
 

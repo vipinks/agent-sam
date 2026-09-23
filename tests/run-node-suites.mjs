@@ -34,6 +34,7 @@ const SUITES = [
   { name: 'tool protocol (batch)', src: 'agent/agent-protocol2-test.ts' },
   { name: 'agent plan', src: 'agent/plan-test.ts' },
   { name: 'turn end diagnosis', src: 'agent/turn-end-test.ts' },
+  { name: 'plan-unfinished notice', src: 'agent/plan-unfinished-test.ts' },
   { name: 'workspace events', src: 'agent/events-test.ts' },
   { name: 'engine tests', src: 'llm/engine-test.ts' },
   { name: 'models engine', src: 'llm/models-test.ts' },

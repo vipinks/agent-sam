@@ -1,7 +1,7 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
-import { TURN_END_CAUSES, type TurnEndCause } from '@/conveyor/protocol/turn-end'
+import { planUnfinishedNotice, TURN_END_CAUSES, type TurnEndCause } from '@/conveyor/protocol/turn-end'
 
 /** The call exactly as the model sent it, as the pause hands it over. */
 export interface PendingCall {
@@ -128,6 +128,14 @@ export interface TurnEndNotice {
    * that it ended without them, not how many calls were behind it.
    */
   lostPending?: boolean
+  /**
+   * Work the turn left undone, as the plan's own steps counted it.
+   *
+   * Absent for every ending that was about the reply alone. Present for the endings where the more
+   * important fact is that the task is unfinished — including, and especially, the one where the reply
+   * arrived complete and the model simply stopped mid-plan.
+   */
+  unfinishedSteps?: number
 }
 
 /**
@@ -201,6 +209,13 @@ export interface AgentChunkEffect {
     steps: number
     /** The change a gated `write_file` would make, when main could compute one. */
     diff?: FileDiff
+    /**
+     * The plan the turn had in hand when it paused.
+     *
+     * Carried so the resumed run is the same turn: the pane hands it straight back on the decision,
+     * or the turn would come back with an empty plan and finish mid-plan without saying so.
+     */
+    plan: PlanStep[]
   }
   done?: { reason: 'complete' | 'max_steps' }
   /**
@@ -217,7 +232,7 @@ export interface AgentChunkEffect {
    * Separate from `turnEnd` because the two are shown differently: the cause is the diagnosis, and
    * this is the decision to put it in front of the user.
    */
-  turnEndNotice?: { cause: TurnEndCause; resumable: boolean }
+  turnEndNotice?: TurnEndNotice
 }
 
 let counter = 0
@@ -467,6 +482,9 @@ export function applyAgentChunk(
       const messages = Array.isArray(c.messages) ? (c.messages as ChatMessage[]) : []
       const steps = typeof c.steps === 'number' ? c.steps : 0
       const diff = isFileDiff(c.diff) ? c.diff : undefined
+      // The plan the turn paused with, read through the same rule the plan chunk uses: this crosses
+      // IPC, and a resumed run is handed it back as the plan it continues from.
+      const plan = Array.isArray(c.plan) ? (c.plan as PlanStep[]) : []
       // A pause without any usable call cannot be resumed, so it is not reported as one: the card
       // would otherwise sit awaiting a decision that could never be carried out.
       const calls = Array.isArray(c.calls) ? (c.calls as PendingCall[]).filter((call) => call && call.id) : []
@@ -496,7 +514,7 @@ export function applyAgentChunk(
       }
       return {
         turns: next,
-        effect: { approval: { callId: headId || callId, tool: String(c.tool), messages, calls, steps, diff } },
+        effect: { approval: { callId: headId || callId, tool: String(c.tool), messages, calls, steps, diff, plan } },
       }
     }
 
@@ -518,9 +536,15 @@ export function applyAgentChunk(
       const cause = asTurnEndCause(c.cause)
       if (!cause) return { turns, effect: {} }
       const resumable = c.resumable === true
+      // The plan's half of the notice, when it came with one. Read as a count only: a chunk claiming
+      // no unfinished steps is the same as one that said nothing, so it cannot put a card on screen
+      // for a turn that owes no such news.
+      const unfinishedSteps =
+        typeof c.unfinishedSteps === 'number' && c.unfinishedSteps > 0 ? c.unfinishedSteps : undefined
+      const notice: TurnEndNotice = { cause, resumable, ...(unfinishedSteps ? { unfinishedSteps } : {}) }
       return {
-        turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, endNotice: { cause, resumable } })),
-        effect: { turnEndNotice: { cause, resumable } },
+        turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, endNotice: notice })),
+        effect: { turnEndNotice: notice },
       }
     }
 
@@ -607,6 +631,37 @@ export function noteContextSkip(turns: AgentTurn[], turnId: string, notice: Cont
  */
 export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
   return replaceTurn(turns, turnId, (turn) => (turn.plan ? { ...turn, plan: reconcilePlanOnTurnEnd(turn.plan) } : turn))
+}
+
+/**
+ * End a turn in the pane: reconcile its plan, and record the notice that plan has earned.
+ *
+ * The renderer's half of the one turn-end path, and the same rule main's `finishTurn` applies — an
+ * ending must not depend on which side happened to notice it. It is needed here because two endings
+ * never reach main at all: a run the user stopped, which unwinds the stream instead of finishing it,
+ * and a denial, which ends the turn where it stands. Both are exactly the case a plan makes visible,
+ * and before this a stopped turn mid-plan went entirely unsaid.
+ *
+ * A notice already on the turn is left alone: that one is the diagnosis of the reply, and a second
+ * card claiming the same ending would be the same news twice. A turn whose plan is finished is left
+ * alone too, which is what keeps the card off the ordinary ending.
+ *
+ * The cause defaults to the ordinary one, and the ordinary one words nothing: for these two endings
+ * there is no reply to diagnose, and naming one that did not happen would be worse than saying less.
+ * What the card is about in both cases is the work.
+ */
+export function endTurn(turns: AgentTurn[], turnId: string, cause: TurnEndCause = 'model_stop'): AgentTurn[] {
+  const ended = endTurnPlan(turns, turnId)
+  const turn = ended.find((t) => t.id === turnId)
+  if (!turn || turn.endNotice) return ended
+
+  const notice = planUnfinishedNotice(turn.plan ?? [], cause)
+  if (!notice) return ended
+
+  return replaceTurn(ended, turnId, (t) => ({
+    ...t,
+    endNotice: { cause: notice.cause, resumable: notice.resumable, unfinishedSteps: notice.unfinishedSteps },
+  }))
 }
 
 /**

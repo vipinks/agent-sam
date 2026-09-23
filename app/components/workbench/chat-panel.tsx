@@ -31,6 +31,7 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
+import type { PlanStep } from '@/conveyor/protocol/plan'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
   ABANDONED_PAUSE_CODE,
@@ -38,7 +39,7 @@ import {
   applyAgentChunk,
   currentEndNotice,
   currentPlan,
-  endTurnPlan,
+  endTurn,
   noteContextSkip,
   resolveDecision,
   startAssistantTurn,
@@ -120,6 +121,14 @@ interface PendingApproval {
    */
   calls: PendingCall[]
   steps: number
+  /**
+   * The plan the turn had when it paused, handed back on the decision.
+   *
+   * The run behind a pause does not survive its stream ending, so the plan is the pane's to keep:
+   * without it the resumed turn would come back with an empty plan and finish mid-plan in silence —
+   * which is exactly the ending this notice exists to make sayable.
+   */
+  plan: PlanStep[]
 }
 
 /**
@@ -498,19 +507,6 @@ export function ChatPanel() {
   }, [])
 
   /**
-   * End the turn the pane is filling in.
-   *
-   * The one place a turn ends here: the stream's own ending, a run the user stopped, and a denial that
-   * ends the turn where it stands all come through it, so no ending can leave a plan claiming work is
-   * under way while another ending would have reconciled it. A pause is the exception, and it is the
-   * caller's to except: a pause ends the stream, not the turn, because the decision resumes it.
-   */
-  const endTurn = useCallback(
-    (turns: AgentTurn[], turnId: string) => updateMessages(endTurnPlan(turns, turnId)),
-    [updateMessages]
-  )
-
-  /**
    * Drive one agent stream to its end.
    *
    * Every chunk is handed to the reducer, which owns what the transcript looks like. The only chunk
@@ -576,6 +572,7 @@ export function ChatPanel() {
                 messages: approval.messages,
                 calls: approval.calls,
                 steps: approval.steps,
+                plan: approval.plan,
               },
             }))
             sessionsRef.current.setLivePause(sessionId, true)
@@ -600,12 +597,13 @@ export function ChatPanel() {
         streamingTurnIdRef.current = null
         setIsStreaming(false)
         // The turn is over — answered, failed, or stopped — so a plan that still claims a step is in
-        // progress is corrected here, at the one place every ending passes through. A pause is the
-        // exception, because the turn it belongs to has not ended.
-        if (!paused) endTurn(messagesRef.current, turnId)
+        // progress is corrected here, at the one place every ending passes through, and a plan with
+        // work left on it gets the notice it has earned. A pause is the exception, because the turn it
+        // belongs to has not ended.
+        if (!paused) updateMessages(endTurn(messagesRef.current, turnId))
       }
     },
-    [drainNow, endTurn, enqueue, providerName, stickToBottom, updateMessages]
+    [drainNow, enqueue, providerName, stickToBottom, updateMessages]
   )
 
   /**
@@ -846,8 +844,10 @@ export function ChatPanel() {
         // user: they are recorded as undecided so the transcript stops showing a question waiting on a
         // run that is over. The tool-call contract is not broken by this — a turn that has ended asks
         // the model nothing further, and the next message reads the transcript as text, not as raw
-        // frames — so ending here costs nothing and is the honest record of what happened.
-        endTurn(abandonUndecidedCalls(decided, current.turnId, ABANDONED_PAUSE_CODE), current.turnId)
+        // frames — so ending here costs nothing and is the honest record of what happened. The ending
+        // goes through the one turn-end path, which is what tells the user what the plan was waiting
+        // on.
+        updateMessages(endTurn(abandonUndecidedCalls(decided, current.turnId, ABANDONED_PAUSE_CODE), current.turnId))
         sessionsRef.current.scheduleSave()
         return
       }
@@ -871,6 +871,9 @@ export function ChatPanel() {
           autoApprove,
           calls: current.calls,
           steps: current.steps,
+          // The plan the pause handed over, handed straight back: a resumed turn is the same turn, and
+          // one that came back with no plan could not report the work it left undone.
+          plan: current.plan,
           decision: 'approved',
         }),
         current.turnId,
@@ -884,7 +887,6 @@ export function ChatPanel() {
       activeModel,
       activeProviderId,
       autoApprove,
-      endTurn,
       isStreaming,
       pending,
       rootPath,

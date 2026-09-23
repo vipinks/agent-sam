@@ -37,6 +37,21 @@ export const AGENT_SYSTEM_PROMPT =
   'Keep any narration between tool calls to two sentences or fewer, and emit the tool call early.'
 
 /**
+ * The one line that keeps the checklist honest while the work is happening.
+ *
+ * A plan is only worth reading if it says what is true now, and the model is the only thing that knows
+ * a step is finished at the moment it finishes: it moves on to the next step's work in the same breath
+ * as it stops working on the last one, so a plan updated afterwards is a plan that lags the run. The
+ * same goes for a step that turned out not to be doable — an interrupted step is a fact the user needs
+ * while the turn is still going, not after it has stopped.
+ *
+ * One line, and it says both halves: *when* to call it and *why then* — before starting the next step's
+ * work. Ordering is the part that is easy to get wrong and easy to state.
+ */
+export const PLAN_DISCIPLINE_NOTE =
+  "Call set_plan immediately when a step transitions to done or interrupted, before beginning the next step's work."
+
+/**
  * The one extra line a Windows machine needs: what its terminal actually is.
  *
  * Live use found this the expensive way — most Windows sessions opened with a bash-ism (`&&`, `ls`,
@@ -55,14 +70,22 @@ export const POWERSHELL_SHELL_NOTE =
 /**
  * The agent's standing instruction as the platform composes it.
  *
- * The base line plus, on Windows only, the shell note: a platform-detected addition rather than a
- * second message, so the injection rule still decides one thing — is the standing instruction already
- * in this history — instead of one thing per platform. The platform is a required argument rather
- * than a defaulted `process.platform` because this module is shared with the renderer, where
- * `process` is not the main process's; the caller that runs in main is the side that knows.
+ * The base line, the plan discipline line, and on Windows only the shell note: additions composed
+ * into one message rather than sent as their own, so the injection rule still decides one thing — is
+ * the standing instruction already in this history — instead of one thing per line, and so a resumed
+ * run that already carries the composed prompt is not given a second copy of part of it. The platform
+ * is a required argument rather than a defaulted `process.platform` because this module is shared with
+ * the renderer, where `process` is not the main process's; the caller that runs in main is the side
+ * that knows.
+ *
+ * The discipline line is here rather than beside the plan rules because it is an instruction to the
+ * model, not a rule the app enforces: nothing can make the model call `set_plan` on time, and what the
+ * app can do — notice an unfinished plan at turn end and say so — is the notice this line exists to
+ * make unnecessary.
  */
 export function agentSystemPrompt(platform: NodeJS.Platform): string {
-  return platform === 'win32' ? `${AGENT_SYSTEM_PROMPT}\n${POWERSHELL_SHELL_NOTE}` : AGENT_SYSTEM_PROMPT
+  const base = `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}`
+  return platform === 'win32' ? `${base}\n${POWERSHELL_SHELL_NOTE}` : base
 }
 
 /**

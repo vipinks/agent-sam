@@ -21,8 +21,13 @@ import { Button } from '../ui/button'
  * that matters indistinguishable from the noise.
  *
  * A notice can say more than one thing, which is why the lines are a list rather than a single
- * sentence: a turn whose reply was cut off *and* whose consent pause ended with the process is one
- * card that reports both, because a user reading one of them still needs the other.
+ * sentence: a turn whose reply was cut off *and* whose plan is unfinished is one card that reports
+ * both, because a user reading one of them still needs the other.
+ *
+ * The plan's line is the one this card exists for. A model that stops on its own with work left on its
+ * plan has the ordinary ending and an unfinished task, and the cause copy is silent for it — so the
+ * only thing that can stop that turn from ending in silence is the plan's own sentence, and it is what
+ * makes the Continue button worth offering for a reply that was never cut off.
  */
 
 /** What each ending says. `null` for the ending that says nothing. */
@@ -35,6 +40,17 @@ const WORDING: Record<TurnEndCause, string | null> = {
 /** A consent pause the process did not survive, which is not a reply that stopped arriving. */
 const LOST_PENDING = 'Ended while waiting for your approval — the app closed before you answered.'
 
+/**
+ * The plan that was not finished, which is not the same news as the reply stopping.
+ *
+ * Counted in steps rather than described, because the checklist above the card is already the
+ * description and repeating it here would be the same list twice. What the number adds is that the
+ * turn is over — which is the one thing the checklist cannot say for itself.
+ */
+function unfinishedCopy(steps: number): string {
+  return `Ended with the plan unfinished — ${steps} ${steps === 1 ? 'step' : 'steps'} remain`
+}
+
 export function TurnEndNotice({
   notice,
   onContinue,
@@ -45,9 +61,11 @@ export function TurnEndNotice({
 }) {
   if (!notice) return null
 
-  const lines = [WORDING[notice.cause], notice.lostPending === true ? LOST_PENDING : null].filter(
-    (line): line is string => line !== null
-  )
+  const lines = [
+    WORDING[notice.cause],
+    notice.unfinishedSteps === undefined ? null : unfinishedCopy(notice.unfinishedSteps),
+    notice.lostPending === true ? LOST_PENDING : null,
+  ].filter((line): line is string => line !== null)
   // Nothing to read for this ending — the ordinary one — so nothing on screen. The card exists for the
   // endings that need explaining, and a row under every answer is how it stops being read.
   if (lines.length === 0) return null
