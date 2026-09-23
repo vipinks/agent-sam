@@ -8,10 +8,11 @@ import {
   serializeTranscript,
   type TranscriptState,
 } from './session-transcript'
-import { resumeTurnNumbering } from './agent-session'
+import { resumeTurnNumbering, type PendingCall } from './agent-session'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
+import type { PlanStep } from '@/conveyor/protocol/plan'
 
 /**
  * The coordination between the session list, the transcript on screen, and the file it is saved to.
@@ -29,6 +30,54 @@ import { planFirstSend, planResumeFinish, planResumeStart } from './session-resu
 export interface SessionError {
   id: string
   message: string
+}
+
+/**
+ * What the agent is paused on, and everything needed to continue it.
+ *
+ * Owned here, beside the transcript, and not by the pane that is showing the card — which is the whole
+ * point of the type living in this file. A consent pause is a question about one conversation, and the
+ * pane is not the conversation: the workbench keys its resize groups on the window state, so a maximize
+ * or a restore remounts every pane under them, and a pause held in a pane's own state would be answered
+ * by a remount rather than by the user. The run behind a pause does not survive the pause either — the
+ * stream ended and the decision starts a new one — so there is nothing in the pane to lose by keeping
+ * the fact above it, and everything to lose by keeping it inside.
+ *
+ * Carries the session it belongs to, because a pause is a fact about a conversation: the user can
+ * switch to another one while this is still waiting, and the decision has to still be here when they
+ * come back rather than blocking a conversation it has nothing to do with.
+ */
+export interface PendingApproval {
+  /** The conversation this pause was asked in. */
+  sessionId: string
+  turnId: string
+  /** The one call this decision is about; the rest of `calls` are queued behind it. */
+  callId: string
+  tool: string
+  /** The provider-shaped history the run handed over, echoed back untouched on resume. */
+  messages: unknown[]
+  /**
+   * The frame's calls still awaiting a decision, this one first, as the model sent them. The decision
+   * answers only the head; the loop presents the next one when this stream ends.
+   */
+  calls: PendingCall[]
+  steps: number
+  /**
+   * Auto-continuations the turn had already spent when it paused, handed back like the plan.
+   *
+   * The budget belongs to the user's turn, not to one generator, so an approval must not refund it: a
+   * turn that came back with a fresh count could continue itself past the cap on every permission the
+   * model asked for.
+   */
+  continuations: number
+  /**
+   * The plan the turn had when it paused, handed back on the decision.
+   *
+   * The run behind a pause does not survive its stream ending, so the plan is the pane's to keep:
+   * without it the resumed turn would come back with an empty plan and finish mid-plan in silence —
+   * which is exactly the ending this notice exists to make sayable.
+   */
+  plan: PlanStep[]
 }
 
 export interface ChatSessions {
@@ -54,13 +103,24 @@ export interface ChatSessions {
    */
   openId: string | null
   /**
-   * Tell the session layer whether the pane is still holding a pause for this conversation.
+   * The consent pauses this process is holding, by the conversation each belongs to.
    *
-   * A consent pause lives in the pane, because the run behind it does; what the session layer needs to
-   * know is only which conversation's pause is still live, so a load of that conversation can leave it
-   * alone while a load of any other reconciles the pauses its own process did not survive.
+   * A map rather than one slot: a pause is a question about one conversation, and the user may leave
+   * it standing to work somewhere else. One slot would mean the second conversation's pause silently
+   * replacing the first. Held here rather than in the pane for the reason on `PendingApproval`, and it
+   * is also what the load path consults — a conversation whose pause is still held is loaded as it is,
+   * while any other is loaded with the pauses this process did not survive reconciled.
    */
-  setLivePause: (id: string, live: boolean) => void
+  pauses: Record<string, PendingApproval>
+  /**
+   * Record the pause a stream has just handed over.
+   *
+   * One call rather than two, because the map and the set of live conversations are the same fact: a
+   * pause held here *is* a pause this process is still holding, and two writers could disagree.
+   */
+  holdPause: (approval: PendingApproval) => void
+  /** Drop the pause of one conversation: the decision was made, or the conversation is gone. */
+  clearPause: (id: string) => void
   createSession: () => string
   openSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
@@ -89,15 +149,30 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const [openId, setOpenId] = useState<string | null>(null)
 
   /**
-   * The conversations whose consent pause this process is still holding.
+   * The conversations whose consent pause this process is still holding, and what each is paused on.
    *
-   * Held here rather than in the pane because the load path is what needs it, and the load path is
-   * this hook's. A ref rather than state: it decides what a load does, never what is rendered.
+   * One store rather than two — a ref for the load path and a copy of the decision for the pane — because
+   * they are the same fact: a conversation is in this map exactly when its pause is live, and the map's
+   * own contents are what a load reads. The ref is the truth and the state is its render-facing mirror,
+   * so a caller cannot leave one updated and the other behind.
+   *
+   * A ref as well as state because the load path asks the question synchronously, in the middle of an
+   * async load, where a value read from state would be a render behind.
    */
-  const livePausesRef = useRef<Set<string>>(new Set())
-  const setLivePause = useCallback((id: string, live: boolean) => {
-    if (live) livePausesRef.current.add(id)
-    else livePausesRef.current.delete(id)
+  const pausesRef = useRef<Record<string, PendingApproval>>({})
+  const [pauses, setPauses] = useState<Record<string, PendingApproval>>({})
+
+  const holdPause = useCallback((approval: PendingApproval) => {
+    pausesRef.current = { ...pausesRef.current, [approval.sessionId]: approval }
+    setPauses(pausesRef.current)
+  }, [])
+
+  const clearPause = useCallback((id: string) => {
+    if (pausesRef.current[id] === undefined) return
+    const rest = { ...pausesRef.current }
+    delete rest[id]
+    pausesRef.current = rest
+    setPauses(rest)
   }, [])
 
   // Mirrors, so the save callback reads the latest values without being re-created — which is what
@@ -237,12 +312,12 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         const snapshot = await conveyor.sessions.loadTranscript({ id })
         savedRef.current = snapshot
         setError(null)
-        // A pause is a question about now, and the run that asked it is not in this process unless the
-        // pane is still holding it. Reconciling the rest is what turns two dead ends — a card whose
+        // A pause is a question about now, and the run that asked it is not in this process unless this
+        // layer is still holding it. Reconciling the rest is what turns two dead ends — a card whose
         // buttons do nothing, and a turn that is neither running nor ended — into a named ending the
         // transcript can state.
         const loaded = rehydrateTranscript(snapshot)
-        applyTranscript(id, livePausesRef.current.has(id) ? loaded : reconcileOrphanedPauses(loaded))
+        applyTranscript(id, pausesRef.current[id] ? loaded : reconcileOrphanedPauses(loaded))
       } catch (err) {
         // Branched on the code, never the message text.
         const corrupt = err instanceof ConveyorError && err.code === 'SESSION_CORRUPT'
@@ -325,11 +400,11 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         setError(null)
         hydratedIdRef.current = null
         setOpenId(null)
-        setLivePause(id, false)
+        clearPause(id)
         setTranscript({ turns: [], interrupted: false })
       }
     },
-    [removeSession, setLivePause, setTranscript]
+    [clearPause, removeSession, setTranscript]
   )
 
   /**
@@ -405,7 +480,9 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     setAutoApprove,
     error,
     openId,
-    setLivePause,
+    pauses,
+    holdPause,
+    clearPause,
     createSession,
     openSession,
     deleteSession,

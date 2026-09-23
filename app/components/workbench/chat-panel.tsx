@@ -31,7 +31,6 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
-import type { PlanStep } from '@/conveyor/protocol/plan'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
   ABANDONED_PAUSE_CODE,
@@ -46,7 +45,6 @@ import {
   startUserTurn,
   toHistory,
   type AgentTurn,
-  type PendingCall,
 } from './agent-session'
 import { RESUME_MESSAGE } from '@/conveyor/protocol/turn-end'
 import { useWorkbenchStore } from './store'
@@ -97,46 +95,6 @@ function streamErrorMessage(error: unknown, providerName: string): string {
     }
   }
   return 'The response stream ended unexpectedly.'
-}
-
-/**
- * What the agent is paused on, and everything needed to continue it.
- *
- * Carries the session it belongs to, because a pause is a fact about a conversation: the user can
- * switch to another one while this is still waiting, and the decision has to still be here when they
- * come back rather than blocking a conversation it has nothing to do with.
- */
-interface PendingApproval {
-  /** The conversation this pause was asked in. */
-  sessionId: string
-  turnId: string
-  /** The one call this decision is about; the rest of `calls` are queued behind it. */
-  callId: string
-  tool: string
-  /** The provider-shaped history the run handed over, echoed back untouched on resume. */
-  messages: unknown[]
-  /**
-   * The frame's calls still awaiting a decision, this one first, as the model sent them. The decision
-   * answers only the head; the loop presents the next one when this stream ends.
-   */
-  calls: PendingCall[]
-  steps: number
-  /**
-   * Auto-continuations the turn had already spent when it paused, handed back like the plan.
-   *
-   * The budget belongs to the user's turn, not to one generator, so an approval must not refund it: a
-   * turn that came back with a fresh count could continue itself past the cap on every permission the
-   * model asked for.
-   */
-  continuations: number
-  /**
-   * The plan the turn had when it paused, handed back on the decision.
-   *
-   * The run behind a pause does not survive its stream ending, so the plan is the pane's to keep:
-   * without it the resumed turn would come back with an empty plan and finish mid-plan in silence —
-   * which is exactly the ending this notice exists to make sayable.
-   */
-  plan: PlanStep[]
 }
 
 /**
@@ -194,16 +152,8 @@ export function ChatPanel() {
   // the setting, so a conversation that had it on opens with it on, and one that has never had it set
   // opens with it off.
   const autoApprove = sessions.autoApprove
-  /**
-   * The consent pauses this pane is holding, by the conversation each belongs to.
-   *
-   * A map rather than one slot: a pause is a question about one conversation, and the user may leave
-   * it standing to work somewhere else. One slot would mean the second conversation's pause silently
-   * replacing the first — the lost decision this phase exists to make impossible.
-   */
-  const [pauses, setPauses] = useState<Record<string, PendingApproval>>({})
   /** The pause of the conversation on screen, which is the only one the pane may act on. */
-  const pending = (sessions.openId ? pauses[sessions.openId] : undefined) ?? null
+  const pending = (sessions.openId ? sessions.pauses[sessions.openId] : undefined) ?? null
 
   /**
    * Whether the controls that act on a message are available: the edit, and the regenerate.
@@ -564,27 +514,25 @@ export function ChatPanel() {
           }
 
           if (effect.approval) {
-            // The pause is recorded under the conversation it belongs to, and the session layer is told
-            // that this process is still holding it. Both halves matter: a load of this conversation
-            // must leave the pause standing, and a load of any other must reconcile the pauses whose
-            // process is gone. Recorded rather than merely set, because the pane may be showing a
-            // different conversation by the time the user answers.
+            // The pause is recorded under the conversation it belongs to, and it is recorded in the
+            // session layer rather than here. Both halves matter: a load of this conversation must leave
+            // the pause standing, and a load of any other must reconcile the pauses whose process is
+            // gone. Held above the pane because the pane is not the conversation — a maximize remounts
+            // every pane, and a decision the user has been asked for must outlive that — and recorded
+            // rather than merely set, because the pane may be showing a different conversation by the
+            // time the user answers.
             const { approval } = effect
-            setPauses((current) => ({
-              ...current,
-              [sessionId]: {
-                sessionId,
-                turnId,
-                callId: approval.callId,
-                tool: approval.tool,
-                messages: approval.messages,
-                calls: approval.calls,
-                steps: approval.steps,
-                continuations: approval.continuations,
-                plan: approval.plan,
-              },
-            }))
-            sessionsRef.current.setLivePause(sessionId, true)
+            sessionsRef.current.holdPause({
+              sessionId,
+              turnId,
+              callId: approval.callId,
+              tool: approval.tool,
+              messages: approval.messages,
+              calls: approval.calls,
+              steps: approval.steps,
+              continuations: approval.continuations,
+              plan: approval.plan,
+            })
             // The stream is over as far as this call is concerned; the run continues on the decision.
             paused = true
             return
@@ -836,12 +784,7 @@ export function ChatPanel() {
       // This process is not holding the pause any more, whichever way the decision went. Said here
       // rather than beside the branches: a load of this conversation after this must reconcile nothing,
       // because there is nothing left waiting for an answer.
-      setPauses((held) => {
-        const rest = { ...held }
-        delete rest[current.sessionId]
-        return rest
-      })
-      sessionsRef.current.setLivePause(current.sessionId, false)
+      sessionsRef.current.clearPause(current.sessionId)
 
       // Record the decision against the one call it was about. The cards queued behind it stay queued:
       // on an approval the loop is about to present the next of them, and marking them decided here
