@@ -125,6 +125,7 @@ function renderPanel(onOpen = vi.fn()) {
           onExport={vi.fn()}
           onDelete={vi.fn()}
           error={null}
+          notice={null}
         />
       </ChatSessionsProvider>
     </QueryClientProvider>

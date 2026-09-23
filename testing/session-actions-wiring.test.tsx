@@ -72,6 +72,7 @@ function renderPanel(
           onExport={onExport}
           onDelete={vi.fn()}
           error={null}
+          notice={null}
         />
       </ChatSessionsProvider>
     </QueryClientProvider>
@@ -215,6 +216,7 @@ describe('session search wiring', () => {
             onExport={vi.fn()}
             onDelete={vi.fn()}
             error={null}
+            notice={null}
           />
         </ChatSessionsProvider>
       </QueryClientProvider>
@@ -263,6 +265,7 @@ describe('session search wiring', () => {
             onExport={vi.fn()}
             onDelete={vi.fn()}
             error={null}
+            notice={null}
           />
         </ChatSessionsProvider>
       </QueryClientProvider>
@@ -311,6 +314,7 @@ describe('session search wiring', () => {
             onExport={vi.fn()}
             onDelete={vi.fn()}
             error={null}
+            notice={null}
           />
         </ChatSessionsProvider>
       </QueryClientProvider>

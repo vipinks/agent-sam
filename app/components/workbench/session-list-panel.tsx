@@ -53,6 +53,7 @@ export function SessionListPanel({
   onExport,
   onDelete,
   error,
+  notice,
 }: {
   onCreate: () => void
   onOpen: (id: string) => void
@@ -61,6 +62,14 @@ export function SessionListPanel({
   onDelete: (id: string) => void
   /** The session whose transcript failed to load, if any. */
   error: SessionError | null
+  /**
+   * Why the last selection did not happen, or null.
+   *
+   * Reported here because this is where the click was made: the row is still on screen, unchanged, and
+   * the sentence saying why belongs beside it — a toast is gone before the user can act on it, and this
+   * is a decision they need to make rather than a failure to acknowledge.
+   */
+  notice: string | null
 }) {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
@@ -150,6 +159,13 @@ export function SessionListPanel({
         */}
         <DrawerChevron />
       </PaneHeader>
+
+      {/*
+        A selection that did not happen, reported against the list that offered it. The rows are exactly
+        as they were — the store was never told anything — so the sentence has to say why rather than
+        leave the user wondering whether the click was simply missed.
+      */}
+      {notice && <p className="shrink-0 border-b border-border px-3 py-1.5 text-[12px] text-destructive">{notice}</p>}
 
       {sessions.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

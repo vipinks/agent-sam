@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorActions, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
+import { workspaceStore } from '@/conveyor/stores/workspace'
 import {
   rehydrateTranscript,
   reconcileOrphanedPauses,
@@ -12,6 +13,8 @@ import { resumeTurnNumbering, type AgentTurn, type PendingCall } from './agent-s
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
+import { planRootStamp, planSelectRoot, planSessionSwitch, selectNotice } from './session-project'
+import { useWorkbenchStore } from './store'
 import type { PlanStep } from '@/conveyor/protocol/plan'
 
 /**
@@ -24,7 +27,31 @@ import type { PlanStep } from '@/conveyor/protocol/plan'
  * Transcripts never enter the store: the store broadcasts to every window, and a transcript there
  * would be pushed over IPC once per token. The live transcript stays in component state; only its
  * metadata is in the store.
+ *
+ * A conversation knows the folder it was last used in, and this layer is what acts on that: a click
+ * opens that folder before the session renders, an unstamped session leaves the window alone, and a
+ * turn start records where the turn ran. It also owns the two facts a click has to be refused against
+ * — a turn streaming, and a decision pending. Where the folder itself lives is the workspace store's
+ * business, and it is global rather than per-window: every window browses the same folder.
  */
+
+/**
+ * Close the file the viewer is holding, because the folder it belonged to just stopped being open.
+ *
+ * The same act the explorer's own switch performs, and for the same reason: a path from the previous
+ * root is now outside the workspace the tree, the git panel and the viewer are all pointed at.
+ *
+ * Only when the buffer is clean. An unsaved edit is the user's work, and a click on a conversation is
+ * not a decision to throw it away — the confirmation in front of that belongs to the pane that can ask
+ * for it, which is not this one.
+ */
+function releaseViewer(): void {
+  const workbench = useWorkbenchStore.getState()
+  if (workbench.editor.dirty) return
+  workbench.setSelectedFile(null)
+  workbench.setSelectedChange(null)
+  workbench.setEditorDirty(null, false)
+}
 
 /** A session whose transcript could not be read. Surfaced on its row, not only as a toast. */
 export interface SessionError {
@@ -147,6 +174,34 @@ export interface ChatSessions {
   autoApprove: boolean
   /** Turn it on or off for the session on screen, and write the choice down. */
   setAutoApprove: (value: boolean) => void
+  /**
+   * Whether a turn is streaming in this window.
+   *
+   * Held here rather than in the pane that runs it, because it is the fact a session click is refused
+   * against: the run is writing into the transcript on screen, so opening another conversation
+   * mid-stream would hand it the rest of an answer it was never about. It also survives a remount,
+   * which the pane's own state did not — the workbench keys its groups on the window state, so a
+   * maximize used to reset a flag about a run that was still going.
+   */
+  streaming: boolean
+  /** Record that a turn started or ended in this window. */
+  setStreaming: (streaming: boolean) => void
+  /**
+   * Note that a turn is starting in a session, and stamp it with the folder the turn runs in.
+   *
+   * Called at every turn start: the project follows the work, so a conversation picked up in another
+   * folder is stamped there rather than keeping a folder the user has moved on from. A stamp equal to
+   * the one already stored writes nothing.
+   */
+  stampRoot: (id: string) => void
+  /**
+   * Why the last selection did not happen, worded from its code, or null.
+   *
+   * Kept here rather than in the row that was clicked, and cleared by the next attempt: what a click
+   * could not do is a fact about the selection, and the list that offered it is where the user is
+   * looking.
+   */
+  notice: string | null
   /** The session whose transcript failed to load. */
   error: SessionError | null
   /**
@@ -194,6 +249,10 @@ export interface ChatSessions {
 export function useChatSessions(providerId: string, model: string): ChatSessions {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
+  // The folder this window is showing, from the store main owns — the same one the explorer, the tree
+  // and the agent's tool paths are all answered against. A session's project is compared with it at a
+  // click and recorded from it at a turn start.
+  const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
   // The last snapshot written for the on-screen transcript, for the dirty check. Null until a
   // session is loaded.
@@ -219,6 +278,30 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     composerRef.current = next
     setComposerState(next)
   }, [])
+
+  /**
+   * Whether a turn is streaming in this window, and the ref the click path reads.
+   *
+   * The same two-store shape as the composer above and the pauses below: the ref is what a decision
+   * made mid-event reads back, the state is what the render sees. Nothing serialises it — it is a fact
+   * about this window's right now, and it lives above the pane deliberately, so a window-state swap
+   * cannot reset a flag about a run that is still going.
+   */
+  const streamingRef = useRef(false)
+  const [streaming, setStreamingState] = useState(false)
+
+  const setStreaming = useCallback((value: boolean) => {
+    streamingRef.current = value
+    setStreamingState(value)
+  }, [])
+
+  /**
+   * Why the last selection did not happen, in the words the list shows.
+   *
+   * A sentence rather than a code: the code was branched on where the decision was made — this side's
+   * own two, or main's `WORKSPACE_MISSING` — and what the panel needs from here is what to say.
+   */
+  const [notice, setNotice] = useState<string | null>(null)
 
   /**
    * The conversations whose consent pause this process is still holding, and what each is paused on.
@@ -262,6 +345,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
   const hydratedIdRef = useRef<string | null>(null)
+  // The folder this window is showing, mirrored for the callbacks below: a click and a turn start both
+  // read it, and both have to keep a stable identity or a switch would re-create the run's handlers.
+  const rootPathRef = useRef(rootPath)
+  rootPathRef.current = rootPath
 
   const setTranscript = useCallback((next: TranscriptState) => {
     transcriptRef.current = next
@@ -355,6 +442,27 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const setActive = useConveyorActions(chatSessionsStore).setActive
   const touchSession = useConveyorActions(chatSessionsStore).touchSession
   const removeSession = useConveyorActions(chatSessionsStore).removeSession
+  // The one write a session-driven switch makes: main checks the folder is still there, and this puts
+  // the answer where every panel reads it.
+  const setRootPath = useConveyorStore(workspaceStore).setRootPath
+
+  /**
+   * Record the folder a turn is starting in.
+   *
+   * Read from the mirror rather than assumed, because a stamp is a comparison with what the store
+   * already holds and the comparison belongs to `planRootStamp`. A session the store has not broadcast
+   * back yet — one created by this very send — is skipped rather than guessed at: its stamp would be
+   * this same folder anyway, and its next turn writes it.
+   */
+  const stampRoot = useCallback(
+    (id: string) => {
+      const session = sessionsRef.current.find((s) => s.id === id)
+      if (!session) return
+      const next = planRootStamp({ sessionLastRoot: session.lastRoot, windowRoot: rootPathRef.current })
+      if (next !== null) touchSession({ id, lastRoot: next })
+    },
+    [touchSession]
+  )
 
   const createSession = useCallback(() => {
     // `crypto.randomUUID` in the renderer is fine for an id: it only has to be unique and safe as a
@@ -365,6 +473,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     activeIdRef.current = id
     savedRef.current = null
     setError(null)
+    setNotice(null)
     // A new session is hydrated by definition: it starts empty and that empty transcript belongs to
     // it. Leaving this unset would let a click on the new row try to load a file that cannot exist.
     hydratedIdRef.current = id
@@ -434,6 +543,50 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       })
       if (start.alreadyShowing) return
 
+      // Which folder this click belongs in, and whether it may happen at all. Both answers are the pure
+      // rules'; this only carries out what they decided. A session with no project resolves to no
+      // switch, which is the silent case: its first turn is what gives it one.
+      const row = sessionsRef.current.find((s) => s.id === id)
+      const project = planSelectRoot({ sessionLastRoot: row?.lastRoot, currentRoot: rootPathRef.current })
+      setNotice(null)
+
+      const refusal = planSessionSwitch({
+        streaming: streamingRef.current,
+        // A pause held anywhere in this window, not only in the conversation being opened: the turn it
+        // belongs to has not ended, and what is refused is moving the workspace under it.
+        pendingDecision: Object.keys(pausesRef.current).length > 0,
+        movesRoot: project.switchTo !== null,
+      })
+      if (refusal !== null) {
+        setNotice(
+          selectNotice(refusal, {
+            path: project.switchTo ?? rootPathRef.current ?? '',
+            currentRoot: rootPathRef.current,
+          })
+        )
+        return
+      }
+
+      // The folder moves before the session renders: the tree, the git reads and the agent's tool paths
+      // are all answered against whatever the workspace store holds, so the transcript must not arrive
+      // first and be read against the wrong one.
+      //
+      // A folder that is gone is reported and the window stays where it is. The conversation still
+      // opens, because the click was about the conversation — the notice explains that its project is
+      // missing, not that the click failed.
+      if (project.switchTo !== null) {
+        const target = project.switchTo
+        try {
+          const opened = await conveyor.workspace.openRoot({ path: target })
+          setRootPath(opened.path)
+          releaseViewer()
+        } catch (err) {
+          // Branched on the code, never on the message text.
+          const code = err instanceof ConveyorError ? err.code : 'UNKNOWN'
+          setNotice(selectNotice(code, { path: target, currentRoot: rootPathRef.current }))
+        }
+      }
+
       if (start.saveFirst) await saveNow()
       setActive({ id })
       activeIdRef.current = id
@@ -449,7 +602,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       })
       if (finish.repairTitle) touchSession({ id, title: finish.repairTitle })
     },
-    [load, saveNow, setActive, touchSession]
+    [load, saveNow, setActive, setRootPath, touchSession]
   )
 
   /**
@@ -566,6 +719,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     setComposer,
     autoApprove,
     setAutoApprove,
+    streaming,
+    setStreaming,
+    stampRoot,
+    notice,
     error,
     openId,
     pauses,

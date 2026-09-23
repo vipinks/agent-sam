@@ -29,6 +29,7 @@ describe('store protocol', () => {
             onExport={() => {}}
             onDelete={() => {}}
             error={null}
+            notice={null}
           />
         </ChatSessionsProvider>
       </QueryClientProvider>
@@ -69,6 +70,7 @@ describe('store protocol', () => {
             onExport={() => {}}
             onDelete={() => {}}
             error={null}
+            notice={null}
           />
         </ChatSessionsProvider>
       </QueryClientProvider>

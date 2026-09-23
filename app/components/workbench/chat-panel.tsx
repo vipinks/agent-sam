@@ -180,7 +180,11 @@ export function ChatPanel() {
   const composerHeightsRef = useRef(composerHeights)
   composerHeightsRef.current = composerHeights
 
-  const [isStreaming, setIsStreaming] = useState(false)
+  // Whether a run is in flight, read from the session layer rather than held here: a session click has
+  // to be refused against it, and the list that offers the click is not inside this pane. Above the
+  // pane it also survives a window-state swap, which used to reset a flag about a run still going.
+  const isStreaming = sessions.streaming
+  const setIsStreaming = sessions.setStreaming
   // Whether the agent acts without asking. Read from the session rather than held here: the record owns
   // the setting, so a conversation that had it on opens with it on, and one that has never had it set
   // opens with it off.
@@ -485,7 +489,7 @@ export function ChatPanel() {
     void iteratorRef.current?.return?.(undefined)
     iteratorRef.current = null
     setIsStreaming(false)
-  }, [])
+  }, [setIsStreaming])
 
   /**
    * Drive one agent stream to its end.
@@ -583,7 +587,7 @@ export function ChatPanel() {
         if (!paused) updateMessages(endTurn(messagesRef.current, turnId))
       }
     },
-    [drainNow, enqueue, providerName, stickToBottom, updateMessages]
+    [drainNow, enqueue, providerName, setIsStreaming, stickToBottom, updateMessages]
   )
 
   /**
@@ -604,6 +608,10 @@ export function ChatPanel() {
    */
   const runAgentTurn = useCallback(
     async (turns: AgentTurn[], mentionPaths: readonly string[], sessionId: string) => {
+      // A turn is this conversation being used in this window's folder, so its start is what the project
+      // is recorded from — and only when that differs from the folder already stored.
+      sessionsRef.current.stampRoot(sessionId)
+
       const assistantTurn = startAssistantTurn()
       streamingTurnIdRef.current = assistantTurn.id
       updateMessages([...turns, assistantTurn])

@@ -144,6 +144,7 @@ function WorkbenchLayout() {
           onExport={runSessionExport}
           onDelete={(id) => void sessions.deleteSession(id)}
           error={sessions.error}
+          notice={sessions.notice}
         />
       ) : activeActivity === 'git' ? (
         <GitPanel />
