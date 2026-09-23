@@ -366,4 +366,36 @@ describe('bounded auto-continue', () => {
     // History is not actionable, and neither is a seam: the run those lines belong to is gone.
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
+
+  it('draws one line per continuation when the loop stopped at its own step ceiling', async () => {
+    // A turn the loop's step budget ended is nudged by the same rule as any other unfinished ending, so
+    // what arrives here is a sequence of seams rather than one, and the pane owes the user a line for each
+    // of them, in the order they happened. This is the marker sequence the phase's live check reads.
+    //
+    // The lines say "after a plain stop", and that is the honest limit of the copy: the ceiling's ending is
+    // diagnosed as the ordinary one — the last reply arrived complete and it was the loop that stopped — so
+    // a ceiling nudge and a stop nudge reach the pane as the same chunk and there is nothing on it that
+    // could separate them. Named as a residual rather than papered over: the pane does not claim otherwise,
+    // and what it must not do is drop a seam or draw two lines for one.
+    const stub = stubChat()
+    renderChat()
+    await userEvent.type(await composer(), 'refactor the parser{Enter}')
+    const channel = await streamChannel(stub)
+
+    chunk(stub, channel, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX, cause: 'model_stop' })
+    chunk(stub, channel, { type: 'text_delta', text: 'Still working on the table.' })
+    chunk(stub, channel, { type: 'auto_continue', count: 2, max: AUTO_CONTINUE_MAX, cause: 'model_stop' })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 3 })
+    stub.emit(channel, { type: 'end' })
+
+    const first = await screen.findByText(`Auto-continuing after a plain stop — 1 of ${AUTO_CONTINUE_MAX}`)
+    const second = await screen.findByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)
+    // One line per nudge and no more: two seams, two lines.
+    expect(screen.getAllByText(/^Auto-continuing after a plain stop — /)).toHaveLength(2)
+    // And they read in the order the run made them, which is what makes the sequence a sequence.
+    expect((first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    // The work was finished by the segment the second nudge opened, so there is no card: a turn that got its
+    // plan done has nothing for a card to announce, however many times the loop picked it up on the way.
+    expect(screen.queryByText(/Ended with the plan unfinished/)).toBeNull()
+  })
 })

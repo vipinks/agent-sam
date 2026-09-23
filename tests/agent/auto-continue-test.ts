@@ -32,13 +32,19 @@
  * rather than run: no call announced, no result, no permission asked, and nothing on the wire asking a
  * provider for the outcome of a call that never happened.
  *
+ * And one is about the ceiling itself, which is the loop's ending rather than the model's: a segment's
+ * step budget spent with work left on the plan is a turn that has not finished, so it is picked up like
+ * any other unfinished ending and the counter restarts for the segment the nudge opens. The two cases
+ * before the run assert it, and the bound they leave visible is the one the user reads: eight nudges on
+ * one turn's plan, with a segment's worth of round-trips behind each of them.
+ *
  * The chunks are fed through the real reducer and the real serializer, so what is asserted about the
  * transcript is the transcript's contents rather than the loop's intentions.
  */
 import { strict as assert } from 'node:assert'
 import { applyAgentChunk, endTurnPlan, type AgentTurn } from '../../app/components/workbench/agent-session'
 import { rehydrateTranscript, serializeTranscript } from '../../app/components/workbench/session-transcript'
-import { runAgentLoop } from '../../conveyor/modules/agent'
+import { MAX_STEPS, runAgentLoop } from '../../conveyor/modules/agent'
 import type { PlanStep } from '../../conveyor/protocol/plan'
 import { AUTO_CONTINUE_MAX, autoContinueNudge } from '../../conveyor/protocol/turn-end'
 
@@ -224,6 +230,21 @@ function nudges(sent: SentRequest[]): string[] {
     .filter((message): message is { role: string; content: string } => message?.role === 'user')
     .map((message) => message.content)
     .filter((content) => content.startsWith('You stopped with'))
+}
+
+/**
+ * Which request each nudge opened, as an index into the request log.
+ *
+ * A nudge is the last message of the request that follows it and of no later one — the round-trips behind
+ * it end in tool results — so one index per nudge is where a segment begins on the wire, which is what the
+ * step budget's reset is visible as.
+ */
+function nudgePositions(sent: SentRequest[]): number[] {
+  return sent.reduce<number[]>((positions, request, index) => {
+    const last = request.messages.at(-1)
+    if (last?.role === 'user' && last.content.startsWith('You stopped with')) positions.push(index)
+    return positions
+  }, [])
 }
 
 // ---------------------------------------------------------------- the ordinary shape
@@ -667,6 +688,133 @@ async function aDroppedConnectionEndsTheTurnWithTheCard() {
   results.push('a dropped connection ends the turn with the card, and no nudge is spent on it')
 }
 
+// ---------------------------------------------------------------- the step ceiling
+
+/**
+ * A round-trip that declares the plan again, so a segment's budget drains with work still on it.
+ *
+ * A plan declaration per round-trip rather than prose, because the step ceiling is what these cases are
+ * about: the turn has to reach it with an unfinished plan, and it has to do that the way a long turn does
+ * — by working — rather than by stopping and being nudged for a different reason.
+ */
+function workingFrames(callId: string): string[] {
+  return planFrames(callId, [
+    { id: 'read', text: 'Read the parser', status: 'done' },
+    { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+  ])
+}
+
+/** One segment's worth of work: MAX_STEPS round-trips, each declaring the plan with a call id of its own. */
+function aSegment(prefix: string): string[][] {
+  return Array.from({ length: MAX_STEPS }, (_, index) => workingFrames(`${prefix}${index + 1}`))
+}
+
+async function theStepCeilingIsNudgedAndItsBudgetStartsOver() {
+  // Two segments spent at the ceiling with the plan unfinished, then a third that finishes it. Before this
+  // phase the first ceiling ended the turn on the card with the auto-continue budget untouched, because the
+  // exit passed `continuable = false` and the guard short-circuited before the rule was ever asked.
+  const { chunks, sent } = await runLoop({
+    rounds: [
+      ...aSegment('a'),
+      ...aSegment('b'),
+      planFrames('finish', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'done' },
+      ]),
+      proseFrames('The precedence table is updated.'),
+    ],
+  })
+
+  const spent = marks(chunks)
+  assert.deepEqual(
+    spent.map((mark) => mark.count),
+    [1, 2],
+    'two segments spent at the ceiling, two continuations'
+  )
+  assert.equal(
+    spent.every((mark) => mark.cause === 'model_stop'),
+    true,
+    'each naming the ending it had: the last reply arrived complete, and it was the loop that stopped'
+  )
+  assert.equal(
+    spent.every((mark) => mark.max === AUTO_CONTINUE_MAX),
+    true,
+    'against the one bound the user reads, which the ceiling does not raise'
+  )
+
+  // The reset, as the wire shows it: a nudge opens a segment, and that segment is as long as the first. The
+  // first request carrying a nudge is request MAX_STEPS and the second is two segments in, so there is a
+  // whole segment of round-trips between the two ceilings rather than none. Without the reset the second
+  // nudge would arrive with no request behind it, which is a round-trip paid to re-hit the same wall.
+  assert.deepEqual(
+    nudgePositions(sent),
+    [MAX_STEPS, MAX_STEPS * 2],
+    'each nudge opened a segment of its own, MAX_STEPS round-trips long'
+  )
+  assert.equal(sent.length, MAX_STEPS * 2 + 2, 'and the run asked for every round-trip it made')
+
+  // One turn, ended complete, and with no user message in it: the nudges are main's own, so the pane is
+  // never told a person typed them, however many of them the loop spent.
+  assert.equal(chunks.filter((chunk) => chunk.type === 'turn_end').length, 1, 'the turn ends once')
+  const last = chunks.at(-1)
+  assert.equal(last?.type, 'done', 'with one ending')
+  assert.equal(last?.reason, 'complete', 'and it is the ordinary one, because the plan got finished')
+  assert.equal(
+    last?.steps,
+    2,
+    'counted from the nudge that opened the last segment rather than from the start of the turn'
+  )
+  const turns = transcript(chunks)
+  assert.equal(turns.length, 1, 'still one turn')
+  assert.equal(
+    turns.some((turn) => turn.role === 'user'),
+    false,
+    'and no user message was appended to the transcript'
+  )
+  assert.deepEqual(
+    turns[0].continuations?.map((mark) => mark.count),
+    [1, 2],
+    'the two seams are recorded on the one turn they split'
+  )
+  results.push('a step-budget ceiling with work left is nudged, and the step budget starts over per segment')
+}
+
+async function aTurnThatHitsTheStepCeilingNineTimesGetsTheCard() {
+  const ceilings = AUTO_CONTINUE_MAX + 1
+  const { chunks, sent } = await runLoop({
+    // Nine segments of work with the plan still unfinished: the ceiling, nine times, with nothing in
+    // between that could have ended the turn any other way.
+    rounds: Array.from({ length: ceilings }, (_, segment) => aSegment(`s${segment + 1}-`)).flat(),
+  })
+
+  assert.deepEqual(
+    marks(chunks).map((mark) => mark.count),
+    Array.from({ length: AUTO_CONTINUE_MAX }, (_, index) => index + 1),
+    'the whole budget, spent at the ceiling rather than at the model'
+  )
+
+  // The card, which is what a spent budget leaves, and it carries the ending the ceiling has: the last
+  // reply arrived complete and it was the loop that stopped, so the cause copy says nothing and the plan
+  // is what the card is about.
+  assert.equal(chunks.at(-1)?.type, 'done', 'the run ends')
+  assert.equal(chunks.at(-1)?.reason, 'max_steps', 'at the budget, which is what it hit')
+  assert.equal(notice(chunks)?.cause, 'model_stop', 'naming the ending it actually had')
+  assert.equal(notice(chunks)?.unfinishedSteps, 1, 'with the work still on the plan')
+  assert.equal(notice(chunks)?.resumable, true, 'and the Continue click as the way on')
+
+  // And that is what a reopened conversation reads: the record keeps the cause beside the count, so the
+  // pane that never saw this run says the same two things about it.
+  const saved = record(chunks)
+  assert.equal(saved.turns[0].endNotice?.cause, 'model_stop', 'the ending is stored with the turn')
+  assert.equal(saved.turns[0].endNotice?.unfinishedSteps, 1, 'and so is the work it stopped on')
+
+  // Nine ceilings, nine whole segments: the ceiling is not reached sooner for having been reached before,
+  // which is the same property the two-nudge case asserts, measured at the edge of the budget.
+  assert.equal(sent.length, MAX_STEPS * ceilings, 'every segment was as long as the first one')
+  assert.equal(nudges(sent).length, AUTO_CONTINUE_MAX, 'and the whole budget went on the wire')
+  results.push('a turn that hits the step ceiling past its budget gets the card, cause and work stored')
+}
+
 // ---------------------------------------------------------------- the run
 
 async function main() {
@@ -677,6 +825,8 @@ async function main() {
   await aCappedReplyCutInsideAToolCallPicksItselfUpMidPlan()
   await aCappedReplyCutInsideAToolCallSpendsTheBudgetThenGetsTheCard()
   await aDroppedConnectionEndsTheTurnWithTheCard()
+  await theStepCeilingIsNudgedAndItsBudgetStartsOver()
+  await aTurnThatHitsTheStepCeilingNineTimesGetsTheCard()
 
   console.log(`\nbounded auto-continue: ${results.length} checks passed`)
   for (const line of results) console.log(`  pass: ${line}`)

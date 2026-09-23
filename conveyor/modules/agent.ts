@@ -78,7 +78,15 @@ import { readMentions } from './mentions'
  * in `needsApproval`, rather than a special case in the loop where the gating decision is made.
  */
 
-/** Model round-trips allowed in one run. A model that will not stop calling tools must not spin. */
+/**
+ * Model round-trips allowed in one segment of a run.
+ *
+ * A segment is the stretch between two auto-continuations, and the counter starts over at each nudge: this
+ * is what stops a model that will not stop calling tools from spinning, while the bound on the turn as a
+ * whole is the auto-continue budget — the one number the user reads on the seam. So one turn may pay this
+ * many round-trips per segment, for as many segments as its budget buys, and the marker drawn at each seam
+ * is what makes that spend visible.
+ */
 export const MAX_STEPS = 10
 
 /** Output handed back to the model. A build log should inform it, not exhaust its context. */
@@ -668,10 +676,12 @@ async function* finishTurn(
    * Whether a nudge may answer this ending at all.
    *
    * The rule below decides *which* endings are worth continuing; this says whether the caller has an
-   * ending whose continuation would be meaningful, which it knows and this function cannot. Two callers
-   * pass false. The loop's own step budget has nothing left to spend, so a nudge there would be answered
-   * by the same check again; and a refusal is a decision the user has already made, which the app must
-   * not answer with "try again anyway". A cut-off turn passes it when the frame holds nothing to run,
+   * ending whose continuation would be meaningful, which it knows and this function cannot. One caller
+   * passes false: a refusal is a decision the user has already made, which the app must not answer with
+   * "try again anyway". The loop's own step budget passes true — a segment's budget spent with work left on
+   * the plan is an unfinished turn like any other, and the caller restarts the step counter for the segment
+   * the nudge opens, so that ending is not asked about by the same ceiling all over again immediately. A
+   * cut-off turn passes it when the frame holds nothing to run,
    * which for a reply the provider cut off is every time: the loop empties a cut reply's frame of its
    * calls before it gets here, because a cut reply never runs its own tool calls — so what this is asked
    * about is a frame with no half-request left in it to refuse.
@@ -1002,8 +1012,24 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       // the turn did not do, and this is the ending a user is least able to see for themselves. The
       // cause is the ordinary one — the last reply arrived complete; it was the loop that stopped —
       // so the cause copy says nothing and the plan is what the card is about.
-      yield* finishTurn(plan, 'model_stop', steps, 'max_steps', continuations, false)
-      return
+      //
+      // Continuable, because the ceiling is the loop's own limit rather than the model's answer. Passing
+      // false here was the defect this phase fixes: the guard short-circuited before `shouldAutoContinue`
+      // was ever asked, so the ending a long turn most often has left — a plan still unfinished with the
+      // auto-continue budget untouched — put the card up while there was still money in the pocket. What
+      // the rule decides is unchanged; this exit lets it decide.
+      const nudge = yield* finishTurn(plan, 'model_stop', steps, 'max_steps', continuations, true)
+      if (nudge === null) return
+
+      // The step budget is a segment's length rather than the turn's, so the counter starts over behind the
+      // nudge: the segment a nudge opens is as long as the one that ended, and the bound the user watches
+      // stays the one they can read — AUTO_CONTINUE_MAX nudges on one turn's plan, with a line drawn on the
+      // answer at each. A nudge that came back to a spent counter would be answered by this same ceiling at
+      // once, which is a round-trip paid to reach the wall the turn has just left.
+      continuations += 1
+      history.push({ role: 'user', content: nudge })
+      steps = 0
+      continue
     }
     steps += 1
 
@@ -1115,8 +1141,12 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       const nudge = yield* finishTurn(plan, cause, steps, null, continuations, calls.length === 0)
       if (nudge === null) return
 
+      // A nudge opens a segment, and a segment's length is the step budget: reset here for the same reason
+      // the step-budget exit resets it — a nudge that came back to a spent counter would be answered by the
+      // same ceiling immediately.
       continuations += 1
       history.push({ role: 'user', content: nudge })
+      steps = 0
       continue
     }
 
@@ -1131,8 +1161,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations, true)
       if (nudge === null) return
 
+      // The step budget starts over with the segment, as it does at the ceiling and at a dead reply: the
+      // counter measures one segment's spend, never the turn's.
       continuations += 1
       history.push({ role: 'user', content: nudge })
+      steps = 0
       continue
     }
 

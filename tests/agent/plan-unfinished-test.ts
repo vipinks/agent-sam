@@ -266,6 +266,12 @@ async function aStoppedRunMidPlanStillSaysWhatIsLeft() {
   // The run hits the step budget with the plan unfinished: the model never got to answer, so the turn
   // ends on a `done` with no reply of its own to diagnose. It is the same silent ending, and it is
   // announced by the same rule.
+  //
+  // Run with the auto-continue budget already spent, for the reason the cut-off case above gives: a step
+  // ceiling with work left on the plan is now picked up by the loop while it has budget, so the ending
+  // this case is about — the card, with the cause stored and the work counted — is the one it reaches
+  // when it has none. Which of the two budgets ends the turn is not what this case is asserting; what the
+  // plan carried back is, and the ceiling is simply the shortest way to it.
   const { chunks } = await runLoop({
     rounds: [
       planFrames('p1', [
@@ -277,6 +283,7 @@ async function aStoppedRunMidPlanStillSaysWhatIsLeft() {
     // One step of the budget left, so the declaration above is made and the run then stops before it
     // can ask the model for anything else.
     steps: MAX_STEPS - 1,
+    continuations: AUTO_CONTINUE_MAX,
   })
 
   assert.equal(chunks.at(-1)?.reason, 'max_steps', 'the run stops at the budget')

@@ -151,11 +151,12 @@ describe('planUnfinishedNotice', () => {
 /**
  * The auto-continue rule, which is the one place the app sends without being asked.
  *
- * Phase 23 and Phase 31 both chose no auto-continue, and this reverses that for exactly one cause:
- * a model that stops on its own with work left on its plan is a turn the manual card turned into a
- * treadmill, because the user's next click was always the same click. A cut-off reply is a different
- * event — the cap or the connection is still there — so nudging it would buy a second failure, and
- * the two remain the user's to send.
+ * Phase 23 and Phase 31 both chose no auto-continue, and this reverses that for two of the three
+ * endings: a model that stops on its own with work left on its plan is a turn the manual card turned
+ * into a treadmill, because the user's next click was always the same click, and a reply the provider
+ * capped at its output limit is the same turn stopped by a limit on the reply rather than by the model.
+ * A dropped connection stays the user's: nothing the app sends reopens it, so a nudge there would spend
+ * a round-trip on a line that is not there.
  */
 describe('shouldAutoContinue', () => {
   const step = (id: string, status: PlanStep['status']): PlanStep => ({ id, text: id, status })
@@ -200,6 +201,20 @@ describe('shouldAutoContinue', () => {
         expect(shouldAutoContinue(cause, unfinished, used)).toBe(false)
       }
     }
+  })
+
+  it('answers for the loop’s own step ceiling the same way, because the ceiling is not a cause', () => {
+    // The step budget is the loop ending a turn rather than the model ending it, and the phase that made
+    // it continuable added no cause, no flag and no parameter to this rule: the ending it produces is
+    // diagnosed as `model_stop` — the last reply arrived complete, and it was the loop that stopped — so
+    // this predicate was already the one that answered for it. What that phase changed is the caller: the
+    // ceiling's exit now asks this rule instead of short-circuiting past it, and the step counter restarts
+    // with the segment the nudge opens, which is a fact about the caller's counter rather than about this
+    // rule. Pinned here so a later reader tempted to widen the vocabulary for the ceiling — a
+    // `step_ceiling` cause, or a fourth argument — has a test to argue with first.
+    expect(TURN_END_CAUSES).toEqual(['model_stop', 'truncated', 'stream_error'])
+    expect(shouldAutoContinue('model_stop', unfinished, 0)).toBe(true)
+    expect(shouldAutoContinue('model_stop', unfinished, AUTO_CONTINUE_MAX)).toBe(false)
   })
 })
 
