@@ -98,8 +98,8 @@ const turnSchema = z.object({
    * Stored, because a reopened conversation must show the same seams it showed live: a turn that picked
    * itself up three times is not one uninterrupted answer, and re-deriving that from the reply is
    * impossible — the reply does not know. Each entry carries the count and the budget the loop
-   * displayed, and how many cards had been drawn when it continued, which is all the renderer needs to
-   * put the line back where it was.
+   * displayed, how many cards had been drawn when it continued, and which ending the turn was picked up
+   * after — which is all the renderer needs to put the line back where it was, saying what it said.
    *
    * Optional, and it did not bump the version for the same reason the plan and the instructions record
    * did not: a file written before auto-continue existed simply has no key, and an absent optional key
@@ -111,6 +111,11 @@ const turnSchema = z.object({
         count: z.number().int().positive(),
         max: z.number().int().positive(),
         afterSteps: z.number().int().min(0),
+        // Read through the same closed vocabulary the live chunk is, so a file naming an ending this
+        // build does not know loses the reason rather than the seam. Optional like the list itself, and
+        // for the same reason: a file written before the loop reported one has no key, and its seams
+        // were all made after a plain stop — which is the fallback the line is drawn with.
+        cause: z.enum(TURN_END_CAUSES).optional(),
       })
     )
     .optional(),

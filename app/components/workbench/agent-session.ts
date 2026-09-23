@@ -134,6 +134,13 @@ export interface AgentTurn {
  * continue. That is what puts the line between the work that was interrupted and the work that picked it
  * up, rather than at the top or the bottom of the answer. Stored beside `count` rather than recomputed,
  * because a card count read back from a transcript has to mean what it meant when the seam was made.
+ *
+ * `cause` is why the machine kept going, and it is part of the mark rather than something the reader
+ * infers: a turn picked up after the provider ran out of output room is a different event from one
+ * picked up after the model stopped, and the user is owed the difference — it is the only part of the
+ * line that tells them whether anything is worth doing about it. Optional for one reason only: a
+ * transcript saved before the loop reported a cause reads as the ending it could have had then, which
+ * was a plain stop.
  */
 export interface AutoContinueMark {
   /** How many continuations this turn had spent when this seam was made, counting this one. */
@@ -141,6 +148,8 @@ export interface AutoContinueMark {
   /** The budget the count is shown against, as the loop reported it. */
   max: number
   afterSteps: number
+  /** The ending the turn was picked up after, as the loop diagnosed it. */
+  cause?: TurnEndCause
 }
 
 /**
@@ -651,11 +660,16 @@ export function applyAgentChunk(
       // fallback for a chunk that arrived without one, which keeps a renderer wired to a newer or older
       // main from drawing a line with a blank where a number belongs.
       const max = typeof c.max === 'number' && c.max > 0 ? c.max : AUTO_CONTINUE_MAX
+      // And the cause, read through the vocabulary rather than trusted, exactly as the notice's is. A
+      // seam whose reason this build cannot name — or which arrived without one, from a run that predates
+      // this field — is still a seam: the count is what the line needs to be drawn at all, so the mark is
+      // kept and the copy falls back to the ending such a mark could have had.
+      const cause = asTurnEndCause(c.cause) ?? undefined
 
       return {
         turns: replaceTurn(turns, turnId, (turn) => ({
           ...turn,
-          continuations: [...(turn.continuations ?? []), { count, max, afterSteps: turn.steps.length }],
+          continuations: [...(turn.continuations ?? []), { count, max, afterSteps: turn.steps.length, cause }],
         })),
         // Nothing reported to the pane. A seam is not an event the UI has to act on — the cards and the
         // prose that follow it arrive as chunks of their own and are applied as they always were — and a

@@ -12,13 +12,18 @@
  * one turn, carrying three auto-continue chunks — so what the user reads is one answer with three
  * seams in it rather than four answers.
  *
- * The second is the ceiling. A model that stops five times gets four continuations and then the card
- * this app already had, at the same place it was before: an app that nudges forever is a loop that
- * spends the user's money to stay wrong.
+ * The second is the ceiling. A model that stops past the budget gets continuations up to it and then
+ * the card this app already had, at the same place it was before: an app that nudges forever is a loop
+ * that spends the user's money to stay wrong.
  *
  * The third is that the nudge is invisible as speech. It goes out as a user-role message — that is
  * the only role the provider's API has for "the operator is speaking" — and the transcript built from
  * the same chunks has no user turn in it at all.
+ *
+ * Two more are about which endings the loop will pick up by itself, which is the half of the rule a
+ * live session actually meets: a reply the provider cut off at its output cap is nudged exactly as a
+ * stop is, and a reply that stopped arriving is not — it ends the turn with the card, because a dropped
+ * connection is not something a further request can fix.
  *
  * The chunks are fed through the real reducer and the real serializer, so what is asserted about the
  * transcript is the transcript's contents rather than the loop's intentions.
@@ -54,6 +59,30 @@ function stopFrame(reason: string): string {
 
 function proseFrames(text: string, reason = 'stop'): string[] {
   return [JSON.stringify({ choices: [{ delta: { content: text } }] }), stopFrame(reason), '[DONE]']
+}
+
+/**
+ * The same frames, on a connection that then goes away.
+ *
+ * The frames arrive as one chunk and the next pull fails, which is what a dropped connection is: a reply
+ * that was being written and stopped arriving. Nothing follows them — no `[DONE]` — because there was
+ * nothing left to send.
+ */
+function failingResponse(frames: string[]): Response {
+  const payload = frames.map((frame) => `data: ${frame}\n\n`).join('')
+  const bytes = new TextEncoder().encode(payload)
+  let delivered = false
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!delivered) {
+        delivered = true
+        controller.enqueue(bytes)
+        return
+      }
+      controller.error(new Error('the connection was reset'))
+    },
+  })
+  return { ok: true, status: 200, body, text: async () => '' } as unknown as Response
 }
 
 /** A `set_plan` call, declared the way the model declares one. */
@@ -256,7 +285,9 @@ async function aModelThatStopsThreeTimesMidPlanEndsOneTurn() {
 
 // ---------------------------------------------------------------- the ceiling
 
-async function aModelThatStopsFiveTimesGetsFourContinuationsThenTheCard() {
+async function aModelThatStopsPastItsBudgetGetsTheCard() {
+  // One stop more than the budget allows, so the ending under test is the one past it.
+  const stops = AUTO_CONTINUE_MAX + 1
   const { chunks, sent } = await runLoop({
     rounds: [
       planFrames('p1', [
@@ -264,21 +295,21 @@ async function aModelThatStopsFiveTimesGetsFourContinuationsThenTheCard() {
         { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
         { id: 'tests', text: 'Add tests for it', status: 'pending' },
       ]),
-      proseFrames('I have started on the table.'),
-      proseFrames('Still working on the table.'),
-      proseFrames('Nearly there.'),
-      proseFrames('One more moment.'),
-      proseFrames('Almost done.'),
+      ...Array.from({ length: stops }, (_, index) => proseFrames(`Still working on the table, pass ${index + 1}.`)),
     ],
   })
 
   assert.deepEqual(
     marks(chunks).map((mark) => mark.count),
-    [1, 2, 3, 4],
-    'four continuations, which is the whole budget'
+    Array.from({ length: AUTO_CONTINUE_MAX }, (_, index) => index + 1),
+    'the whole budget, and not one continuation more'
   )
-  assert.equal(nudges(sent).length, AUTO_CONTINUE_MAX, 'and four nudges on the wire')
-  assert.equal(sent.length, 6, 'a fifth stop is not nudged: it ends the turn')
+  assert.equal(nudges(sent).length, AUTO_CONTINUE_MAX, 'and one nudge on the wire for each of them')
+  assert.equal(
+    sent.length,
+    1 + AUTO_CONTINUE_MAX + 1,
+    'the stop past the budget pays for a round-trip and gets the card'
+  )
 
   // The ending is today's, unchanged: the card the manual path already had, after the budget rather
   // than instead of it.
@@ -297,7 +328,7 @@ async function aModelThatStopsFiveTimesGetsFourContinuationsThenTheCard() {
   const restored = rehydrateTranscript(record(chunks))
   assert.equal(restored.turns[0].continuations?.length, AUTO_CONTINUE_MAX, 'the seams are in the record')
   assert.equal(restored.turns[0].endNotice?.unfinishedSteps, 2, 'and so is the card it ended on')
-  results.push('a model that stops five times gets four continuations and then the plan-unfinished card')
+  results.push('a model that stops past its budget gets the whole budget and then the plan-unfinished card')
 }
 
 // ---------------------------------------------------------------- the budget is per turn
@@ -318,7 +349,7 @@ async function aTurnSpendsItsOwnBudget() {
   assert.equal(marks(second.chunks)[0]?.count, 1, 'a new send starts the count over')
   assert.deepEqual(
     marks(second.chunks).map((mark) => mark.count),
-    [1, 2, 3, 4],
+    Array.from({ length: AUTO_CONTINUE_MAX }, (_, index) => index + 1),
     'and spends the whole budget again before the card'
   )
   assert.equal(notice(second.chunks)?.cause, 'model_stop', 'ending at the card, as the previous turn did')
@@ -346,12 +377,116 @@ async function aTurnSpendsItsOwnBudget() {
   results.push('and resumes with it, so an approval does not refund the turn its budget')
 }
 
+// ---------------------------------------------------------------- the endings a nudge can answer
+
+async function aTruncatedTurnPicksItselfUpMidPlan() {
+  // The death a long turn actually has: the provider stops writing at its output cap, twice, with the
+  // plan unfinished. Nobody clicks anything — the loop is the only party that acts here — and the turn
+  // finishes the work it was doing rather than handing the user a card about half a paragraph.
+  const { chunks, sent } = await runLoop({
+    rounds: [
+      planFrames('p1', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+        { id: 'tests', text: 'Add tests for it', status: 'pending' },
+      ]),
+      proseFrames('I have started on the precedence table, and the first arm is', 'length'),
+      proseFrames('The table is most of the way rewritten; what is left is', 'length'),
+      planFrames('p2', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'done' },
+        { id: 'tests', text: 'Add tests for it', status: 'done' },
+      ]),
+      proseFrames('The precedence table is updated.'),
+    ],
+  })
+
+  const spent = marks(chunks)
+  assert.deepEqual(
+    spent.map((mark) => mark.count),
+    [1, 2],
+    'two capped replies, two continuations'
+  )
+  assert.equal(
+    spent.every((mark) => mark.cause === 'truncated'),
+    true,
+    'each of them naming the output cap as the reason, because that is why the machine kept going'
+  )
+  assert.equal(nudges(sent).length, 2, 'and the provider was nudged both times')
+  const nudge = autoContinueNudge(2)
+  assert.deepEqual(
+    [sent[2]?.messages.at(-1), sent[3]?.messages.at(-1)],
+    // The same sentence twice, and that is not a slip: the plan had not changed between the two capped
+    // replies, so the work described to the model was the same work both times.
+    [
+      { role: 'user', content: nudge },
+      { role: 'user', content: nudge },
+    ],
+    'the nudge went out as the last message of the request that followed it'
+  )
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'awaiting_approval'),
+    false,
+    'and no permission card was raised: nothing here needed a person'
+  )
+
+  // The turn is one turn: the capped replies were kept, and the work that followed them is in the same
+  // answer rather than in a new one.
+  const turns = transcript(chunks)
+  assert.equal(turns.length, 1, 'still one turn')
+  assert.equal(
+    turns.some((turn) => turn.role === 'user'),
+    false,
+    'with no user message in it, the nudge being main\u2019s own'
+  )
+  assert.equal(turns[0].content.includes('the first arm is'), true, 'the capped reply was kept, not discarded')
+  assert.equal(turns[0].content.includes('is updated'), true, 'and the finished work followed it')
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'turn_end_notice'),
+    false,
+    'and there is nothing to announce, because the plan got done'
+  )
+  assert.equal(chunks.at(-1)?.type, 'done', 'the turn ends the ordinary way')
+  results.push('two capped replies mid-plan are nudged twice, with no click, and the turn finishes the work')
+}
+
+async function aDroppedConnectionEndsTheTurnWithTheCard() {
+  // The one ending a further request cannot fix. The reply stopped arriving, so the app stops and asks
+  // the person rather than spending their money on a connection that is not there.
+  const { chunks, sent } = await runLoop({
+    rounds: [
+      planFrames('p1', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+      ]),
+      failingResponse([
+        JSON.stringify({ choices: [{ delta: { content: 'I have started on the precedence table, and' } }] }),
+      ]),
+    ],
+  })
+
+  assert.deepEqual(marks(chunks), [], 'a dropped connection is never nudged')
+  assert.equal(sent.length, 2, 'and the model is not asked again')
+  assert.equal(notice(chunks)?.cause, 'stream_error', 'the turn ends naming the ending it had')
+  assert.equal(notice(chunks)?.unfinishedSteps, 1, 'with the work that is left')
+  assert.equal(notice(chunks)?.resumable, true, 'and the Continue click the user still has')
+  assert.equal(chunks.at(-1)?.type, 'turn_end_notice', 'the card is the last thing the run says')
+  assert.equal(
+    transcript(chunks)[0]?.content,
+    'I have started on the precedence table, and',
+    'and the part of the reply that did arrive was kept'
+  )
+  results.push('a dropped connection ends the turn with the card, and no nudge is spent on it')
+}
+
 // ---------------------------------------------------------------- the run
 
 async function main() {
   await aModelThatStopsThreeTimesMidPlanEndsOneTurn()
-  await aModelThatStopsFiveTimesGetsFourContinuationsThenTheCard()
+  await aModelThatStopsPastItsBudgetGetsTheCard()
   await aTurnSpendsItsOwnBudget()
+  await aTruncatedTurnPicksItselfUpMidPlan()
+  await aDroppedConnectionEndsTheTurnWithTheCard()
 
   console.log(`\nbounded auto-continue: ${results.length} checks passed`)
   for (const line of results) console.log(`  pass: ${line}`)

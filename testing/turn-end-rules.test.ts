@@ -171,10 +171,17 @@ describe('shouldAutoContinue', () => {
     expect(shouldAutoContinue('model_stop', plan, 0)).toBe(true)
   })
 
-  it('never nudges a reply that was cut off, by either cause', () => {
-    // The two endings the manual card stays for: re-asking past an output cap hits the same cap, and
-    // re-asking across a dropped connection needs the connection. Neither is what a nudge fixes.
-    expect(shouldAutoContinue('truncated', unfinished, 0)).toBe(false)
+  it('continues a reply the provider cut off, which is how a long turn actually dies', () => {
+    // The cause the rule was written for. A capped reply is not a decision the model made — it is the
+    // same turn, stopped at the same place by the provider's output limit — so nudging it is the click
+    // the user would make anyway, and the ending a live long turn is overwhelmingly likely to have.
+    expect(shouldAutoContinue('truncated', unfinished, 0)).toBe(true)
+    expect(shouldAutoContinue('truncated', reconcilePlanOnTurnEnd([step('a', 'in_progress')]), 0)).toBe(true)
+  })
+
+  it('leaves a dropped connection to the user, because a nudge needs the connection back', () => {
+    // The one ending a further request cannot fix: the reply stopped arriving. Nothing the app sends
+    // changes that, and the human is the only party who can act on it.
     expect(shouldAutoContinue('stream_error', unfinished, 0)).toBe(false)
   })
 
@@ -183,11 +190,15 @@ describe('shouldAutoContinue', () => {
     expect(shouldAutoContinue('model_stop', [], 0)).toBe(false)
   })
 
-  it('spends a budget of four continuations and then stops', () => {
-    expect(AUTO_CONTINUE_MAX).toBe(4)
-    expect(shouldAutoContinue('model_stop', unfinished, AUTO_CONTINUE_MAX - 1)).toBe(true)
-    for (let used = AUTO_CONTINUE_MAX; used <= AUTO_CONTINUE_MAX + 2; used += 1) {
-      expect(shouldAutoContinue('model_stop', unfinished, used)).toBe(false)
+  it('spends a budget of eight continuations and then stops', () => {
+    expect(AUTO_CONTINUE_MAX).toBe(8)
+    // A budget a long turn can spend rather than one it spends at once: eight is the point at which the
+    // same unfinished step has survived eight round-trips, which is the evidence a ninth would not fix.
+    for (const cause of ['model_stop', 'truncated'] as const) {
+      expect(shouldAutoContinue(cause, unfinished, AUTO_CONTINUE_MAX - 1)).toBe(true)
+      for (let used = AUTO_CONTINUE_MAX; used <= AUTO_CONTINUE_MAX + 2; used += 1) {
+        expect(shouldAutoContinue(cause, unfinished, used)).toBe(false)
+      }
     }
   })
 })

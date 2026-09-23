@@ -484,13 +484,14 @@ export type AgentChunk =
   /**
    * A turn that picked itself up again, and how much of its budget it has now spent.
    *
-   * Yielded *instead* of the ending above when the model stopped on its own with steps left on its
-   * plan: the run then asks the model again rather than ending, so there is no ending to announce and
-   * the turn is not over. `count` and `max` travel with it rather than being known by the pane, so the
-   * line the user reads is the loop's own account of what it did — one turn's `2 of 4` can never be
-   * confused with another build's different budget.
+   * Yielded *instead* of the ending above when an ending the auto-continue rule can answer is reached
+   * with steps left on the plan: the run then asks the model again rather than ending, so there is no
+   * ending to announce and the turn is not over. `count`, `max` and the cause travel with it rather than
+   * being known by the pane, so the line the user reads is the loop's own account of what it did — one
+   * turn's `2 of 8` can never be confused with another build's different budget, and the reason it kept
+   * going is never guessed at from the reply that followed.
    */
-  | { type: 'auto_continue'; count: number; max: number }
+  | { type: 'auto_continue'; count: number; max: number; cause: TurnEndCause }
   | { type: 'done'; reason: 'complete' | 'max_steps'; steps: number }
 
 /** A tool call as it is being assembled from stream fragments. */
@@ -645,12 +646,12 @@ async function presentCall(
  * pause does not come through here — a pause ends the stream, not the turn — which is why the caller
  * that presents a call returns before reaching this.
  *
- * One ending is decided here rather than announced: the model stopped on its own with work still on its
- * plan, and the auto-continue rule says this turn should be picked up again. That ending does not end
- * the turn — it yields the auto-continue chunk the user reads and hands the caller the nudge to send,
- * and the loop asks the model again. It is decided in this function rather than beside it for the same
- * reason everything else here is: every ending passes through one place, so a turn that continues
- * itself cannot be a turn that skipped the reconciliation, the counting, or the budget.
+ * One ending is decided here rather than announced: an ending the auto-continue rule says this turn
+ * should be picked up from. That ending does not end the turn — it yields the auto-continue chunk the
+ * user reads and hands the caller the nudge to send, and the loop asks the model again. It is decided in
+ * this function rather than beside it for the same reason everything else here is: every ending passes
+ * through one place, so a turn that continues itself cannot be a turn that skipped the reconciliation,
+ * the counting, or the budget.
  *
  * The plan is reconciled rather than reported as declared: a turn that has ended cannot have a step
  * in progress, and the notice counts the reconciled plan, so a step stopped midway through is counted
@@ -661,17 +662,27 @@ async function* finishTurn(
   cause: TurnEndCause,
   steps: number,
   reason: 'complete' | 'max_steps' | null,
-  usedBudget: number
+  usedBudget: number,
+  /**
+   * Whether a nudge may answer this ending at all.
+   *
+   * The rule below decides *which* endings are worth continuing; this says whether the caller has an
+   * ending whose continuation would be meaningful, which it knows and this function cannot. Two callers
+   * pass false. The loop's own step budget has nothing left to spend, so a nudge there would be answered
+   * by the same check again; and a refusal is a decision the user has already made, which the app must
+   * not answer with "try again anyway". A cut-off turn passes it only when the frame asked for no work: a
+   * reply that stopped mid-request cannot be continued from, because running half a request is the thing
+   * that rule already refuses.
+   */
+  continuable: boolean
 ): AsyncGenerator<AgentChunk, TurnEnding, undefined> {
   const reconciled = reconcilePlanOnTurnEnd(plan)
 
-  // Consulted only at the ending the model chose with nothing further asked of it. The loop's own step
-  // budget has nothing left to spend, so a nudge there would be answered by the same check again, four
-  // round-trips that do nothing; and a refusal is a decision the user has already made, which the app
-  // must not answer with "try again anyway". `complete` excludes both, and the cause excludes the two
-  // cut-off endings a further request cannot fix.
-  if (reason === 'complete' && shouldAutoContinue(cause, reconciled, usedBudget)) {
-    yield { type: 'auto_continue', count: usedBudget + 1, max: AUTO_CONTINUE_MAX }
+  if (continuable && shouldAutoContinue(cause, reconciled, usedBudget)) {
+    // The cause travels with the count, because the user is owed the reason the machine kept going: a
+    // turn picked up after the provider ran out of room is a different event from one picked up after
+    // the model stopped, and only the second is something the user can do anything about.
+    yield { type: 'auto_continue', count: usedBudget + 1, max: AUTO_CONTINUE_MAX, cause }
     return autoContinueNudge(unfinishedPlanSteps(reconciled))
   }
 
@@ -972,7 +983,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     if (opts.pending.denied) {
       // The budget is passed through as the counter stands and the ending still cannot spend it: a
       // denial is the user's own decision, and the app does not answer it by asking the model again.
-      yield* finishTurn(plan, 'model_stop', steps, null, continuations)
+      yield* finishTurn(plan, 'model_stop', steps, null, continuations, false)
       return
     }
 
@@ -989,7 +1000,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       // the turn did not do, and this is the ending a user is least able to see for themselves. The
       // cause is the ordinary one — the last reply arrived complete; it was the loop that stopped —
       // so the cause copy says nothing and the plan is what the card is about.
-      yield* finishTurn(plan, 'model_stop', steps, 'max_steps', continuations)
+      yield* finishTurn(plan, 'model_stop', steps, 'max_steps', continuations, false)
       return
     }
     steps += 1
@@ -1067,13 +1078,19 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // A turn that died announces itself before it ends, and a turn that was cut off is over whatever
     // the model asked for: the calls it asked for in the same breath arrived alongside a reply the
     // provider had already stopped writing, so running them would be acting on half a request. The
-    // notice is the announcement; whether to continue is the user's click, and `resumable` is what
-    // the button reads. That is true of both of these causes and of no other ending: a model that
-    // stopped with work left is nudged by `finishTurn` instead of ending, so it never reaches here with
-    // a plan to announce. A cut-off turn asked for no further work, so it yields no `done` chunk.
+    // notice is the announcement. Whether to continue is decided by `finishTurn`, which is the one place
+    // holding the reconciled plan and the budget — and the reason the reply was cut off is not a reason
+    // to stop: a truncated reply with nothing to run asks the loop for the rest, which is the click the
+    // user would have made. That is what the flag below says, and it is false for a cut-off frame that
+    // did ask for calls: there is work in it, and half a request is not something to continue from.
+    // A connection that dropped asks for nothing and continues nothing, whatever the frame said.
     if (cause !== 'model_stop') {
-      yield* finishTurn(plan, cause, steps, null, continuations)
-      return
+      const nudge = yield* finishTurn(plan, cause, steps, null, continuations, calls.length === 0)
+      if (nudge === null) return
+
+      continuations += 1
+      history.push({ role: 'user', content: nudge })
+      continue
     }
 
     // No tools asked for: this is the model's answer, and the loop is finished — unless the answer left
@@ -1084,7 +1101,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // nowhere else: no chunk carries it, so the pane never renders it as something the user typed, and
     // the transcript of this conversation gains no turn from it.
     if (calls.length === 0) {
-      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations)
+      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations, true)
       if (nudge === null) return
 
       continuations += 1

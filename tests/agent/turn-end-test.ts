@@ -30,7 +30,7 @@ import { rehydrateTranscript, serializeTranscript } from '../../app/components/w
 import { runAgentLoop } from '../../conveyor/modules/agent'
 import { extractDelta } from '../../conveyor/modules/llm-engine'
 import type { PlanStep } from '../../conveyor/protocol/plan'
-import { TURN_END_CAUSES } from '../../conveyor/protocol/turn-end'
+import { AUTO_CONTINUE_MAX, TURN_END_CAUSES } from '../../conveyor/protocol/turn-end'
 
 const results: string[] = []
 
@@ -148,7 +148,11 @@ async function collect(iter: AsyncIterable<unknown>): Promise<Array<Record<strin
 }
 
 /** Run one scripted conversation through the real loop. */
-async function runLoop(rounds: Array<string[] | Response>): Promise<Array<Record<string, unknown>>> {
+async function runLoop(
+  rounds: Array<string[] | Response>,
+  /** A turn that has already spent its auto-continue budget, so no ending is picked up by the loop. */
+  opts: { continuations?: number } = {}
+): Promise<Array<Record<string, unknown>>> {
   const log: unknown[] = []
   return collect(
     runAgentLoop({
@@ -161,6 +165,7 @@ async function runLoop(rounds: Array<string[] | Response>): Promise<Array<Record
       autoApprove: false,
       signal: new AbortController().signal,
       fetchImpl: scriptedFetch(rounds, log) as never,
+      continuations: opts.continuations,
     })
   )
 }
@@ -226,7 +231,14 @@ async function cutOffByTheOutputLimit() {
     { id: 'tests', text: 'Add tests for it', status: 'pending' },
   ]
 
-  const chunks = await runLoop([planFrames('call_1', steps), proseFrames('The parser works by ', 'length')])
+  // Run with the budget already spent. A cut-off reply mid-plan is now picked up again by the loop —
+  // that is `tests/agent/auto-continue-test.ts`'s subject, and it is the ending a live long turn
+  // usually has — so what is left to test here is the ending itself: the one a cut-off reply reaches
+  // once the turn has nothing left to answer it with. Every assertion below is about that ending, and
+  // none of them is about the policy that decides how the loop got to it.
+  const chunks = await runLoop([planFrames('call_1', steps), proseFrames('The parser works by ', 'length')], {
+    continuations: AUTO_CONTINUE_MAX,
+  })
 
   assert.deepEqual(
     chunks.map((c) => c.type),

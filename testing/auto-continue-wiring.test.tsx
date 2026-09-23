@@ -115,7 +115,7 @@ describe('bounded auto-continue', () => {
     chunk(stub, channel, { type: 'text_delta', text: 'I have started on the precedence table.' })
     // The model stopped with work left on its plan: the loop nudges it rather than ending the turn,
     // and says so where the resumed work begins.
-    chunk(stub, channel, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX })
+    chunk(stub, channel, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX, cause: 'model_stop' })
     readCall(stub, channel, 'c1', 'src/parser.ts')
     chunk(stub, channel, { type: 'text_delta', text: 'The table is on line 12.' })
     // And the resumed stretch finishes the work, which is the whole point of nudging it: the plan is
@@ -131,9 +131,9 @@ describe('bounded auto-continue', () => {
     chunk(stub, channel, { type: 'done', reason: 'complete', steps: 3 })
     stub.emit(channel, { type: 'end' })
 
-    const marker = await screen.findByText(`Auto-continuing — 1 of ${AUTO_CONTINUE_MAX}`)
+    const marker = await screen.findByText(`Auto-continuing after a plain stop — 1 of ${AUTO_CONTINUE_MAX}`)
     // The count is the chunk's, rendered as it arrived: the pane is not counting anything itself.
-    expect(screen.queryByText('Auto-continuing — 2 of 4')).toBeNull()
+    expect(screen.queryByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)).toBeNull()
 
     // It sits at the seam: the resumed call is carded under it, so the line reads as the boundary it
     // is rather than as a comment on the answer above.
@@ -147,6 +147,49 @@ describe('bounded auto-continue', () => {
     expect(screen.queryByText(/You stopped with/)).toBeNull()
   })
 
+  it('says which ending the turn was picked up after', async () => {
+    // The line has to name the cause, not just the number: a turn that kept going after a plain stop is
+    // a different event from one that kept going after the provider stopped writing, and the second is
+    // the one a user meets on a long turn — the reason the machine kept going is the thing they can act on.
+    const stub = stubChat()
+    renderChat()
+    await userEvent.type(await composer(), 'refactor the parser{Enter}')
+    const channel = await streamChannel(stub)
+
+    chunk(stub, channel, { type: 'plan', plan: PLAN })
+    chunk(stub, channel, { type: 'text_delta', text: 'I have started on the table, and' })
+    chunk(stub, channel, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX, cause: 'truncated' })
+    chunk(stub, channel, { type: 'text_delta', text: 'The rest of the table.' })
+    chunk(stub, channel, { type: 'auto_continue', count: 2, max: AUTO_CONTINUE_MAX, cause: 'model_stop' })
+    chunk(stub, channel, { type: 'text_delta', text: 'And the tests.' })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 4 })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText(`Auto-continuing after the output cap — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(await screen.findByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+  })
+
+  it('raises the card for a dropped connection without spending the budget on it', async () => {
+    // The other ending that still stops the app. Nothing is nudged — a further request would go to a
+    // connection that is not there — so the turn ends with the card the user can act on.
+    const stub = stubChat()
+    renderChat()
+    await userEvent.type(await composer(), 'refactor the parser{Enter}')
+    const channel = await streamChannel(stub)
+
+    chunk(stub, channel, { type: 'plan', plan: PLAN })
+    chunk(stub, channel, { type: 'text_delta', text: 'I have started on the precedence table,' })
+    chunk(stub, channel, { type: 'turn_end', cause: 'stream_error' })
+    chunk(stub, channel, { type: 'turn_end_notice', cause: 'stream_error', resumable: true, unfinishedSteps: 1 })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 2 })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText('Ended early: the reply was cut off (the connection dropped)')).toBeTruthy()
+    expect(await screen.findByText('Ended with the plan unfinished — 1 step remain')).toBeTruthy()
+    expect(screen.queryByText(/Auto-continuing/)).toBeNull()
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+  })
+
   it('shows the plan-unfinished card only once the budget is spent', async () => {
     const stub = stubChat()
     renderChat()
@@ -156,19 +199,21 @@ describe('bounded auto-continue', () => {
     chunk(stub, channel, { type: 'plan', plan: PLAN })
     for (let count = 1; count <= AUTO_CONTINUE_MAX; count += 1) {
       chunk(stub, channel, { type: 'text_delta', text: `Pass ${count}. ` })
-      chunk(stub, channel, { type: 'auto_continue', count, max: AUTO_CONTINUE_MAX })
+      chunk(stub, channel, { type: 'auto_continue', count, max: AUTO_CONTINUE_MAX, cause: 'truncated' })
     }
 
     // The spend is visible, and nothing has been claimed about the ending: a card raised while the
     // loop was still going would be telling the user the turn was over when it was not.
-    expect(await screen.findByText(`Auto-continuing — ${AUTO_CONTINUE_MAX} of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(
+      await screen.findByText(`Auto-continuing after the output cap — ${AUTO_CONTINUE_MAX} of ${AUTO_CONTINUE_MAX}`)
+    ).toBeTruthy()
     expect(screen.queryByText(/Ended with the plan unfinished/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
 
-    // The fifth stop is the one the loop will not nudge: it ends the turn, and the card is the card
-    // this app already had, in the same words.
-    chunk(stub, channel, { type: 'turn_end', cause: 'model_stop' })
-    chunk(stub, channel, { type: 'turn_end_notice', cause: 'model_stop', resumable: true, unfinishedSteps: 1 })
+    // The stop past the budget is the one the loop will not nudge: it ends the turn, and the card is
+    // the card this app already had, in the same words.
+    chunk(stub, channel, { type: 'turn_end', cause: 'truncated' })
+    chunk(stub, channel, { type: 'turn_end_notice', cause: 'truncated', resumable: true, unfinishedSteps: 1 })
     chunk(stub, channel, { type: 'done', reason: 'complete', steps: 5 })
     stub.emit(channel, { type: 'end' })
 
@@ -183,22 +228,30 @@ describe('bounded auto-continue', () => {
     await userEvent.type(composerField, 'refactor the parser{Enter}')
     const first = await streamChannel(stub)
 
-    for (let count = 1; count <= 3; count += 1) {
-      chunk(stub, first, { type: 'auto_continue', count, max: AUTO_CONTINUE_MAX })
+    for (let count = 1; count <= AUTO_CONTINUE_MAX; count += 1) {
+      chunk(stub, first, { type: 'auto_continue', count, max: AUTO_CONTINUE_MAX, cause: 'truncated' })
     }
-    chunk(stub, first, { type: 'turn_end_notice', cause: 'model_stop', resumable: true, unfinishedSteps: 1 })
+    chunk(stub, first, { type: 'turn_end_notice', cause: 'truncated', resumable: true, unfinishedSteps: 1 })
     chunk(stub, first, { type: 'done', reason: 'complete', steps: 4 })
     stub.emit(first, { type: 'end' })
-    expect(await screen.findByText(`Auto-continuing — 3 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(
+      await screen.findByText(`Auto-continuing after the output cap — ${AUTO_CONTINUE_MAX} of ${AUTO_CONTINUE_MAX}`)
+    ).toBeTruthy()
 
-    // A second message is a second turn: the loop starts its own budget, so what arrives is a count
-    // of one. A pane that remembered the first turn's count would render four and be wrong.
+    // A second message is a second turn: the loop starts its own budget, so what arrives is a count of
+    // one. A pane that remembered the first turn's count would render nine and be wrong.
     await userEvent.type(await composer(), 'and now the lexer{Enter}')
     const second = await streamChannel(stub, 1)
-    chunk(stub, second, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX })
+    chunk(stub, second, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX, cause: 'model_stop' })
     stub.emit(second, { type: 'end' })
 
-    expect(await screen.findByText(`Auto-continuing — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(await screen.findByText(`Auto-continuing after a plain stop — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    // Both turns' lines are on screen — the transcript keeps them — and the second turn's count is its
+    // own: nothing renders a ninth continuation, which is what carrying the count across would do.
+    expect(
+      screen.getByText(`Auto-continuing after the output cap — ${AUTO_CONTINUE_MAX} of ${AUTO_CONTINUE_MAX}`)
+    ).toBeTruthy()
+    expect(screen.queryByText(`Auto-continuing after the output cap — 9 of ${AUTO_CONTINUE_MAX}`)).toBeNull()
   })
 
   it('draws the seams a reopened transcript was saved with', async () => {
@@ -215,8 +268,8 @@ describe('bounded auto-continue', () => {
           // Two seams, as the save kept them: a turn that picked itself up twice is not one
           // uninterrupted answer, and the reply cannot say so — only the record can.
           continuations: [
-            { count: 1, max: AUTO_CONTINUE_MAX, afterSteps: 0 },
-            { count: 2, max: AUTO_CONTINUE_MAX, afterSteps: 0 },
+            { count: 1, max: AUTO_CONTINUE_MAX, afterSteps: 0, cause: 'truncated' },
+            { count: 2, max: AUTO_CONTINUE_MAX, afterSteps: 0, cause: 'model_stop' },
           ],
           // And the card it ended on, which is what a turn that spent its budget ends with.
           endNotice: { cause: 'model_stop', unfinishedSteps: 2 },
@@ -227,8 +280,8 @@ describe('bounded auto-continue', () => {
     stubChat({ loadTranscript: () => snapshot })
     renderChat()
 
-    expect(await screen.findByText(`Auto-continuing — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
-    expect(await screen.findByText(`Auto-continuing — 2 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(await screen.findByText(`Auto-continuing after the output cap — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(await screen.findByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
     expect(await screen.findByText('Ended with the plan unfinished — 2 steps remain')).toBeTruthy()
     // History is not actionable, and neither is a seam: the run those lines belong to is gone.
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()

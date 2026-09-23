@@ -30,7 +30,7 @@ import { rehydrateTranscript, serializeTranscript } from '../../app/components/w
 import { runAgentLoop, MAX_STEPS } from '../../conveyor/modules/agent'
 import { agentSystemPrompt } from '../../conveyor/protocol/context'
 import type { PlanStep } from '../../conveyor/protocol/plan'
-import { RESUME_MESSAGE } from '../../conveyor/protocol/turn-end'
+import { AUTO_CONTINUE_MAX, RESUME_MESSAGE } from '../../conveyor/protocol/turn-end'
 
 const results: string[] = []
 
@@ -127,6 +127,8 @@ interface RunOptions {
   pending?: Record<string, unknown>
   plan?: readonly PlanStep[]
   steps?: number
+  /** Auto-continuations this turn has already spent, for the endings the loop will not pick up again. */
+  continuations?: number
 }
 
 async function runLoop(opts: RunOptions): Promise<{
@@ -148,6 +150,7 @@ async function runLoop(opts: RunOptions): Promise<{
       ...(opts.pending ? { pending: opts.pending as never } : {}),
       ...(opts.plan ? { plan: opts.plan } : {}),
       ...(opts.steps !== undefined ? { steps: opts.steps } : {}),
+      ...(opts.continuations !== undefined ? { continuations: opts.continuations } : {}),
     })
   )
   return { chunks, sent }
@@ -237,6 +240,9 @@ async function aFinishedPlanEndsInSilence() {
 }
 
 async function aCutOffTurnWithAnUnfinishedPlanNamesBoth() {
+  // Run with the budget already spent, for the reason `tests/agent/turn-end-test.ts` gives at its own
+  // cut-off case: a truncated reply mid-plan is picked up by the loop while it has budget, so the
+  // ending this case is about is the one it reaches when it has none.
   const { chunks } = await runLoop({
     rounds: [
       planFrames('p1', [
@@ -245,6 +251,7 @@ async function aCutOffTurnWithAnUnfinishedPlanNamesBoth() {
       ]),
       proseFrames('I am halfway through the ta', 'length'),
     ],
+    continuations: AUTO_CONTINUE_MAX,
   })
 
   // One chunk, two facts: the reply was cut off, and work is left. A user told only one of them still
@@ -310,7 +317,20 @@ async function aPauseCarriesThePlanBackToTheResumedRun() {
   // The write cannot run without a folder, which is the point: the refusal is fed back and the model
   // answers — and the turn that ends is the plan's turn, not an empty one. A resume that started from
   // an empty plan would report nothing here, which is the failure this case exists to catch.
-  assert.equal(second.chunks.at(-1)?.reason, 'complete', 'the resumed run ends the ordinary way')
+  //
+  // Which is also why the assertions below are about what the plan carried back, not about which budget
+  // ends the turn: a plan that came back with two steps still unfinished is a plan the loop now keeps
+  // picking the turn up for, so this run spends its auto-continue budget and the model keeps stopping
+  // until one of the two budgets runs out. The seams are the stronger evidence for this case's subject —
+  // a resume that had lost the plan would have ended on the first stop with none.
+  const spent = second.chunks.filter((chunk) => chunk.type === 'auto_continue')
+  assert.equal(spent.length > 0, true, 'the plan it carried back is what kept the turn going')
+  assert.equal(second.chunks.at(-1)?.type, 'done', 'and it still ends through one of the loop’s endings')
+  assert.equal(
+    ['complete', 'max_steps'].includes(String(second.chunks.at(-1)?.reason)),
+    true,
+    `unexpected ending: ${JSON.stringify(second.chunks.at(-1))}`
+  )
   assert.equal(
     notice(second.chunks)?.unfinishedSteps,
     2,
