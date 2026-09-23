@@ -6,7 +6,7 @@ import { defineModule, stream } from '../init'
 import { readApiKey } from './settings'
 import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type ToolDefinition } from './llm-engine'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
-import { nextCallToPresent, type FrameCall, type GateDecision } from '../protocol/approval'
+import { nextGateIndex, type FrameCall } from '../protocol/approval'
 import { computeFileDiff, type FileDiff } from '../protocol/diff'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
@@ -46,12 +46,18 @@ import { readMentions } from './mentions'
  * `awaiting_approval` and ends, and `resume` continues from the decision. The UI's Approve button
  * starts a new stream rather than unpausing an old one.
  *
- * Consent is per call. A frame may ask for several calls that each need approval, and one click must
- * not answer all of them: the loop presents the first, waits for its decision, runs or refuses it,
- * appends its tool message, and only then presents the next — re-asking the model once the frame's
- * decisions are all resolved. `nextCallToPresent` owns which call is next, so the order is stated
- * once and tested directly. The batch invariant from the previous fix still holds: the model is not
+ * Consent is per call, and the frame is walked strictly in the order the model wrote it. One click
+ * must not answer several calls, and no call may overtake a decision either: the walk stops dead at
+ * the first call that needs consent, runs nothing behind it, and resumes where it stopped once that
+ * decision lands. `nextGateIndex` owns where the walk stops, so the order is stated once and tested
+ * directly, and the renderer-side half of the same law — no outcome below an undecided call — is
+ * `firstPauseViolation`. The batch invariant from the previous fix still holds: the model is not
  * asked anything until every `tool_call_id` in the frame has a tool message, denials included.
+ *
+ * A refusal is the one decision that does not resume the walk. It ends the turn where it stopped:
+ * the refused call is answered with the refusal so the frame's record is complete, and the calls
+ * behind it are never run — a turn that has ended asks the model nothing further, so there is no
+ * request for their results to be missing from.
  *
  * `set_plan` is the one tool exempt from that gate. Every other tool is gated because it touches the
  * disk, a shell or the network through `executeTool`, and consent is the point of the gate. This one
@@ -177,7 +183,7 @@ const TOOL_ARG_SCHEMAS = {
  * ask.
  *
  * Both exemptions are tools that cannot act on anything outside this process. `set_plan` merges a
- * list and yields it, which is why it never reaches the `gated` queue and why a run can announce a
+ * list and yields it, which is why a walk never stops in front of it and why a run can announce a
  * plan mid-turn without stopping to ask — the property the node plan suite asserts directly.
  */
 export function needsApproval(tool: string): boolean {
@@ -417,10 +423,15 @@ export type AgentChunk =
        */
       messages: ChatMessage[]
       /**
-       * The calls from this frame still awaiting a decision, this one first, exactly as the model
-       * sent them. They arrived in one assistant turn and the provider requires an answer for each
-       * before the next request, so the queue is carried rather than rebuilt: the run executes what
-       * was approved rather than a display layer's reconstruction of it.
+       * The calls of this frame from the one being asked about, in the model's own order: this one
+       * first, then everything it is holding back.
+       *
+       * Everything, not only the calls that will need a decision of their own. An exempt call behind
+       * the parked one has not run and will not run until this decision lands, so it belongs to the
+       * queue as much as a gated one does — and leaving it out would drop it from the run entirely,
+       * because the queue is what the resume walks. They arrived in one assistant turn and the
+       * provider requires an answer for each before the next request, so the queue is carried rather
+       * than rebuilt: the run executes what the model asked for, in the order it asked.
        */
       calls: ToolCall[]
       /** Steps consumed so far, so the budget spans approvals rather than resetting on each one. */
@@ -499,12 +510,22 @@ export function describeToolCall(tool: string, args: Record<string, unknown>): s
   }
 }
 
+/**
+ * How a frame walk ended.
+ *
+ * Three endings rather than a boolean, because the caller has to do something different with each:
+ * a settled frame goes on to the next model round-trip, a pause ends the stream so the decision can
+ * start the next one, and an abort ends the run without the app deciding anything for the user.
+ */
+type WalkEnd = 'settled' | 'paused' | 'aborted'
+
 interface PendingDecision {
   /**
-   * The gated queue from the paused frame, the decided call first.
+   * The frame's calls from the paused one, in frame order: the call this decision answers first.
    *
-   * Only the head is answered by this decision. The rest stay queued and are presented one at a
-   * time, because consent is per call.
+   * The head is the only call the decision settles. What follows it is the rest of the frame, and on
+   * an approval the walk takes them in order from there — running the ones that need no consent and
+   * stopping again at the next one that does, because consent is per call.
    */
   calls: ToolCall[]
   denied: boolean
@@ -556,11 +577,11 @@ async function previewWriteDiff(
 }
 
 /**
- * Put one gated call in front of the user, with the queue behind it.
+ * Put the call the walk stopped at in front of the user, with the frame's remainder behind it.
  *
- * The queue travels with the chunk so the renderer can show what is still coming, and is handed back
+ * The queue travels with the chunk so the renderer can show what is waiting and hand it back
  * unchanged on resume — which is how the run re-enters with the model's own calls rather than a
- * rebuild of them.
+ * rebuild of them, and why the calls behind this one stay unexecuted rather than disappearing.
  */
 async function presentCall(
   queue: ToolCall[],
@@ -771,14 +792,79 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     }
   }
 
+  // ---------------------------------------------------------------- the frame walk
+
+  /**
+   * Walk a frame's calls from `cursor`, in the order the model wrote them.
+   *
+   * This is where the serialization law lives. The walk runs every call in front of the gate — they
+   * need no decision, so there is nothing to wait for — and then stops dead in front of the first
+   * call that needs one: that call is announced and put to the user, and *nothing behind it runs*,
+   * an approval-exempt call included. Both halves matter. A walk that ran the exempt calls behind the
+   * parked one would be executing work the user has not agreed to the surrounding action for, in the
+   * same frame, in an order the user never sanctioned; the reported session is exactly that shape —
+   * a command waiting on a decision with two file reads already marked done behind it.
+   *
+   * A resumed run calls this again with the queue the pause handed over, so one rule covers a fresh
+   * frame and a continued one: the cursor is where the run has got to, and the gate answers whether
+   * it may take the next step.
+   */
+  async function* walkFrame(frame: ToolCall[], cursor: number): AsyncGenerator<AgentChunk, WalkEnd, void> {
+    const calls: FrameCall[] = frame.map((call) => ({
+      callId: call.id,
+      // Auto-approve answers every question in advance, so the gate has nothing to stop at. It is read
+      // here, once, where the flags are built: a walk that consulted the setting per call would be a
+      // second place for the same decision about the same run.
+      needsApproval: needsApproval(call.function.name) && !opts.autoApprove,
+    }))
+    const gate = nextGateIndex(calls, cursor)
+    // Where the stretch with nothing to decide ends: the gate itself when there is one, and the end
+    // of the frame when there is not.
+    const stop = gate === -1 ? frame.length : gate
+
+    for (let index = cursor; index < stop; index += 1) {
+      const call = frame[index]
+      const tool = call.function.name
+      yield { type: 'tool_call_start', callId: call.id, tool, args: argsForDisplay(call) }
+
+      const outcome = await executeTool(tool, call.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
+      if (opts.signal.aborted) return 'aborted'
+
+      yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
+      // A declared plan is announced after its result, so what the user sees in the checklist and what
+      // the model was told arrive in the same order they happened. Merged over the plan in hand, and
+      // only when the call carried one: a refused call or an empty list leaves the plan as it was.
+      if (tool === 'set_plan' && outcome.ok) {
+        const declared = declaredPlan(call.function.arguments)
+        if (declared) {
+          plan = mergePlan(plan, declared)
+          yield { type: 'plan', plan }
+        }
+      }
+      // Failures go back to the model as ordinary tool output, which is what lets it adapt instead of
+      // the run collapsing.
+      history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
+    }
+
+    if (gate === -1) return 'settled'
+
+    // The gate's own call, announced before it is put to the user so there is a card to decide on,
+    // and unanswered by anything behind it. The queue is the frame from here on as the model wrote
+    // it, so a resume continues the frame rather than a display layer's idea of it.
+    const parked = frame[gate]
+    yield { type: 'tool_call_start', callId: parked.id, tool: parked.function.name, args: argsForDisplay(parked) }
+    yield await presentCall(frame.slice(gate), history, steps, opts.workspaceRoot, plan)
+    return 'paused'
+  }
+
   // A resumed run re-enters with the head of the paused queue already decided. `opts.messages`
   // already ends with the assistant turn that asked for these calls, so nothing is reconstructed
   // here — pushing it again would duplicate the turn and orphan the other calls in the same frame.
   //
   // Only this one call is answered now. Its decision settles it with its own tool message, and the
-  // rest of the queue is presented in turn: the model is not re-asked until every call in the frame
-  // has been run or refused, because the provider requires a result for each `tool_call_id` the
-  // assistant turn declared before the next request.
+  // walk then takes the rest of the frame in order — which is why the model is not re-asked until
+  // every call in it has been run or refused: the provider requires a result for each `tool_call_id`
+  // the assistant turn declared before the next request.
   if (opts.pending) {
     const queue = opts.pending.calls
     const decided = queue[0]
@@ -799,21 +885,22 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     history.push({ role: 'tool', tool_call_id: decided.id, content: outcome.output })
     steps += 1
 
-    // Who is next is the gate's decision, not this loop's: the frame's calls plus the decision just
-    // received, and the first one still unanswered is presented. A queue whose every call is now
-    // answered falls through to the model with the whole frame settled.
-    const frame: FrameCall[] = queue.map((call) => ({
-      callId: call.id,
-      needsApproval: needsApproval(call.function.name),
-    }))
-    const decisions: GateDecision[] = [{ callId: decided.id, outcome: opts.pending.denied ? 'denied' : 'approved' }]
-    const next = nextCallToPresent(frame, decisions)
-
-    if (next.kind === 'present') {
-      const index = queue.findIndex((call) => call.id === next.callId)
-      yield await presentCall(queue.slice(index), history, steps, opts.workspaceRoot, plan)
+    // A refusal ends the turn here, and the ending is the one every ending passes through. Nothing
+    // behind the refused call is walked — not the calls that needed no consent, and not the next one
+    // that did — because a decision the user already made against this frame cannot be followed by
+    // acting on it. The model is not asked again either: the refusal is the answer, and a turn that
+    // has ended asks nothing, so there is no request in which the frame's unrun calls would be owed
+    // a result.
+    if (opts.pending.denied) {
+      yield* finishTurn(plan, 'model_stop', steps, null)
       return
     }
+
+    // The approval answers one call and says nothing about the rest. They are walked in the frame's
+    // own order from behind it: the calls that need no consent actually run, and the next one that
+    // does stops the walk again for its own decision.
+    const walked = yield* walkFrame(queue, 1)
+    if (walked !== 'settled') return
   }
 
   for (;;) {
@@ -915,49 +1002,12 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       return
     }
 
-    // Calls that need a decision before they can run. Collected rather than executed, and presented
-    // one at a time from here on: the assistant turn was recorded with every call it asked for, so
-    // the whole frame must be answered before the next request — but answering it is not the same as
-    // asking about it all at once, and asking about it all at once is what gave one click the power
-    // to authorise calls the user never looked at.
-    const gated: ToolCall[] = []
-
-    for (const call of calls) {
-      const tool = call.function.name
-      const displayArgs = argsForDisplay(call)
-      yield { type: 'tool_call_start', callId: call.id, tool, args: displayArgs }
-
-      if (needsApproval(tool) && !opts.autoApprove) {
-        gated.push(call)
-        continue
-      }
-
-      const outcome = await executeTool(tool, call.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
-      if (opts.signal.aborted) return
-
-      yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
-      // A declared plan is announced after its result, so what the user sees in the checklist and what
-      // the model was told arrive in the same order they happened. Merged over the plan in hand, and
-      // only when the call carried one: a refused call or an empty list leaves the plan as it was.
-      if (tool === 'set_plan' && outcome.ok) {
-        const declared = declaredPlan(call.function.arguments)
-        if (declared) {
-          plan = mergePlan(plan, declared)
-          yield { type: 'plan', plan }
-        }
-      }
-      // Failures go back to the model as ordinary tool output, which is what lets it adapt instead of
-      // the run collapsing.
-      history.push({ role: 'tool', tool_call_id: call.id, content: outcome.output })
-    }
-
-    // The history is handed over exactly as it stands, with the whole gated queue but only its head
-    // presented. `resume` answers that one call, then presents the next, and so on until the frame is
-    // settled — so the run continues rather than restarting this round-trip.
-    if (gated.length > 0) {
-      yield await presentCall(gated, history, steps, opts.workspaceRoot, plan)
-      return
-    }
+    // The frame is walked in the model's own order, and the walk is where the decision gate lives: it
+    // runs the calls in front of the gate and stops dead at it, so nothing behind a call the user has
+    // not decided yet runs — exempt or not. A pause ends this stream; `resume` continues the walk from
+    // the queue the pause handed over, so the run carries on rather than restarting this round-trip.
+    const walked = yield* walkFrame(calls, 0)
+    if (walked !== 'settled') return
   }
 }
 
@@ -1034,12 +1084,14 @@ export const agentModule = defineModule({
   /**
    * Continue a run that paused for approval.
    *
-   * The decision answers one call. If the paused frame had more calls waiting, the loop presents the
-   * next one instead of re-asking the model, so consent stays per call while the frame's tool-call
-   * contract is still satisfied in full.
+   * The decision answers one call. An approval resumes the frame's walk where it stopped — the calls
+   * that need no consent run, and the next call that needs one is presented instead of re-asking the
+   * model — so consent stays per call while the frame's tool-call contract is still satisfied in
+   * full.
    *
-   * Denial does not end the conversation: the refusal is fed back as the tool's result, so the model
-   * can explain itself rather than the turn dying silently.
+   * A denial ends the turn instead, through the same ending every other ending passes through: the
+   * refused call is answered with the refusal and the calls behind it are never run. The turn is over
+   * at that point, so nothing further is asked of the model.
    */
   resume: stream(
     z.object({
@@ -1049,8 +1101,8 @@ export const agentModule = defineModule({
       workspaceRoot: z.string().nullable(),
       autoApprove: z.boolean().optional(),
       /**
-       * The gated queue as it was handed over: the decided call first, the rest still to present.
-       * The decision answers the head only.
+       * The frame's calls from the paused one, in frame order: the decided call first, then everything
+       * the pause was holding back. The decision answers the head only; an approval walks the rest.
        */
       calls: z.array(callSchema).min(1, 'At least one call must be answered'),
       steps: z.number().int().min(0).optional(),

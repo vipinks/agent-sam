@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider, useChatSessionsContext } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
+import { firstPauseViolation } from '@/conveyor/protocol/approval'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '@/conveyor/protocol/transcript'
 import { agentSystemPrompt, PLAN_DISCIPLINE_NOTE } from '@/conveyor/protocol/context'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
@@ -194,6 +195,40 @@ function composerPlaceholder(): string | null {
   return screen.getByLabelText('Message').getAttribute('placeholder')
 }
 
+/**
+ * The status marks of the tool cards, in the order they are on screen.
+ *
+ * Read from the DOM rather than from the transcript so the claim is about what the user is looking at:
+ * a result rendered *below* an undecided call is the defect this phase is about, whichever way the
+ * transcript produced it. The marks are the cards' own `aria-label`s — the same vocabulary the status
+ * icon renders — so this reads the rendered state rather than re-deriving it.
+ */
+const RENDERED_STATUSES: Record<string, string> = {
+  running: 'running',
+  succeeded: 'ok',
+  failed: 'failed',
+  denied: 'denied',
+  'needs approval': 'awaiting',
+  'waiting its turn': 'queued',
+  'not decided': 'interrupted',
+}
+
+function renderedStatuses(): Array<{ callId: string; status: string }> {
+  const marks = screen.queryAllByLabelText(
+    /^(running|succeeded|failed|denied|needs approval|waiting its turn|not decided)$/
+  )
+  // Document order is card order, which is the transcript's order — the order the rule is about.
+  return marks.map((mark, index) => ({
+    callId: `card-${index}`,
+    status: RENDERED_STATUSES[mark.getAttribute('aria-label') ?? ''] ?? 'running',
+  }))
+}
+
+/** Where the invariant is checked in the one place it is visible: the rendered card list. */
+function renderedViolation(): { awaitingCallId: string; settledCallId: string } | null {
+  return firstPauseViolation(renderedStatuses())
+}
+
 describe('a consent pause', () => {
   it('renders an actionable card for a pause nothing announced a fragment for', async () => {
     const stub = renderChat().stub
@@ -243,7 +278,10 @@ describe('a consent pause', () => {
     // One decision, one call: the sibling is visibly waiting rather than offering a second approval.
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy()
     expect(screen.getAllByRole('button', { name: 'Approve' }).length).toBe(1)
-    expect(screen.getByText('Waiting its turn — you will be asked about this one separately.')).toBeTruthy()
+    expect(screen.getByText('Waiting its turn — nothing here runs until the decision above is made.')).toBeTruthy()
+    // And nothing below the decision claims to have finished: a card under an open decision that
+    // carried a result is exactly the session this phase was written for.
+    expect(renderedViolation()).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
 
@@ -262,6 +300,66 @@ describe('a consent pause', () => {
     const echoed = resume.input.messages as Array<{ role: string; content: string }>
     expect(echoed.filter((m) => m.role === 'system').length).toBe(1)
     expect(echoed.filter((m) => m.content.includes(PLAN_DISCIPLINE_NOTE)).length).toBe(1)
+  })
+
+  it('runs a frame from the gate onward in order, with one card per call', async () => {
+    const stub = renderChat().stub
+    const channel = await startRun(stub)
+
+    // The reported frame as the loop now sends it: the exempt calls in front ran and reported, the
+    // command is the gate, and the two calls behind it are carded as queued with no fragment of their
+    // own — because the loop announces nothing behind the gate.
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'r1', tool: 'read_file', args: { path: 'a.ts' } })
+    chunk(stub, channel, { type: 'tool_result', callId: 'r1', tool: 'read_file', ok: true, output: 'body' })
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'c2', tool: 'run_command', args: { command: 'npm test' } })
+    chunk(
+      stub,
+      channel,
+      pause({
+        callId: 'c2',
+        tool: 'run_command',
+        args: { command: 'npm test' },
+        calls: [
+          call('c2', 'run_command', { command: 'npm test' }),
+          call('r3', 'read_file', { path: 'a.ts' }),
+          call('r4', 'read_file', { path: 'b.ts' }),
+        ],
+      })
+    )
+
+    // Both calls behind the decision are on screen as waiting, and neither carries a result.
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy()
+    expect(screen.getAllByText('Waiting its turn — nothing here runs until the decision above is made.')).toHaveLength(
+      2
+    )
+    expect(renderedViolation()).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(starts(stub).length).toBe(2))
+    const resumed = await streamChannelFrom(stub, 1)
+
+    // The resumed walk announces each call as it reaches it. The announcement replaces the card that
+    // was already waiting rather than adding a second one, so the frame stays one card per call.
+    chunk(stub, resumed, { type: 'tool_result', callId: 'c2', tool: 'run_command', ok: true, output: 'passed' })
+    chunk(stub, resumed, { type: 'tool_call_start', callId: 'r3', tool: 'read_file', args: { path: 'a.ts' } })
+    chunk(stub, resumed, { type: 'tool_result', callId: 'r3', tool: 'read_file', ok: true, output: 'body' })
+    chunk(stub, resumed, { type: 'tool_call_start', callId: 'r4', tool: 'read_file', args: { path: 'b.ts' } })
+    chunk(stub, resumed, { type: 'tool_result', callId: 'r4', tool: 'read_file', ok: true, output: 'other' })
+
+    // Four calls ran in all: the read in front of the gate, the command, and the two reads the command
+    // was holding. Every one of them settled on the card it already had.
+    await waitFor(() => expect(screen.getAllByLabelText('succeeded').length).toBe(4))
+    // One card per call, in the frame's own order: r1 in front of the gate, then the command and the two
+    // reads it was holding. No call is carded twice and none is missing — the announcement that reached
+    // the card already waiting replaced it rather than adding a second one.
+    expect(screen.queryByLabelText('not decided')).toBeNull()
+    expect(screen.queryByLabelText('needs approval')).toBeNull()
+    expect(screen.getAllByText('Reading a.ts').length).toBe(2)
+    expect(screen.getAllByText('Running npm test').length).toBe(1)
+    expect(screen.getByText('Reading b.ts')).toBeTruthy()
+    // And the invariant holds at the end of the frame too: nothing here is undecided, so nothing is
+    // reported as having run ahead of a decision.
+    expect(renderedViolation()).toBeNull()
   })
 
   it('advances the queue when the head is answered', async () => {
@@ -304,7 +402,7 @@ describe('a consent pause', () => {
     // The second call is now the one being asked about, and the first is settled rather than asking again.
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Approve' }).length).toBe(1))
     expect(screen.getByText('Running npm test')).toBeTruthy()
-    expect(screen.queryByText('Waiting its turn — you will be asked about this one separately.')).toBeNull()
+    expect(screen.queryByText('Waiting its turn — nothing here runs until the decision above is made.')).toBeNull()
   })
 
   it('ends the turn when a decision is denied rather than asking the model again', async () => {

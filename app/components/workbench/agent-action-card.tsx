@@ -61,7 +61,7 @@ export function AgentActionCard({
         // decision should read as "needs you", not as an error.
         awaiting ? 'border-brand/50 bg-brand-soft/40' : 'border-border bg-muted/30',
         // A queued call is visibly inert rather than dimmed out of existence: the user should see
-        // what is coming without mistaking it for something they can act on now.
+        // what is waiting behind the decision without mistaking it for something they can act on now.
         queued && 'opacity-70'
       )}
     >
@@ -113,7 +113,7 @@ export function AgentActionCard({
 
           {queued && (
             <p className="mt-2 text-[11px] text-muted-foreground">
-              Waiting its turn — you will be asked about this one separately.
+              Waiting its turn — nothing here runs until the decision above is made.
             </p>
           )}
 

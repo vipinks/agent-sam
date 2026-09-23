@@ -132,16 +132,13 @@ async function step(label: string, fn: () => void | Promise<void>): Promise<void
 // ---------------------------------------------------------------- the reproduction
 
 /**
- * Two commands, both needing approval, in one assistant turn. Approve the first, deny the second.
+ * Two commands, both needing approval, in one assistant turn: each is decided on its own, in the
+ * frame's own order, and the model is asked again only once the frame is settled.
  *
- * Every request the loop makes is validated, so if the second model call goes out with the second
- * call still unanswered, this fails with the provider's own complaint.
- *
- * Consent is per call, so this is two decisions rather than one: the first resume is asked about
- * call one only, and the second about call two. That the model is not contacted in between is what
- * the validator proves.
+ * Every request the loop makes is validated, so if the frame were left partly unanswered before the
+ * next model call went out, this would fail with the provider's own complaint.
  */
-async function twoGatedCallsApproveOneDenyOne() {
+async function twoGatedCallsAreDecidedOneAtATime() {
   const root = mkdtempSync(join(tmpdir(), 'sam-proto2-'))
   try {
     const seen: WireMessage[][] = []
@@ -203,13 +200,13 @@ async function twoGatedCallsApproveOneDenyOne() {
       'the approved call reported its result before the next prompt'
     )
 
-    // Decision two: deny c2, which completes the frame and lets the model be asked again.
+    // Decision two: approve c2 as well, which settles the frame and lets the model be asked again.
     const third = await collect(
       runAgentLoop({
         ...base,
         messages: secondPause.messages as never,
         steps: secondPause.steps as number,
-        pending: { calls: secondPause.calls as never, denied: true },
+        pending: { calls: secondPause.calls as never, denied: false },
       })
     )
 
@@ -217,20 +214,84 @@ async function twoGatedCallsApproveOneDenyOne() {
 
     // Every request passed the validator, so reaching here means both calls were answered before the
     // model was contacted again. Assert the shape explicitly too, since that is the reported symptom.
+    assert.equal(seen.length, 2, 'the model is contacted once, after the whole frame is settled')
     const last = seen[seen.length - 1]
     const toolTurns = last.filter((m) => m.role === 'tool')
     assert.equal(toolTurns.length, 2, `expected 2 tool messages, got ${toolTurns.length}`)
     assert.deepEqual(toolTurns.map((m) => m.tool_call_id).sort(), ['c1', 'c2'], 'both call ids must be answered')
-    // The denial is the one that must report itself; the approved call carries its command output.
-    const denied = toolTurns.find((turn) => turn.tool_call_id === 'c2')
-    assert.match(String(denied?.content), /denied/i, 'the refused call must report the refusal')
-    assert.doesNotMatch(
-      String(toolTurns.find((turn) => turn.tool_call_id === 'c1')?.content),
-      /denied/i,
-      'and the approved call must not be reported as denied'
-    )
 
     results.push('a batch of two gated calls is answered one decision at a time, in full')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The other half of a decision: refusing one ends the turn where the frame stood.
+ *
+ * Nothing behind the refused call is run — not the second gated call, and not an exempt one that
+ * happened to sit between them — and the model is asked nothing, because a turn that has ended asks
+ * nothing. The refusal is the answer to this frame rather than a result the model has to explain.
+ */
+async function aRefusalEndsTheFrameWhereItStood() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-proto2-'))
+  try {
+    writeFileSync(join(root, 'a.txt'), 'body\n')
+    const seen: WireMessage[][] = []
+    const fetchImpl = validatedFetch(
+      async () =>
+        sse(
+          toolCallFrames([
+            { id: 'c1', name: 'run_command', args: { command: 'echo one' } },
+            { id: 'r2', name: 'read_file', args: { path: 'a.txt' } },
+            { id: 'c3', name: 'run_command', args: { command: 'echo three' } },
+          ])
+        ),
+      seen
+    )
+
+    const base = {
+      providerId: 'deepseek',
+      apiKey: 'k',
+      model: 'm',
+      workspaceRoot: root,
+      autoApprove: false,
+      signal: new AbortController().signal,
+      fetchImpl: fetchImpl as never,
+    }
+
+    const first = await collect(runAgentLoop({ ...base, messages: [{ role: 'user', content: 'run the batch' }] }))
+    const pause = first.find((c) => c.type === 'awaiting_approval')
+    assert.ok(pause, `expected a pause, got ${JSON.stringify(first.map((c) => c.type))}`)
+    assert.equal(pause.callId, 'c1', 'the first gated call is the one asked about')
+    assert.ok(
+      !first.some((c) => c.type === 'tool_result' && c.callId === 'r2'),
+      'the exempt call behind it must not have run either'
+    )
+
+    const refused = await collect(
+      runAgentLoop({
+        ...base,
+        messages: pause.messages as never,
+        steps: pause.steps as number,
+        pending: { calls: pause.calls as never, denied: true },
+      })
+    )
+
+    assert.deepEqual(
+      refused.map((c) => c.type),
+      ['tool_result', 'turn_end'],
+      `a refusal ends the turn: ${JSON.stringify(refused.map((c) => c.type))}`
+    )
+    assert.equal(refused[0].code, 'DENIED', 'the refused call carries its refusal')
+    assert.equal(seen.length, 1, 'and nothing further is asked of the model')
+    assert.equal(
+      refused.some((c) => c.type === 'tool_result' && c.callId !== 'c1'),
+      false,
+      'no call behind the refusal ran, the exempt one included'
+    )
+
+    results.push('a refusal ends the turn where the frame stood, running nothing behind it')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -381,7 +442,8 @@ async function main() {
   await step('validator negative controls', validatorHasTeeth)
   await step('batch without gating', batchWithoutGating)
   await step('mixed batch', mixedBatch)
-  await step('two gated calls', twoGatedCallsApproveOneDenyOne)
+  await step('two gated calls', twoGatedCallsAreDecidedOneAtATime)
+  await step('a refusal ends the frame', aRefusalEndsTheFrameWhereItStood)
 
   console.log(`tool protocol: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)

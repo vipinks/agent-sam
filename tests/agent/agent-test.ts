@@ -12,6 +12,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeTool, needsApproval, runAgentLoop, TOOL_DEFINITIONS } from '../../conveyor/modules/agent'
+import { firstPauseViolation } from '../../conveyor/protocol/approval'
+import { applyAgentChunk, startAssistantTurn, type ToolStep } from '../../app/components/workbench/agent-session'
 import {
   AGENT_SYSTEM_PROMPT,
   agentSystemPrompt,
@@ -90,6 +92,77 @@ async function collect(iter: AsyncIterable<unknown>): Promise<Array<Record<strin
   const out: Array<Record<string, unknown>> = []
   for await (const chunk of iter) out.push(chunk as Record<string, unknown>)
   return out
+}
+
+/**
+ * The transcript a run's chunks build, folded exactly the way the pane folds them.
+ *
+ * Folding rather than reading main's internals is the point of the post-condition below: what has to
+ * hold is what the user is shown, and the panel builds that by handing each chunk to this reducer.
+ */
+function stepsFrom(chunks: Array<Record<string, unknown>>): ToolStep[] {
+  const assistant = startAssistantTurn()
+  let turns = [assistant]
+  for (const chunk of chunks) turns = applyAgentChunk(turns, assistant.id, chunk).turns
+  return turns[0].steps
+}
+
+/**
+ * The pause invariant, as a post-condition of every scenario that stops for a decision.
+ *
+ * While any call is undecided, no call behind it may carry a recorded outcome. Stated here as a
+ * property of the chunks a scenario yielded, so it is checked against every paused shape the suite
+ * builds — including the ones whose subject is something else entirely.
+ */
+function assertPauseInvariant(chunks: Array<Record<string, unknown>>, where: string): void {
+  const violation = firstPauseViolation(stepsFrom(chunks))
+  assert.equal(
+    violation,
+    null,
+    `${where}: a call behind an undecided one recorded an outcome: ${JSON.stringify(violation)}`
+  )
+}
+
+/**
+ * A provider that asks for several calls in one assistant turn, then answers with prose.
+ *
+ * The frame is the unit that matters here: several calls arrive together and are walked together, so
+ * a suite about their order needs to be able to write one down.
+ */
+function frameFetch(calls: Array<{ id: string; name: string; args: unknown }>, log: unknown[]) {
+  let call = 0
+  return async (_url: string, init: RequestInit) => {
+    call += 1
+    log.push({ call, body: JSON.parse(String(init.body)) })
+
+    if (call > 1) {
+      return sseResponse([JSON.stringify({ choices: [{ delta: { content: 'All three done.' } }] }), '[DONE]'])
+    }
+
+    return sseResponse([
+      JSON.stringify({
+        choices: [
+          {
+            delta: {
+              role: 'assistant',
+              tool_calls: calls.map((entry, index) => ({
+                index,
+                id: entry.id,
+                type: 'function',
+                function: { name: entry.name, arguments: JSON.stringify(entry.args) },
+              })),
+            },
+          },
+        ],
+      }),
+      '[DONE]',
+    ])
+  }
+}
+
+/** The tool results in a chunk list, in the order the loop yielded them. */
+function resultsOf(chunks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return chunks.filter((chunk) => chunk.type === 'tool_result')
 }
 
 // ---------------------------------------------------------------- the loop
@@ -272,6 +345,9 @@ async function pausesForApproval() {
 
     // Nothing was written: the pause came before execution, which is the whole point.
     assert.throws(() => readFileSync(join(root, 'x.txt'), 'utf8'), 'the file must not exist yet')
+    // And the turn the pane would render from this stream is clean, which is the invariant stated where
+    // a paused scenario ends rather than only where it is the subject.
+    assertPauseInvariant(chunks, 'a write waiting for consent')
 
     results.push('a write with auto-approve off pauses before touching the disk, handing over history')
   } finally {
@@ -331,8 +407,200 @@ async function gatedWriteCarriesItsDiff() {
     const commandPause = commandChunks.find((c) => c.type === 'awaiting_approval')
     assert.ok(commandPause, 'the command must gate')
     assert.equal(commandPause.diff, undefined, 'only a write has a change to preview')
+    assertPauseInvariant(chunks, 'a write waiting for consent, carrying its diff')
+    assertPauseInvariant(commandChunks, 'a command waiting for consent')
 
     results.push('a gated write carries a diff of the change, computed in main')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/** A spawn that runs nothing and records every command it was asked to run. */
+async function terminalStub(stdout: string) {
+  const { EventEmitter } = await import('node:events')
+  type Emitter = InstanceType<typeof EventEmitter>
+  const runs: string[] = []
+  const spawnImpl = ((command: string) => {
+    runs.push(command)
+    const child = new EventEmitter() as Emitter & {
+      stdout: Emitter
+      stderr: Emitter
+      killed: boolean
+      kill: () => boolean
+    }
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.killed = false
+    child.kill = () => {
+      child.killed = true
+      return true
+    }
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from(stdout))
+      child.emit('close', 0)
+    })
+    return child
+  }) as never
+  return { spawnImpl, runs }
+}
+
+/**
+ * The reported session, written down as a frame: six reads, a command that needs a decision, and two
+ * more reads — all asked for in one assistant turn, with auto-approve off.
+ *
+ * Two things have to be true of it that were not. Nothing behind the command runs while it waits, and
+ * the command is the only call the user is asked about; an approval then walks the frame in the order
+ * the model wrote it, and a refusal ends the turn with the two reads never run at all.
+ */
+async function callsBehindADecisionWait() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'a.txt'), 'alpha\n', 'utf8')
+    writeFileSync(join(root, 'b.txt'), 'beta\n', 'utf8')
+
+    const frame = [
+      ...['r1', 'r2', 'r3', 'r4', 'r5', 'r6'].map((id, index) => ({
+        id,
+        name: 'read_file',
+        args: { path: index % 2 === 0 ? 'a.txt' : 'b.txt' },
+      })),
+      { id: 'c7', name: 'run_command', args: { command: 'echo hi' } },
+      { id: 'r8', name: 'read_file', args: { path: 'a.txt' } },
+      { id: 'r9', name: 'read_file', args: { path: 'b.txt' } },
+    ]
+    const base = {
+      providerId: 'deepseek',
+      apiKey: 'test-key',
+      model: 'test-model',
+      workspaceRoot: root,
+      autoApprove: false,
+      signal: new AbortController().signal,
+    }
+
+    // The pause itself. The reads in front of the command ran, in the model's order, and they are the
+    // only calls that carry an outcome.
+    const log: unknown[] = []
+    const terminal = await terminalStub('hi\n')
+    // One provider for the whole scenario, as a real one is: a resumed run continues the same
+    // conversation with the same model, so the mock's round-trip count has to span both streams.
+    const fetchImpl = frameFetch(frame, log)
+    const first = await collect(
+      runAgentLoop({
+        ...base,
+        messages: [{ role: 'user', content: 'test it, then read both files' }],
+        spawnImpl: terminal.spawnImpl,
+        fetchImpl: fetchImpl as never,
+      })
+    )
+
+    assert.deepEqual(
+      resultsOf(first).map((chunk) => chunk.callId),
+      ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'],
+      'the calls in front of the gate run, and nothing else does'
+    )
+
+    const pause = first.at(-1) as Record<string, unknown>
+    assert.equal(pause.type, 'awaiting_approval', `expected a pause, got ${JSON.stringify(first.map((c) => c.type))}`)
+    assert.equal(pause.callId, 'c7', 'the command is what the user is asked about')
+    assert.deepEqual(
+      (pause.calls as Array<{ id: string }>).map((call) => call.id),
+      ['c7', 'r8', 'r9'],
+      'the queue is the frame from the command on, in the model’s own order'
+    )
+    for (const id of ['r8', 'r9']) {
+      assert.ok(
+        !first.some((chunk) => chunk.type === 'tool_result' && chunk.callId === id),
+        `${id} must not run while c7 is undecided`
+      )
+    }
+    assert.equal(terminal.runs.length, 0, 'the command must not have been spawned either')
+    // The formal version of all of the above, checked against the transcript the pane would build.
+    assertPauseInvariant(first, 'a frame paused at its command')
+
+    // An approval resumes the walk where it stopped: the command runs, then the two reads in the
+    // order the model wrote them, and the model is asked again only once the frame is settled.
+    const approved = await collect(
+      runAgentLoop({
+        ...base,
+        messages: pause.messages as never,
+        steps: pause.steps as number,
+        spawnImpl: terminal.spawnImpl,
+        pending: { calls: pause.calls as never, denied: false },
+        fetchImpl: fetchImpl as never,
+      })
+    )
+
+    assert.deepEqual(
+      resultsOf(approved).map((chunk) => chunk.callId),
+      ['c7', 'r8', 'r9'],
+      'approving runs the command and then the frame behind it, in order'
+    )
+    assert.deepEqual(terminal.runs, ['echo hi'], 'the command ran exactly once, and only once approved')
+    assert.ok(String(resultsOf(approved)[1].output).includes('alpha'), 'the first read behind it really ran')
+    assert.ok(String(resultsOf(approved)[2].output).includes('beta'), 'and so did the second')
+    assert.equal(approved.at(-1)?.type, 'done', 'and the run finishes')
+    assertPauseInvariant([...first, ...approved], 'a frame walked past its decision')
+
+    // One request followed the pause, and it answers every call in the frame — the six that ran
+    // before the gate and the three the decision released. The provider's contract is what makes
+    // running the frame in order non-negotiable rather than merely tidy.
+    assert.equal(log.length, 2, 'exactly one request follows the pause')
+    const wire = (log.at(-1) as { body: { messages: Array<{ role: string; tool_call_id?: string }> } }).body
+    assert.deepEqual(
+      wire.messages.filter((m) => m.role === 'tool').map((m) => m.tool_call_id),
+      ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'c7', 'r8', 'r9'],
+      'the model is asked again once the whole frame has an answer, in the order it was walked'
+    )
+
+    // A refusal ends the turn where it stands. The refused call is answered with the refusal, the two
+    // reads are never run, and the model is not asked again — a turn that has ended asks nothing.
+    const deniedLog: unknown[] = []
+    const deniedTerminal = await terminalStub('hi\n')
+    const deniedFetch = frameFetch(frame, deniedLog)
+    const deniedFirst = await collect(
+      runAgentLoop({
+        ...base,
+        messages: [{ role: 'user', content: 'test it, then read both files' }],
+        spawnImpl: deniedTerminal.spawnImpl,
+        fetchImpl: deniedFetch as never,
+      })
+    )
+    const deniedPause = deniedFirst.at(-1) as Record<string, unknown>
+    assert.equal(deniedPause.type, 'awaiting_approval', 'the same frame pauses the same way')
+
+    const denied = await collect(
+      runAgentLoop({
+        ...base,
+        messages: deniedPause.messages as never,
+        steps: deniedPause.steps as number,
+        spawnImpl: deniedTerminal.spawnImpl,
+        pending: { calls: deniedPause.calls as never, denied: true },
+        fetchImpl: deniedFetch as never,
+      })
+    )
+
+    assert.deepEqual(
+      denied.map((chunk) => chunk.type),
+      ['tool_result', 'turn_end'],
+      `a refusal ends the turn: ${JSON.stringify(denied.map((c) => c.type))}`
+    )
+    assert.equal(denied[0].code, 'DENIED', 'the refused call is answered with the refusal')
+    assert.deepEqual(
+      resultsOf(denied).map((chunk) => chunk.callId),
+      ['c7'],
+      'the two reads behind it are never run'
+    )
+    assert.equal(
+      denied.some((chunk) => chunk.type === 'awaiting_approval'),
+      false,
+      'nothing behind a refusal is presented'
+    )
+    assert.equal(deniedTerminal.runs.length, 0, 'and nothing behind it is executed either')
+    assert.equal(deniedLog.length, 1, 'the model is not asked again after a refusal')
+    assertPauseInvariant([...deniedFirst, ...denied], 'a turn refused at its command')
+
+    results.push('a frame waits at its decision, runs in order on approval, and stops on refusal')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -453,16 +721,17 @@ async function resumeAfterDenial() {
     assert.ok(String(result.output).includes('denied'), 'the model must be told it was refused')
     assert.ok(String(result.output).includes('Do not retry'), 'and told not to retry')
 
-    // The denial is replayed to the provider as the tool's result, not dropped.
-    const body = (log[0] as { body: { messages: Array<Record<string, unknown>> } }).body
-    const toolTurn = body.messages.find((m) => m.role === 'tool')
-    assert.ok(toolTurn, 'the denial must be fed back so the model can explain it')
+    // A refusal ends the turn where it stands. The call is answered so the frame's record is complete,
+    // and then the turn is over through the one ending every ending passes through: nothing is asked
+    // of the model, because a turn that has ended asks nothing, and the refusal is the answer.
     assert.deepEqual(
       chunks.map((c) => c.type),
-      ['tool_result', 'text_delta', 'turn_end', 'done']
+      ['tool_result', 'turn_end'],
+      `a refusal ends the turn: ${JSON.stringify(chunks.map((c) => c.type))}`
     )
+    assert.equal(log.length, 0, 'the model must not be asked again after a refusal')
 
-    results.push('a denied call is fed back as its result, so the model can explain the failure')
+    results.push('a denied call is recorded as refused and ends the turn where it stood')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -823,7 +1092,7 @@ async function aResumeDoesNotInjectTheInstructionsTwice() {
         steps: 1,
         pending: {
           calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }],
-          denied: true,
+          denied: false,
         },
         fetchImpl: oneRoundFetch(log) as never,
       })
@@ -928,7 +1197,7 @@ async function windowsIsToldItsShell() {
         signal: new AbortController().signal,
         platform: 'win32',
         steps: 1,
-        pending: { calls, denied: true },
+        pending: { calls, denied: false },
         fetchImpl: oneRoundFetch(resumed) as never,
       })
     )
@@ -1075,7 +1344,7 @@ async function aResumeDoesNotReReadTheMentions() {
         steps: 1,
         pending: {
           calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"small.ts"}' } }],
-          denied: true,
+          denied: false,
         },
         signal: new AbortController().signal,
         fetchImpl: oneRoundFetch(log) as never,
@@ -1113,6 +1382,7 @@ async function main() {
   await step('run_command tool', runCommandTool)
   await step('pauses for approval', pausesForApproval)
   await step('gated write diff', gatedWriteCarriesItsDiff)
+  await step('calls behind a decision wait', callsBehindADecisionWait)
   await step('resumes after approval', resumeAfterApproval)
   await step('resumes after denial', resumeAfterDenial)
   await step('step budget', stepBudgetStopsTheLoop)

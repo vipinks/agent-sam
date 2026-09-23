@@ -348,6 +348,21 @@ function updateStep(
 }
 
 /**
+ * The steps with `step` in place of the one that already carries its call id, appended when it is new.
+ *
+ * One call is one card for the whole of its life, however many times a run announces it: the loop
+ * announces each call as it reaches it, and a call that waited behind a decision is reached twice —
+ * once by the pause that held it, and once by the walk that came back for it.
+ */
+function upsertStep(steps: ToolStep[], step: ToolStep): ToolStep[] {
+  const index = steps.findIndex((existing) => existing.callId === step.callId)
+  if (index === -1) return [...steps, step]
+  const next = steps.slice()
+  next[index] = step
+  return next
+}
+
+/**
  * The break between two pieces of narration, as the bubble's markdown reads it.
  *
  * A blank line, not a newline: the prose is rendered as markdown, where a single newline is a line
@@ -431,9 +446,15 @@ export function applyAgentChunk(
       const callId = String(c.callId)
       const tool = String(c.tool)
       const args = (c.args && typeof c.args === 'object' ? c.args : {}) as Record<string, unknown>
-      const step: ToolStep = { callId, tool, args, status: 'running' }
+      // Upsert, not append. A resumed run announces each call as its walk reaches it, and the calls
+      // that walk reaches include the ones the pause was holding — which already have a card, waiting
+      // its turn. Appending would put the same call in the transcript twice and split its outcome
+      // across two rows; replacing keeps the one card the user has been looking at, now running.
       return {
-        turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, steps: [...turn.steps, step] })),
+        turns: replaceTurn(turns, turnId, (turn) => ({
+          ...turn,
+          steps: upsertStep(turn.steps, { callId, tool, args, status: 'running' }),
+        })),
         effect: {},
       }
     }
@@ -510,7 +531,12 @@ export function applyAgentChunk(
         next = replaceTurn(next, turnId, (turn) => ({ ...turn, steps: [...turn.steps, step] }))
       }
       for (const call of calls.slice(1)) {
-        next = updateStep(next, turnId, call.id, (step) => ({ ...step, status: 'queued' }))
+        // Carded the way the head is carded, and for the same reason: the pause is the authority on
+        // what is waiting, so a call behind the decision is shown even when the stream never announced
+        // it — which is now the ordinary case, because the loop stops at the gate and announces nothing
+        // behind it. `queued` is a state with no outcome in it: the call is there, and it has not run.
+        const queued: ToolStep = { callId: call.id, tool: call.function.name, args: callArgs(call), status: 'queued' }
+        next = replaceTurn(next, turnId, (turn) => ({ ...turn, steps: upsertStep(turn.steps, queued) }))
       }
       return {
         turns: next,

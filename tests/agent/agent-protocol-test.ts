@@ -6,9 +6,13 @@
  * immediately by exactly one `tool` turn per call id. A run is therefore driven from the history the
  * *renderer* actually sends (the continuation path), not from an idealised one, because that is the
  * path that produced the failure.
+ *
+ * Since phase 32 the loop also refuses to run anything behind a call the user has not decided — and a
+ * refusal ends the turn — so the contract is checked on the request that follows a decision, and the
+ * refusal's half of the claim is that no such request is made at all.
  */
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runAgentLoop } from '../../conveyor/modules/agent'
@@ -176,7 +180,8 @@ async function batchApproveAndDenyThenContinue() {
     const pause = first.find((c) => c.type === 'awaiting_approval')
     assert.ok(pause, 'the batch must pause at the write')
 
-    // Round 2: deny the write and continue. This is the call that 400'd.
+    // Round 2: approve the write and continue. This is the request that used to 400: the frame's
+    // earlier call had run before the pause, and the batch went out partly unanswered.
     const second = await collect(
       runAgentLoop({
         providerId: 'deepseek',
@@ -187,7 +192,7 @@ async function batchApproveAndDenyThenContinue() {
         autoApprove: false,
         signal,
         steps: pause.steps as number,
-        pending: { calls: pause.calls as never, denied: true },
+        pending: { calls: pause.calls as never, denied: false },
         fetchImpl: fetchImpl as never,
       })
     )
@@ -198,18 +203,45 @@ async function batchApproveAndDenyThenContinue() {
     assert.equal(seen.length, 2, 'two round-trips')
     assertToolContract(seen[1], 'the continuation request')
 
-    // The denial must be reported to the model as a tool message, not silently dropped.
-    const denial = seen[1].find((m) => m.role === 'tool' && m.tool_call_id === 'call_write')
-    assert.ok(denial, 'the denied call must still be answered with a tool message')
-    assert.match(String(denial.content), /denied/i, 'and the content must say it was denied')
+    // Both calls of the frame are answered, in the frame's order and one message each: the read that
+    // ran in front of the gate and the write that ran after the decision.
+    assert.deepEqual(
+      seen[1].filter((m) => m.role === 'tool').map((m) => m.tool_call_id),
+      ['call_read', 'call_write'],
+      'the continuation answers every call the frame declared, in order'
+    )
+    assert.equal(readFileSync(join(root, 'out.txt'), 'utf8'), 'hi', 'the approved write really ran')
+    results.push('a batch with an execution in front of the gate keeps the tool-call contract')
 
-    // And the read that ran must be answered too.
-    assert.ok(
-      seen[1].some((m) => m.role === 'tool' && m.tool_call_id === 'call_read'),
-      'the executed call must be answered as well'
+    // Round 3: the same frame, refused instead. A refusal ends the turn where it stands, so no request
+    // follows it at all: the contract cannot be broken by a request that is never made, and the
+    // refusal is this frame's answer rather than a result the model has to explain.
+    rmSync(join(root, 'out.txt'), { force: true })
+    const refusedWire: WireMessage[][] = []
+    const refusal = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'k',
+        model: 'm',
+        workspaceRoot: root,
+        messages: pause.messages as never,
+        autoApprove: false,
+        signal,
+        steps: pause.steps as number,
+        pending: { calls: pause.calls as never, denied: true },
+        fetchImpl: validatedFetch(async () => sse(answers('Never reached.')), refusedWire) as never,
+      })
     )
 
-    results.push('a batch with one execution and one denial keeps the tool-call contract')
+    assert.deepEqual(
+      refusal.map((c) => c.type),
+      ['tool_result', 'turn_end'],
+      `a refusal ends the turn: ${JSON.stringify(refusal.map((c) => c.type))}`
+    )
+    assert.equal(refusedWire.length, 0, 'and the model is asked nothing afterwards')
+    assert.equal(refusal[0].code, 'DENIED', 'the refused call carries its refusal')
+    assert.throws(() => readFileSync(join(root, 'out.txt'), 'utf8'), 'and a refused write never reaches the disk')
+    results.push('a refusal ends the turn without a further request to violate the contract')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -354,7 +386,7 @@ function validatorCatchesTheBadShape() {
 async function main() {
   await step('validator negative controls', validatorCatchesTheBadShape)
   await step('rebuilt continuation history', rebuiltHistoryDropsCallsEntirely)
-  await step('batch: one execution, one denial', batchApproveAndDenyThenContinue)
+  await step('batch: one execution, one decision', batchApproveAndDenyThenContinue)
   await step('continuation after a batch', continuationAfterABatch)
 
   console.log(`tool protocol: ${results.length} passed`)
