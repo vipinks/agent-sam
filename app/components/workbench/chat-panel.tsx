@@ -401,8 +401,10 @@ export function ChatPanel() {
 
   const updateMessages = useCallback((next: AgentTurn[]) => {
     messagesRef.current = next
-    // Through the shared session state, not local state: this is the transcript that gets saved.
-    sessionsRef.current.setTranscript({ turns: next, interrupted: false })
+    // Through the session layer, not local state: this is the transcript that gets saved. Turns are all
+    // this names, which is what keeps a run's own write from dropping a choice the run never touched —
+    // the consent setting is written by the toggle, and nothing here can reach it to lose it.
+    sessionsRef.current.setTurns(next)
   }, [])
 
   const stickToBottom = useCallback(() => {

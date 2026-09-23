@@ -8,7 +8,7 @@ import {
   serializeTranscript,
   type TranscriptState,
 } from './session-transcript'
-import { resumeTurnNumbering, type PendingCall } from './agent-session'
+import { resumeTurnNumbering, type AgentTurn, type PendingCall } from './agent-session'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
@@ -83,8 +83,17 @@ export interface PendingApproval {
 export interface ChatSessions {
   /** The live transcript on screen. */
   transcript: TranscriptState
-  /** Replaces the transcript, e.g. as a run streams. Marks it dirty. */
-  setTranscript: (next: TranscriptState) => void
+  /**
+   * Replace the turns, keeping everything about the conversation the pane does not own.
+   *
+   * The narrow writer, and deliberately the only one the pane has. A run rewrites the transcript on
+   * every chunk, and a pane holding a whole-record setter can name only the fields it happens to know:
+   * the consent setting is set by the toggle and touched by no chunk, so the first write of a turn
+   * dropped it, the toggle read off on the next render, and the file was saved without the key — which
+   * the next read resolves to off. Narrowing is the fix rather than a reminder to spread, because a
+   * caller cannot drop what it was never handed.
+   */
+  setTurns: (turns: AgentTurn[]) => void
   /**
    * Whether this conversation runs tools without asking. Off for a session with no stored value, which
    * is every session whose user has never touched the toggle.
@@ -192,6 +201,20 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const hydratedIdRef = useRef<string | null>(null)
 
   const setTranscript = useCallback((next: TranscriptState) => {
+    transcriptRef.current = next
+    setTranscriptState(next)
+  }, [])
+
+  /**
+   * Replace the turns, and nothing else.
+   *
+   * Spread rather than rebuilt, so every field the pane does not name — the consent setting above all —
+   * is carried through by construction. `interrupted: false` is the one thing set beyond the turns: a
+   * run is writing turns, so a flag left over from a previous load must not survive turns produced
+   * after it.
+   */
+  const setTurns = useCallback((turns: AgentTurn[]) => {
+    const next: TranscriptState = { ...transcriptRef.current, turns, interrupted: false }
     transcriptRef.current = next
     setTranscriptState(next)
   }, [])
@@ -475,7 +498,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
 
   return {
     transcript,
-    setTranscript,
+    setTurns,
     autoApprove,
     setAutoApprove,
     error,
