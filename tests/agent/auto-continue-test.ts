@@ -25,6 +25,13 @@
  * stop is, and a reply that stopped arriving is not — it ends the turn with the card, because a dropped
  * connection is not something a further request can fix.
  *
+ * And one is about the shape of the reply that dies that way, which is the shape the loop used to miss: a
+ * capped reply is cut *inside* a tool call rather than between two of them, and a frame holding a
+ * half-written call was read as work in hand — so the turn ended on the card while its plan was
+ * unfinished and its budget untouched. The two tests below assert that the cut payload is discarded
+ * rather than run: no call announced, no result, no permission asked, and nothing on the wire asking a
+ * provider for the outcome of a call that never happened.
+ *
  * The chunks are fed through the real reducer and the real serializer, so what is asserted about the
  * transcript is the transcript's contents rather than the loop's intentions.
  */
@@ -104,8 +111,34 @@ function planFrames(callId: string, steps: readonly PlanStep[]): string[] {
   ]
 }
 
+/**
+ * A reply the provider cut off inside a tool-call payload: the death a long turn actually has.
+ *
+ * The model was narrating and asking for its next write when the output room ran out, so what arrives is
+ * a call that was still being written — an id, a name, and arguments that never became valid JSON. The
+ * finish reason says so in the provider's own words too, which is how a real capped reply dies: the cut
+ * lands inside the frame rather than between two frames.
+ */
+function cutCallFrames(callId: string, text: string, tool: string, partialArgs: string): string[] {
+  return [
+    JSON.stringify({ choices: [{ delta: { content: text } }] }),
+    JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: [{ index: 0, id: callId, type: 'function', function: { name: tool, arguments: '' } }],
+          },
+        },
+      ],
+    }),
+    JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: partialArgs } }] } }] }),
+    stopFrame('length'),
+    '[DONE]',
+  ]
+}
+
 interface SentRequest {
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string; tool_calls?: unknown }>
 }
 
 /** A provider that answers each request with the next scripted round, and logs what it was sent. */
@@ -450,6 +483,161 @@ async function aTruncatedTurnPicksItselfUpMidPlan() {
   results.push('two capped replies mid-plan are nudged twice, with no click, and the turn finishes the work')
 }
 
+async function aCappedReplyCutInsideAToolCallPicksItselfUpMidPlan() {
+  // The same ending as the test above, in the shape it actually arrives in. The provider's cap does not
+  // land neatly between two calls: it lands inside one, so the frame holds a call that was still being
+  // written — and that partial call used to be read as work in hand, which ended the turn on the card
+  // with the plan unfinished and the budget unspent.
+  const first = 'I have the first arm measured, and what is left is '
+  const second = 'The table is half written, and what is left is '
+  const { chunks, sent } = await runLoop({
+    rounds: [
+      planFrames('p1', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+        { id: 'tests', text: 'Add tests for it', status: 'pending' },
+      ]),
+      cutCallFrames('cut1', first, 'write_file', '{"path":"src/parser.ts","content":"const table = ['),
+      cutCallFrames('cut2', second, 'write_file', '{"path":"src/parser.ts","content":"const table = [1,'),
+      planFrames('p2', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'done' },
+        { id: 'tests', text: 'Add tests for it', status: 'done' },
+      ]),
+      proseFrames('The precedence table is updated.'),
+    ],
+  })
+
+  const spent = marks(chunks)
+  assert.deepEqual(
+    spent.map((mark) => mark.count),
+    [1, 2],
+    'two capped replies inside a tool call, two auto-continuations'
+  )
+  assert.equal(
+    spent.every((mark) => mark.cause === 'truncated'),
+    true,
+    'each of them naming the output cap, because that is the ending it was'
+  )
+  assert.equal(nudges(sent).length, 2, 'and the provider was nudged rather than the user being carded')
+
+  // Neither cut payload ever became a call: nothing was announced for it, nothing executed, nothing was
+  // answered. The only calls that ran are the two plans the model declared in full, which is the whole
+  // claim of discarding a cut frame's calls instead of running half of one.
+  for (const callId of ['cut1', 'cut2']) {
+    assert.equal(
+      chunks.some((chunk) => chunk.callId === callId),
+      false,
+      `${callId} was never announced, never run, and never answered`
+    )
+  }
+  const ran = [
+    ...new Set(
+      chunks
+        .filter((chunk) => chunk.type === 'tool_call_start' || chunk.type === 'tool_result')
+        .map((chunk) => chunk.callId)
+    ),
+  ]
+  assert.deepEqual(ran, ['p1', 'p2'], 'and the calls that did run are the ones the model declared in full')
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'awaiting_approval'),
+    false,
+    'with no permission asked for a call that does not exist'
+  )
+
+  // The request that followed the first capped reply: the reply was kept as the assistant turn, with no
+  // calls on it. Its call was never run, so no result for it will ever be sent — and an assistant turn
+  // asking for results that never come is a request the provider refuses.
+  const afterCut = sent[2]?.messages ?? []
+  assert.equal(
+    afterCut.filter((message) => message.role === 'assistant').at(-1)?.tool_calls,
+    undefined,
+    'so the cut reply reached the provider carrying no tool call'
+  )
+  assert.deepEqual(
+    afterCut.at(-1),
+    { role: 'user', content: autoContinueNudge(2) },
+    'with the nudge as its last message'
+  )
+
+  // One turn, no user message: the nudge is main's, and the pane is never told a person typed it.
+  const turns = transcript(chunks)
+  assert.equal(turns.length, 1, 'still one turn')
+  assert.equal(
+    turns.some((turn) => turn.role === 'user'),
+    false,
+    'with no user message in it'
+  )
+  assert.equal(turns[0].content.includes(first), true, 'the capped text was kept, not discarded')
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'turn_end_notice'),
+    false,
+    'and there is no card, because the loop took the click the user would have made'
+  )
+  assert.equal(chunks.at(-1)?.type, 'done', 'the turn ends the ordinary way')
+
+  // The seams, with the reason and the budget the pane draws its lines from — and with where in the prose
+  // each one was made, which is what puts the line between the capped text and the work that resumed it
+  // rather than above the answer.
+  assert.deepEqual(
+    turns[0].continuations?.map((mark) => `${mark.count} of ${mark.max} after ${mark.cause}`),
+    ['1 of 8 after truncated', '2 of 8 after truncated'],
+    'two seams, each naming the output cap as the reason the machine kept going'
+  )
+  const offsets = turns[0].continuations?.map((mark) => mark.afterChars ?? -1) ?? []
+  assert.equal(turns[0].content.slice(0, offsets[0]), first, 'the first seam sits after the text the cut left')
+  assert.equal(offsets[1] > offsets[0], true, 'and the second one further along the prose it ended')
+  results.push('a reply capped inside a tool call is nudged twice, and the partial call is never run')
+}
+
+async function aCappedReplyCutInsideAToolCallSpendsTheBudgetThenGetsTheCard() {
+  // The same death, one reply past the budget. The loop nudges while it has room to and the card is what
+  // is left when it does not — which is the claim the live check rests on: under a truncated turn, a card
+  // now means the budget rather than the shape of the reply that died.
+  const stops = AUTO_CONTINUE_MAX + 1
+  const { chunks } = await runLoop({
+    rounds: [
+      planFrames('p1', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+        { id: 'tests', text: 'Add tests for it', status: 'pending' },
+      ]),
+      ...Array.from({ length: stops }, (_, index) =>
+        cutCallFrames(
+          `cut${index + 1}`,
+          `Pass ${index + 1}, and what is left is `,
+          'write_file',
+          `{"path":"src/parser.ts","content":"const table = [${index},`
+        )
+      ),
+    ],
+  })
+
+  assert.deepEqual(
+    marks(chunks).map((mark) => mark.count),
+    Array.from({ length: AUTO_CONTINUE_MAX }, (_, index) => index + 1),
+    'the whole budget, spent on replies that were each capped inside a tool call'
+  )
+  assert.equal(
+    marks(chunks).every((mark) => mark.cause === 'truncated'),
+    true,
+    'every one of them naming the output cap'
+  )
+  // The ending a cut-off reply gets is the one it already had, and it is not the `done` an ordinary
+  // answer ends with: this path has no reason to report, so the notice is the last thing the run says.
+  assert.equal(chunks.at(-2)?.type, 'turn_end', 'the turn ends when the budget is spent')
+  assert.equal(chunks.at(-1)?.type, 'turn_end_notice', 'with the notice a spent budget leaves behind')
+  assert.equal(notice(chunks)?.cause, 'truncated', 'naming the ending it actually had')
+  assert.equal(notice(chunks)?.unfinishedSteps, 2, 'and the work still on the plan')
+  assert.equal(notice(chunks)?.resumable, true, 'with the Continue click the way on')
+  assert.equal(
+    chunks.some((chunk) => String(chunk.callId ?? '').startsWith('cut')),
+    false,
+    'and not one of the cut payloads was ever run'
+  )
+  results.push('a reply capped inside a tool call spends the budget and then gets the card, like any stop past it')
+}
+
 async function aDroppedConnectionEndsTheTurnWithTheCard() {
   // The one ending a further request cannot fix. The reply stopped arriving, so the app stops and asks
   // the person rather than spending their money on a connection that is not there.
@@ -486,6 +674,8 @@ async function main() {
   await aModelThatStopsPastItsBudgetGetsTheCard()
   await aTurnSpendsItsOwnBudget()
   await aTruncatedTurnPicksItselfUpMidPlan()
+  await aCappedReplyCutInsideAToolCallPicksItselfUpMidPlan()
+  await aCappedReplyCutInsideAToolCallSpendsTheBudgetThenGetsTheCard()
   await aDroppedConnectionEndsTheTurnWithTheCard()
 
   console.log(`\nbounded auto-continue: ${results.length} checks passed`)

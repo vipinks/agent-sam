@@ -111,6 +111,11 @@ const turnSchema = z.object({
         count: z.number().int().positive(),
         max: z.number().int().positive(),
         afterSteps: z.number().int().min(0),
+        // Where in the prose the seam was made, in characters, for the same reason `afterSteps` is here:
+        // the line belongs where it happened, and a card count alone cannot place it inside the answer's
+        // text. Optional like the two below it, and for the same reason — a file written before this
+        // build has no such offset, and its seams are read back with the prose below them.
+        afterChars: z.number().int().min(0).optional(),
         // Read through the same closed vocabulary the live chunk is, so a file naming an ending this
         // build does not know loses the reason rather than the seam. Optional like the list itself, and
         // for the same reason: a file written before the loop reported one has no key, and its seams

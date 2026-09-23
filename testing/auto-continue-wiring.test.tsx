@@ -14,9 +14,10 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  * The rule that decides whether a turn continues itself is tested directly in
  * `turn-end-rules.test.ts`, and the loop that applies it is tested against a mocked provider in
  * `tests/agent/auto-continue-test.ts`. What is left here is what only the pane can get wrong: that
- * the chunk the loop sends becomes a line the user can read, that the line sits where the resumed
- * work begins, that the plan-unfinished card still appears exactly once the budget is spent, and
- * that the count is per turn rather than carried across sends.
+ * the chunk the loop sends becomes a line the user can read, that the line sits where the run resumed —
+ * after the text that was cut off and before the cards that picked it up, which is what the prose and
+ * card positions on the mark are for — that the plan-unfinished card still appears exactly once the
+ * budget is spent, and that the count is per turn rather than carried across sends.
  *
  * The transport is the real conveyor client over a stubbed bridge, so the assertions are made
  * against what a run actually delivers rather than against a prop drilled into a component.
@@ -104,6 +105,9 @@ const PLAN = [
   { id: 'edit', text: 'Change the precedence table', status: 'pending' },
 ]
 
+/** The capped stretch of prose the seam-placement test cuts off mid-sentence. */
+const CUT_TEXT = 'I have the first arm measured, and what is left is'
+
 describe('bounded auto-continue', () => {
   it('writes the continuation into the transcript as a line the user can read', async () => {
     const stub = stubChat()
@@ -169,6 +173,78 @@ describe('bounded auto-continue', () => {
     expect(await screen.findByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
   })
 
+  it('draws the marker between the capped text and the work that resumed it', async () => {
+    // Where the line sits is the whole of the seam: the user reads it between the reply the provider cut
+    // off and the cards of the stretch that picked it up, not above the answer. The prose position is what
+    // places it there, so the assertion is about document order rather than about presence.
+    const stub = stubChat()
+    renderChat()
+    await userEvent.type(await composer(), 'refactor the parser{Enter}')
+    const channel = await streamChannel(stub)
+
+    chunk(stub, channel, { type: 'plan', plan: PLAN })
+    chunk(stub, channel, { type: 'text_delta', text: CUT_TEXT })
+    chunk(stub, channel, { type: 'auto_continue', count: 1, max: AUTO_CONTINUE_MAX, cause: 'truncated' })
+    readCall(stub, channel, 'c1', 'src/parser.ts')
+    chunk(stub, channel, { type: 'text_delta', text: 'That is the first arm changed.' })
+    chunk(stub, channel, { type: 'auto_continue', count: 2, max: AUTO_CONTINUE_MAX, cause: 'truncated' })
+    chunk(stub, channel, { type: 'text_delta', text: 'The tests are written too.' })
+    // And the resumed work finishes the plan, which is why there is no card: a turn that got its work done
+    // has nothing for a card to announce, however many times it was picked up on the way.
+    chunk(stub, channel, {
+      type: 'plan',
+      plan: [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'done' },
+      ],
+    })
+    chunk(stub, channel, { type: 'turn_end', cause: 'truncated' })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 4 })
+    stub.emit(channel, { type: 'end' })
+
+    const cut = await screen.findByText(CUT_TEXT)
+    const first = await screen.findByText(`Auto-continuing after the output cap — 1 of ${AUTO_CONTINUE_MAX}`)
+    const card = await screen.findByText('Reading src/parser.ts')
+    const resumed = await screen.findByText('That is the first arm changed.')
+    const second = await screen.findByText(`Auto-continuing after the output cap — 2 of ${AUTO_CONTINUE_MAX}`)
+    const last = await screen.findByText('The tests are written too.')
+
+    const before = (a: HTMLElement, b: HTMLElement) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+
+    expect(before(cut, first)).toBe(true)
+    expect(before(first, card)).toBe(true)
+    expect(before(card, resumed)).toBe(true)
+    expect(before(resumed, second)).toBe(true)
+    expect(before(second, last)).toBe(true)
+
+    // And the whole answer in one reading, in the order it reaches the user: the text the cap left, the
+    // line saying the app picked the turn up, the resumed prose, the second line, and the last stretch.
+    // Asserted as a sequence rather than as four separate document-order pairs, because the sequence is
+    // what a reader sees — and it is the exact evidence the phase's live check is built on.
+    //
+    // Read from nodes found now, and ordered by where they sit, rather than from a container captured
+    // during the stream: the transcript is virtualized, so a node found mid-stream can be replaced
+    // underneath a later assertion, and a container read then would be a tree the rest of the answer never
+    // entered. Text is the lookup, document position is the order.
+    const answerTexts = [
+      CUT_TEXT,
+      `Auto-continuing after the output cap — 1 of ${AUTO_CONTINUE_MAX}`,
+      'That is the first arm changed.',
+      `Auto-continuing after the output cap — 2 of ${AUTO_CONTINUE_MAX}`,
+      'The tests are written too.',
+    ]
+    const inOrder = answerTexts
+      .map((text) => screen.getByText(text))
+      .sort((a, b) => (before(a, b) ? -1 : 1))
+      .map((node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim())
+    expect(inOrder).toEqual(answerTexts)
+
+    // And nothing claims the turn ended early: the loop took the click, so there is no card to take it.
+    expect(screen.queryByText(/Ended with the plan unfinished/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
   it('raises the card for a dropped connection without spending the budget on it', async () => {
     // The other ending that still stops the app. Nothing is nudged — a further request would go to a
     // connection that is not there — so the turn ends with the card the user can act on.
@@ -218,6 +294,10 @@ describe('bounded auto-continue', () => {
     stub.emit(channel, { type: 'end' })
 
     expect(await screen.findByText('Ended with the plan unfinished — 1 step remain')).toBeTruthy()
+    // The card names the ending as well as the work, and that copy is the one a truncated turn gets: the
+    // output limit, rather than a connection — which is the difference between a turn the loop kept
+    // going until it ran out of budget and one it never nudged at all.
+    expect(await screen.findByText('Ended early: the reply was cut off (output limit)')).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
   })
 

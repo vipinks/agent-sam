@@ -21,37 +21,66 @@ import { contextNoticeText } from './mentions'
 import type { AgentTurn } from './agent-session'
 
 /**
- * The turn's action cards and its auto-continue seams, in the order they happened.
+ * The turn's blocks in the order they happened: its cards, its prose, and the seams between them.
  *
  * A model that stopped with work left on its plan is nudged rather than ended, so one turn can contain
- * several stretches of work — and the seam between two of them belongs *between* the cards around it,
- * which is the one thing a card list alone cannot express. The marker is placed by the card count the
- * seam was recorded at, so it lands where the run actually resumed rather than at the top or the bottom
- * of the answer.
+ * several stretches of work — and the seam between two of them belongs between the prose that was cut off
+ * and the cards of the stretch that resumed it, which is the one thing a card list alone cannot express.
+ * The marker is placed by the two positions the seam was recorded at — the cards drawn and the characters
+ * narrated when the loop decided to continue — so it lands where the run actually resumed rather than at
+ * the top or the bottom of the answer.
  *
- * Clamped to the cards that exist: a seam recorded after the last card of the turn as it arrived is
- * drawn after the last card, which is what a transcript read back from disk shows when the resumed
- * stretch narrated but called nothing.
+ * The prose is drawn in the slices those positions cut it into, and that is what puts a line inside the
+ * answer: the narration is one assembled string, so a seam between two of its stretches can only be
+ * rendered by cutting the string there. Each slice is its own markdown block, and the slices stay in the
+ * order the run wrote them.
+ *
+ * Clamped to what exists: a seam recorded after the last card of the turn as it arrived is drawn after
+ * the last card, which is what a transcript read back from disk shows when the resumed stretch narrated
+ * but called nothing. A mark stored without a prose position — written before seams carried one, or read
+ * from a file saved before they did — leaves the whole answer below it, which is the only placement such
+ * a record supports.
  */
-function actionRows(
+function turnBlocks(
   turn: AgentTurn,
   onApprove?: (callId: string) => void,
   onDeny?: (callId: string) => void
 ): ReactNode[] {
   const marks = turn.continuations ?? []
-  const rows: ReactNode[] = []
+  const blocks: ReactNode[] = []
+  // Where the walk has got to: the cards drawn and the characters narrated so far. Both move forward
+  // only, and only to a position a seam was recorded at.
+  let cards = 0
+  let chars = 0
 
-  for (let index = 0; index <= turn.steps.length; index += 1) {
-    for (const [position, mark] of marks.entries()) {
-      if (Math.min(mark.afterSteps, turn.steps.length) !== index) continue
-      rows.push(<AutoContinueMark key={`auto-${position}-${mark.count}`} mark={mark} />)
+  /** Push the cards up to `boundary`, which is either a seam or the end of the frame. */
+  const cardsUpTo = (boundary: number) => {
+    const end = Math.min(boundary, turn.steps.length)
+    for (let index = cards; index < end; index += 1) {
+      const step = turn.steps[index]
+      blocks.push(<AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />)
     }
-
-    const step = turn.steps[index]
-    if (step) rows.push(<AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />)
+    cards = end
   }
 
-  return rows
+  for (const [position, mark] of marks.entries()) {
+    cardsUpTo(mark.afterSteps)
+    const slice = turn.content.slice(chars, mark.afterChars ?? chars)
+    chars += slice.length
+    // An empty slice is not a piece of the answer to render — and for a mark with no prose position it is
+    // exactly the case above: the text that follows belongs below the line rather than above it.
+    if (slice) blocks.push(<MarkdownContent key={`prose-${position}`} content={slice} />)
+    blocks.push(<AutoContinueMark key={`auto-${position}-${mark.count}`} mark={mark} />)
+  }
+
+  cardsUpTo(turn.steps.length)
+  const rest = turn.content.slice(chars)
+  // The last slice is the one the empty state reads: a turn with no cards and nothing written yet is
+  // still thinking, and the bubble says so. An empty slice *between* two seams is not that — the answer
+  // simply paused there, and a "Thinking…" there would be a claim about work that is already done.
+  if (rest || turn.steps.length === 0) blocks.push(<MarkdownContent key="prose" content={rest} />)
+
+  return blocks
 }
 
 /**
@@ -101,10 +130,9 @@ export const MessageBubble = memo(function MessageBubble({
   onRegenerate?: (turnId: string) => void
 }) {
   const isUser = message.role === 'user'
-  const steps = message.steps
-  // The cards and the seams between them, built once per render: their order is the order the run
-  // happened in, and two passes over the same data would be a second place for it to be got wrong.
-  const rows = actionRows(message, onApprove, onDeny)
+  // The turn's blocks, built once per render: their order is the order the run happened in, and two
+  // passes over the same data would be a second place for it to be got wrong.
+  const blocks = turnBlocks(message, onApprove, onDeny)
 
   /*
    * The editor, held here rather than in the pane.
@@ -269,12 +297,11 @@ export const MessageBubble = memo(function MessageBubble({
                   ))}
                 </div>
               )}
-              {/* Steps above the prose: the actions are what the answer refers to, so they read in
-                the order they happened. */}
-              {rows.length > 0 && <div className="mb-2 space-y-1.5">{rows}</div>}
-              {/* With steps but no prose yet, the cards are the content — an empty "Thinking…" under
-                them would be noise. */}
-              {(message.content || steps.length === 0) && <MarkdownContent content={message.content} />}
+              {/* The answer in one column, in the order it happened: a stretch's cards, the prose written
+                around them, then the seam that says the app continued itself there. One list rather
+                than cards above all the text, because a seam belongs where it happened — between the
+                text it cut off and the work that resumed it. */}
+              {blocks.length > 0 && <div className="mb-2 space-y-1.5">{blocks}</div>}
             </>
           )}
 

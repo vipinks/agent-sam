@@ -130,10 +130,12 @@ export interface AgentTurn {
 /**
  * One point where a turn continued itself.
  *
- * `afterSteps` is where the seam is: the number of action cards already drawn when the loop decided to
- * continue. That is what puts the line between the work that was interrupted and the work that picked it
- * up, rather than at the top or the bottom of the answer. Stored beside `count` rather than recomputed,
- * because a card count read back from a transcript has to mean what it meant when the seam was made.
+ * `afterSteps` and `afterChars` are where the seam is: the action cards already drawn and the
+ * characters of narration already written when the loop decided to continue. Together they are what
+ * puts the line between the work that was interrupted and the work that picked it up, rather than at
+ * the top or the bottom of the answer — a turn is cards *and* prose, so one position cannot place a
+ * line inside it. Stored beside `count` rather than recomputed, because a position read back from a
+ * transcript has to mean what it meant when the seam was made.
  *
  * `cause` is why the machine kept going, and it is part of the mark rather than something the reader
  * infers: a turn picked up after the provider ran out of output room is a different event from one
@@ -148,6 +150,17 @@ export interface AutoContinueMark {
   /** The budget the count is shown against, as the loop reported it. */
   max: number
   afterSteps: number
+  /**
+   * How much of the turn's narration had been written when this seam was made, in characters.
+   *
+   * The other half of where the line goes, and the half a card count cannot express: the prose is one
+   * assembled string, so the only way to draw a seam inside it is to know how much of it was there when
+   * the turn picked itself up. Stored for the same reason `afterSteps` is — a seam read back from disk
+   * has to land where it landed live, and the reply cannot say where it was cut. Optional for the same
+   * reason `cause` is: a transcript written before this build has no such offset, and the seams in it are
+   * drawn with the answer's prose below them, which is the only claim such a record supports.
+   */
+  afterChars?: number
   /** The ending the turn was picked up after, as the loop diagnosed it. */
   cause?: TurnEndCause
 }
@@ -646,9 +659,10 @@ export function applyAgentChunk(
     case 'auto_continue': {
       // Recorded as a seam on the turn, never as a turn of its own. The nudge the loop sends with this
       // is not in the transcript and must not be: the user did not type it, and a pane that showed it
-      // as their message would be putting words in their mouth. What the chunk does carry is where the
-      // run picked itself up — the number of cards drawn so far — and that is what the line is drawn
-      // between.
+      // as their message would be putting words in their mouth. Drawing the line where it happened takes
+      // two positions, and only one of them is the chunk's: the cards drawn so far are counted here, and
+      // how much prose had been written is read off the turn's own content — assembled before this chunk
+      // arrives, and the only place that offset exists.
       //
       // Read defensively for the same reason the notice is: the chunk crosses IPC, so a count this
       // build cannot render (a zero, a string, a missing key) leaves the turn exactly as it was rather
@@ -669,7 +683,10 @@ export function applyAgentChunk(
       return {
         turns: replaceTurn(turns, turnId, (turn) => ({
           ...turn,
-          continuations: [...(turn.continuations ?? []), { count, max, afterSteps: turn.steps.length, cause }],
+          continuations: [
+            ...(turn.continuations ?? []),
+            { count, max, afterSteps: turn.steps.length, afterChars: turn.content.length, cause },
+          ],
         })),
         // Nothing reported to the pane. A seam is not an event the UI has to act on — the cards and the
         // prose that follow it arrive as chunks of their own and are applied as they always were — and a

@@ -470,9 +470,10 @@ export type AgentChunk =
    *
    * Sent only for those two causes, and only when the turn is over — so it is both the announcement
    * that a stop was not silent and the only chunk a transcript keeps about it. `resumable` is what
-   * the Continue button reads. The two cut-off endings are the manual ones and stay manual: the app
-   * never sends the next message on its own for a reply that ran into an output cap or a broken
-   * connection, because asking again would meet the same cap and the same connection.
+   * the Continue button reads. A reply that stopped arriving is the manual ending and stays manual:
+   * nothing this app sends reopens a dropped connection. A reply the provider cut off at its output cap
+   * is not manual any more — the loop nudges it while there is work on the plan and budget left to
+   * spend, so the card under it is the one that appears once that budget is spent.
    *
    * `unfinishedSteps` is what a plan-shaped ending adds to the same chunk rather than travelling in a
    * second one: a cut-off reply under an unfinished plan is one ending with two things true about it,
@@ -670,9 +671,10 @@ async function* finishTurn(
    * ending whose continuation would be meaningful, which it knows and this function cannot. Two callers
    * pass false. The loop's own step budget has nothing left to spend, so a nudge there would be answered
    * by the same check again; and a refusal is a decision the user has already made, which the app must
-   * not answer with "try again anyway". A cut-off turn passes it only when the frame asked for no work: a
-   * reply that stopped mid-request cannot be continued from, because running half a request is the thing
-   * that rule already refuses.
+   * not answer with "try again anyway". A cut-off turn passes it when the frame holds nothing to run,
+   * which for a reply the provider cut off is every time: the loop empties a cut reply's frame of its
+   * calls before it gets here, because a cut reply never runs its own tool calls — so what this is asked
+   * about is a frame with no half-request left in it to refuse.
    */
   continuable: boolean
 ): AsyncGenerator<AgentChunk, TurnEnding, undefined> {
@@ -1054,16 +1056,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       streamErrorCode = err.code
     }
 
-    const calls = finalizeCalls(partials)
     const assistantText = text.join('')
-
-    // The assistant turn is recorded either way: an OpenAI-compatible provider expects the turn
-    // that asked for tools to be present when its results are sent back.
-    history.push({
-      role: 'assistant',
-      content: assistantText,
-      ...(calls.length ? { tool_calls: calls } : {}),
-    })
 
     // Before anything is done with them: did this reply actually finish? Every ending is diagnosed,
     // including the ordinary one — "the model stopped" is a fact the caller has to be able to tell
@@ -1075,15 +1068,49 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       streamErrorCode,
     })
 
+    // The frame a reply the provider cut off is allowed to keep: none of its calls.
+    //
+    // Phase 23's rule, applied where it decides something — a cut reply never runs its own tool calls.
+    // The calls it asked for arrived alongside a reply that had already stopped being written, so
+    // running them would be acting on half a request, and that holds whatever the cut landed on: a payload
+    // that never became valid JSON, or one that did.
+    //
+    // Emptied rather than passed through, because of what reads the frame next: the gate below asks
+    // whether the frame asked for anything, and any call left in it answers yes. That is the defect this
+    // phase fixes. The death a long turn actually has is the provider running out of output room in the
+    // middle of a tool-call payload, and the partial call that leaves behind was read as work in hand —
+    // so a truncated turn with an unfinished plan and budget left ended on the card instead of being
+    // nudged, over a reply that had nothing it could run.
+    //
+    // Discarding is safe for one reason, and it is the invariant this rests on: nothing in this frame has
+    // run. A frame's calls are executed by `walkFrame`, which this run reaches only on the `model_stop`
+    // path below, so a frame whose calls were parsed and executed has the ordinary ending and never
+    // arrives here. Discarding them also keeps the nudge honest — those calls are sent to no one and
+    // answered by nothing, so leaving them on the assistant turn would ask the provider for the results of
+    // calls that were never run.
+    //
+    // A dropped connection keeps its frame as it arrived: `shouldAutoContinue` refuses that cause
+    // outright, so that ending is the card whatever the frame holds.
+    const calls = cause === 'truncated' ? [] : finalizeCalls(partials)
+
+    // The assistant turn is recorded either way: an OpenAI-compatible provider expects the turn
+    // that asked for tools to be present when its results are sent back.
+    history.push({
+      role: 'assistant',
+      content: assistantText,
+      ...(calls.length ? { tool_calls: calls } : {}),
+    })
+
     // A turn that died announces itself before it ends, and a turn that was cut off is over whatever
     // the model asked for: the calls it asked for in the same breath arrived alongside a reply the
-    // provider had already stopped writing, so running them would be acting on half a request. The
-    // notice is the announcement. Whether to continue is decided by `finishTurn`, which is the one place
-    // holding the reconciled plan and the budget — and the reason the reply was cut off is not a reason
-    // to stop: a truncated reply with nothing to run asks the loop for the rest, which is the click the
-    // user would have made. That is what the flag below says, and it is false for a cut-off frame that
-    // did ask for calls: there is work in it, and half a request is not something to continue from.
-    // A connection that dropped asks for nothing and continues nothing, whatever the frame said.
+    // provider had already stopped writing, so running them would be acting on half a request — which is
+    // why the frame above was emptied of them. The notice is the announcement. Whether to continue is
+    // decided by `finishTurn`, which is the one place holding the reconciled plan and the budget — and
+    // the reason the reply was cut off is not a reason to stop: a truncated reply with nothing to run
+    // asks the loop for the rest, which is the click the user would have made. That is what the flag
+    // below says, and it is now true of every truncated frame, because there is no call left in one to
+    // be work in hand. A connection that dropped asks for nothing and continues nothing, whatever the
+    // frame said.
     if (cause !== 'model_stop') {
       const nudge = yield* finishTurn(plan, cause, steps, null, continuations, calls.length === 0)
       if (nudge === null) return
