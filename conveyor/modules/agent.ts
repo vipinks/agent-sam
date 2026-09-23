@@ -13,7 +13,17 @@ import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
 import { instructionsFileName, planAgentPrompt, planSystemInjection } from '../protocol/context'
-import { isResumable, isToolCallCut, planUnfinishedNotice, turnEndCause, type TurnEndCause } from '../protocol/turn-end'
+import {
+  AUTO_CONTINUE_MAX,
+  autoContinueNudge,
+  isResumable,
+  isToolCallCut,
+  planUnfinishedNotice,
+  shouldAutoContinue,
+  turnEndCause,
+  unfinishedPlanSteps,
+  type TurnEndCause,
+} from '../protocol/turn-end'
 import { assembleMentionContext, MAX_MENTION_PATHS, type MentionSkipCode } from '../protocol/mentions'
 import {
   MAX_PLAN_STEPS,
@@ -436,6 +446,14 @@ export type AgentChunk =
       calls: ToolCall[]
       /** Steps consumed so far, so the budget spans approvals rather than resetting on each one. */
       steps: number
+      /**
+       * Auto-continuations spent so far, carried for the same reason `steps` is.
+       *
+       * The budget belongs to the user's turn, and a turn that paused for consent is still that turn:
+       * a count that came back as zero would let an approval reset it, and a model that asked for a
+       * permission between every stretch of work could then continue itself without limit.
+       */
+      continuations: number
     }
   /**
    * How the assistant's reply ended, for every turn that ends by the model's own answering rather
@@ -452,9 +470,9 @@ export type AgentChunk =
    *
    * Sent only for those two causes, and only when the turn is over — so it is both the announcement
    * that a stop was not silent and the only chunk a transcript keeps about it. `resumable` is what
-   * the Continue button reads, and it stays off the auto-continue path deliberately: the app never
-   * sends the next message on its own, and a turn that continued itself would spend the user's
-   * budget on a conversation they did not ask to continue.
+   * the Continue button reads. The two cut-off endings are the manual ones and stay manual: the app
+   * never sends the next message on its own for a reply that ran into an output cap or a broken
+   * connection, because asking again would meet the same cap and the same connection.
    *
    * `unfinishedSteps` is what a plan-shaped ending adds to the same chunk rather than travelling in a
    * second one: a cut-off reply under an unfinished plan is one ending with two things true about it,
@@ -463,6 +481,16 @@ export type AgentChunk =
    * reason to continue that has nothing to do with how the reply ended.
    */
   | { type: 'turn_end_notice'; cause: TurnEndCause; resumable: boolean; unfinishedSteps?: number }
+  /**
+   * A turn that picked itself up again, and how much of its budget it has now spent.
+   *
+   * Yielded *instead* of the ending above when the model stopped on its own with steps left on its
+   * plan: the run then asks the model again rather than ending, so there is no ending to announce and
+   * the turn is not over. `count` and `max` travel with it rather than being known by the pane, so the
+   * line the user reads is the loop's own account of what it did — one turn's `2 of 4` can never be
+   * confused with another build's different budget.
+   */
+  | { type: 'auto_continue'; count: number; max: number }
   | { type: 'done'; reason: 'complete' | 'max_steps'; steps: number }
 
 /** A tool call as it is being assembled from stream fragments. */
@@ -587,6 +615,7 @@ async function presentCall(
   queue: ToolCall[],
   history: ChatMessage[],
   steps: number,
+  continuations: number,
   workspaceRoot: string | null,
   plan: readonly PlanStep[]
 ): Promise<AgentChunk> {
@@ -603,6 +632,7 @@ async function presentCall(
     messages: history.map((m) => ({ ...m })),
     plan: plan.map((step) => ({ ...step })),
     steps,
+    continuations,
   }
 }
 
@@ -615,6 +645,13 @@ async function presentCall(
  * pause does not come through here — a pause ends the stream, not the turn — which is why the caller
  * that presents a call returns before reaching this.
  *
+ * One ending is decided here rather than announced: the model stopped on its own with work still on its
+ * plan, and the auto-continue rule says this turn should be picked up again. That ending does not end
+ * the turn — it yields the auto-continue chunk the user reads and hands the caller the nudge to send,
+ * and the loop asks the model again. It is decided in this function rather than beside it for the same
+ * reason everything else here is: every ending passes through one place, so a turn that continues
+ * itself cannot be a turn that skipped the reconciliation, the counting, or the budget.
+ *
  * The plan is reconciled rather than reported as declared: a turn that has ended cannot have a step
  * in progress, and the notice counts the reconciled plan, so a step stopped midway through is counted
  * as the unfinished work it is instead of being reported as done.
@@ -623,9 +660,21 @@ async function* finishTurn(
   plan: Plan,
   cause: TurnEndCause,
   steps: number,
-  reason: 'complete' | 'max_steps' | null
-): AsyncGenerator<AgentChunk, void, undefined> {
+  reason: 'complete' | 'max_steps' | null,
+  usedBudget: number
+): AsyncGenerator<AgentChunk, TurnEnding, undefined> {
   const reconciled = reconcilePlanOnTurnEnd(plan)
+
+  // Consulted only at the ending the model chose with nothing further asked of it. The loop's own step
+  // budget has nothing left to spend, so a nudge there would be answered by the same check again, four
+  // round-trips that do nothing; and a refusal is a decision the user has already made, which the app
+  // must not answer with "try again anyway". `complete` excludes both, and the cause excludes the two
+  // cut-off endings a further request cannot fix.
+  if (reason === 'complete' && shouldAutoContinue(cause, reconciled, usedBudget)) {
+    yield { type: 'auto_continue', count: usedBudget + 1, max: AUTO_CONTINUE_MAX }
+    return autoContinueNudge(unfinishedPlanSteps(reconciled))
+  }
+
   yield { type: 'turn_end', cause }
 
   // Two ways a turn earns something said about it, merged into one card: the reply that stopped
@@ -647,7 +696,19 @@ async function* finishTurn(
   }
 
   if (reason !== null) yield { type: 'done', reason, steps }
+  return null
 }
+
+/**
+ * What a finishing turn hands back to the loop: the nudge to send when the turn is not over, and null
+ * when it is.
+ *
+ * A message rather than a flag, because the message is the whole of what a continuation needs and the
+ * loop is the only side that may put it on the wire. Returning it here keeps the count, the plan and
+ * the wording in the one place that reconciled them, rather than having the caller reconcile a second
+ * time to write the same sentence.
+ */
+type TurnEnding = string | null
 
 /**
  * The plan a `set_plan` call declared, or `null` when the call carried nothing usable.
@@ -694,6 +755,13 @@ interface LoopOptions {
   steps?: number
   pending?: PendingDecision
   /**
+   * The auto-continuations this turn had already spent when it paused, on a resumed run.
+   *
+   * Beside `steps`, and for the same reason: the budget is the turn's, and a resume is that turn
+   * continuing rather than a new one. Absent for a fresh run, which has spent nothing.
+   */
+  continuations?: number
+  /**
    * The plan the turn had in hand when it paused, on a resumed run.
    *
    * A resumed run is the same turn continuing, so its plan comes back with it: a resume that started
@@ -725,6 +793,16 @@ interface LoopOptions {
 export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChunk, void, undefined> {
   const history: ChatMessage[] = opts.messages.map((m) => ({ ...m }))
   let steps = opts.steps ?? 0
+  /**
+   * How many times this turn has continued itself, spent against `AUTO_CONTINUE_MAX`.
+   *
+   * Per *turn*, which is what a user send is: a fresh send starts a fresh loop and so a fresh budget,
+   * while a resume from a consent pause is the same turn continuing and comes back with the count it
+   * had already spent — carried through the pause beside the step count, for exactly the same reason.
+   * That is also why the counter lives here rather than being derived from the history: a budget read
+   * out of the transcript would be a second source of truth a reopened conversation could disagree with.
+   */
+  let continuations = opts.continuations ?? 0
 
   // The plan in hand, carried across the round-trips of this run so each declaration merges over the
   // last rather than replacing it. A frame that names three of six steps therefore cannot shrink the
@@ -853,7 +931,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // it, so a resume continues the frame rather than a display layer's idea of it.
     const parked = frame[gate]
     yield { type: 'tool_call_start', callId: parked.id, tool: parked.function.name, args: argsForDisplay(parked) }
-    yield await presentCall(frame.slice(gate), history, steps, opts.workspaceRoot, plan)
+    yield await presentCall(frame.slice(gate), history, steps, continuations, opts.workspaceRoot, plan)
     return 'paused'
   }
 
@@ -892,7 +970,9 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // has ended asks nothing, so there is no request in which the frame's unrun calls would be owed
     // a result.
     if (opts.pending.denied) {
-      yield* finishTurn(plan, 'model_stop', steps, null)
+      // The budget is passed through as the counter stands and the ending still cannot spend it: a
+      // denial is the user's own decision, and the app does not answer it by asking the model again.
+      yield* finishTurn(plan, 'model_stop', steps, null, continuations)
       return
     }
 
@@ -909,7 +989,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       // the turn did not do, and this is the ending a user is least able to see for themselves. The
       // cause is the ordinary one — the last reply arrived complete; it was the loop that stopped —
       // so the cause copy says nothing and the plan is what the card is about.
-      yield* finishTurn(plan, 'model_stop', steps, 'max_steps')
+      yield* finishTurn(plan, 'model_stop', steps, 'max_steps', continuations)
       return
     }
     steps += 1
@@ -988,18 +1068,28 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // the model asked for: the calls it asked for in the same breath arrived alongside a reply the
     // provider had already stopped writing, so running them would be acting on half a request. The
     // notice is the announcement; whether to continue is the user's click, and `resumable` is what
-    // the button reads. A cut-off turn asked for no further work, so it yields no `done` chunk.
+    // the button reads. That is true of both of these causes and of no other ending: a model that
+    // stopped with work left is nudged by `finishTurn` instead of ending, so it never reaches here with
+    // a plan to announce. A cut-off turn asked for no further work, so it yields no `done` chunk.
     if (cause !== 'model_stop') {
-      yield* finishTurn(plan, cause, steps, null)
+      yield* finishTurn(plan, cause, steps, null, continuations)
       return
     }
 
-    // No tools asked for: this is the model's answer, and the loop is finished. It is still an ending
-    // a plan can make unfinished — a model that stops on its own mid-plan has stopped mid-task — and
-    // that is the case the card exists for.
+    // No tools asked for: this is the model's answer, and the loop is finished — unless the answer left
+    // work on the plan, in which case this ending does not end the turn. `finishTurn` is the judge of
+    // that, because it is the one place holding the reconciled plan and the budget; all this side does
+    // is take the nudge it hands back and put it on the wire. The nudge goes out as a user-role message
+    // — the only role the provider has for the operator speaking — and is sent to the provider and
+    // nowhere else: no chunk carries it, so the pane never renders it as something the user typed, and
+    // the transcript of this conversation gains no turn from it.
     if (calls.length === 0) {
-      yield* finishTurn(plan, cause, steps, 'complete')
-      return
+      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations)
+      if (nudge === null) return
+
+      continuations += 1
+      history.push({ role: 'user', content: nudge })
+      continue
     }
 
     // The frame is walked in the model's own order, and the walk is where the decision gate lives: it
@@ -1107,6 +1197,14 @@ export const agentModule = defineModule({
       calls: z.array(callSchema).min(1, 'At least one call must be answered'),
       steps: z.number().int().min(0).optional(),
       /**
+       * The auto-continuations the turn has already spent, handed straight back like the step count.
+       *
+       * Validated rather than trusted for the same reason: it crosses the IPC boundary and it bounds how
+       * much work the app does on the user's behalf. A count past the cap reads as spent, so a payload
+       * cannot buy extra round-trips by claiming a negative one either.
+       */
+      continuations: z.number().int().min(0).max(AUTO_CONTINUE_MAX).optional(),
+      /**
        * The plan the pause handed over, handed straight back.
        *
        * Validated as a plan and not trusted: this crosses the IPC boundary, and the checklist it
@@ -1130,6 +1228,8 @@ export const agentModule = defineModule({
         autoApprove: input.autoApprove ?? false,
         signal,
         steps: input.steps ?? 0,
+        // The count of continuations this turn has already spent, so an approval does not refund it.
+        continuations: input.continuations ?? 0,
         // The plan the pause handed back, so the turn that continues is the turn it was. Absent on a
         // resume from a turn that had declared none, which is a turn with nothing to carry.
         ...(input.plan ? { plan: input.plan } : {}),

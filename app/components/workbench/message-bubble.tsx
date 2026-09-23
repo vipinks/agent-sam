@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy, Pencil, RefreshCw, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
@@ -14,10 +14,45 @@ import {
 } from '../ui/alert-dialog'
 import { Textarea } from '../ui/textarea'
 import { AgentActionCard } from './agent-action-card'
+import { AutoContinueMark } from './auto-continue-mark'
 import { MarkdownContent } from './markdown'
 import { MentionChipRow } from './mention-chip'
 import { contextNoticeText } from './mentions'
 import type { AgentTurn } from './agent-session'
+
+/**
+ * The turn's action cards and its auto-continue seams, in the order they happened.
+ *
+ * A model that stopped with work left on its plan is nudged rather than ended, so one turn can contain
+ * several stretches of work — and the seam between two of them belongs *between* the cards around it,
+ * which is the one thing a card list alone cannot express. The marker is placed by the card count the
+ * seam was recorded at, so it lands where the run actually resumed rather than at the top or the bottom
+ * of the answer.
+ *
+ * Clamped to the cards that exist: a seam recorded after the last card of the turn as it arrived is
+ * drawn after the last card, which is what a transcript read back from disk shows when the resumed
+ * stretch narrated but called nothing.
+ */
+function actionRows(
+  turn: AgentTurn,
+  onApprove?: (callId: string) => void,
+  onDeny?: (callId: string) => void
+): ReactNode[] {
+  const marks = turn.continuations ?? []
+  const rows: ReactNode[] = []
+
+  for (let index = 0; index <= turn.steps.length; index += 1) {
+    for (const [position, mark] of marks.entries()) {
+      if (Math.min(mark.afterSteps, turn.steps.length) !== index) continue
+      rows.push(<AutoContinueMark key={`auto-${position}-${mark.count}`} mark={mark} />)
+    }
+
+    const step = turn.steps[index]
+    if (step) rows.push(<AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />)
+  }
+
+  return rows
+}
 
 /**
  * A single message bubble.
@@ -67,6 +102,9 @@ export const MessageBubble = memo(function MessageBubble({
 }) {
   const isUser = message.role === 'user'
   const steps = message.steps
+  // The cards and the seams between them, built once per render: their order is the order the run
+  // happened in, and two passes over the same data would be a second place for it to be got wrong.
+  const rows = actionRows(message, onApprove, onDeny)
 
   /*
    * The editor, held here rather than in the pane.
@@ -233,13 +271,7 @@ export const MessageBubble = memo(function MessageBubble({
               )}
               {/* Steps above the prose: the actions are what the answer refers to, so they read in
                 the order they happened. */}
-              {steps.length > 0 && (
-                <div className="mb-2 space-y-1.5">
-                  {steps.map((step) => (
-                    <AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />
-                  ))}
-                </div>
-              )}
+              {rows.length > 0 && <div className="mb-2 space-y-1.5">{rows}</div>}
               {/* With steps but no prose yet, the cards are the content — an empty "Thinking…" under
                 them would be noise. */}
               {(message.content || steps.length === 0) && <MarkdownContent content={message.content} />}

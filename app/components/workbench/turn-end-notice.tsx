@@ -18,16 +18,20 @@ import { Button } from '../ui/button'
  *
  * `model_stop` words nothing and renders nothing. That is the point of the card's existence: the
  * ordinary ending must not look like an incident, and a card under every answer would make the one
- * that matters indistinguishable from the noise.
+ * that matters indistinguishable from the noise. It is also the ending a turn no longer stops at:
+ * a model that quits with steps still on its plan is nudged along by the loop, up to a budget, and
+ * the card appears once that budget is spent — which is why the plan's line below is now the
+ * exception rather than the routine.
  *
  * A notice can say more than one thing, which is why the lines are a list rather than a single
  * sentence: a turn whose reply was cut off *and* whose plan is unfinished is one card that reports
  * both, because a user reading one of them still needs the other.
  *
- * The plan's line is the one this card exists for. A model that stops on its own with work left on its
- * plan has the ordinary ending and an unfinished task, and the cause copy is silent for it — so the
- * only thing that can stop that turn from ending in silence is the plan's own sentence, and it is what
- * makes the Continue button worth offering for a reply that was never cut off.
+ * The plan's line is the one this card exists for, and it is what remains of a decision the app has
+ * partly taken back. A model that stops on its own with work left on its plan has the ordinary ending
+ * and an unfinished task; the loop nudges it while its budget lasts, and when the budget is spent the
+ * only thing that can stop that turn from ending in silence is this sentence — which is also what makes
+ * the Continue button worth offering once the app has stopped clicking it for the user.
  */
 
 /** What each ending says. `null` for the ending that says nothing. */

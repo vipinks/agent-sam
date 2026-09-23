@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 import {
+  AUTO_CONTINUE_MAX,
+  autoContinueNudge,
   isResumable,
   isToolCallCut,
   planUnfinishedNotice,
   RESUME_MESSAGE,
+  shouldAutoContinue,
   TURN_END_CAUSES,
   turnEndCause,
   type TurnEndCause,
@@ -142,6 +145,65 @@ describe('planUnfinishedNotice', () => {
     expect(planUnfinishedNotice([step('a', 'done'), step('b', 'done')], 'model_stop')).toBeNull()
     expect(planUnfinishedNotice([], 'truncated')).toBeNull()
     expect(planUnfinishedNotice([], 'model_stop')).toBeNull()
+  })
+})
+
+/**
+ * The auto-continue rule, which is the one place the app sends without being asked.
+ *
+ * Phase 23 and Phase 31 both chose no auto-continue, and this reverses that for exactly one cause:
+ * a model that stops on its own with work left on its plan is a turn the manual card turned into a
+ * treadmill, because the user's next click was always the same click. A cut-off reply is a different
+ * event — the cap or the connection is still there — so nudging it would buy a second failure, and
+ * the two remain the user's to send.
+ */
+describe('shouldAutoContinue', () => {
+  const step = (id: string, status: PlanStep['status']): PlanStep => ({ id, text: id, status })
+  const unfinished = [step('a', 'done'), step('b', 'pending')]
+
+  it('continues a model that stopped on its own with work left and budget to spend', () => {
+    expect(shouldAutoContinue('model_stop', reconcilePlanOnTurnEnd(unfinished), 0)).toBe(true)
+  })
+
+  it('counts a step the turn was midway through as work to pick up, not as work it finished', () => {
+    const plan = reconcilePlanOnTurnEnd([step('a', 'in_progress')])
+    expect(plan.map((s) => s.status)).toEqual(['interrupted'])
+    expect(shouldAutoContinue('model_stop', plan, 0)).toBe(true)
+  })
+
+  it('never nudges a reply that was cut off, by either cause', () => {
+    // The two endings the manual card stays for: re-asking past an output cap hits the same cap, and
+    // re-asking across a dropped connection needs the connection. Neither is what a nudge fixes.
+    expect(shouldAutoContinue('truncated', unfinished, 0)).toBe(false)
+    expect(shouldAutoContinue('stream_error', unfinished, 0)).toBe(false)
+  })
+
+  it('says nothing for a finished plan, or for no plan at all', () => {
+    expect(shouldAutoContinue('model_stop', [step('a', 'done'), step('b', 'done')], 0)).toBe(false)
+    expect(shouldAutoContinue('model_stop', [], 0)).toBe(false)
+  })
+
+  it('spends a budget of four continuations and then stops', () => {
+    expect(AUTO_CONTINUE_MAX).toBe(4)
+    expect(shouldAutoContinue('model_stop', unfinished, AUTO_CONTINUE_MAX - 1)).toBe(true)
+    for (let used = AUTO_CONTINUE_MAX; used <= AUTO_CONTINUE_MAX + 2; used += 1) {
+      expect(shouldAutoContinue('model_stop', unfinished, used)).toBe(false)
+    }
+  })
+})
+
+describe('autoContinueNudge', () => {
+  it('names the steps left and sends the model to the first one unfinished', () => {
+    expect(autoContinueNudge(2)).toBe(
+      'You stopped with 2 plan steps remaining; continue now from the first unfinished step without restating completed work'
+    )
+  })
+
+  it('is one line, because it arrives at the provider where a user message arrives', () => {
+    // Sent as a user-role message, so it is written as one: a multi-line value would read as a pasted
+    // document in a request log rather than as the sentence it is.
+    expect(autoContinueNudge(1)).not.toContain('\n')
+    expect(autoContinueNudge(1)).toBe(autoContinueNudge(1).trim())
   })
 })
 

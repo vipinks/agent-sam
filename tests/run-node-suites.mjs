@@ -35,6 +35,7 @@ const SUITES = [
   { name: 'agent plan', src: 'agent/plan-test.ts' },
   { name: 'turn end diagnosis', src: 'agent/turn-end-test.ts' },
   { name: 'plan-unfinished notice', src: 'agent/plan-unfinished-test.ts' },
+  { name: 'bounded auto-continue', src: 'agent/auto-continue-test.ts' },
   { name: 'workspace events', src: 'agent/events-test.ts' },
   { name: 'engine tests', src: 'llm/engine-test.ts' },
   { name: 'models engine', src: 'llm/models-test.ts' },

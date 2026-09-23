@@ -21,6 +21,7 @@ import { rehydrateTranscript, serializeTranscript } from '../../app/components/w
 import { executeTool, needsApproval, runAgentLoop } from '../../conveyor/modules/agent'
 import { MAX_PLAN_STEPS, type PlanStep } from '../../conveyor/protocol/plan'
 import { TRANSCRIPT_VERSION } from '../../conveyor/protocol/transcript'
+import { AUTO_CONTINUE_MAX } from '../../conveyor/protocol/turn-end'
 
 const results: string[] = []
 
@@ -130,16 +131,31 @@ const DECLARED: PlanStep[] = [
 async function declaredPlan() {
   const chunks = await runLoop([planCallFrames('call_1', DECLARED), proseFrames('Planned.')])
 
-  // The notice is part of the sequence now, and the plan in it is why: this turn declared two steps
-  // and finished neither, so the ordinary ending is not silent about it any more. The order is what is
-  // asserted — the notice lands between the ending and the `done`, so a client that stopped reading at
-  // `turn_end` would still be handed it.
+  // The declaration reaches the renderer in the order it happened — the call, its result, then the plan
+  // it carried — and the round-trip after it is prose, which is the model stopping.
   assert.deepEqual(
-    chunks.map((c) => c.type),
-    ['tool_call_start', 'tool_result', 'plan', 'text_delta', 'turn_end', 'turn_end_notice', 'done'],
+    chunks.slice(0, 3).map((c) => c.type),
+    ['tool_call_start', 'tool_result', 'plan'],
     `unexpected chunk sequence: ${JSON.stringify(chunks.map((c) => c.type))}`
   )
-  assert.equal((chunks[5].unfinishedSteps as number) ?? null, 2, 'and it names the two steps the turn left open')
+
+  // The ending of a turn that stops with steps still open is bounded auto-continue: the mock answers
+  // every request with the same prose, so the loop nudges it the whole budget and then hands the turn
+  // back with the notice. Asserted here because the plan it declared is the reason — which is the same
+  // fact this suite has always been about, seen at the other end of the turn.
+  assert.equal(
+    chunks.filter((c) => c.type === 'auto_continue').length,
+    AUTO_CONTINUE_MAX,
+    'a plan left unfinished is nudged for the whole budget before the card goes up'
+  )
+  assert.deepEqual(
+    chunks.slice(-3).map((c) => c.type),
+    ['turn_end', 'turn_end_notice', 'done'],
+    'and the notice lands between the ending and the done, after the last continuation'
+  )
+
+  const notice = chunks.find((c) => c.type === 'turn_end_notice')
+  assert.equal((notice?.unfinishedSteps as number) ?? null, 2, 'and it names the two steps the turn left open')
 
   // The exemption, asserted rather than assumed: an ungated call is the whole reason a plan can be
   // declared mid-turn without the run stopping to ask.

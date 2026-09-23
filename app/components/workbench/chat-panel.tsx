@@ -122,6 +122,14 @@ interface PendingApproval {
   calls: PendingCall[]
   steps: number
   /**
+   * Auto-continuations the turn had already spent when it paused, handed back like the plan.
+   *
+   * The budget belongs to the user's turn, not to one generator, so an approval must not refund it: a
+   * turn that came back with a fresh count could continue itself past the cap on every permission the
+   * model asked for.
+   */
+  continuations: number
+  /**
    * The plan the turn had when it paused, handed back on the decision.
    *
    * The run behind a pause does not survive its stream ending, so the plan is the pane's to keep:
@@ -572,6 +580,7 @@ export function ChatPanel() {
                 messages: approval.messages,
                 calls: approval.calls,
                 steps: approval.steps,
+                continuations: approval.continuations,
                 plan: approval.plan,
               },
             }))
@@ -874,6 +883,9 @@ export function ChatPanel() {
           // The plan the pause handed over, handed straight back: a resumed turn is the same turn, and
           // one that came back with no plan could not report the work it left undone.
           plan: current.plan,
+          // And the auto-continuations it had already spent, for the same reason: the budget is the
+          // turn's, so a permission granted midway through it must not hand the loop a fresh one.
+          continuations: current.continuations,
           decision: 'approved',
         }),
         current.turnId,

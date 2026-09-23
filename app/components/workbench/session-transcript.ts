@@ -74,6 +74,12 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // carries no key — the same reason the instructions record is conditional — and copied rather than
     // referenced so a later edit to the live turn cannot reach back into what was just written.
     ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
+    // The seams this turn continued itself at, copied rather than referenced for the same reason the
+    // plan is: a later edit to the live turn must not reach back into what was just written. Written
+    // only when there were any, so a turn that never continued itself carries no key at all.
+    ...(turn.continuations !== undefined && turn.continuations.length > 0
+      ? { continuations: turn.continuations.map((mark) => ({ ...mark })) }
+      : {}),
     // How the turn ended, when it ended early — written with the cause and, when there was one, the
     // flag saying a consent pause ended with the process. Actionability is a property of the live
     // session rather than of the record: a card read back from disk offers no Continue button, because
@@ -126,6 +132,12 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is
     // a fact about the file rather than something the reader has to work out.
     ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
+    // Carried back so a reopened conversation draws the same seams it drew live — the line the user read
+    // when the turn continued itself is part of the answer, not a decoration on it. Absent for every
+    // turn that never continued, which is almost all of them.
+    ...(turn.continuations !== undefined && turn.continuations.length > 0
+      ? { continuations: turn.continuations.map((mark) => ({ ...mark })) }
+      : {}),
     // Carried back as history: the card says how the answer stopped and offers nothing to click,
     // because the run behind it is not in this process any more. `false` rather than absent, so the
     // card has one flag to read and no third state to handle.

@@ -93,6 +93,28 @@ const turnSchema = z.object({
    */
   plan: z.array(planStepSchema).optional(),
   /**
+   * The seams where this turn continued itself, as the loop reported them.
+   *
+   * Stored, because a reopened conversation must show the same seams it showed live: a turn that picked
+   * itself up three times is not one uninterrupted answer, and re-deriving that from the reply is
+   * impossible — the reply does not know. Each entry carries the count and the budget the loop
+   * displayed, and how many cards had been drawn when it continued, which is all the renderer needs to
+   * put the line back where it was.
+   *
+   * Optional, and it did not bump the version for the same reason the plan and the instructions record
+   * did not: a file written before auto-continue existed simply has no key, and an absent optional key
+   * is stripped rather than defaulted, so old files stay valid reads.
+   */
+  continuations: z
+    .array(
+      z.object({
+        count: z.number().int().positive(),
+        max: z.number().int().positive(),
+        afterSteps: z.number().int().min(0),
+      })
+    )
+    .optional(),
+  /**
    * How this turn's reply ended, when it ended early enough to say so.
    *
    * The cause only, never the live flag: a notice in a file is history, and the run a Continue button

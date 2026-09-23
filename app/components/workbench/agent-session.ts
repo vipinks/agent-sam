@@ -1,7 +1,12 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
-import { planUnfinishedNotice, TURN_END_CAUSES, type TurnEndCause } from '@/conveyor/protocol/turn-end'
+import {
+  AUTO_CONTINUE_MAX,
+  planUnfinishedNotice,
+  TURN_END_CAUSES,
+  type TurnEndCause,
+} from '@/conveyor/protocol/turn-end'
 
 /** The call exactly as the model sent it, as the pause hands it over. */
 export interface PendingCall {
@@ -107,6 +112,35 @@ export interface AgentTurn {
    * `session-transcript.ts`, which is where that distinction is written down.
    */
   endNotice?: TurnEndNotice
+  /**
+   * The seams where this turn picked itself up again, in the order they happened.
+   *
+   * A turn that stops with work left on its plan is nudged rather than ended, so the run the user reads
+   * is one turn with several stretches of work in it — and a stretch that simply continues a previous
+   * one would be indistinguishable from a model that rambled on in one go. These are what the
+   * transcript draws those seams from, and they are recorded as facts about the turn rather than
+   * inferred at draw time: only the run knows where its pieces ended.
+   *
+   * Each carries the count it was shown with, because the line the user reads is the loop's own account
+   * of its budget and the pane is not counting anything.
+   */
+  continuations?: AutoContinueMark[]
+}
+
+/**
+ * One point where a turn continued itself.
+ *
+ * `afterSteps` is where the seam is: the number of action cards already drawn when the loop decided to
+ * continue. That is what puts the line between the work that was interrupted and the work that picked it
+ * up, rather than at the top or the bottom of the answer. Stored beside `count` rather than recomputed,
+ * because a card count read back from a transcript has to mean what it meant when the seam was made.
+ */
+export interface AutoContinueMark {
+  /** How many continuations this turn had spent when this seam was made, counting this one. */
+  count: number
+  /** The budget the count is shown against, as the loop reported it. */
+  max: number
+  afterSteps: number
 }
 
 /**
@@ -207,6 +241,15 @@ export interface AgentChunkEffect {
      */
     calls: PendingCall[]
     steps: number
+    /**
+     * Auto-continuations the turn had already spent when it paused.
+     *
+     * Carried for the same reason the plan is: the run behind the pause does not survive its stream
+     * ending, and the budget belongs to the turn rather than to one generator. A resumed turn that came
+     * back with a fresh budget could continue itself past the cap every time the model asked for a
+     * permission.
+     */
+    continuations: number
     /** The change a gated `write_file` would make, when main could compute one. */
     diff?: FileDiff
     /**
@@ -538,9 +581,26 @@ export function applyAgentChunk(
         const queued: ToolStep = { callId: call.id, tool: call.function.name, args: callArgs(call), status: 'queued' }
         next = replaceTurn(next, turnId, (turn) => ({ ...turn, steps: upsertStep(turn.steps, queued) }))
       }
+      // A count that cannot be negative or fractional, because it is a budget: a value this build cannot
+      // read is nothing spent, rather than a number the loop would then have to defend itself against.
+      const continuations =
+        typeof c.continuations === 'number' && Number.isInteger(c.continuations) && c.continuations > 0
+          ? c.continuations
+          : 0
       return {
         turns: next,
-        effect: { approval: { callId: headId || callId, tool: String(c.tool), messages, calls, steps, diff, plan } },
+        effect: {
+          approval: {
+            callId: headId || callId,
+            tool: String(c.tool),
+            messages,
+            calls,
+            steps,
+            continuations,
+            diff,
+            plan,
+          },
+        },
       }
     }
 
@@ -571,6 +631,37 @@ export function applyAgentChunk(
       return {
         turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, endNotice: notice })),
         effect: { turnEndNotice: notice },
+      }
+    }
+
+    case 'auto_continue': {
+      // Recorded as a seam on the turn, never as a turn of its own. The nudge the loop sends with this
+      // is not in the transcript and must not be: the user did not type it, and a pane that showed it
+      // as their message would be putting words in their mouth. What the chunk does carry is where the
+      // run picked itself up — the number of cards drawn so far — and that is what the line is drawn
+      // between.
+      //
+      // Read defensively for the same reason the notice is: the chunk crosses IPC, so a count this
+      // build cannot render (a zero, a string, a missing key) leaves the turn exactly as it was rather
+      // than drawing a line that says nothing true.
+      const count = typeof c.count === 'number' && c.count > 0 ? c.count : null
+      if (count === null) return { turns, effect: {} }
+      // The budget comes from the chunk too, because the line the user reads names both numbers and the
+      // pane is not entitled to assume what the loop's cap is. The protocol's own default is the
+      // fallback for a chunk that arrived without one, which keeps a renderer wired to a newer or older
+      // main from drawing a line with a blank where a number belongs.
+      const max = typeof c.max === 'number' && c.max > 0 ? c.max : AUTO_CONTINUE_MAX
+
+      return {
+        turns: replaceTurn(turns, turnId, (turn) => ({
+          ...turn,
+          continuations: [...(turn.continuations ?? []), { count, max, afterSteps: turn.steps.length }],
+        })),
+        // Nothing reported to the pane. A seam is not an event the UI has to act on — the cards and the
+        // prose that follow it arrive as chunks of their own and are applied as they always were — and a
+        // second copy of the fact in component state would be a second thing to keep in step with the
+        // turn that already carries it.
+        effect: {},
       }
     }
 
@@ -675,6 +766,10 @@ export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
  * The cause defaults to the ordinary one, and the ordinary one words nothing: for these two endings
  * there is no reply to diagnose, and naming one that did not happen would be worse than saying less.
  * What the card is about in both cases is the work.
+ *
+ * Neither is an ending the app continues by itself, and the reason is the same as the loop's: a user who
+ * stopped a run has said so, and a denial is a decision. The nudge in main is for the ending nobody
+ * chose — the model quitting with work still on its plan.
  */
 export function endTurn(turns: AgentTurn[], turnId: string, cause: TurnEndCause = 'model_stop'): AgentTurn[] {
   const ended = endTurnPlan(turns, turnId)

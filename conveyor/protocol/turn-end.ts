@@ -107,8 +107,9 @@ export function isToolCallCut(payloads: readonly string[]): boolean {
  * asking again would produce a second answer to a finished question. The two causes that mean the
  * reply was cut short always can be: the conversation is intact on the provider's side of the next
  * request, so continuing costs one round-trip and rewrites nothing. That is also why this is the
- * predicate the notice is emitted on: a dead turn is exactly a turn that can be resumed, and
- * continuing is still the user's click rather than the app's decision.
+ * predicate the notice is emitted on: a dead turn is exactly a turn that can be resumed, and for these
+ * two causes continuing stays the user's click rather than the app's decision — `shouldAutoContinue`
+ * below says why, and is careful to answer for the one cause it names rather than for every ending.
  */
 export function isResumable(cause: TurnEndCause): boolean {
   return cause !== 'model_stop'
@@ -146,9 +147,22 @@ export interface PlanUnfinishedNotice {
    * An unfinished plan is work that can be picked up whatever the reply did, so the model stopping on
    * its own is not the end of the matter. `isResumable` answers about the *reply* — a complete answer
    * has nothing to continue — and this answers about the *work*, which is a different question with a
-   * different answer. Continue is still the user's click: nothing here sends anything.
+   * different answer. Whether that pick-up is the user's click or the loop's own nudge depends on the
+   * cause, which is what `shouldAutoContinue` decides; this flag is the weaker claim both cases share,
+   * and is what the card reads when the loop has stopped continuing.
    */
   resumable: true
+}
+
+/**
+ * How many steps of a plan are still to do: pending work, plus work a reconciliation marked interrupted.
+ *
+ * Counted from the plan the caller reconciled, never from the plan as it was declared — a step the turn
+ * was midway through is unfinished work, and calling it anything else would report a stopped turn as
+ * having finished what it started.
+ */
+export function unfinishedPlanSteps(plan: readonly PlanStep[]): number {
+  return plan.filter((step) => step.status !== 'done').length
 }
 
 /**
@@ -158,10 +172,60 @@ export interface PlanUnfinishedNotice {
  * the overwhelming majority of turns: a notice under every answer is a notice nobody reads.
  */
 export function planUnfinishedNotice(plan: readonly PlanStep[], cause: TurnEndCause): PlanUnfinishedNotice | null {
-  const unfinishedSteps = plan.filter((step) => step.status !== 'done').length
+  const unfinishedSteps = unfinishedPlanSteps(plan)
   if (unfinishedSteps === 0) return null
 
   return { cause, unfinishedSteps, resumable: true }
+}
+
+/**
+ * How many times one turn may continue itself before the user is asked.
+ *
+ * A cap rather than a preference, and the number is the product decision: a turn that has stopped four
+ * times with the same steps still on its plan is not going to be talked into finishing by a fifth
+ * nudge, so the fifth stop is the one the card goes up for. It is also what keeps this feature bounded
+ * in the user's money rather than in the app's hope.
+ */
+export const AUTO_CONTINUE_MAX = 4
+
+/**
+ * Whether a turn that is ending should be picked up again by the app rather than by the user.
+ *
+ * This reverses an earlier decision, deliberately, and for exactly one cause. Phase 23 and Phase 31
+ * both chose no auto-continue, on the grounds that continuing is the user's click; live use then showed
+ * what that choice costs. A model that stops with steps still on its plan stops at the same place every
+ * time, so the click was never a decision — it was the same click, over and over, until the user
+ * learned to stop reading the card. So the app now takes the click it can predict, up to a budget, and
+ * the user's Continue becomes the exception: the endings a nudge cannot fix.
+ *
+ * Which is why the cause is the first half of the rule rather than a detail of it. `truncated` means
+ * the provider ran out of output room and `stream_error` means the reply stopped arriving: nudging
+ * either buys exactly one more failure, the same cap or the same connection. Both remain manual, and
+ * both keep the card they already had. Only `model_stop` — the model deciding it was done while its own
+ * plan says otherwise — is a state a further round-trip can move.
+ *
+ * Written as a predicate over the reconciled plan, like every other rule here: the caller reconciles
+ * once, and this decides on the same list the card would have counted.
+ */
+export function shouldAutoContinue(cause: TurnEndCause, plan: readonly PlanStep[], usedBudget: number): boolean {
+  if (cause !== 'model_stop') return false
+  if (usedBudget >= AUTO_CONTINUE_MAX) return false
+  return unfinishedPlanSteps(plan) > 0
+}
+
+/**
+ * What the app says to the model when it continues a turn the model had stopped.
+ *
+ * A user-role message, because that is the only role the provider's API has for the operator speaking,
+ * and it is sent to the provider and never rendered as user speech: the pane is never told a person
+ * typed this, so a transcript of the conversation has no such turn in it.
+ *
+ * It names the count and the place to start, because those are the two things a stopped model gets
+ * wrong when it resumes — it restates what it already finished, or it picks up somewhere arbitrary. The
+ * number is the reconciled plan's own, so it describes the work that is actually left.
+ */
+export function autoContinueNudge(unfinishedSteps: number): string {
+  return `You stopped with ${unfinishedSteps} plan steps remaining; continue now from the first unfinished step without restating completed work`
 }
 
 /**
