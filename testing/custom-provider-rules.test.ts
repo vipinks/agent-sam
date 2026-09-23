@@ -113,7 +113,9 @@ describe('the descriptor', () => {
     expect(modelsUrl('http://localhost:1234/v1/')).toBe('http://localhost:1234/v1/models')
   })
 
-  it('does not move the transcript version: nothing outside the settings slice changed shape', () => {
-    expect(TRANSCRIPT_VERSION).toBe(2)
+  it('moves the transcript version only when a stored shape widens: a step status did, a setting did not', () => {
+    // Raised to 3 by the `interrupted` step status, the same rule that raised it to 2 for `queued`.
+    // The settings slice this file is about still changes nothing a transcript reader must know.
+    expect(TRANSCRIPT_VERSION).toBe(3)
   })
 })

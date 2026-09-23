@@ -4,7 +4,7 @@ import {
   type TranscriptSnapshot,
   type TranscriptTurn,
 } from '@/conveyor/protocol/transcript'
-import { isInterrupted, type AgentTurn } from './agent-session'
+import { isInterrupted, isUndecidedPause, LOST_PAUSE_CODE, type AgentTurn } from './agent-session'
 
 /**
  * Turning the live transcript into something that can be saved, and back.
@@ -74,11 +74,19 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // carries no key — the same reason the instructions record is conditional — and copied rather than
     // referenced so a later edit to the live turn cannot reach back into what was just written.
     ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
-    // How the turn ended, when it ended early — written with the cause alone, because actionability
-    // is a property of the live session rather than of the record. A card read back from disk offers
-    // no Continue button: the run it would continue is gone. Dropping the flag here rather than
-    // storing and re-reading it is what gives "history is not actionable" one place to be true.
-    ...(turn.endNotice !== undefined ? { endNotice: { cause: turn.endNotice.cause } } : {}),
+    // How the turn ended, when it ended early — written with the cause and, when there was one, the
+    // flag saying a consent pause ended with the process. Actionability is a property of the live
+    // session rather than of the record: a card read back from disk offers no Continue button, because
+    // the run it would continue is gone. Dropping that here rather than storing and re-reading it is
+    // what gives "history is not actionable" one place to be true.
+    ...(turn.endNotice !== undefined
+      ? {
+          endNotice: {
+            cause: turn.endNotice.cause,
+            ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
+          },
+        }
+      : {}),
   }))
 
   return {
@@ -117,10 +125,18 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is
     // a fact about the file rather than something the reader has to work out.
     ...(turn.plan !== undefined ? { plan: turn.plan.map((step) => ({ ...step })) } : {}),
-    // Carried back as history: the card says the answer stopped early and offers nothing to click,
+    // Carried back as history: the card says how the answer stopped and offers nothing to click,
     // because the run behind it is not in this process any more. `false` rather than absent, so the
     // card has one flag to read and no third state to handle.
-    ...(turn.endNotice !== undefined ? { endNotice: { cause: turn.endNotice.cause, resumable: false } } : {}),
+    ...(turn.endNotice !== undefined
+      ? {
+          endNotice: {
+            cause: turn.endNotice.cause,
+            resumable: false,
+            ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
+          },
+        }
+      : {}),
   }))
 
   return {
@@ -132,6 +148,39 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // else in the UI.
     autoApprove: snapshot.autoApprove === true,
   }
+}
+
+/**
+ * Reconcile a consent pause the process did not survive.
+ *
+ * A pause is a question waiting for a person, and the thing that was doing the waiting — the run
+ * holding the frame's history — lives in the process that asked. A transcript read back by a later
+ * process therefore cannot be shown as still waiting: it would be a card whose buttons do nothing and
+ * a turn that is neither running nor ended, which is exactly the state this exists to remove.
+ *
+ * So a pause found at load ends where it stands. Its calls are recorded as never decided, the turn says
+ * so, and the conversation gets a notice. Nothing is guessed about what the user would have answered —
+ * an undecided call is not a refused one — and nothing is dropped, so the turn keeps the record of what
+ * was proposed. Idempotent: a transcript with no pause comes back untouched.
+ */
+export function reconcileOrphanedPauses(state: TranscriptState): TranscriptState {
+  const turns = state.turns.map((turn) => {
+    if (!turn.steps.some(isUndecidedPause)) return turn
+
+    return {
+      ...turn,
+      steps: turn.steps.map((step) =>
+        isUndecidedPause(step) ? { ...step, status: 'interrupted' as const, code: LOST_PAUSE_CODE } : step
+      ),
+      // The notice lands here rather than beside the transcript because that is where every other
+      // notice is read from, so the card above the composer needs no second path to reach it. A turn
+      // that somehow already has one keeps it: a diagnosis of the reply is not overwritten by what
+      // happened to the pause afterwards.
+      endNotice: turn.endNotice ?? { cause: 'model_stop' as const, resumable: false, lostPending: true },
+    }
+  })
+
+  return { ...state, turns }
 }
 
 /** A snapshot for a session with no saved file. */

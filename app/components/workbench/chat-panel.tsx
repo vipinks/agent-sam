@@ -33,6 +33,8 @@ import {
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
+  ABANDONED_PAUSE_CODE,
+  abandonUndecidedCalls,
   applyAgentChunk,
   currentEndNotice,
   currentPlan,
@@ -96,8 +98,16 @@ function streamErrorMessage(error: unknown, providerName: string): string {
   return 'The response stream ended unexpectedly.'
 }
 
-/** What the agent is paused on, and everything needed to continue it. */
+/**
+ * What the agent is paused on, and everything needed to continue it.
+ *
+ * Carries the session it belongs to, because a pause is a fact about a conversation: the user can
+ * switch to another one while this is still waiting, and the decision has to still be here when they
+ * come back rather than blocking a conversation it has nothing to do with.
+ */
 interface PendingApproval {
+  /** The conversation this pause was asked in. */
+  sessionId: string
   turnId: string
   /** The one call this decision is about; the rest of `calls` are queued behind it. */
   callId: string
@@ -167,7 +177,16 @@ export function ChatPanel() {
   // the setting, so a conversation that had it on opens with it on, and one that has never had it set
   // opens with it off.
   const autoApprove = sessions.autoApprove
-  const [pending, setPending] = useState<PendingApproval | null>(null)
+  /**
+   * The consent pauses this pane is holding, by the conversation each belongs to.
+   *
+   * A map rather than one slot: a pause is a question about one conversation, and the user may leave
+   * it standing to work somewhere else. One slot would mean the second conversation's pause silently
+   * replacing the first — the lost decision this phase exists to make impossible.
+   */
+  const [pauses, setPauses] = useState<Record<string, PendingApproval>>({})
+  /** The pause of the conversation on screen, which is the only one the pane may act on. */
+  const pending = (sessions.openId ? pauses[sessions.openId] : undefined) ?? null
 
   /**
    * Whether the controls that act on a message are available: the edit, and the regenerate.
@@ -479,13 +498,26 @@ export function ChatPanel() {
   }, [])
 
   /**
+   * End the turn the pane is filling in.
+   *
+   * The one place a turn ends here: the stream's own ending, a run the user stopped, and a denial that
+   * ends the turn where it stands all come through it, so no ending can leave a plan claiming work is
+   * under way while another ending would have reconciled it. A pause is the exception, and it is the
+   * caller's to except: a pause ends the stream, not the turn, because the decision resumes it.
+   */
+  const endTurn = useCallback(
+    (turns: AgentTurn[], turnId: string) => updateMessages(endTurnPlan(turns, turnId)),
+    [updateMessages]
+  )
+
+  /**
    * Drive one agent stream to its end.
    *
    * Every chunk is handed to the reducer, which owns what the transcript looks like. The only chunk
    * with a side effect is the pause: it stops this stream and records what is needed to continue.
    */
   const runStream = useCallback(
-    async (stream: AsyncIterable<unknown>, turnId: string) => {
+    async (stream: AsyncIterable<unknown>, turnId: string, sessionId: string) => {
       const iterator = stream[Symbol.asyncIterator]()
       iteratorRef.current = iterator
       setIsStreaming(true)
@@ -528,14 +560,25 @@ export function ChatPanel() {
           }
 
           if (effect.approval) {
-            setPending({
-              turnId,
-              callId: effect.approval.callId,
-              tool: effect.approval.tool,
-              messages: effect.approval.messages,
-              calls: effect.approval.calls,
-              steps: effect.approval.steps,
-            })
+            // The pause is recorded under the conversation it belongs to, and the session layer is told
+            // that this process is still holding it. Both halves matter: a load of this conversation
+            // must leave the pause standing, and a load of any other must reconcile the pauses whose
+            // process is gone. Recorded rather than merely set, because the pane may be showing a
+            // different conversation by the time the user answers.
+            const { approval } = effect
+            setPauses((current) => ({
+              ...current,
+              [sessionId]: {
+                sessionId,
+                turnId,
+                callId: approval.callId,
+                tool: approval.tool,
+                messages: approval.messages,
+                calls: approval.calls,
+                steps: approval.steps,
+              },
+            }))
+            sessionsRef.current.setLivePause(sessionId, true)
             // The stream is over as far as this call is concerned; the run continues on the decision.
             paused = true
             return
@@ -559,10 +602,10 @@ export function ChatPanel() {
         // The turn is over — answered, failed, or stopped — so a plan that still claims a step is in
         // progress is corrected here, at the one place every ending passes through. A pause is the
         // exception, because the turn it belongs to has not ended.
-        if (!paused) updateMessages(endTurnPlan(messagesRef.current, turnId))
+        if (!paused) endTurn(messagesRef.current, turnId)
       }
     },
-    [drainNow, enqueue, providerName, stickToBottom, updateMessages]
+    [drainNow, endTurn, enqueue, providerName, stickToBottom, updateMessages]
   )
 
   /**
@@ -582,7 +625,7 @@ export function ChatPanel() {
    * read again on a regenerate.
    */
   const runAgentTurn = useCallback(
-    async (turns: AgentTurn[], mentionPaths: readonly string[]) => {
+    async (turns: AgentTurn[], mentionPaths: readonly string[], sessionId: string) => {
       const assistantTurn = startAssistantTurn()
       streamingTurnIdRef.current = assistantTurn.id
       updateMessages([...turns, assistantTurn])
@@ -604,7 +647,8 @@ export function ChatPanel() {
           // and the payload is the wire's own array.
           mentionPaths: mentionPaths.length > 0 ? [...mentionPaths] : undefined,
         }),
-        assistantTurn.id
+        assistantTurn.id,
+        sessionId
       )
 
       // A turn boundary: what was sent and the reply to it are now a complete unit, so this is when the
@@ -629,8 +673,10 @@ export function ChatPanel() {
       const fromComposer = options.keepComposer !== true
 
       // Sending with no session open is normal: a session is created for the message, and named from
-      // it. This is what makes the composer work before the user has ever touched the session list.
-      sessionsRef.current.ensureSession(text)
+      // it. This is what makes the composer work before the user has ever touched the session list. The
+      // id comes back so the run knows which conversation it belongs to — a pause it asks for is a
+      // question about that conversation, and the pane has to be able to say which one it is holding.
+      const sessionId = sessionsRef.current.ensureSession(text)
 
       if (fromComposer) {
         setDraft('')
@@ -644,7 +690,7 @@ export function ChatPanel() {
       // The message goes on the end of the transcript as it stands — after any truncation an edit made,
       // so a resend continues the conversation that is left rather than the one the removed turns
       // belonged to — and that whole list is what the run is handed.
-      await runAgentTurn([...messagesRef.current, startUserTurn(text, chips)], chips)
+      await runAgentTurn([...messagesRef.current, startUserTurn(text, chips)], chips, sessionId)
     },
     [isStreaming, pending, runAgentTurn, setChips]
   )
@@ -704,7 +750,7 @@ export function ChatPanel() {
         const kept = truncateFromTurn(messagesRef.current, turnId)
         updateMessages(kept)
         await sessionsRef.current.saveNow()
-        await runAgentTurn(kept, lastAskMentions(kept))
+        await runAgentTurn(kept, lastAskMentions(kept), sessionsRef.current.openId ?? '')
       })()
     },
     [isStreaming, pending, runAgentTurn, updateMessages]
@@ -762,22 +808,51 @@ export function ChatPanel() {
   /**
    * Answer a pause.
    *
-   * Approval and denial travel the same path: the decision goes to `resume`, which either runs the
-   * tool or feeds the refusal back to the model as the tool's result. Denial is therefore not a dead
-   * end — the model gets to explain itself.
+   * Approval resumes the run where it left off: the queue goes back whole while the decision answers
+   * its head, which is how the loop knows what to present next — so consent stays per call even though
+   * a frame's calls travel together.
+   *
+   * A denial ends the turn rather than being fed back to the model as the call's result. Feeding it
+   * back meant the only way to refuse an action was to ask for another one: the two things a user wants
+   * at that moment — refuse this, and stop — were the same button, and neither of them stopped the run.
+   * The refusal is recorded, the frame's unanswered calls are recorded as never decided rather than
+   * left waiting, and the turn ends through the one path every ending passes through, so a plan that
+   * still claims a step is in progress is reconciled and the turn says how it went.
+   *
+   * Either way the pause is cleared before the work starts, so a second click cannot decide it twice.
    */
   const decide = useCallback(
     async (approved: boolean) => {
       const current = pending
       if (!current || isStreaming) return
 
-      setPending(null)
-      // Record the decision against the one call it was about. The cards queued behind it stay queued:
-      // the loop is about to present the next of them, and marking them decided here would claim
-      // consent the user has not given.
-      const next = resolveDecision(messagesRef.current, current.turnId, current.callId, approved)
-      updateMessages(next)
+      // This process is not holding the pause any more, whichever way the decision went. Said here
+      // rather than beside the branches: a load of this conversation after this must reconcile nothing,
+      // because there is nothing left waiting for an answer.
+      setPauses((held) => {
+        const rest = { ...held }
+        delete rest[current.sessionId]
+        return rest
+      })
+      sessionsRef.current.setLivePause(current.sessionId, false)
 
+      // Record the decision against the one call it was about. The cards queued behind it stay queued:
+      // on an approval the loop is about to present the next of them, and marking them decided here
+      // would claim consent the user has not given.
+      const decided = resolveDecision(messagesRef.current, current.turnId, current.callId, approved)
+
+      if (!approved) {
+        // A denial ends the turn where it stands, and the calls behind the head are never put to the
+        // user: they are recorded as undecided so the transcript stops showing a question waiting on a
+        // run that is over. The tool-call contract is not broken by this — a turn that has ended asks
+        // the model nothing further, and the next message reads the transcript as text, not as raw
+        // frames — so ending here costs nothing and is the honest record of what happened.
+        endTurn(abandonUndecidedCalls(decided, current.turnId, ABANDONED_PAUSE_CODE), current.turnId)
+        sessionsRef.current.scheduleSave()
+        return
+      }
+
+      updateMessages(decided)
       streamingTurnIdRef.current = current.turnId
       requestAnimationFrame(stickToBottom)
 
@@ -796,9 +871,10 @@ export function ChatPanel() {
           autoApprove,
           calls: current.calls,
           steps: current.steps,
-          decision: approved ? 'approved' : 'denied',
+          decision: 'approved',
         }),
-        current.turnId
+        current.turnId,
+        current.sessionId
       )
 
       // Answering a decision completes the turn, so it is a save point too.
@@ -808,6 +884,7 @@ export function ChatPanel() {
       activeModel,
       activeProviderId,
       autoApprove,
+      endTurn,
       isStreaming,
       pending,
       rootPath,

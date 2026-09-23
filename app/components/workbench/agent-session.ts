@@ -34,8 +34,13 @@ export interface ToolStep {
    * 'awaiting', and the others in the same frame are 'queued' behind it. They are distinct states
    * rather than one because only the awaiting call may be actioned — a queue that looked uniform
    * would invite the batch approval that consent is per call to prevent.
+   *
+   * 'interrupted' is the terminal state of a call that will never be decided: the pause it belonged to
+   * died with the process that held the run, or the turn was denied and ended where it stood. It is a
+   * state of its own rather than a `denied`, because a call the user never answered is not a call the
+   * user refused, and a transcript that could not tell them apart would misreport consent.
    */
-  status: 'running' | 'awaiting' | 'queued' | 'denied' | 'ok' | 'failed'
+  status: 'running' | 'awaiting' | 'queued' | 'interrupted' | 'denied' | 'ok' | 'failed'
   output?: string
   /** A stable failure code, for the UI to branch on. */
   code?: string
@@ -101,7 +106,64 @@ export interface AgentTurn {
    * it, so a card read back from disk offers no button — the run it would continue is gone. See
    * `session-transcript.ts`, which is where that distinction is written down.
    */
-  endNotice?: { cause: TurnEndCause; resumable: boolean }
+  endNotice?: TurnEndNotice
+}
+
+/**
+ * What a turn says about its own ending, on the turn and in the card above the composer.
+ *
+ * `cause` is the diagnosis of the reply — the model finished, or it was cut off — and it is always
+ * present, because the vocabulary is closed and every ending is one of its three values. `lostPending`
+ * beside it is about something else the ending has to report, so a notice whose cause words nothing
+ * (`model_stop`) can still say something rather than a turn ending silently because its reply arrived
+ * complete.
+ */
+export interface TurnEndNotice {
+  cause: TurnEndCause
+  resumable: boolean
+  /**
+   * A consent pause this process did not survive, recorded when the transcript is read back.
+   *
+   * Sized to one value rather than a count: there was one pause, and what the user needs told is
+   * that it ended without them, not how many calls were behind it.
+   */
+  lostPending?: boolean
+}
+
+/**
+ * The code a card reads to know its call was never decided, and why.
+ *
+ * A stable code rather than a sentence: the wording belongs to the card, and a step that merely says
+ * `interrupted` cannot be told apart from one whose turn ran out before its call was reached. Branching
+ * on a code is the rule the rest of the app's failures follow, and this is a failure to decide.
+ *
+ * Two codes rather than one because the two reasons are different news: a pause the process did not
+ * survive ended without the user, and a pause the user ended themselves did not. Neither is a refusal,
+ * so neither is a `denied`.
+ */
+export const LOST_PAUSE_CODE = 'PAUSE_LOST'
+export const ABANDONED_PAUSE_CODE = 'PAUSE_ABANDONED'
+
+/** A call the user was asked about and never answered, as the two states a pause leaves it in. */
+export function isUndecidedPause(step: { status: string }): boolean {
+  return step.status === 'awaiting' || step.status === 'queued'
+}
+
+/**
+ * Mark the calls a frame never got to as never decided.
+ *
+ * Called when a turn ends at the head of a frame — a denial, or the user stopping the run. The
+ * provider's contract requires an answer for every call the frame declared, and a turn that has ended
+ * cannot give one; what it can do is stop claiming the question is still open. Recording them as
+ * undecided is what keeps a transcript from showing a decision waiting on a process that has moved on.
+ */
+export function abandonUndecidedCalls(turns: AgentTurn[], turnId: string, code: string): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => ({
+    ...turn,
+    steps: turn.steps.map((step) =>
+      isUndecidedPause(step) ? { ...step, status: 'interrupted' as const, code } : step
+    ),
+  }))
 }
 
 /** A file a send asked for that could not be attached, named with the code main reported. */
@@ -204,6 +266,31 @@ function isFileDiff(value: unknown): value is FileDiff {
   if (!value || typeof value !== 'object') return false
   const candidate = value as FileDiff
   return Array.isArray(candidate.lines) && typeof candidate.added === 'number' && typeof candidate.removed === 'number'
+}
+
+/**
+ * Whether a turn already carries a card for one call.
+ *
+ * Asked before a pause materialises its own card, so a call the fragments did announce keeps the step
+ * it already has — with the args it was announced with — rather than gaining a second one.
+ */
+function hasStep(turns: readonly AgentTurn[], turnId: string, callId: string): boolean {
+  return turns.find((turn) => turn.id === turnId)?.steps.some((step) => step.callId === callId) === true
+}
+
+/**
+ * A call's arguments, for a card built from the pause rather than from the call's own fragment.
+ *
+ * Lenient for the same reason `argsForDisplay` in the loop is: malformed arguments are the
+ * execution's problem to report, and a card with no arguments is still a card to decide on.
+ */
+function callArgs(call: PendingCall): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(call.function.arguments || '{}')
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return { raw: call.function.arguments }
+  }
 }
 
 /**
@@ -389,7 +476,21 @@ export function applyAgentChunk(
       // order is authoritative — it is the frame's own order, which is what the loop walks.
       const headId = calls[0].id
       let next = turns
+      // The pause is the authority on what is being asked, so a call the fragments never announced is
+      // carded from the pause itself. Without this the pane would hold a decision with nothing on
+      // screen to decide on — the one state this whole path exists to make impossible — and it happens
+      // for real whenever a frame reaches the renderer without its `tool_call_start`.
       next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting', diff }))
+      if (!hasStep(next, turnId, headId)) {
+        const step: ToolStep = {
+          callId: headId,
+          tool: String(c.tool),
+          args: callArgs(calls[0]),
+          status: 'awaiting',
+          ...(diff ? { diff } : {}),
+        }
+        next = replaceTurn(next, turnId, (turn) => ({ ...turn, steps: [...turn.steps, step] }))
+      }
       for (const call of calls.slice(1)) {
         next = updateStep(next, turnId, call.id, (step) => ({ ...step, status: 'queued' }))
       }
@@ -500,7 +601,9 @@ export function noteContextSkip(turns: AgentTurn[], turnId: string, notice: Cont
  *
  * Not called when a run pauses for consent: a pause ends the *stream*, not the turn — the decision
  * resumes it — and a checklist that marked its own step interrupted every time the app asked a
- * question would be wrong at exactly the moment the user is reading it.
+ * question would be wrong at exactly the moment the user is reading it. A pause that *ends* rather
+ * than waiting — a denial, or a process that went away — does come through here, because that turn is
+ * over and nothing can still be doing its work.
  */
 export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
   return replaceTurn(turns, turnId, (turn) => (turn.plan ? { ...turn, plan: reconcilePlanOnTurnEnd(turn.plan) } : turn))
@@ -515,7 +618,7 @@ export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
  * anything, the conversation has moved on and the newest turn is the one in flight — so the card
  * clears itself by the ordinary act of continuing, in a sentence or with the button.
  */
-export function currentEndNotice(turns: readonly AgentTurn[]): { cause: TurnEndCause; resumable: boolean } | null {
+export function currentEndNotice(turns: readonly AgentTurn[]): TurnEndNotice | null {
   return turns[turns.length - 1]?.endNotice ?? null
 }
 

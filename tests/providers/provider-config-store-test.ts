@@ -198,9 +198,16 @@ function theSliceIsNotWhereAKeyIsKept() {
   results.push('no credential is written into the mirrored slice')
 }
 
+/**
+ * The version moves only for a change in what a reader of a transcript must know.
+ *
+ * It is 3 now: a tool step gained `interrupted`, the same kind of widening that took it to 2 for
+ * `queued`. What this suite is about — a provider setting — still changes nothing a transcript reader
+ * has to know, which is the property being held here rather than the number itself.
+ */
 function theTranscriptVersionDidNotMove() {
-  assert.equal(TRANSCRIPT_VERSION, 2, 'storing custom providers is not a transcript change')
-  results.push('the transcript version is still 2')
+  assert.equal(TRANSCRIPT_VERSION, 3, 'storing custom providers is not a transcript change')
+  results.push('the transcript version is still 3')
 }
 
 function main() {

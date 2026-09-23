@@ -14,7 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { DiffView } from './diff-view'
-import type { ToolStep } from './agent-session'
+import { ABANDONED_PAUSE_CODE, LOST_PAUSE_CODE, type ToolStep } from './agent-session'
 
 /**
  * One tool call, as a card in the transcript.
@@ -31,6 +31,10 @@ import type { ToolStep } from './agent-session'
  * card shows that it is coming without offering a decision it is not entitled to yet. For a
  * `write_file` the card also shows the change itself, so the write is approved after being read
  * rather than before.
+ *
+ * A call nobody ever decided is forced open for the same reason, and says so: an `interrupted` step
+ * with the pause's code on it is a question that ended without an answer, and the one thing worth
+ * reading there is which of the two ways that happened.
  */
 export function AgentActionCard({
   step,
@@ -44,7 +48,10 @@ export function AgentActionCard({
   const [open, setOpen] = useState(false)
   const awaiting = step.status === 'awaiting'
   const queued = step.status === 'queued'
-  const expanded = open || awaiting || queued
+  // Why this call was never decided, as the code the pause that owned it left behind. `undefined` for
+  // a step whose turn simply ended, which needs no note: nothing was asked about it.
+  const undecided = step.code === LOST_PAUSE_CODE || step.code === ABANDONED_PAUSE_CODE ? step.code : null
+  const expanded = open || awaiting || queued || undecided !== null
 
   return (
     <div
@@ -109,6 +116,18 @@ export function AgentActionCard({
               Waiting its turn — you will be asked about this one separately.
             </p>
           )}
+
+          {/* The two ways a question can end unanswered, told apart because they are different news:
+              a pause the process did not survive ended without the user, and one the user ended
+              themselves did not. Branching on the code, never on a sentence. */}
+          {undecided === LOST_PAUSE_CODE && (
+            <p className="mt-2 text-[11px] text-muted-foreground">Not decided — the app closed before you answered.</p>
+          )}
+          {undecided === ABANDONED_PAUSE_CODE && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Not decided — the turn was ended before this was answered.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -143,6 +162,8 @@ function StatusMark({ status }: { status: ToolStep['status'] }) {
       return <ShieldQuestion className="size-3.5 shrink-0 text-brand" aria-label="needs approval" />
     case 'queued':
       return <Clock className="size-3.5 shrink-0 text-muted-foreground" aria-label="waiting its turn" />
+    case 'interrupted':
+      return <XCircle className="size-3.5 shrink-0 text-muted-foreground" aria-label="not decided" />
   }
 }
 

@@ -20,13 +20,20 @@ import { TURN_END_CAUSES } from './turn-end'
  * calls are waiting behind the one being decided has to be describable on disk as well as live. An
  * older build reading such a file refuses it rather than silently showing a queue as one pause.
  *
+ * Version 3 widened the same status with `interrupted`, for the same reason and by the same rule: a
+ * call nobody decided — a pause the process did not survive, or a turn that ended at the head of its
+ * frame — is a state a transcript has to be able to state, and a reader that cannot tell it from a
+ * call still being waited on would be wrong about consent rather than merely incomplete. The version
+ * is a number rather than a literal, so files written by earlier builds stay readable; what the bump
+ * ensures is that a reader which does not know the new state refuses the file instead of guessing.
+ *
  * The project-instructions record did *not* bump it. A turn gained two optional fields, so a file
  * written before them — by this build or the last one — has neither key, and an absent optional key is
  * stripped rather than defaulted. Old files are valid reads, and a new file read by an older build
  * loses only the two fields it never knew about. Nothing a reader has to be told about is a version
  * bump; only a change it would otherwise get wrong is.
  */
-export const TRANSCRIPT_VERSION = 2
+export const TRANSCRIPT_VERSION = 3
 
 /**
  * A tool step. `status` is the widened set, not just the settled ones: a turn interrupted by a
@@ -37,7 +44,7 @@ const toolStepSchema = z.object({
   callId: z.string(),
   tool: z.string(),
   args: z.record(z.string(), z.unknown()),
-  status: z.enum(['running', 'awaiting', 'queued', 'denied', 'ok', 'failed']),
+  status: z.enum(['running', 'awaiting', 'queued', 'interrupted', 'denied', 'ok', 'failed']),
   output: z.string().optional(),
   code: z.string().optional(),
 })
@@ -93,11 +100,16 @@ const turnSchema = z.object({
    * about the ending, so it belongs to the stored shape — which is why an absent key here means
    * "nothing to say" and a present one means "this turn stopped early", with no third state.
    *
+   * `lostPending` is the one flag stored beside the cause: a consent pause the process did not survive
+   * is a fact about the turn that the card above the composer has to be able to state when the
+   * conversation is reopened, and it is not derivable from the reply's own cause — a turn can be cut
+   * off, or asked a question, or both.
+   *
    * Optional, and it did not bump the version for the same reason the plan and the instructions record
    * did not: a file written before this existed simply has no key, and an absent optional key is
    * stripped rather than defaulted, so old files stay valid reads.
    */
-  endNotice: z.object({ cause: z.enum(TURN_END_CAUSES) }).optional(),
+  endNotice: z.object({ cause: z.enum(TURN_END_CAUSES), lostPending: z.boolean().optional() }).optional(),
 })
 
 /**

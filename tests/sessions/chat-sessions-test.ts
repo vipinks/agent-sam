@@ -17,11 +17,17 @@ import {
 import {
   blankTranscript,
   rehydrateTranscript,
+  reconcileOrphanedPauses,
   serializeTranscript,
   INTERRUPTED_NOTE,
   type TranscriptState,
 } from '../../app/components/workbench/session-transcript'
-import { resumeTurnNumbering, startAssistantTurn, startUserTurn } from '../../app/components/workbench/agent-session'
+import {
+  LOST_PAUSE_CODE,
+  resumeTurnNumbering,
+  startAssistantTurn,
+  startUserTurn,
+} from '../../app/components/workbench/agent-session'
 import { formatRelativeTime } from '../../app/components/workbench/relative-time'
 import { isSearchable, planVisibleSessions, snippetsFor } from '../../app/components/workbench/session-search'
 import { SEARCH_MIN_TERM } from '../../conveyor/protocol/search'
@@ -313,6 +319,47 @@ function aPauseIsNotAnInterruption() {
   results.push('a pause for approval is not reported as an interruption')
 }
 
+function aPauseTheProcessOutlivedIsReconciled() {
+  const paused: TranscriptState = {
+    interrupted: false,
+    turns: [
+      { id: 'user-1', role: 'user', content: 'go', steps: [] },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: '',
+        steps: [
+          { callId: 'c1', tool: 'write_file', args: { path: 'a.ts' }, status: 'awaiting' },
+          { callId: 'c2', tool: 'run_command', args: { command: 'npm test' }, status: 'queued' },
+        ],
+      },
+    ],
+  }
+
+  // The other side of the pause rule: a pause this process still holds is left alone, and one no
+  // process holds is ended. Between them there is no third outcome — not a card whose buttons do
+  // nothing, and not a turn that is neither running nor ended.
+  const held = rehydrateTranscript(serializeTranscript(paused))
+  assert.equal(held.turns[1].steps[0].status, 'awaiting', 'a held pause comes back as a pause')
+
+  const reconciled = reconcileOrphanedPauses(held)
+  assert.equal(
+    reconciled.turns[1].steps[0].status,
+    'interrupted',
+    'a pause no process holds is recorded as never decided'
+  )
+  assert.equal(reconciled.turns[1].steps[0].code, LOST_PAUSE_CODE, 'and says which way it ended')
+  assert.equal(reconciled.turns[1].steps[1].status, 'interrupted', 'the calls queued behind it with it')
+  assert.equal(reconciled.turns[1].endNotice?.lostPending, true, 'and the turn says so')
+  assert.equal(reconciled.turns[1].endNotice?.cause, 'model_stop', 'naming a cause that words nothing')
+
+  // Idempotent, and it leaves a conversation with no pause untouched: a load runs it unconditionally.
+  assert.deepEqual(reconcileOrphanedPauses(reconciled), reconciled, 'reconciling twice changes nothing')
+  const plain = rehydrateTranscript(serializeTranscript(transcriptWithTools()))
+  assert.deepEqual(reconcileOrphanedPauses(plain), plain, 'a transcript with no pause is left as it was')
+  results.push('a pause the process outlived reconciles at load into a named state and a notice')
+}
+
 // ---------------------------------------------------------------- numbering
 
 function numberingResumesPastRestoredTurns() {
@@ -564,6 +611,7 @@ async function main() {
   await step('mention paths', theMentionPathsRoundTripWithoutTheirContents)
   await step('interruption', anUnfinishedTurnIsInterrupted)
   await step('pause is not interruption', aPauseIsNotAnInterruption)
+  await step('pause outlived by its process', aPauseTheProcessOutlivedIsReconciled)
   await step('numbering', numberingResumesPastRestoredTurns)
   await step('debounce', debouncedSavesCoalesce)
   await step('relative time', relativeTimes)

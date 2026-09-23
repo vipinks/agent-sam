@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorActions, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
-import { rehydrateTranscript, serializeTranscript, type TranscriptState } from './session-transcript'
+import {
+  rehydrateTranscript,
+  reconcileOrphanedPauses,
+  serializeTranscript,
+  type TranscriptState,
+} from './session-transcript'
 import { resumeTurnNumbering } from './agent-session'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
@@ -40,6 +45,22 @@ export interface ChatSessions {
   setAutoApprove: (value: boolean) => void
   /** The session whose transcript failed to load. */
   error: SessionError | null
+  /**
+   * The session the on-screen transcript belongs to, or null before any has been read.
+   *
+   * Exposed because a fact about a conversation has to be attributable to a conversation: the pane
+   * holds a consent pause per session, so it needs the id of the one it is showing rather than the
+   * store's active id, which names a session that may never have been loaded.
+   */
+  openId: string | null
+  /**
+   * Tell the session layer whether the pane is still holding a pause for this conversation.
+   *
+   * A consent pause lives in the pane, because the run behind it does; what the session layer needs to
+   * know is only which conversation's pause is still live, so a load of that conversation can leave it
+   * alone while a load of any other reconciles the pauses its own process did not survive.
+   */
+  setLivePause: (id: string, live: boolean) => void
   createSession: () => string
   openSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
@@ -65,6 +86,19 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
 
   const [transcript, setTranscriptState] = useState<TranscriptState>({ turns: [], interrupted: false })
   const [error, setError] = useState<SessionError | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
+
+  /**
+   * The conversations whose consent pause this process is still holding.
+   *
+   * Held here rather than in the pane because the load path is what needs it, and the load path is
+   * this hook's. A ref rather than state: it decides what a load does, never what is rendered.
+   */
+  const livePausesRef = useRef<Set<string>>(new Set())
+  const setLivePause = useCallback((id: string, live: boolean) => {
+    if (live) livePausesRef.current.add(id)
+    else livePausesRef.current.delete(id)
+  }, [])
 
   // Mirrors, so the save callback reads the latest values without being re-created — which is what
   // keeps the debounce timer from being thrown away on every render.
@@ -173,6 +207,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     // A new session is hydrated by definition: it starts empty and that empty transcript belongs to
     // it. Leaving this unset would let a click on the new row try to load a file that cannot exist.
     hydratedIdRef.current = id
+    setOpenId(id)
     setTranscript({ turns: [], interrupted: false })
     return id
   }, [addSession, model, providerId, setActive, setTranscript])
@@ -190,6 +225,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // are already in the transcript.
       resumeTurnNumbering(next.turns)
       hydratedIdRef.current = id
+      setOpenId(id)
       setTranscript(next)
     },
     [setTranscript]
@@ -201,7 +237,12 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         const snapshot = await conveyor.sessions.loadTranscript({ id })
         savedRef.current = snapshot
         setError(null)
-        applyTranscript(id, rehydrateTranscript(snapshot))
+        // A pause is a question about now, and the run that asked it is not in this process unless the
+        // pane is still holding it. Reconciling the rest is what turns two dead ends — a card whose
+        // buttons do nothing, and a turn that is neither running nor ended — into a named ending the
+        // transcript can state.
+        const loaded = rehydrateTranscript(snapshot)
+        applyTranscript(id, livePausesRef.current.has(id) ? loaded : reconcileOrphanedPauses(loaded))
       } catch (err) {
         // Branched on the code, never the message text.
         const corrupt = err instanceof ConveyorError && err.code === 'SESSION_CORRUPT'
@@ -283,10 +324,12 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         savedRef.current = null
         setError(null)
         hydratedIdRef.current = null
+        setOpenId(null)
+        setLivePause(id, false)
         setTranscript({ turns: [], interrupted: false })
       }
     },
-    [removeSession, setTranscript]
+    [removeSession, setLivePause, setTranscript]
   )
 
   /**
@@ -361,6 +404,8 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     autoApprove,
     setAutoApprove,
     error,
+    openId,
+    setLivePause,
     createSession,
     openSession,
     deleteSession,
