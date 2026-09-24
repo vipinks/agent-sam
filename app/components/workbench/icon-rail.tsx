@@ -139,10 +139,17 @@ export function DrawerClose() {
  * the drawer is away, any icon is the way back and brings the drawer with the panel it names. While it
  * is here, the icon of the panel already showing puts it away, because that is what a second click on
  * "the thing that is open" means everywhere else. Any other icon is the switch it has always been.
+ *
+ * Settings is the one control here that does not go through `choose`, and it is not an exception to
+ * that reading: it takes over the whole main area rather than the drawer, so it has nothing to switch
+ * between and nothing to put away. It opens through the store's own `openSettings`, which is what
+ * remembers the view it is replacing — the subject of the back glyph in its header. Clicking it while
+ * settings is already showing is therefore a no-op, exactly as it was before this phase.
  */
 export function IconRail() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
   const setActiveActivity = useWorkbenchStore((s) => s.setActiveActivity)
+  const openSettings = useWorkbenchStore((s) => s.openSettings)
   const drawerCollapsed = useWorkbenchStore((s) => s.drawerCollapsed)
   const setDrawerCollapsed = useWorkbenchStore((s) => s.setDrawerCollapsed)
 
@@ -190,7 +197,7 @@ export function IconRail() {
         title="Settings"
         aria-label="Settings"
         aria-pressed={activeActivity === 'settings'}
-        onClick={() => setActiveActivity('settings')}
+        onClick={openSettings}
         className={cn(
           'mt-auto flex size-10 items-center justify-center rounded-md outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-ring',

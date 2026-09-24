@@ -11,19 +11,27 @@ import type { LucideIcon } from 'lucide-react'
  * "Chat Sess…" needs. What gives up its width first is the trailing row, which carries the heavier
  * shrink factor, so a narrow drawer costs a short search field before it costs the title a character.
  * What cannot usefully move is pinned: the glyph, and the controls whose hit targets are their size.
+ *
+ * `leading` is the slot before the glyph, and it exists for the one control that belongs to the *view*
+ * rather than to the pane's own contents: the way back out of a screen that took the whole main area
+ * over. Optional, so every other pane renders exactly the row it rendered before.
  */
 export function PaneHeader({
   icon: Icon,
   title,
+  leading,
   children,
 }: {
   icon: LucideIcon
   title: string
+  /** Optional control before the glyph — the way back into the view this pane took over. */
+  leading?: ReactNode
   /** Optional trailing controls, pinned to the right edge. */
   children?: ReactNode
 }) {
   return (
     <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 select-none">
+      {leading}
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate text-[13px] font-medium" title={title}>
         {title}

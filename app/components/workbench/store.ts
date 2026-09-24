@@ -11,6 +11,14 @@ import { BRIGHTNESS_DEFAULT, clampBrightness } from './theme-engine'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
 
 /**
+ * The sections of the settings screen, in the order the section row offers them.
+ *
+ * A launch opens the first, and the choice is the run's rather than the machine's: noting that you are
+ * the kind of person who configures MCP servers is not something this app has any business remembering.
+ */
+export type SettingsSection = 'providers' | 'mcp-servers'
+
+/**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —
  * because real state (the workspace, the API keys) belongs to main. The chat target is a
  * preference rather than a truth, so it lives here and survives a restart.
@@ -22,6 +30,26 @@ interface WorkbenchState {
    */
   activeActivity: string
   setActiveActivity: (id: string) => void
+  /**
+   * Which section of the settings screen is showing.
+   *
+   * Here rather than in `SettingsView` because the screen is unmounted while it is not open, and the
+   * choice has to survive a visit: leaving settings and coming back is one visit to a screen, not a
+   * fresh entry into it. Not persisted, so a launch opens the first section.
+   */
+  settingsSection: SettingsSection
+  setSettingsSection: (section: SettingsSection) => void
+  /**
+   * The drawer view settings was opened from, or null while no visit is in progress.
+   *
+   * The back glyph's whole subject: "where you were" is a fact about this run and not a preference, so
+   * it is held for as long as the visit lasts and written nowhere.
+   */
+  settingsReturnView: string | null
+  /** Open the settings screen, remembering the drawer view it is taking over. */
+  openSettings: () => void
+  /** Leave the settings screen for the view it took over, or the conversation when there is none. */
+  closeSettings: () => void
   /** Path of the file previewed in the code viewer, or null for the empty state. */
   selectedFile: string | null
   setSelectedFile: (path: string | null) => void
@@ -320,6 +348,26 @@ const launchPreferences = initialLayoutPreferences()
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   activeActivity: 'chat',
   setActiveActivity: (activeActivity) => set({ activeActivity }),
+  settingsSection: 'providers',
+  setSettingsSection: (settingsSection) => set({ settingsSection }),
+  settingsReturnView: null,
+  /**
+   * The remembered view is only replaced by a visit that starts outside settings. Opening settings
+   * again while it is already showing keeps what the visit began with, because the rail's settings
+   * control is not a toggle — a second click on it is not a second visit.
+   */
+  openSettings: () =>
+    set((state) => ({
+      activeActivity: 'settings',
+      settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
+    })),
+  /**
+   * Leaving forgets the remembered view, so the next visit records its own. The fallback is the
+   * conversation, which is where a window with nothing chosen belongs — the same answer the drawer gives
+   * a store that was never told which activity to show.
+   */
+  closeSettings: () =>
+    set((state) => ({ activeActivity: state.settingsReturnView ?? 'chat', settingsReturnView: null })),
   selectedFile: null,
   setSelectedFile: (selectedFile) => set({ selectedFile }),
   ...initialTarget(),
