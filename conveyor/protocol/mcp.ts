@@ -531,3 +531,88 @@ export function mcpTrustRefusal(
 export function secretEnvListing(config: McpServerConfig): Array<{ name: string; set: boolean }> {
   return Object.keys(config.secretEnv).map((name) => ({ name, set: config.secretEnv[name] !== '' }))
 }
+
+/**
+ * What the settings section derives from the two reads, and the rules it derives them with.
+ *
+ * The section draws a row per server, and a row says three things that are not in either read on their
+ * own: whether the server is running (which main reports as tools, not as processes), what its trust
+ * state reads as, and whether Start is a thing it may do. All three are derived here rather than in the
+ * JSX, because a rule a screen branches on is a rule a suite has to be able to reach without a screen.
+ * The derivations are pure and take only the reads' own shapes — the tools list is accepted structurally
+ * so this module stays free of the SDK's types, exactly as it is free of electron's.
+ */
+
+/** One tool as `mcp.listRunningTools` tags it. Only the tag is read here, so only it is typed. */
+export interface McpRunningToolRef {
+  serverId: string
+}
+
+/** One server that is running, and how many tools it is offering. */
+export interface McpRunningServer {
+  serverId: string
+  toolCount: number
+}
+
+/**
+ * The running set, derived from the live tool list.
+ *
+ * Grouped by server and counted, sorted by id, so two reads of the same registry produce the same answer:
+ * a reader comparing what the row says before and after a refresh is comparing two derivations, and the
+ * order they happen to arrive in is not part of what is running.
+ *
+ * A server that offers no tools is not in the set, and that is the honest reading rather than a gap:
+ * main's answer to "is it running" for this feature *is* the tools, so a server with none is
+ * indistinguishable from one that is not there — and a row that said "running, with nothing" would be
+ * claiming a process the derivation cannot see.
+ */
+export function deriveRunningServers(tools: readonly McpRunningToolRef[]): McpRunningServer[] {
+  const counts = new Map<string, number>()
+  for (const { serverId } of tools) counts.set(serverId, (counts.get(serverId) ?? 0) + 1)
+  return [...counts.entries()]
+    .map(([serverId, toolCount]) => ({ serverId, toolCount }))
+    .sort((a, b) => (a.serverId < b.serverId ? -1 : a.serverId > b.serverId ? 1 : 0))
+}
+
+/** What a project server's trust state reads as, and what the row offers because of it. */
+export interface McpTrustPresentation {
+  /** The state in words. Names the difference, because the two refusals are repaired differently. */
+  label: string
+  /** The button beside it: the grant that fixes this state, or the revoke a matched one offers. */
+  action: 'trust' | 'retrust' | 'revoke'
+  /** Whether trust alone permits a start. The row's Start control reads this and nothing else. */
+  startAllowed: boolean
+}
+
+/**
+ * A trust state as a person reads it.
+ *
+ * Three sentences rather than one with a variable in it, because the three are three different
+ * situations: never trusted, trusted and changed since, and trusted as it stands. `mismatched` names
+ * that the *config changed* rather than that trust is missing, which is the whole reason the state is
+ * not a boolean — the fix is a re-grant, not a first grant.
+ */
+export function trustPresentation(state: McpTrustState): McpTrustPresentation {
+  switch (state) {
+    case 'matched':
+      return { label: 'Trusted', action: 'revoke', startAllowed: true }
+    case 'mismatched':
+      return { label: 'Changed since it was trusted', action: 'retrust', startAllowed: false }
+    case 'absent':
+      return { label: 'Not trusted yet', action: 'trust', startAllowed: false }
+  }
+}
+
+/**
+ * Whether a Start is permitted: the flag, plus trust for the scope trust governs.
+ *
+ * The same judgment main makes before it spawns, stated here so the screen and the guard cannot disagree
+ * — the section disables a button on exactly the condition the spawn would refuse. Project scope needs
+ * both, and trust is not consulted for a user server at all: the user file is the user's own, nobody
+ * else can put a command in it, and a trust state passed for one anyway is ignored rather than honoured.
+ */
+export function canStartServer(input: { scope: McpScope; enabled: boolean; trust: McpTrustState | null }): boolean {
+  if (!input.enabled) return false
+  if (input.scope === 'user') return true
+  return input.trust === 'matched'
+}
