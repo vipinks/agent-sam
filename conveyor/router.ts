@@ -73,6 +73,21 @@ void sweepOrphanedTranscripts(router.stores['chat-sessions'].getState().sessions
   })
 
 /**
+ * Land the launch on the home screen.
+ *
+ * The chat store's pointer — which conversation is open — is persisted, so the state just restored
+ * names the conversation that was open when the app was last closed. A window that reads that pointer
+ * opens it, so a launch would come up on a conversation rather than on home: the screen a window with
+ * nothing open belongs on, and the one whose whole subject is what to do next. The store's own step
+ * clears it, leaving the conversation list intact for that screen to offer back.
+ *
+ * Here, beside the sweep and for the same reason: this is the first moment the store is readable, and
+ * it is before any window exists — so there is no window to tell, and the state every window mirrors
+ * already has nothing open.
+ */
+router.stores['chat-sessions'].dispatch('landOnHome')
+
+/**
  * Fan out workspace changes to every window.
  *
  * Declared here rather than in a module because `createEmitter` needs the module's id, which

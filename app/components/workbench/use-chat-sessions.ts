@@ -677,12 +677,15 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   )
 
   /**
-   * Restore the session the store says is active, once, on startup.
+   * Follow the conversation main says is open, once.
    *
-   * The store persists `activeSessionId`, so after a restart the app knows which conversation was
-   * open but holds no transcript for it — the pane would sit on its empty state until the user
-   * clicked the row that is already highlighted. This runs the same load the click path uses, so
-   * both routes hydrate identically.
+   * Which conversation is open is main's state, not this window's: the pointer is read here so a
+   * window told about one loads it the way a click's own selection does, and a conversation
+   * restored-but-unloaded is a state that never reaches a pane.
+   *
+   * A launch is the case this deliberately does not describe: main clears the pointer before any
+   * window exists, so a launch has nothing open and lands on the home screen, and what that screen
+   * offers back is the list rather than a conversation opened for the user.
    *
    * Declared after `load` because it calls it, and guarded so it fires once: a later store change
    * must not hydrate over turns the user has since typed.

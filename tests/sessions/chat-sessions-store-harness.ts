@@ -18,8 +18,17 @@ const INITIAL_STATE = (chatSessionsStore as unknown as { initialState: ChatSessi
 
 export interface StoreHarness {
   state: () => ChatSessionsState
-  /** Invoke one action by name, exactly as the store runtime would. */
-  run: <K extends keyof Actions>(name: K, payload: Parameters<Actions[K]>[1]) => void
+  /**
+   * Invoke one action by name, exactly as the store runtime would.
+   *
+   * Variadic as well as typed, because conveyor registers an action that declares only `state` as
+   * taking no payload at all — the launch step is one of those — and a harness that could not call
+   * one could not exercise the rule it carries.
+   */
+  run: <K extends keyof Actions>(
+    name: K,
+    ...payload: Parameters<Actions[K]> extends [unknown, ...infer Rest] ? Rest : []
+  ) => void
 }
 
 export function createStoreHarness(): StoreHarness {
@@ -27,14 +36,13 @@ export function createStoreHarness(): StoreHarness {
   // and leak into the next test.
   const state: ChatSessionsState = structuredClone(INITIAL_STATE)
 
-  return {
-    state: () => state,
-    run(name, payload) {
-      const action = chatSessionsStore.actions[name]
-      if (!action) throw new Error(`no such action: ${String(name)}`)
-      ;(action as (s: ChatSessionsState, p: unknown) => void)(state, payload)
-    },
+  const run: StoreHarness['run'] = (name, ...payload) => {
+    const action = chatSessionsStore.actions[name as keyof Actions]
+    if (!action) throw new Error(`no such action: ${String(name)}`)
+    ;(action as (s: ChatSessionsState, ...p: unknown[]) => void)(state, ...payload)
   }
+
+  return { state: () => state, run }
 }
 
 /**

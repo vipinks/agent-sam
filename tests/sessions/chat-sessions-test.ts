@@ -478,6 +478,59 @@ async function storeOrderingAndLifecycle() {
   results.push('the store orders by recency, is idempotent, and clears a removed active id')
 }
 
+/**
+ * A launch lands on the home screen — including a launch whose persisted state named an open
+ * conversation.
+ *
+ * The pointer is "which conversation is open", and it is persisted, so the state a launch starts from
+ * names whatever was open when the app was last closed. Taking that pointer to mean "open this one" is
+ * what kept the home screen from ever being what a launch shows. What a launch does instead is clear
+ * it — the action `conveyor/router.ts` dispatches as soon as the store is readable, before any window
+ * exists — leaving every conversation in the list and none of them open.
+ */
+function aLaunchStartsOnHome() {
+  const harness = createStoreHarness()
+  harness.run('addSession', {
+    id: uuid(1),
+    title: 'the parser work',
+    providerId: 'deepseek',
+    model: 'm',
+    lastRoot: 'C:/w',
+  })
+  backdateStore(harness, uuid(1), 1_000)
+  harness.run('addSession', { id: uuid(2), title: 'a second conversation', providerId: 'deepseek', model: 'm' })
+  backdateStore(harness, uuid(2), 2_000)
+  harness.run('setActive', { id: uuid(1) })
+
+  // What persistence restored: a conversation was open when the app was last closed. That is the
+  // whole reason the launch has to clear it rather than inherit it.
+  assert.equal(harness.state().activeSessionId, uuid(1), 'the pointer is restored, so a launch starts holding one')
+
+  // The step main runs at launch, dispatched by name from `conveyor/router.ts` once the store is
+  // readable — invoked here the way the store runtime would invoke it.
+  harness.run('landOnHome')
+
+  assert.equal(harness.state().activeSessionId, null, 'a launch starts with no conversation open')
+  assert.deepEqual(
+    harness.state().sessions.map((s) => s.id),
+    [uuid(2), uuid(1)],
+    'and every conversation is still offered back, most recent first'
+  )
+  assert.equal(
+    harness.state().sessions.find((s) => s.id === uuid(1))?.lastRoot,
+    'C:/w',
+    'each one keeping the project it was last used in'
+  )
+
+  // Idempotent, which is the ordinary case: a store whose pointer was already cleared — a second
+  // launch after one that landed home — changes nothing.
+  const settled = structuredClone(harness.state())
+  harness.run('landOnHome')
+  assert.deepEqual(harness.state(), settled, 'clearing an already-cleared pointer leaves the state exactly as it was')
+
+  results.push('a launch clears the restored pointer, and leaves the conversations in the list')
+}
+
 function uuid(n: number): string {
   const tail = String(n).padStart(12, '0')
   return `11111111-2222-4333-8444-${tail}`
@@ -616,6 +669,7 @@ async function main() {
   await step('debounce', debouncedSavesCoalesce)
   await step('relative time', relativeTimes)
   await step('store lifecycle', storeOrderingAndLifecycle)
+  await step('launch lands home', aLaunchStartsOnHome)
   await step('search rows: body match', aBodyOnlyMatchStillGetsARow)
   await step('search rows: title match', aTitleOnlyMatchHasNoSnippets)
   await step('search rows: union order', theUnionKeepsBothAndTheScanOrderDoesNotWin)

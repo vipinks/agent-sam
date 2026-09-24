@@ -148,6 +148,26 @@ export const chatSessionsStore = defineStore('chat-sessions', {
     setActive: (state, { id }) => {
       state.activeSessionId = id
     },
+
+    /**
+     * Land a launch on the home screen: every conversation is there, and none of them is open.
+     *
+     * This pointer is persisted, so the state a launch starts from names whatever was open when the app
+     * was last closed. Inheriting it is what kept the home screen from being what a launch shows: the
+     * pane reads a pointer as "this conversation is open" and opens it — a conversation nobody asked
+     * for, on the screen whose whole job is to ask.
+     *
+     * So a launch clears it. Main dispatches this the moment the store is readable and before any window
+     * exists, which is also why no window is told that it happened.
+     *
+     * Only the pointer: what the last run left is what home and the conversation list offer back, and
+     * that is a read of `sessions` rather than of this.
+     *
+     * Declares no payload, which is what makes it the one action conveyor needs no schema for.
+     */
+    landOnHome: (state) => {
+      state.activeSessionId = null
+    },
   },
 
   persist: true,
