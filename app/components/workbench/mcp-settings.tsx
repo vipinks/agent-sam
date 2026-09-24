@@ -280,7 +280,12 @@ function ServerRow({
       data-scope={server.scope}
       className="rounded-lg border border-border px-3.5 py-3"
     >
-      <div className="flex min-w-0 items-center gap-2.5">
+      {/* One line, and one that wraps. Everything with a width of its own — the id, both badges, the
+          switch, every action glyph — is held at that width, and the two things that give are the command
+          summary and then the running state beside it. When the fixed part is wider than the row, the
+          action cluster takes a second line inside this card instead of leaving the border: an
+          unshrinkable group on a non-wrapping line is a delete glyph drawn outside the row it belongs to. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-2.5">
         <span className="shrink-0 text-[13px] font-medium">{server.id}</span>
         <Badge variant="outline" className="shrink-0">
           {server.scope === 'user' ? 'User' : 'Project'}
@@ -294,19 +299,32 @@ function ServerRow({
             Auto-approve tools
           </Badge>
         )}
-        <code className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground" title={commandSummary(server)}>
+        {/* The middle, and the first thing to give: it grows into whatever the fixed elements leave and
+            ellipsizes when that is less than the command needs. Without a flexible basis it is a
+            content-sized item on an unshrinkable line, so a row whose fixed content is too wide loses the
+            summary altogether rather than shortening it — which is what the badge above did to it. */}
+        <code
+          data-slot="mcp-command-summary"
+          className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground"
+          title={commandSummary(server)}
+        >
           {commandSummary(server)}
         </code>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <span
-            data-slot="mcp-running"
-            data-state={isRunning ? 'running' : 'stopped'}
-            className="text-[12px] text-muted-foreground"
-          >
-            {isRunning ? `Running · ${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}` : 'Stopped'}
-          </span>
+        {/* Second to give, after the summary and never before it. It sits on the line rather than inside
+            the cluster below, because a group that cannot shrink cannot hold the second thing that shrinks. */}
+        <span
+          data-slot="mcp-running"
+          data-state={isRunning ? 'running' : 'stopped'}
+          className="min-w-0 truncate text-[12px] text-muted-foreground"
+        >
+          {isRunning ? `Running · ${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}` : 'Stopped'}
+        </span>
 
+        <div
+          data-slot="mcp-row-actions"
+          className="ml-auto flex max-w-full flex-none flex-wrap items-center justify-end gap-2"
+        >
           <Switch
             data-slot="mcp-enabled"
             size="sm"
