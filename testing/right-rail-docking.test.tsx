@@ -97,7 +97,10 @@ function sessionStore() {
     rootPath: ROOT,
   })
   return {
-    sessions: [row(SESSION_ID, 'the parser drops newlines', 1_700_000_000_000), row(OTHER_ID, OTHER_TITLE, 1_700_000_000_001)],
+    sessions: [
+      row(SESSION_ID, 'the parser drops newlines', 1_700_000_000_000),
+      row(OTHER_ID, OTHER_TITLE, 1_700_000_000_001),
+    ],
     activeId: SESSION_ID,
   }
 }
@@ -231,11 +234,9 @@ describe('the right rail, at launch', () => {
 
     const labels = [...rightRail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
     expect(labels).toEqual(['Code', 'Preview', 'Terminal'])
-    expect(labels.map((_, index) => [...rightRail().querySelectorAll('button')][index]?.getAttribute('aria-pressed'))).toEqual([
-      'false',
-      'false',
-      'false',
-    ])
+    expect(
+      labels.map((_, index) => [...rightRail().querySelectorAll('button')][index]?.getAttribute('aria-pressed'))
+    ).toEqual(['false', 'false', 'false'])
   })
 })
 

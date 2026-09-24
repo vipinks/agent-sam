@@ -16,7 +16,7 @@ import {
 } from '../ui/alert-dialog'
 import { Button } from '../ui/button'
 import { PaneHeader } from './pane-header'
-import { activityById, DrawerChevron } from './icon-rail'
+import { activityById, DrawerClose } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
 import { RootSwitcher } from './root-switcher'
 import { rootErrorMessage, rootTail } from './recent-roots'
@@ -144,7 +144,7 @@ export function ExplorerPanel() {
           onOpenFolder={() => void onOpenFolder()}
         />
         {/* The way out of the drawer, beside the folder it is showing. */}
-        <DrawerChevron />
+        <DrawerClose />
       </PaneHeader>
 
       {rootPath === null ? (

@@ -99,19 +99,19 @@ beforeEach(() => {
 })
 
 describe('the rail', () => {
-  it('carries the collapse control and the four activity items, in the order the registry reads', async () => {
+  it('carries the three residents the drawer holds, with Settings listed beside them', async () => {
     stubWorkbench()
     renderWorkbench()
 
-    // Every item states its label through `aria-label`, because the buttons are icons. The collapse
-    // control leads the five, and the foot control is listed with them and is not one of them:
-    // Settings is a place you visit and leave, and the five above it are the drawer and the views you
-    // work in.
+    // Every item states its label through `aria-label`, because the buttons are icons. Phase 39 left this
+    // rail with the drawer's own three views: the shell is a resident of the right rail now, and the
+    // collapse control retired from here when the way into the drawer moved to the drawer's own header.
+    // Settings is listed with them and is not one of them — it is a place you visit and leave.
     const nav = screen.getByRole('navigation', { name: 'Workbench' })
     const labels = [...nav.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
 
-    expect(labels).toEqual(['Collapse drawer', 'Chat', 'Explorer', 'Git', 'Terminal', 'Settings'])
-    expect(labels.filter((label) => label !== 'Settings')).toHaveLength(5)
+    expect(labels).toEqual(['Chat', 'Explorer', 'Git', 'Settings'])
+    expect(labels.filter((label) => label !== 'Settings')).toHaveLength(3)
   })
 
   it('marks the git item as the current view once it is selected', async () => {
@@ -190,6 +190,9 @@ describe('the git panel', () => {
 describe('a row in the git panel', () => {
   it('opens the staged side of the change in the diff pane', async () => {
     const stub = stubWorkbench()
+    // The diff pane is docked, because the rail opens with the dock closed and a change opened into a
+    // pane that is not on screen is a read nobody makes — which is what this test is about.
+    useWorkbenchStore.setState({ rightPanel: 'code' })
     const { container } = renderWorkbench()
 
     await selectRail('Git')

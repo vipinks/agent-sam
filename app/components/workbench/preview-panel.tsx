@@ -101,8 +101,8 @@ export function PreviewPanel() {
           <div>
             <p className="text-[13px] font-medium">Nothing to render</p>
             <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-              This viewer renders markdown, pictures and workbooks. {fileName} is none of them — its source is in
-              the Code panel.
+              This viewer renders markdown, pictures and workbooks. {fileName} is none of them — its source is in the
+              Code panel.
             </p>
           </div>
         </div>

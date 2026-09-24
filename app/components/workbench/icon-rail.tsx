@@ -1,6 +1,4 @@
 import {
-  ChevronLeft,
-  ChevronRight,
   Folder,
   GitBranch,
   MessageSquare,
@@ -59,10 +57,10 @@ export function activityById(id: string): Activity {
 /**
  * The drawer's collapse flag, and the direction a click would take it in.
  *
- * The label is named once here rather than at each of the two controls, so the rail's toggle and the
- * drawer's chevron cannot come to disagree about what a click does. The glyph follows the same value
- * for the same reason: an arrow that kept pointing left while the drawer was away would be describing
- * the state it had left.
+ * The label is named once here rather than at each of the two controls, so the drawer's header glyph and
+ * the rail's cannot come to disagree about what a click does. Each of them renders one direction only —
+ * the header while the drawer is here, the rail while it is away — so between them the flag never has a
+ * button whose label describes the state it has left.
  */
 function useDrawerCollapse(): { collapsed: boolean; label: string; toggle: () => void } {
   const drawerCollapsed = useWorkbenchStore((s) => s.drawerCollapsed)
@@ -75,15 +73,20 @@ function useDrawerCollapse(): { collapsed: boolean; label: string; toggle: () =>
 }
 
 /**
- * The rail's collapse control, in the slot the status dot used to hold.
+ * The way back into the drawer, at the rail's top — rendered only while there is one to come back to.
  *
- * The dot was decoration: a brand mark drawn as a `<span>` with no tooltip, no accessible name and no
- * handler, so there was no action to keep and the rail's head was free for the one control that cannot
- * live inside the drawer — the way back to it. It keeps the box the dot sat in, so the rail's head reads
- * as it did, and its glyph and its tooltip both name the direction on offer.
+ * Phase 29 repurposed the slot the status dot held as the drawer's collapse control, which meant the
+ * rail's head was a control whose direction the state decided. Phase 39 gives the way *in* to the
+ * drawer's own header, where it is a panel-left-close glyph beside the panel it belongs to, and retires
+ * the rail's copy of that direction: this renders the mirrored panel-left-open glyph, and only while the
+ * drawer is away. The slot therefore belongs to the state it exists for rather than to the rail's
+ * furniture, and an element that is not there is one nothing can tab to — which is the point, because
+ * the rail's first stop is the conversation whenever there is nothing to expand.
  */
-export function DrawerToggle({ className }: { className?: string }) {
+export function DrawerOpen({ className }: { className?: string }) {
   const { collapsed, label, toggle } = useDrawerCollapse()
+
+  if (!collapsed) return null
 
   return (
     <button
@@ -94,20 +97,22 @@ export function DrawerToggle({ className }: { className?: string }) {
       onClick={toggle}
       className={className}
     >
-      {collapsed ? <PanelLeftOpen className="size-4.5" /> : <PanelLeftClose className="size-4.5" />}
+      <PanelLeftOpen className="size-4.5" />
     </button>
   )
 }
 
 /**
- * The drawer's own copy of that control, in the header beside whatever panel is showing — the
- * discoverable one, for a reader who has not looked at the rail.
+ * The drawer's own collapse control, at the right edge of its header beside whatever panel is showing.
  *
- * It states the same direction as the rail's, and there is no state in which it has to state the other
- * one: the header belongs to the drawer, so while the drawer is away there is no header to hold it and
- * the rail's control is the way back.
+ * It replaces the header chevron Phase 29 put here, and it is now the only control that puts the drawer
+ * away: the rail kept the way back instead of both directions, so the two are one glyph and its mirror
+ * rather than two arrows that had to keep agreeing. It states one direction, and there is no state in
+ * which it has to state the other one — the header belongs to the drawer, so while the drawer is away
+ * there is no header to hold it. `aria-expanded` is pinned true for the reason the drawer's control on
+ * the right rail pins it: a reader told this control collapses a panel can be told the panel is here.
  */
-export function DrawerChevron() {
+export function DrawerClose() {
   const { collapsed, label, toggle } = useDrawerCollapse()
 
   return (
@@ -120,7 +125,7 @@ export function DrawerChevron() {
       className="shrink-0"
       onClick={toggle}
     >
-      {collapsed ? <ChevronRight /> : <ChevronLeft />}
+      <PanelLeftClose />
     </Button>
   )
 }
@@ -133,8 +138,7 @@ export function DrawerChevron() {
  * An activity click means what the screen makes it mean, which is three cases rather than one. While
  * the drawer is away, any icon is the way back and brings the drawer with the panel it names. While it
  * is here, the icon of the panel already showing puts it away, because that is what a second click on
- * "the thing that is open" means everywhere else — and it is the only way to collapse from the panel
- * list without reaching for the header. Any other icon is the switch it has always been.
+ * "the thing that is open" means everywhere else. Any other icon is the switch it has always been.
  */
 export function IconRail() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
@@ -157,7 +161,7 @@ export function IconRail() {
 
   return (
     <nav aria-label="Workbench" className="flex w-16 shrink-0 flex-col items-center gap-1 bg-card py-2">
-      <DrawerToggle className="mb-1 flex size-8 items-center justify-center rounded-md border border-brand/35 bg-brand-soft text-brand outline-none transition-colors hover:bg-brand-soft/80 focus-visible:ring-2 focus-visible:ring-ring" />
+      <DrawerOpen className="mb-1 flex size-8 items-center justify-center rounded-md border border-brand/35 bg-brand-soft text-brand outline-none transition-colors hover:bg-brand-soft/80 focus-visible:ring-2 focus-visible:ring-ring" />
 
       {ACTIVITIES.map((activity) => {
         const Icon = activity.icon

@@ -1,12 +1,4 @@
-import {
-  Eye,
-  FileCode,
-  Maximize2,
-  Minimize2,
-  PanelRightClose,
-  SquareTerminal,
-  type LucideIcon,
-} from 'lucide-react'
+import { Eye, FileCode, Maximize2, Minimize2, PanelRightClose, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'

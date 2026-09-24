@@ -22,7 +22,7 @@ import {
 } from '../ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
-import { DrawerChevron, activityById } from './icon-rail'
+import { DrawerClose, activityById } from './icon-rail'
 import { useWorkbenchStore } from './store'
 import { formatRelativeTime } from './relative-time'
 import { isSearchable, planVisibleSessions, snippetsFor } from './session-search'
@@ -189,10 +189,11 @@ export function SessionListPanel({
         </Button>
         {/*
           The way out of the drawer, trailing the row it shares with the search and the new-chat control.
-          It states the same direction as the rail's own control, and cannot state the other one: this
-          header is inside the drawer, so while the drawer is away there is no header here to hold it.
+          It is the only control that puts the drawer away, and it cannot state the other direction: this
+          header is inside the drawer, so while the drawer is away there is no header here to hold it, and
+          the rail's own mirrored glyph is the way back.
         */}
-        <DrawerChevron />
+        <DrawerClose />
       </PaneHeader>
 
       {/*

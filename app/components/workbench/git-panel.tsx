@@ -2,7 +2,7 @@ import { FolderTree } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { PaneHeader } from './pane-header'
-import { activityById, DrawerChevron } from './icon-rail'
+import { activityById, DrawerClose } from './icon-rail'
 import { ChangesSection } from './changes-section'
 
 /**
@@ -35,7 +35,7 @@ export function GitPanel() {
   return (
     <div className="flex h-full flex-col bg-card">
       <PaneHeader icon={activity.icon} title={activity.panelTitle}>
-        <DrawerChevron />
+        <DrawerClose />
       </PaneHeader>
 
       {rootPath === null ? (
