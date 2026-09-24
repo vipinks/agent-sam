@@ -8,6 +8,7 @@ import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { PaneHeader } from './pane-header'
+import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 import { createTerminalSession, exitMessage } from './terminal-session'
 import '@xterm/xterm/css/xterm.css'
 
@@ -141,9 +142,11 @@ export function TerminalPanel() {
   return (
     <div className="flex h-full flex-col bg-background">
       <PaneHeader icon={SquareTerminal} title="Terminal">
-        <span className="truncate font-mono text-[10.5px] text-muted-foreground" title={rootPath ?? undefined}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground" title={rootPath ?? undefined}>
           {rootPath ?? 'no folder open'}
         </span>
+        <PanelExpandControl />
+        <PanelCollapseControl />
       </PaneHeader>
 
       {/* The transcript. xterm writes into this element directly. */}

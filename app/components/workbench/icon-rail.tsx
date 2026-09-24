@@ -7,7 +7,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  SquareTerminal,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -25,9 +24,13 @@ export interface Activity {
 
 /**
  * The activity views the workbench switches between, in the order they are read: the conversation,
- * then the folder it is about, then the state of that folder, and the shell beside it. Settings is
- * deliberately not one of them — it is a place you visit and leave, and it comes last for the same
- * reason.
+ * then the folder it is about, then the state of that folder. Settings is deliberately not one of
+ * them — it is a place you visit and leave, and it comes last for the same reason.
+ *
+ * The shell is not one of them either, and that is this phase's change: the terminal is a resident of
+ * the right rail, docked into the inner group's right slot like the file's two views, rather than a
+ * view that takes the whole main area. So the list is three, and the three are all things the *drawer*
+ * shows.
  *
  * The order is the rail's, top to bottom, because the rail draws this list and nothing else does: a
  * reader of either one is reading the other, and that is what makes a reorder here a change to the
@@ -39,7 +42,6 @@ export const ACTIVITIES: Activity[] = [
   { id: 'chat', label: 'Chat', icon: MessageSquare, panelTitle: 'Chat Sessions' },
   { id: 'files', label: 'Explorer', icon: Folder, panelTitle: 'Explorer' },
   { id: 'git', label: 'Git', icon: GitBranch, panelTitle: 'Git Changes' },
-  { id: 'terminal', label: 'Terminal', icon: SquareTerminal, panelTitle: 'Terminal' },
 ]
 
 /**

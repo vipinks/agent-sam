@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Braces, FileCode, GitCompare, Lock, Maximize2, Minimize2, Pencil, Save, TriangleAlert, X } from 'lucide-react'
+import { Braces, FileCode, GitCompare, Lock, Pencil, Save, TriangleAlert, X } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -11,12 +11,13 @@ import { canEdit, decideConflict, insertTab, isDirty, writeErrorMessage } from '
 import { gutterText } from './gutter'
 import { editorHighlightPlan, skipNote, utf8Bytes } from './highlight'
 import { useHighlightedCode } from './use-highlight'
-import { formatBytes, imageOf, type ImageRead } from './image'
-import { MarkdownContent } from './markdown'
+import { imageOf } from './image'
 import { defaultViewModeForPath, previewablePath, type ViewMode } from './preview'
+import { FileError, ImageView, MarkdownPreview } from './preview-panel'
 import { lossNotice, recordEdit, savedLossNotice, spreadsheetOf, type SpreadsheetEdit } from './spreadsheet'
 import { SpreadsheetView } from './spreadsheet-view'
 import { useWorkbenchStore } from './store'
+import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 
 /**
  * The main area's second half: whichever of a file or a change the user asked for last.
@@ -41,11 +42,6 @@ export function CodeViewer() {
   const selectedChange = useWorkbenchStore((s) => s.selectedChange)
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
   const setEditorDirty = useWorkbenchStore((s) => s.setEditorDirty)
-  // The expanded layout is the workbench's, not this pane's, but the control that moves it lives here —
-  // so the flag is read from the store the layout writes and reads too, rather than kept local and
-  // reported upward.
-  const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
-  const setViewerExpanded = useWorkbenchStore((s) => s.setViewerExpanded)
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
@@ -736,27 +732,18 @@ export function CodeViewer() {
         }
       >
         {/*
-          The expand control, and the only control there is: no key binding, and deliberately not
-          Escape — a layout that also answered the key that dismisses things would rearrange itself for
-          a reader who was only closing something else.
+          The viewer's expansion, and the panel's collapse, both taken from the rail module rather
+          than written again here: this pane is one of three residents of that slot, and the two
+          controls belong to the slot. Expansion still means what it always did — the docked column
+          takes the chat's width — and it is offered by whichever resident is docked, so a reader
+          looking at the rendered preview is not told the layout control is somewhere else.
 
-          It sits in the header rather than in the file toolbar below, because the toolbar belongs to a
-          file while this belongs to the pane: it is offered for a diff, an image and a workbook too,
-          and those have no toolbar of their own to put it in.
-
-          The icon and the tooltip both follow the state, so each direction is named — a label that did
-          not move would describe a button that is no longer on screen.
+          The collapse glyph is the panel's way back to rail-only, on the same second-click rule the
+          resident's own rail icon keeps. It sits outermost, past the control that closes the *file*,
+          because the two are different scopes: the X puts the file away and leaves the pane, and this
+          puts the pane away and leaves the rail.
         */}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-pressed={viewerExpanded}
-          aria-label={viewerExpanded ? 'Restore the chat column' : 'Expand the viewer'}
-          title={viewerExpanded ? 'Restore the chat column' : 'Expand the viewer over the chat column'}
-          onClick={() => setViewerExpanded(!viewerExpanded)}
-        >
-          {viewerExpanded ? <Minimize2 /> : <Maximize2 />}
-        </Button>
+        <PanelExpandControl />
 
         {(showingDiff || selectedFile) && (
           <Button
@@ -771,6 +758,8 @@ export function CodeViewer() {
             <X />
           </Button>
         )}
+
+        <PanelCollapseControl />
       </PaneHeader>
 
       {showingDiff ? (
@@ -1081,18 +1070,7 @@ export function CodeViewer() {
               the same `<Markdown>` the chat has always trusted, and no `dangerouslySetInnerHTML` was
               added for a file's contents.
             */
-            <div data-slot="markdown-preview" className="min-h-0 flex-1 overflow-auto p-4">
-              {/*
-                An empty file has a preview too: nothing to render. The chat's renderer answers empty
-                content with "Thinking…", which is a sentence about a stream that has not started — a
-                file the user opened is not a stream, so the preview says what is true of the file.
-              */}
-              {readContent.trim() === '' ? (
-                <p className="text-[12.5px] text-muted-foreground">This file is empty.</p>
-              ) : (
-                <MarkdownContent content={readContent} />
-              )}
-            </div>
+            <MarkdownPreview content={readContent} />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
               {/*
@@ -1152,91 +1130,6 @@ export function CodeViewer() {
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-/**
- * An image, as the pane shows it.
- *
- * One `img` of the data URL main sent, centered on the pane, with the file's own name as its `alt` so
- * the picture is announced as the file it is rather than as "image". The caption underneath is the
- * pane's one statement about what it is showing: the media type main decided and the size it measured —
- * the caption's wording is this pane's, so one sentence here says it.
- *
- * This element is also the whole of this side's svg story. Main sends an svg base64 inside a data URL —
- * bytes, never markup — and an `img` cannot run what it displays: the source is decoded and painted, so
- * a `script` inside the file has no document to execute in. Every other way of drawing those bytes
- * (inline, or as HTML) would hand them to the DOM as a document, which is the one thing that must not
- * happen; keeping the render to an `img` is what makes the format safe to offer at all.
- */
-function ImageView({ image, alt }: { image: ImageRead; alt: string }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/*
-        The image keeps its own aspect ratio inside whatever box the pane gives it (`object-contain`),
-        and the scroll container is here rather than on the pane so a picture larger than the pane can
-        still be reached instead of being clipped.
-      */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-        <img src={image.dataUrl} alt={alt} className="max-h-full max-w-full object-contain" />
-      </div>
-
-      <p
-        data-slot="image-caption"
-        className="shrink-0 border-t border-border bg-muted px-3 py-1.5 text-center font-mono text-[11px] text-muted-foreground"
-      >
-        {`${image.mime} · ${formatBytes(image.bytes)}`}
-      </p>
-    </div>
-  )
-}
-
-/**
- * What the viewer shows when a read fails. The cases worth their own copy — a file past the cap, an image
- * past its own, a workbook past its own, a locked workbook, a workbook that will not parse — are branched
- * on the error code, never on the message string, which is main's to word.
- *
- * The cases are not refinements of each other: the limits are different numbers, and the way out differs
- * for each — a text file over the cap is a preview the viewer declines, an image over it is one it cannot
- * show, and a locked workbook is neither damaged nor oversized, so telling its reader it "could not be
- * opened" would be a statement about the bytes that happens to be false. A workbook that will not parse
- * is the one place this pane names a format limit outright, because the honest reason a `.xls` fails here
- * is that this parser reads the modern container and not the binary one.
- *
- * All of them take the editor away, which for a picture and a workbook is already the case.
- */
-function FileError({ error, path }: { error: unknown; path: string }) {
-  const code = error instanceof ConveyorError ? error.code : null
-  const encrypted = code === 'SPREADSHEET_ENCRYPTED'
-  const tooLarge = code === 'FILE_TOO_LARGE' || code === 'IMAGE_TOO_LARGE' || code === 'SPREADSHEET_TOO_LARGE'
-  const name = path.split(/[\\/]/).pop() ?? path
-
-  const title = encrypted
-    ? `${name} is password protected`
-    : tooLarge
-      ? `${name} is too large to preview`
-      : 'This file could not be opened'
-
-  const detail = encrypted
-    ? 'It can be opened in a spreadsheet program, where it can be unlocked.'
-    : code === 'SPREADSHEET_TOO_LARGE'
-      ? 'The viewer caps workbooks at 8 MB so a large read never blocks the window.'
-      : code === 'SPREADSHEET_PARSE_FAILED'
-        ? 'This viewer reads modern .xlsx workbooks; a legacy binary .xls is not one of them.'
-        : code === 'IMAGE_TOO_LARGE'
-          ? 'The viewer caps images at 2 MB so a large read never blocks the window.'
-          : tooLarge
-            ? 'The viewer caps files at 1 MB so a large read never blocks the window.'
-            : 'It may be binary, moved, or unreadable.'
-
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-      <TriangleAlert className="size-6 text-muted-foreground/50" />
-      <div>
-        <p className="text-[13px] font-medium">{title}</p>
-        <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">{detail}</p>
-      </div>
     </div>
   )
 }

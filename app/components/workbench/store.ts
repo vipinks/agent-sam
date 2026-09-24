@@ -6,6 +6,7 @@ import {
   type StoredLayoutSets,
   type WindowState,
 } from './layout'
+import type { RightPanelId } from './right-rail'
 import { BRIGHTNESS_DEFAULT, clampBrightness } from './theme-engine'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
 
@@ -76,6 +77,29 @@ interface WorkbenchState {
    */
   viewerExpanded: boolean
   setViewerExpanded: (expanded: boolean) => void
+  /**
+   * Which of the right rail's residents is docked into the inner group's right slot, or null while the
+   * rail is alone.
+   *
+   * Not persisted, and on the same side of that line as `viewerExpanded` rather than as
+   * `drawerCollapsed`: an open panel is a way of looking at the file in front of you, not a way of
+   * working that outlives the window. Nothing writes it to storage, so it lives exactly as long as this
+   * renderer does — which is what makes a session switch inside one run leave it alone and every launch
+   * open rail-only. The type is the rail registry's, so the ids a rail button offers and the ids this
+   * accepts are one list rather than two that could disagree.
+   */
+  rightPanel: RightPanelId | null
+  /**
+   * Dock a resident, or put it back when it is the one already docked.
+   *
+   * A click on the active resident means the same thing here that a second click on the active activity
+   * means on the left rail: put away the thing that is open. Every other id is the switch it looks
+   * like, and there is no third case — the rail is always there, so nothing has to carry "bring it
+   * back", which on the left rail is what the collapse flag's two controls are for.
+   */
+  toggleRightPanel: (id: RightPanelId) => void
+  /** Put the docked panel back to rail-only, whatever is in it. The header's collapse glyph. */
+  closeRightPanel: () => void
   /**
    * Which theme the window wears, and how far its surfaces are shifted from that theme's own values.
    *
@@ -312,6 +336,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   commitMessage: '',
   setCommitMessage: (commitMessage) => set({ commitMessage }),
   editor: { path: null, dirty: false, externalNonce: 0 },
+  rightPanel: null,
+  toggleRightPanel: (id) =>
+    // A stored `null` for the panel that was clicked is what "rail-only" is, and it is the absence of a
+    // resident rather than a fourth id: nothing docks "nothing". The expansion is dropped with it, so
+    // the only state in which the flag is set is one where there is a column for it to widen — which is
+    // what keeps the inner group from being left with no panels in it.
+    set((state) => (state.rightPanel === id ? { rightPanel: null, viewerExpanded: false } : { rightPanel: id })),
+  closeRightPanel: () => set({ rightPanel: null, viewerExpanded: false }),
   setEditorDirty: (path, dirty) =>
     set((state) => ({
       // A different path means the previous buffer is gone, so the flag is replaced rather than kept.

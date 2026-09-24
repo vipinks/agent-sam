@@ -170,10 +170,14 @@ describe('an image in the viewer', () => {
     expect(image.getAttribute('src')).toBe(SVG_DATA_URL)
     // The assertion the whole branch exists for: the svg is a source for an image decoder, so the
     // script in it never becomes an element. Asserted on the file's *own* markup rather than on "no svg
-    // anywhere", because the pane's chrome is drawn with svg icons of its own — and the `<rect>` is the
-    // fixture's, so finding one would mean the document had been parsed.
-    expect(container.querySelector('rect')).toBeNull()
-    expect(container.querySelector('script')).toBeNull()
+    // anywhere", because the chrome around it is drawn with svg icons of its own — and scoped to the
+    // image's own region, because the panel's controls are drawn with one that carries a `<rect>` too.
+    // The `<rect>` that matters is the fixture's, so finding one in the region the file is drawn in
+    // would mean the document had been parsed.
+    const region = container.querySelector<HTMLElement>('[data-slot="image"]')
+    expect(region, 'the image region').not.toBeNull()
+    expect(region?.querySelector('rect')).toBeNull()
+    expect(region?.querySelector('script')).toBeNull()
     expect(container.innerHTML).not.toContain('alert(1)')
     expect(container.textContent).not.toContain('alert(1)')
   })

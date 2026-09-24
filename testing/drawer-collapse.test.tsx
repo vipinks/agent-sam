@@ -9,13 +9,10 @@ import { queryClient } from '@/conveyor/client'
 import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
- * The drawer, put away: the rail's own control, the three triggers that move it, and what the layout
- * writes while it is gone.
+ * The three triggers that move it, and what the layout writes while it is gone.
  *
- * The rail's top control was a status dot — a `<span>` with a brand mark in it, no `title`, no
- * `aria-label` and no handler — so there was no action to keep and it becomes the collapse control
- * instead, in the slot it already held. That repurpose is pinned below rather than left to the diff:
- * the same slot is asserted to be a button now, and the span that used to fill it to be gone.
+ * Phase 39 took the shell off this rail — the terminal is a resident of the right rail now, asserted in
+ * `right-rail-docking.test.tsx` — so the residents read three, and Settings still has the foot.
  *
  * What only a rendered workbench can show, and what no rule test would catch, is the composition. The
  * collapse removes the drawer *panel* from the outer group rather than narrowing it, hiding it or
@@ -113,6 +110,16 @@ function drawerHeader(container: HTMLElement): HTMLElement {
 }
 
 /**
+ * The drawer header's collapse glyph.
+ *
+ * The only collapse control there is while the drawer is on screen: the rail's copy of that direction
+ * retired, and what the rail keeps is the glyph that brings the drawer back.
+ */
+function drawerCollapse(container: HTMLElement): HTMLElement {
+  return within(drawerHeader(container)).getByRole('button', { name: 'Collapse drawer' })
+}
+
+/**
  * The panels of the *outer* group, in the order the group was built with.
  *
  * Scoped to the group's own direct children, as the viewer's suite is and for the same reason: the chat
@@ -146,6 +153,7 @@ beforeEach(() => {
     commitMessage: '',
     viewerExpanded: false,
     drawerCollapsed: false,
+    rightPanel: null,
     editor: { path: null, dirty: false, externalNonce: 0 },
     layoutPreferences: {},
   })
@@ -153,18 +161,22 @@ beforeEach(() => {
 })
 
 describe('the rail', () => {
-  it('reads its five controls in order, with Settings still at the foot', async () => {
+  it('reads five controls in order while the drawer is away, with Settings still at the foot', async () => {
     stubWorkbench()
+    useWorkbenchStore.setState({ drawerCollapsed: true })
     renderWorkbench()
 
     // DOM order is the tab order and the visual order at once: the buttons are the rail's children in
-    // the order the registry holds, so one reading answers for all three. The collapse control leads,
-    // then the conversation, the folder it is about, that folder's state, and the shell beside it.
-    const labels = [...rail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-
-    expect(labels).toEqual(['Collapse drawer', 'Chat', 'Explorer', 'Git', 'Terminal', 'Settings'])
-    // The five, and then the foot: Settings is a place you visit and leave, and is not one of them.
-    expect(labels.slice(0, 5)).toHaveLength(5)
+    // the order the registry holds, so one reading answers for the others. Leading, the way back into the
+    // drawer; then the conversation, the folder it is about, that folder's state, and the foot — Settings,
+    // which is a place you visit and leave rather than one of the residents.
+    expect([...rail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Expand drawer',
+      'Chat',
+      'Explorer',
+      'Git',
+      'Settings',
+    ])
   })
 
   it('opens each activity’s own panel from the rail', async () => {
@@ -181,12 +193,8 @@ describe('the rail', () => {
     await userEvent.click(railControl('Git'))
     expect(within(drawer(container) as HTMLElement).getByText('Git Changes')).toBeTruthy()
 
-    // Terminal is one of the two views that take the whole main area rather than the drawer, so what it
-    // opens is asserted where it draws: the group and the drawer are gone, and the transcript is up.
-    await userEvent.click(railControl('Terminal'))
-    expect(useWorkbenchStore.getState().activeActivity).toBe('terminal')
-    expect(container.querySelector('[data-panel]#secondary')).toBeNull()
-    expect(screen.getByLabelText('Command')).toBeTruthy()
+    // The shell is not one of the drawer's activities any more: it is a resident of the right rail, so
+    // what it opens is asserted in `right-rail-docking.test.tsx`, beside the rail that offers it.
   })
 })
 
@@ -244,9 +252,12 @@ describe('the collapse control', () => {
     stubWorkbench()
     const { container } = renderWorkbench()
 
-    const chevron = within(drawerHeader(container)).getByRole('button', { name: 'Collapse drawer' })
+    const glyph = drawerCollapse(container)
+    expect(glyph.getAttribute('title')).toBe('Collapse drawer')
+    expect(glyph.getAttribute('aria-expanded')).toBe('true')
 
-    await userEvent.click(chevron)
+    await userEvent.click(glyph)
+    expect(useWorkbenchStore.getState().drawerCollapsed).toBe(true)
     expect(drawer(container)).toBeNull()
 
     // There is no drawer header while the drawer is away, so the way back is the rail's own control —
@@ -254,8 +265,8 @@ describe('the collapse control', () => {
     // before, because the drawer is on screen again.
     await userEvent.click(railControl('Expand drawer'))
 
-    expect(within(drawerHeader(container)).getByRole('button', { name: 'Collapse drawer' })).toBeTruthy()
     expect(useWorkbenchStore.getState().drawerCollapsed).toBe(false)
+    expect(drawerCollapse(container)).toBeTruthy()
   })
 })
 
@@ -324,7 +335,7 @@ describe('the flag, and the two groups it sits between', () => {
     stubWorkbench()
     const { container } = renderWorkbench()
 
-    await userEvent.click(railControl('Collapse drawer'))
+    await userEvent.click(drawerCollapse(container))
     // The flag is the only key that moved; the sets are the ones the drags left, character for
     // character.
     expect(storedSets()).toBe(before)
@@ -342,7 +353,7 @@ describe('the flag, and the two groups it sits between', () => {
     // The other direction of the same seam: a drag is the only thing allowed to write a set, and it
     // must not take the collapse with it.
     const dragged: LayoutSizes = { outer: { drawer: 30, main: 70 }, main: { chat: 45, viewer: 55 } }
-    await userEvent.click(railControl('Collapse drawer'))
+    await userEvent.click(drawerCollapse(container))
     act(() => useWorkbenchStore.getState().saveLayout('windowed', dragged))
 
     expect(stored()).toEqual({ layoutWindowed: dragged, layoutMaximized: maximized, drawerCollapsed: true })
@@ -356,12 +367,14 @@ describe('the flag, and the two groups it sits between', () => {
 
   it('composes with the viewer’s expansion, and neither toggle moves the other', async () => {
     stubWorkbench()
-    useWorkbenchStore.setState({ selectedFile: TEXT_PATH })
+    // The code resident is docked, because the dock is closed at launch and the expansion is a control a
+    // docked panel offers — the two removals this test is about are in two groups, and both exist here.
+    useWorkbenchStore.setState({ selectedFile: TEXT_PATH, rightPanel: 'code' })
     const { container } = renderWorkbench()
 
     await waitFor(() => expect(container.querySelector('[data-slot="code-gutter"]')).not.toBeNull())
     await userEvent.click(screen.getByRole('button', { name: 'Expand the viewer' }))
-    await userEvent.click(railControl('Collapse drawer'))
+    await userEvent.click(drawerCollapse(container))
 
     // Both on: the rail, and the viewer that has taken the chat's column.
     expect(container.querySelector('[data-panel]#secondary')).toBeNull()
@@ -376,7 +389,7 @@ describe('the flag, and the two groups it sits between', () => {
     expect(drawer(container)).not.toBeNull()
 
     // ...and restoring the chat column leaves the drawer where it was.
-    await userEvent.click(railControl('Collapse drawer'))
+    await userEvent.click(drawerCollapse(container))
     await userEvent.click(screen.getByRole('button', { name: 'Restore the chat column' }))
     expect(useWorkbenchStore.getState().drawerCollapsed).toBe(true)
     expect(container.querySelector('[data-panel]#chat')).not.toBeNull()

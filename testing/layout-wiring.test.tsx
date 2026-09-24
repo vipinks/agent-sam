@@ -165,6 +165,7 @@ beforeEach(() => {
     selectedChange: null,
     commitMessage: '',
     viewerExpanded: false,
+    rightPanel: null,
     layoutPreferences: {},
   })
   queryClient.clear()
@@ -198,8 +199,14 @@ describe('the workbench columns', () => {
     }
   })
 
-  it('still hands each panel its own size, which is what a one-panel group falls back to', () => {
+  it('hands the chat the whole group while the dock is closed, and both panels their own sizes once it is not', () => {
     const { container } = renderWorkbench()
+
+    // Phase 39: the right rail opens with nothing docked, so the inner group holds the conversation
+    // alone and the chat states its own size for the fallback the group's two-id layout is set aside by.
+    expect(columns(container, 'workbench-main')).toEqual([{ id: 'chat', defaultSize: percentSize(100) }])
+
+    act(() => useWorkbenchStore.getState().toggleRightPanel('code'))
 
     expect(columns(container, 'workbench-main')).toEqual([
       { id: 'chat', defaultSize: percentSize(WINDOWED.main.chat) },

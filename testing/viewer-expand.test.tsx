@@ -27,6 +27,10 @@ import { createBridgeStub, setActiveStub, type BridgeStub } from './bridge-stub'
  * nothing in `localStorage`, which is what "not persisted, resets on restart" means from a test. Escape
  * is asserted *not* to toggle it — the icon is the only control there is.
  *
+ * Every case renders the workbench with the code resident *docked*, which is Phase 39's doing rather
+ * than this file's subject: the rail opens with the dock closed and its panel absent, and this file's
+ * claims are all about a docked column, so each case starts from the state that has one.
+ *
  * There is no `CHAT_SESSIONS_STORE_ID` seed here either, for the reason `stubWorkbench` states: the chat
  * panel is rendered as part of the workbench, and the session store it reads unseeded is already empty.
  */
@@ -210,7 +214,9 @@ function stubWorkbench(kind: Kind): BridgeStub {
     listFilesFlat: () => [],
   })
   setActiveStub(stub)
-  useWorkbenchStore.setState({ selectedFile: kind.path, selectedChange: kind.change ?? null })
+  // The code resident is docked at the start of every case, because the dock is closed at launch: the
+  // control this file is about belongs to a docked panel, and what it does to the columns is the claim.
+  useWorkbenchStore.setState({ selectedFile: kind.path, selectedChange: kind.change ?? null, rightPanel: 'code' })
   return stub
 }
 
@@ -301,6 +307,7 @@ beforeEach(() => {
     selectedFile: null,
     selectedChange: null,
     viewerExpanded: false,
+    rightPanel: null,
     editor: { path: null, dirty: false, externalNonce: 0 },
   })
   queryClient.clear()

@@ -12,6 +12,8 @@ import { GitPanel } from './git-panel'
 import { SessionListPanel } from './session-list-panel'
 import { SettingsView } from './settings-view'
 import { TerminalPanel } from './terminal-panel'
+import { PreviewPanel } from './preview-panel'
+import { RightRail } from './right-rail'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
@@ -39,12 +41,29 @@ import { useWorkbenchStore } from './store'
  * is what a reader of either group should be able to see. The cost that buys is named where it is
  * paid: a maximize or a restore remounts the panes under them.
  *
- * Two rail items take the whole main area rather than the secondary panel, because they are places
- * you go rather than things you glance at: Settings (a screen you leave when done) and Terminal (a
- * transcript that wants the width).
+ * Two views take the whole main area rather than a column: Settings, which is a screen you leave when
+ * done, and nothing else now that the terminal is a resident of the right rail.
  *
  * The secondary panel follows the rail: the explorer keeps the file tree, git keeps the working tree's
  * state, and the chat shows the conversation list the panel header has always promised.
+ *
+ * The right rail is the outer edge's other end, and it is what decides whether the inner group has a
+ * second column at all. At launch it has none: the inner group holds the conversation alone, and a
+ * resident is docked by clicking its icon — Code for the open file's source and diffs, Preview for the
+ * same file rendered, Terminal for the command transcript. The docked panel takes the inner group's
+ * right slot at the state's own persisted inner percentage, which is the number a drag of that
+ * separator left, so docking writes nothing and a reader who had dragged the split where they wanted
+ * it gets it back. One resident is docked at a time: the three are things you look at in the same place
+ * rather than three places, and the slot is one column.
+ *
+ * Whether one is docked is memory only, and deliberately not the drawer's flag's neighbour in storage:
+ * an open panel is a way of looking at the file in front of you rather than a way of working, so a
+ * session switch inside the run leaves it exactly where it is and every launch opens rail-only.
+ * Closing it — a second click on its own icon, or the header's collapse glyph — removes the panel from
+ * the group rather than narrowing it, exactly as the drawer's collapse does in the outer group, and it
+ * takes the viewer's expansion with it, because an expansion of a column that is not there is a way for
+ * this group to end up empty. Expansion itself is unchanged: while a panel is docked, that column can
+ * take the chat's width, and the control that does it is offered by whichever resident is docked.
  *
  * The drawer is the one column that can be put away, and putting it away removes it from the outer group
  * rather than shrinking it: a panel that is still in the tree is still a column the main area shares
@@ -88,6 +107,9 @@ function WorkbenchLayout() {
   const viewerExpanded = useWorkbenchStore((s) => s.viewerExpanded)
   // Whether the drawer is away, as the rail's own control and the drawer header's chevron last left it.
   const drawerCollapsed = useWorkbenchStore((s) => s.drawerCollapsed)
+  // Which resident of the right rail is docked into the inner group's right slot, or null while the rail
+  // is alone. Read once per render, beside the flag that says whether it has taken the chat's width.
+  const rightPanel = useWorkbenchStore((s) => s.rightPanel)
   // The window state this window is in, and the set both groups open with for it. Read once per
   // render, so the two levels of the layout can never be given sizes that were resolved apart.
   const { state, sizes, onOuterLayoutChanged, onInnerLayoutChanged } = useWorkbenchLayout()
@@ -162,10 +184,6 @@ function WorkbenchLayout() {
         <div className="min-w-0 flex-1">
           <SettingsView />
         </div>
-      ) : activeActivity === 'terminal' ? (
-        <div className="min-w-0 flex-1">
-          <TerminalPanel />
-        </div>
       ) : (
         <ResizablePanelGroup
           id="workbench"
@@ -213,45 +231,76 @@ function WorkbenchLayout() {
               {/*
                 The chat column while the split is showing, and its handle with it. Removed rather than
                 hidden behind a zero width or a class: a column that is still in the tree is still a
-                column the pane is sharing with, and "the viewer spans both" has to be true of the
-                layout rather than of the styling.
+                column the pane is sharing with, and "the docked panel spans both" has to be true of
+                the layout rather than of the styling.
 
                 The two branches are keyed, and that is not decoration: without keys React reconciles
                 the group's children by position, so the panel that was the chat's would be re-used —
-                and remounted — as the viewer's. The viewer would then lose everything it was holding,
-                and an edited buffer, a chosen sheet and a rendered preview would all be rebuilt by a
-                click on a layout control. The keys are what make "the pane renders through the layout
-                change" true rather than merely intended.
+                and remounted — as the docked panel's. The docked panel would then lose everything it was
+                holding, and an edited buffer, a chosen sheet and a running transcript would all be
+                rebuilt by a click on a layout control. The keys are what make "the pane renders through
+                the layout change" true rather than merely intended.
+
+                The handle is declared only when there is something to drag between: while the rail is
+                alone the chat is the group's only column, and a separator with nothing on one side of
+                it is a divider the library would have to discard.
               */}
               {!viewerExpanded && (
                 <Fragment key="chat">
-                  <ResizablePanel id="chat" defaultSize={percentSize(sizes.main.chat)} minSize={320}>
+                  <ResizablePanel
+                    id="chat"
+                    // The sole column while the rail is alone, and it needs no size of its own beyond
+                    // that: the group's declared layout names two panels and the group has one, so the
+                    // library sets it aside and falls back to this share — which is why the closed dock
+                    // says a hundred rather than leaving the chat at half of a group it now has to
+                    // itself.
+                    defaultSize={rightPanel === null ? percentSize(100) : percentSize(sizes.main.chat)}
+                    minSize={320}
+                  >
                     <ChatPanel />
                   </ResizablePanel>
 
-                  <ResizableHandle />
+                  {rightPanel !== null && <ResizableHandle />}
                 </Fragment>
               )}
 
-              {/* The sole column while expanded, and it needs no size of its own: a group with one panel
-                  gives that panel everything, so the width follows from the chat's absence.
+              {/*
+                The right slot, while a resident is docked in it. One panel whatever is in it, because
+                the rail's three residents are three things shown in one column rather than three
+                columns; the resident's own component is what changes.
 
-                  Each panel states its own size as well as the group stating the set, and while expanded
-                  that is the only statement that applies: the group's declared layout names two panels
-                  and the group has one, so the library sets it aside and falls back to the panel's own
-                  share — which is what makes the two branches agree instead of a stale set winning. */}
-              <ResizablePanel
-                key="code"
-                id="code"
-                defaultSize={viewerExpanded ? percentSize(100) : percentSize(sizes.main.viewer)}
-                minSize={280}
-              >
-                <CodeViewer />
-              </ResizablePanel>
+                The id is the group's key for the pane beside the chat and is the same for every
+                resident, deliberately: the state's stored inner split is named for the slot, so the
+                percentage a drag left is the percentage the next resident docks at, and a reader who
+                had dragged the split gets the same one back whichever panel they open beside it.
+
+                Each panel states its own size as well as the group stating the set, and while expanded
+                that is the only statement that applies: the group's declared layout names two panels
+                and the group has one, so the library sets it aside and falls back to the panel's own
+                share — which is what makes the two branches agree instead of a stale set winning.
+              */}
+              {rightPanel !== null && (
+                <ResizablePanel
+                  key="code"
+                  id="code"
+                  defaultSize={viewerExpanded ? percentSize(100) : percentSize(sizes.main.viewer)}
+                  minSize={280}
+                >
+                  {rightPanel === 'code' ? (
+                    <CodeViewer />
+                  ) : rightPanel === 'preview' ? (
+                    <PreviewPanel />
+                  ) : (
+                    <TerminalPanel />
+                  )}
+                </ResizablePanel>
+              )}
             </ResizablePanelGroup>
           </ResizablePanel>
         </ResizablePanelGroup>
       )}
+
+      <RightRail />
     </div>
   )
 }
