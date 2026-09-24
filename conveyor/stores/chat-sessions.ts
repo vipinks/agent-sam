@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
+import { MAX_ACTIVE_SKILLS, MAX_SKILL_ID_CHARS } from '../protocol/skills'
 
 /**
  * The chat session list: what conversations exist, and which one is open.
@@ -33,6 +34,23 @@ export interface ChatSession {
    * entry written before this field existed simply has no key, and behaves the way it did before it.
    */
   lastRoot?: string
+  /**
+   * The skills this conversation runs with, by id, in the order the user turned them on.
+   *
+   * On the session rather than in a window, because a skill changes what the model is told for every turn
+   * of that conversation: a conversation that was working from a review checklist should still be working
+   * from it when it is reopened tomorrow, and the next conversation should not inherit it.
+   *
+   * Additive and optional, like `lastRoot` above: an entry written before skills existed simply has no
+   * key, and absence means none chosen — which is what every such session meant. Nothing writes an empty
+   * list to say "none": that would rewrite every record on the first launch after the feature landed, to
+   * say something the absent key already said. The exception is the user turning the last skill off, which
+   * is a change they made and is stored as the empty list it is.
+   *
+   * Ids only. The skill's own title, summary and body are the disk's answer, read fresh by the turn that
+   * uses them, so a session never carries a stale copy of a skill someone has since edited.
+   */
+  activeSkillIds?: string[]
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -60,6 +78,16 @@ function sortByRecency(sessions: ChatSession[]): ChatSession[] {
   return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/**
+ * The ids one conversation may carry.
+ *
+ * Bounded here as well as in the control that offers the toggles, because this is the boundary the
+ * renderer's payload actually crosses: the cap is a property of the app's prompt budget, so a payload
+ * claiming nine active skills is refused rather than stored and then discovered at the next turn start.
+ * `min(1)` on each id, so a blank string cannot name a skill nobody can resolve.
+ */
+const activeSkillIdsSchema = z.array(z.string().min(1).max(MAX_SKILL_ID_CHARS)).max(MAX_ACTIVE_SKILLS)
+
 export const chatSessionsStore = defineStore('chat-sessions', {
   state: { sessions: [], activeSessionId: null } as ChatSessionsState,
 
@@ -74,6 +102,11 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       // is open is created in that folder, and one created with nothing open has none. Min one, so a
       // blank path cannot become a project; absent is how "no project yet" is spelled.
       lastRoot: z.string().min(1).optional(),
+      // The skills the conversation is created with, when the user chose them before there was a
+      // conversation to choose them on. Absent for one created without any; an empty list is refused
+      // nowhere and written nowhere — `addSession` drops it below, so a new record says "none" the way
+      // every record written before this field existed says it: by having no key at all.
+      activeSkillIds: activeSkillIdsSchema.optional(),
     }),
     touchSession: z.object({
       id: sessionIdSchema,
@@ -83,13 +116,17 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       // Min one, so a blank path cannot become a project: the field's whole meaning is that it names
       // a folder, and absence is how "none" is spelled.
       lastRoot: z.string().min(1).optional(),
+      // The skill choice, on the same terms as `lastRoot` above and with one difference that matters:
+      // an empty list here *is* a change — the user turned the last skill off — so it is stored rather
+      // than dropped. Only a caller that says nothing about skills leaves the stored ones alone.
+      activeSkillIds: activeSkillIdsSchema.optional(),
     }),
     removeSession: z.object({ id: sessionIdSchema }),
     setActive: z.object({ id: sessionIdSchema.nullable() }),
   },
 
   actions: {
-    addSession: (state, { id, title, providerId, model, lastRoot }) => {
+    addSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds }) => {
       const now = Date.now()
       // Idempotent: a re-add of an id that already exists would otherwise give the list two rows
       // with one transcript between them.
@@ -107,6 +144,11 @@ export const chatSessionsStore = defineStore('chat-sessions', {
           providerId,
           model,
           ...(lastRoot !== undefined ? { lastRoot } : {}),
+          // An empty list is skipped for the same reason the absent key is the default everywhere else:
+          // a record that names no skill and a record with no such key mean the same thing, and writing
+          // the key would be a second spelling of it. A conversation the user chose skills for carries
+          // them from its first row.
+          ...(activeSkillIds !== undefined && activeSkillIds.length > 0 ? { activeSkillIds: [...activeSkillIds] } : {}),
         },
       ])
     },
@@ -119,19 +161,25 @@ export const chatSessionsStore = defineStore('chat-sessions', {
      * the same reason: the caller compares it against what is stored before asking, so a touch that
      * says nothing about the project leaves the recorded one exactly as it was.
      */
-    touchSession: (state, { id, title, providerId, model, lastRoot }) => {
+    touchSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds }) => {
       const index = state.sessions.findIndex((s) => s.id === id)
       if (index === -1) return
       state.sessions = sortByRecency(
         state.sessions.map((s, i) =>
           i === index
             ? {
+                // The whole record is spread first, so a field this action says nothing about — the
+                // skills among them — is carried through rather than dropped by a write about something
+                // else. Every named field below is an override of that base, never a rebuild of it.
                 ...s,
                 updatedAt: Date.now(),
                 ...(title !== undefined ? { title } : {}),
                 ...(providerId !== undefined ? { providerId } : {}),
                 ...(model !== undefined ? { model } : {}),
                 ...(lastRoot !== undefined ? { lastRoot } : {}),
+                // Unlike the create above, an empty list is written: it is the user turning the last
+                // skill off, and that is a change rather than the absence of one.
+                ...(activeSkillIds !== undefined ? { activeSkillIds: [...activeSkillIds] } : {}),
               }
             : s
         )

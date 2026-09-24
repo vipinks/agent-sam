@@ -57,6 +57,8 @@ const SUITES = [
   { name: 'project instructions', src: 'sessions/project-instructions-test.ts' },
   { name: 'mention rules', src: 'mentions/mentions-test.ts' },
   { name: 'mention files', src: 'mentions/mentions-files-test.ts' },
+  { name: 'skill rules', src: 'skills/skills-rules-test.ts' },
+  { name: 'skill files', src: 'skills/skills-files-test.ts' },
   { name: 'git porcelain parser', src: 'git/porcelain-test.ts' },
   { name: 'git module', src: 'git/git-module-test.ts' },
   { name: 'write guard rules', src: 'workspace/write-guard-test.ts' },

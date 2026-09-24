@@ -1,5 +1,6 @@
 import { readFile as readFileFromDisk, stat } from 'fs/promises'
 import { relative } from 'path'
+import { app } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, stream } from '../init'
@@ -35,6 +36,8 @@ import {
   type PlanStep,
 } from '../protocol/plan'
 import { readMentions } from './mentions'
+import { resolveActiveSkills, userSkillsDir } from './skills'
+import { assembleSkillsSection, MAX_ACTIVE_SKILLS, planSkillsInjection } from '../protocol/skills'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -775,6 +778,14 @@ interface LoopOptions {
    * reading the files a second time and appending them twice.
    */
   mentionPaths?: string[]
+  /**
+   * The skills this session has activated, by id, in the order the user turned them on.
+   *
+   * Ids only, and resolved to bodies in main at the turn start: a skill is a file on the user's own disk,
+   * and what it says now is the only copy worth sending. Absent for a run with none, and for a resumed
+   * run — which is the same turn continuing, with the section already in the history it handed back.
+   */
+  activeSkillIds?: readonly string[]
   steps?: number
   pending?: PendingDecision
   /**
@@ -847,6 +858,30 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // either is unshifted, because both rules answer "is it already there" and the first unshift would
   // answer for the second.
   const agentPrompt = planAgentPrompt(history, opts.platform ?? process.platform)
+
+  // The skills this session has activated, resolved here, at the turn start, from the same folder the
+  // run is in and the user's own skills folder beside it.
+  //
+  // Resolved rather than carried from the renderer, because what a skill *says* is the disk's answer:
+  // the renderer holds ids, and a body that travelled with a message could be an edit old or a file
+  // deleted since. A skill that cannot be found, cannot be read, or does not fit refuses the turn from
+  // in here — nothing is sent, and nothing is dropped quietly to keep the turn going.
+  //
+  // Decided from the same untouched history as the two above, for the same reason: all three rules
+  // answer "is this already in the conversation", and the first unshift would answer for the rest. A
+  // resumed run re-enters with the history its pause handed back, skills section included, so this
+  // finds it already there and adds nothing — which is what keeps a continued turn from carrying two
+  // copies of the same instructions.
+  const activeSkills = await resolveActiveSkills({
+    rootPath: opts.workspaceRoot,
+    userDir: userSkillsDir(app.getPath('appData')),
+    activeSkillIds: opts.activeSkillIds ?? [],
+  })
+  const skillsInjection = planSkillsInjection(history, assembleSkillsSection(activeSkills))
+
+  // Appended at the end of the standing-context block: closest to the conversation it governs, and
+  // after the project's own instructions, which are the folder's word rather than a skill's.
+  if (skillsInjection) history.unshift({ role: 'system', content: skillsInjection.content })
 
   if (injection) {
     // Position 0, before the conversation: the provider treats a system message as standing context
@@ -1223,6 +1258,15 @@ export const agentModule = defineModule({
        */
       mentionPaths: z.array(z.string()).max(MAX_MENTION_PATHS).optional(),
       /**
+       * The skills the session has active, by id.
+       *
+       * Capped at this boundary as well as in the store that holds them, because this array decides how
+       * much standing context a send carries: the cap is the app's prompt budget, so a payload claiming
+       * nine skills is refused here rather than resolved and sent. A non-string is refused by the schema
+       * rather than coerced, and an empty list is simply no skills.
+       */
+      activeSkillIds: z.array(z.string().min(1)).max(MAX_ACTIVE_SKILLS).optional(),
+      /**
        * The descriptor of a provider the user added, when this run's provider is one.
        *
        * `unknown` on purpose: the loop is handed whatever a caller has, and what makes a descriptor
@@ -1243,6 +1287,10 @@ export const agentModule = defineModule({
         messages: input.messages as ChatMessage[],
         autoApprove: input.autoApprove ?? false,
         mentionPaths: input.mentionPaths,
+        // Straight through: the ids the session holds, which main resolves against the disk at this turn
+        // start. A resume does not carry them — it is the turn that paused continuing, and its history
+        // already has the section this would rebuild.
+        activeSkillIds: input.activeSkillIds,
         signal,
       })
     }
