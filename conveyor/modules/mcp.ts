@@ -668,6 +668,75 @@ export async function startMcpServer(
   return { id: input.serverId, tools }
 }
 
+/**
+ * One server as a call to it needs it: the scope and trust its card must state, and the plaintexts that
+ * card must not show.
+ *
+ * Read here rather than handed in, for the reason `startMcpServer` reads trust here as well: scope and
+ * trust are comparisons between two files on the user's disk, so a caller that supplied its own answer
+ * could declare a server trusted — the one thing that gate exists to prevent. The secret values are in
+ * the same category: they are what the *stored* config says this server was started with, and a caller
+ * holding its own idea of them could hand the consent card a redaction list that redacts nothing.
+ *
+ * A server that is in neither file answers `null` — the ordinary case for a config edited while a turn
+ * was running. The caller still has a question to ask; what it does not have is anything true to add
+ * about the server.
+ */
+export interface McpServerCallContext {
+  serverId: string
+  scope: McpScope
+  /** Null for the user scope: trust governs the project scope only. */
+  trust: McpTrustState | null
+  /**
+   * The plaintexts this server's calls must not show.
+   *
+   * The values, not their names: redaction is a search for these strings, and a name cannot be searched
+   * for. They travel no further than the card's own preview — nothing here writes them anywhere, and
+   * `listing` above is where the renderer's view of a server is built, without them.
+   */
+  secrets: string[]
+}
+
+export async function readMcpServerCallContext(
+  rootPath: string | null,
+  serverId: string,
+  env: McpEnv = mcpEnv()
+): Promise<McpServerCallContext | null> {
+  const user = await readMcpConfigFile(mcpUserConfigPath(env.appDataPath), 'user')
+  const userEntry = user.entries.find((entry) => entry.config.id === serverId)
+  if (userEntry) return { serverId, scope: 'user', trust: null, secrets: secretValues(env, userEntry.config) }
+
+  // No folder open, so there is no project file to look in — and nothing to report about one.
+  if (!rootPath) return null
+
+  const project = await readMcpConfigFile(mcpProjectConfigPath(rootPath), 'project')
+  const projectEntry = project.entries.find((entry) => entry.config.id === serverId)
+  if (!projectEntry) return null
+
+  const roots = (await readMcpTrustFile(mcpTrustFilePath(env.appDataPath))).roots[rootPath] ?? {}
+  return {
+    serverId,
+    scope: 'project',
+    trust: compareMcpTrust(projectEntry.config, roots[serverId]),
+    secrets: secretValues(env, projectEntry.config),
+  }
+}
+
+/**
+ * The plaintexts one server was started with, or none when they cannot be read.
+ *
+ * A secret that cannot be decrypted is not a reason to withhold the consent card: the value nobody can
+ * read is also a value nobody could leak, and the user is still the one being asked whether this call
+ * may run. The refusal belongs to the start, which is where `decryptSecrets` throws.
+ */
+function secretValues(env: McpEnv, config: McpServerConfig): string[] {
+  try {
+    return Object.values(decryptSecrets(env, config))
+  } catch {
+    return []
+  }
+}
+
 /** The environment the registered commands run with: the real app data folder and the real keychain. */
 function mcpEnv(): McpEnv {
   return {

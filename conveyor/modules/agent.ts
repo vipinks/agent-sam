@@ -5,9 +5,11 @@ import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, stream } from '../init'
 import { readApiKey } from './settings'
+import { createMcpToolBridge, type McpToolBridge } from './mcp-tools'
 import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type ToolDefinition } from './llm-engine'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
 import { nextGateIndex, type FrameCall } from '../protocol/approval'
+import { createMcpToolNames, isMcpToolName, type McpConsent, type McpToolNames } from '../protocol/mcp-tools'
 import { computeFileDiff, type FileDiff } from '../protocol/diff'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
@@ -209,6 +211,21 @@ const TOOL_ARG_SCHEMAS = {
  */
 export function needsApproval(tool: string): boolean {
   return tool !== 'read_file' && tool !== 'set_plan'
+}
+
+/**
+ * Whether one call must be put to the user before it runs, given the session's own setting.
+ *
+ * Two rules, and the order between them is the whole of this function. An MCP call is always asked
+ * about, whatever the Auto-approve shield says: the shield is the user answering *this app's* tools in
+ * advance, and a call that runs in another process, against another project's configuration, in a server
+ * this app did not write, is not a question that has already been answered. Everything else keeps the
+ * behaviour it had — the exempt reads run, and a write or a command waits unless the user turned the
+ * gate off.
+ */
+function callNeedsApproval(tool: string, autoApprove: boolean): boolean {
+  if (isMcpToolName(tool)) return true
+  return needsApproval(tool) && !autoApprove
 }
 
 function isAgentTool(tool: string): tool is AgentToolName {
@@ -430,6 +447,15 @@ export type AgentChunk =
        */
       diff?: FileDiff
       /**
+       * The MCP server this call would run against, and what the card must say about it.
+       *
+       * Present only for a call of a running server's tool. The gate this pause comes from is the one
+       * every other tool passes through; what this adds is everything the user needs to answer it —
+       * which server is asking, what its scope and trust state are, and the arguments with that
+       * server's own secrets taken out.
+       */
+      mcp?: McpConsent
+      /**
        * The plan the turn had in hand when it paused, as the checklist is showing it.
        *
        * Carried because the run does not survive the pause: the resumed stream is a new generator,
@@ -522,6 +548,62 @@ function finalizeCalls(partials: Map<number, PartialCall>): ToolCall[] {
       type: 'function' as const,
       function: { name: p.name ?? '', arguments: p.args },
     }))
+}
+
+/**
+ * The tools one round-trip is sent: this app's own, then whatever the running servers offer right now.
+ *
+ * Rebuilt per request rather than once per turn, because "running" is a fact that can change inside a
+ * turn: a server started mid-turn becomes available without a new send, and one stopped stops being
+ * offered. This reads the registry at the moment of asking and caches nothing — a copy here would be a
+ * second opinion about what is running, and this app has one answer to that question by design.
+ */
+function toolsForRoundTrip(mcp: McpToolBridge): ToolDefinition[] {
+  return [...TOOL_DEFINITIONS, ...mcp.toolDefinitions()]
+}
+
+/** The tools as the provider must see them: every MCP identity under a name its charset accepts. */
+function wireTools(tools: readonly ToolDefinition[], names: McpToolNames): ToolDefinition[] {
+  return tools.map((tool) => ({
+    ...tool,
+    function: { ...tool.function, name: names.wireNameFor(tool.function.name) },
+  }))
+}
+
+/**
+ * The history as the provider must see it: every MCP call named the way it was advertised.
+ *
+ * The loop holds identities, because that is what a call means, while the provider holds wire names,
+ * because that is the vocabulary it was offered and the one it echoes back. Only the assistant turns that
+ * asked for tools need the translation — a tool result is addressed by call id, which is the same on both
+ * sides.
+ */
+function wireHistory(messages: readonly ChatMessage[], names: McpToolNames): ChatMessage[] {
+  return messages.map((message) =>
+    message.tool_calls
+      ? {
+          ...message,
+          tool_calls: message.tool_calls.map((call) => ({
+            ...call,
+            function: { ...call.function, name: names.wireNameFor(call.function.name) },
+          })),
+        }
+      : message
+  )
+}
+
+/**
+ * A frame as this turn works with it: every wire name read back to the identity it was sent for.
+ *
+ * The one place a reply crosses back into this app's own vocabulary, which is why it is a named step
+ * rather than a map written inline. A name this turn never assigned is left exactly as it arrived, so an
+ * unknown tool stays unknown rather than being guessed into some server's call.
+ */
+function resolveCalls(calls: readonly ToolCall[], names: McpToolNames): ToolCall[] {
+  return calls.map((call) => ({
+    ...call,
+    function: { ...call.function, name: names.identityFor(call.function.name) },
+  }))
 }
 
 /** Parse the arguments of a call for display, falling back to the raw string. */
@@ -630,7 +712,9 @@ async function presentCall(
   steps: number,
   continuations: number,
   workspaceRoot: string | null,
-  plan: readonly PlanStep[]
+  plan: readonly PlanStep[],
+  /** What the card must say when the call belongs to a running MCP server, and nothing otherwise. */
+  mcp: McpConsent | undefined
 ): Promise<AgentChunk> {
   const call = queue[0]
   const tool = call.function.name
@@ -641,6 +725,7 @@ async function presentCall(
     tool,
     args: argsForDisplay(call),
     diff: await previewWriteDiff(workspaceRoot, tool, call.function.arguments),
+    ...(mcp ? { mcp } : {}),
     calls: queue,
     messages: history.map((m) => ({ ...m })),
     plan: plan.map((step) => ({ ...step })),
@@ -768,6 +853,14 @@ interface LoopOptions {
   workspaceRoot: string | null
   messages: ChatMessage[]
   autoApprove: boolean
+  /**
+   * The bridge to the running MCP servers.
+   *
+   * Built from the workspace root when a caller does not supply one, which is every production caller:
+   * the loop is handed the folder the turn runs in, and the bridge is where that decides a project
+   * server's trust. A suite passes its own, so no case has to spawn a server to measure the bridge.
+   */
+  mcp?: McpToolBridge
   signal: AbortSignal
   /**
    * Workspace-relative files the user attached to this send, in the order they attached them.
@@ -844,6 +937,38 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // transcript stores. A resumed run starts from the plan the pause handed back, because it is the
   // same turn continuing — starting empty would let a turn finish mid-plan and say nothing about it.
   let plan: Plan = opts.plan ? opts.plan.map((step) => ({ ...step })) : []
+
+  /**
+   * The bridge to the running servers, and the names this turn is using for their tools.
+   *
+   * One name map for the whole turn, and it is what makes a call readable at all: what leaves here is a
+   * name a provider's charset accepts, and what comes back is that name. It starts empty and fills as
+   * the turn asks for names, because a server seen on the first round-trip and gone by the third still
+   * appears in the history the model is sent — and the call the model then makes for it must read back
+   * to the server that offered it, so the user is told that server is not running rather than that the
+   * tool never existed.
+   */
+  const mcp = opts.mcp ?? createMcpToolBridge({ workspaceRoot: opts.workspaceRoot })
+  const mcpNames = createMcpToolNames()
+
+  /**
+   * Run one call of a frame.
+   *
+   * An MCP call goes to the server that offers it and comes back as an outcome like any other. That is
+   * why it is routed here rather than in `executeTool`: that function is this app's own hands, and a
+   * server's tool is not one of them. On both paths a failure is a tool result the model can read and
+   * adapt to, because the turn must not end over a process this app does not own.
+   */
+  async function runCall(tool: string, argsJson: string): Promise<ToolOutcome> {
+    if (!isMcpToolName(tool)) return executeTool(tool, argsJson, opts.workspaceRoot, opts.signal, opts.spawnImpl)
+
+    const outcome = await mcp.call(tool, argsJson)
+    return {
+      ok: outcome.ok,
+      ...(outcome.code === undefined ? {} : { code: outcome.code }),
+      output: cap(outcome.output),
+    }
+  }
 
   // The project instructions, read fresh on every send rather than kept anywhere.
   //
@@ -948,10 +1073,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   async function* walkFrame(frame: ToolCall[], cursor: number): AsyncGenerator<AgentChunk, WalkEnd, void> {
     const calls: FrameCall[] = frame.map((call) => ({
       callId: call.id,
-      // Auto-approve answers every question in advance, so the gate has nothing to stop at. It is read
-      // here, once, where the flags are built: a walk that consulted the setting per call would be a
-      // second place for the same decision about the same run.
-      needsApproval: needsApproval(call.function.name) && !opts.autoApprove,
+      // Auto-approve answers this app's own questions in advance, so the gate has nothing to stop at
+      // for them. It is read here, once, where the flags are built: a walk that consulted the setting
+      // per call would be a second place for the same decision about the same run. An MCP call is asked
+      // about whatever the setting says — see `callNeedsApproval`.
+      needsApproval: callNeedsApproval(call.function.name, opts.autoApprove),
     }))
     const gate = nextGateIndex(calls, cursor)
     // Where the stretch with nothing to decide ends: the gate itself when there is one, and the end
@@ -963,7 +1089,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       const tool = call.function.name
       yield { type: 'tool_call_start', callId: call.id, tool, args: argsForDisplay(call) }
 
-      const outcome = await executeTool(tool, call.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
+      const outcome = await runCall(tool, call.function.arguments)
       if (opts.signal.aborted) return 'aborted'
 
       yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
@@ -989,7 +1115,14 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // it, so a resume continues the frame rather than a display layer's idea of it.
     const parked = frame[gate]
     yield { type: 'tool_call_start', callId: parked.id, tool: parked.function.name, args: argsForDisplay(parked) }
-    yield await presentCall(frame.slice(gate), history, steps, continuations, opts.workspaceRoot, plan)
+    // What the card says about the server behind this call, read here rather than inside `presentCall`:
+    // it is the one await in this walk that reaches past the app's own files, and keeping it beside the
+    // announcement makes the order visible — the call is named, then the server is asked what the user
+    // should be shown about it.
+    const parkedMcp = isMcpToolName(parked.function.name)
+      ? await mcp.consent(parked.function.name, parked.function.arguments)
+      : undefined
+    yield await presentCall(frame.slice(gate), history, steps, continuations, opts.workspaceRoot, plan, parkedMcp)
     return 'paused'
   }
 
@@ -1013,7 +1146,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
           output:
             'The user denied permission to run this tool. Do not retry it. Explain what you were trying to do and ask how they would like to proceed.',
         }
-      : await executeTool(tool, decided.function.arguments, opts.workspaceRoot, opts.signal, opts.spawnImpl)
+      : await runCall(tool, decided.function.arguments)
 
     // The result is yielded as well as recorded, so the card already on screen can be completed
     // rather than left looking like it is still running.
@@ -1082,8 +1215,8 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         providerId: opts.providerId,
         apiKey: opts.apiKey,
         model: opts.model,
-        messages: history,
-        tools: TOOL_DEFINITIONS,
+        messages: wireHistory(history, mcpNames),
+        tools: wireTools(toolsForRoundTrip(mcp), mcpNames),
         signal: opts.signal,
         fetchImpl: opts.fetchImpl,
         provider: opts.provider,
@@ -1152,7 +1285,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     //
     // A dropped connection keeps its frame as it arrived: `shouldAutoContinue` refuses that cause
     // outright, so that ending is the card whatever the frame holds.
-    const calls = cause === 'truncated' ? [] : finalizeCalls(partials)
+    const calls = cause === 'truncated' ? [] : resolveCalls(finalizeCalls(partials), mcpNames)
 
     // The assistant turn is recorded either way: an OpenAI-compatible provider expects the turn
     // that asked for tools to be present when its results are sent back.
