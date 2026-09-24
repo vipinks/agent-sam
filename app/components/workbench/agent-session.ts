@@ -626,7 +626,12 @@ export function applyAgentChunk(
       // carded from the pause itself. Without this the pane would hold a decision with nothing on
       // screen to decide on — the one state this whole path exists to make impossible — and it happens
       // for real whenever a frame reaches the renderer without its `tool_call_start`.
-      next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting', diff, ...(mcp ? { mcp } : {}) }))
+      next = updateStep(next, turnId, headId, (step) => ({
+        ...step,
+        status: 'awaiting',
+        diff,
+        ...(mcp ? { mcp } : {}),
+      }))
       if (!hasStep(next, turnId, headId)) {
         const step: ToolStep = {
           callId: headId,

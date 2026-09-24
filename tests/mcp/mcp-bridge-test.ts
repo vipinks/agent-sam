@@ -89,7 +89,11 @@ function askFrame(calls: AskedCall[]): string[] {
     // The arguments arrive as their own fragment, so a call is assembled rather than read whole.
     JSON.stringify({
       choices: [
-        { delta: { tool_calls: calls.map((call, index) => ({ index, function: { arguments: JSON.stringify(call.args) } })) } },
+        {
+          delta: {
+            tool_calls: calls.map((call, index) => ({ index, function: { arguments: JSON.stringify(call.args) } })),
+          },
+        },
       ],
     }),
     '[DONE]',
@@ -185,7 +189,9 @@ interface FakeServers {
   contexts: Record<string, McpServerContext>
 }
 
-function fakeServers(options: { tools?: McpRunningTool[]; contexts?: Record<string, McpServerContext> } = {}): FakeServers {
+function fakeServers(
+  options: { tools?: McpRunningTool[]; contexts?: Record<string, McpServerContext> } = {}
+): FakeServers {
   const servers: FakeServers = {
     tools: options.tools ?? [],
     calls: [],
@@ -386,7 +392,10 @@ function thePreviewIsRedactedThenCut() {
     // the boundary the truncation draws.
     `{"url":"https://example.com","token":"s3cret-token"}`
   )
-  assert.equal(truncateMcpPreview('{"token":"s3cret-token"}'.split('s3cret-token').join(MCP_REDACTED)), '{"token":"[REDACTED]"}')
+  assert.equal(
+    truncateMcpPreview('{"token":"s3cret-token"}'.split('s3cret-token').join(MCP_REDACTED)),
+    '{"token":"[REDACTED]"}'
+  )
   assert.equal(redacted.length <= MCP_CONSENT_PREVIEW_CHARS + 1, true)
   assert.equal(truncateMcpPreview('one\n two   three'), 'one two three', 'whitespace is collapsed to one line')
 
@@ -409,9 +418,7 @@ async function autoApproveDoesNotBypassAnMcpCall() {
   const servers = fakeServers({ tools: ALPHA })
   const provider = scriptedProvider([askFrame([{ id: 'c1', name: ALPHA_WIRE, args: { url: 'https://example.com' } }])])
 
-  const chunks = await collect(
-    runAgentLoop(loopOptions({ mcp: bridgeOver(servers), provider, autoApprove: true }))
-  )
+  const chunks = await collect(runAgentLoop(loopOptions({ mcp: bridgeOver(servers), provider, autoApprove: true })))
 
   const pause = chunks.find((chunk) => chunk.type === 'awaiting_approval')
   assert.ok(pause, `an MCP call must pause even with auto-approve on: ${JSON.stringify(chunks.map((c) => c.type))}`)
@@ -423,7 +430,11 @@ async function autoApproveDoesNotBypassAnMcpCall() {
     'and no result was recorded for it'
   )
   // A pause is not an ending, so it is not a turn the app may pick up again by itself either.
-  assert.equal(chunks.some((chunk) => chunk.type === 'auto_continue'), false, 'a pause never auto-continues')
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'auto_continue'),
+    false,
+    'a pause never auto-continues'
+  )
 
   results.push('auto-approve does not bypass an MCP call, and the pause never continues itself')
 }
@@ -470,9 +481,7 @@ async function aCallBehindAnUndecidedHeadDoesNotRun() {
       ]),
     ])
 
-    const chunks = await collect(
-      runAgentLoop(loopOptions({ mcp: bridgeOver(servers), provider, workspaceRoot: root }))
-    )
+    const chunks = await collect(runAgentLoop(loopOptions({ mcp: bridgeOver(servers), provider, workspaceRoot: root })))
 
     const pause = chunks.find((chunk) => chunk.type === 'awaiting_approval')
     assert.ok(pause, 'the frame pauses at its first gated call')
@@ -554,7 +563,11 @@ async function aDenialEndsTheTurn() {
   const result = denied.find((chunk) => chunk.type === 'tool_result')
   assert.equal(result?.ok, false)
   assert.equal(result?.code, 'DENIED')
-  assert.equal(denied.some((chunk) => chunk.type === 'turn_end'), true, 'the turn ends where it stood')
+  assert.equal(
+    denied.some((chunk) => chunk.type === 'turn_end'),
+    true,
+    'the turn ends where it stood'
+  )
   assert.equal(provider.log.length, 1, 'and the model is not asked again')
 
   results.push('a denial of an MCP call ends the turn without reaching the server')
@@ -595,7 +608,9 @@ async function failuresArriveAsResultsCarryingTheCode() {
   const askedAgain = await collect(runAgentLoop(loopOptions({ mcp: failingBridge, provider: failingProvider })))
   const failingFrame = (askedAgain.find((chunk) => chunk.type === 'awaiting_approval')?.calls ?? []) as PendingCall[]
   const failed = await collect(
-    runAgentLoop(loopOptions({ mcp: failingBridge, provider: failingProvider, pending: { calls: failingFrame, denied: false } }))
+    runAgentLoop(
+      loopOptions({ mcp: failingBridge, provider: failingProvider, pending: { calls: failingFrame, denied: false } })
+    )
   )
   const failedResult = failed.find((chunk) => chunk.type === 'tool_result')
   assert.equal(failedResult?.code, MCP_TOOL_ERROR)
@@ -618,14 +633,17 @@ async function thePauseCarriesWhatTheCardMustShow() {
   })
   const provider = scriptedProvider([
     askFrame([
-      { id: 'c1', name: ALPHA_WIRE, args: { url: 'https://example.com', token: 's3cret-token', body: 'y'.repeat(600) } },
+      {
+        id: 'c1',
+        name: ALPHA_WIRE,
+        args: { url: 'https://example.com', token: 's3cret-token', body: 'y'.repeat(600) },
+      },
     ]),
   ])
 
   const chunks = await collect(runAgentLoop(loopOptions({ mcp: bridgeOver(servers), provider })))
   const consent = chunks.find((chunk) => chunk.type === 'awaiting_approval')?.mcp as
-    | { serverId: string; toolName: string; scope: string | null; trust: string | null; argsPreview: string }
-    | undefined
+    { serverId: string; toolName: string; scope: string | null; trust: string | null; argsPreview: string } | undefined
 
   assert.ok(consent, 'an MCP pause carries the consent the card renders')
   assert.equal(consent?.serverId, 'alpha')
@@ -641,8 +659,7 @@ async function thePauseCarriesWhatTheCardMustShow() {
   const unreadableProvider = scriptedProvider([askFrame([{ id: 'c1', name: ALPHA_WIRE, args: { url: 'https://x' } }])])
   const bare = await collect(runAgentLoop(loopOptions({ mcp: bridgeOver(unreadable), provider: unreadableProvider })))
   const bareConsent = bare.find((chunk) => chunk.type === 'awaiting_approval')?.mcp as
-    | { scope: string | null; trust: string | null }
-    | undefined
+    { scope: string | null; trust: string | null } | undefined
   assert.equal(bareConsent?.scope, null)
   assert.equal(bareConsent?.trust, null)
   assert.ok(bareConsent, 'the question is still asked')
@@ -730,7 +747,11 @@ async function aPlanLeftUnfinishedDoesNotContinueAPause() {
     ['tool_call_start', 'tool_result', 'plan', 'tool_call_start', 'awaiting_approval'],
     `unexpected chunks: ${JSON.stringify(chunks.map((chunk) => chunk.type))}`
   )
-  assert.equal(chunks.some((chunk) => chunk.type === 'turn_end'), false, 'a pause is not an ending')
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'turn_end'),
+    false,
+    'a pause is not an ending'
+  )
   assert.equal(servers.calls.length, 0)
 
   results.push('an unfinished plan does not let a paused MCP turn continue itself')

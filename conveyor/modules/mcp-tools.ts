@@ -20,12 +20,7 @@
  */
 import { ConveyorError } from 'electron-conveyor/main'
 import { MCP_TOOL_ERROR, redactSecrets } from '../protocol/mcp'
-import {
-  mcpToolIdentity,
-  parseMcpToolIdentity,
-  truncateMcpPreview,
-  type McpConsent,
-} from '../protocol/mcp-tools'
+import { mcpToolIdentity, parseMcpToolIdentity, truncateMcpPreview, type McpConsent } from '../protocol/mcp-tools'
 import type { McpRunningTool } from './mcp-runtime'
 import { getMcpRuntime } from './mcp-runtime'
 import { readMcpServerCallContext, type McpServerCallContext } from './mcp'
@@ -120,13 +115,18 @@ function failure(code: string, message: string): McpCallOutcome {
 }
 
 /** The arguments of one call, read back from the model's own JSON. */
-function readArgs(argsJson: string): { ok: true; args: Record<string, unknown> } | { ok: false; outcome: McpCallOutcome } {
+function readArgs(
+  argsJson: string
+): { ok: true; args: Record<string, unknown> } | { ok: false; outcome: McpCallOutcome } {
   let parsed: unknown
   try {
     parsed = JSON.parse(argsJson || '{}')
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    return { ok: false, outcome: failure(MCP_TOOL_ERROR, `The arguments were not valid JSON (${reason}). Send a single JSON object.`) }
+    return {
+      ok: false,
+      outcome: failure(MCP_TOOL_ERROR, `The arguments were not valid JSON (${reason}). Send a single JSON object.`),
+    }
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
