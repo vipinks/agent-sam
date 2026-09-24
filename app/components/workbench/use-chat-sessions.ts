@@ -16,6 +16,7 @@ import { planFirstSend, planResumeFinish, planResumeStart } from './session-resu
 import { planRootStamp, planSelectRoot, planSessionSwitch, selectNotice } from './session-project'
 import { useWorkbenchStore } from './store'
 import type { PlanStep } from '@/conveyor/protocol/plan'
+import { applySkillToggle } from '@/conveyor/protocol/skills'
 
 /**
  * The coordination between the session list, the transcript on screen, and the file it is saved to.
@@ -174,6 +175,25 @@ export interface ChatSessions {
   autoApprove: boolean
   /** Turn it on or off for the session on screen, and write the choice down. */
   setAutoApprove: (value: boolean) => void
+  /**
+   * The skills the conversation on screen runs with, by id, in the order they were turned on.
+   *
+   * The record's own list when a conversation is open — the record is the source of truth, so a
+   * conversation reopened tomorrow opens with the skills it was working from — and the composer's own
+   * pending choice on the home screen, where there is no record yet to hold it. That pending choice is
+   * written onto the conversation the first message creates, which is what keeps a skill a property of
+   * the conversation rather than of the window: the next conversation starts from none.
+   */
+  activeSkillIds: string[]
+  /**
+   * Turn one skill on or off for the conversation in front of the user.
+   *
+   * A toggle rather than a setter, because the control is a list of switches and the number that
+   * decides the outcome — how many are already on — belongs in one place rather than in every caller.
+   * At the cap the choice is refused and both the record and the screen are left exactly as they were:
+   * a fourth skill cannot be half-on.
+   */
+  toggleSkill: (id: string) => void
   /**
    * Whether a turn is streaming in this window.
    *
@@ -442,6 +462,27 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const atHome = activeSessionId === null && openId === null
 
   /**
+   * The skills chosen before there was a conversation to choose them for.
+   *
+   * Held here, above the pane, for the same reason the composer's draft is: the workbench keys its
+   * resize groups on the window state, and a choice held in the pane would be dropped by a maximize.
+   * It is not a second copy of the session's own list — the record is still the source of truth once
+   * one exists — only the answer to "what did the user ask for while there was nowhere to write it".
+   */
+  const [pendingSkillIds, setPendingSkillIds] = useState<string[]>([])
+  const pendingSkillsRef = useRef<string[]>(pendingSkillIds)
+  pendingSkillsRef.current = pendingSkillIds
+
+  const sessionRecord = sessions.find((s) => s.id === activeSessionId)
+  const activeSkillIds = atHome ? pendingSkillIds : (sessionRecord?.activeSkillIds ?? [])
+  // Read by the toggle and by the send, both of which run outside a render: the list they must agree
+  // with is the one on screen, not the one from whenever the callback was created.
+  const activeSkillsRef = useRef<string[]>(activeSkillIds)
+  activeSkillsRef.current = activeSkillIds
+  const atHomeRef = useRef(atHome)
+  atHomeRef.current = atHome
+
+  /**
    * Write the consent setting onto the conversation.
    *
    * Saved the moment it changes rather than at the next turn boundary: the toggle is a deliberate act
@@ -474,6 +515,39 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const setActive = useConveyorActions(chatSessionsStore).setActive
   const touchSession = useConveyorActions(chatSessionsStore).touchSession
   const removeSession = useConveyorActions(chatSessionsStore).removeSession
+
+  /**
+   * Turn one skill on or off, for whichever of the two places is holding the choice.
+   *
+   * The refusal at the cap changes nothing at all — nothing is written, and nothing is turned off on
+   * the user's behalf to make room — which is reported by the picker as a disabled row rather than
+   * here. This is the backstop under that, not the ordinary path.
+   */
+  const toggleSkill = useCallback(
+    (id: string) => {
+      const current = activeSkillsRef.current
+      const result = applySkillToggle(current, id, !current.includes(id))
+      if (!result.ok) return
+
+      // Nothing chosen before a conversation exists is written down: there is no record to write it
+      // onto. It is carried into the record the first message creates, so a toggle on the home screen
+      // is a choice about the conversation that is about to start and not about the window.
+      if (atHomeRef.current) {
+        setPendingSkillIds(result.activeSkillIds)
+        return
+      }
+
+      const activeId = activeIdRef.current
+      // On screen but not yet named by the store — the round trip after a send created it. The only way
+      // to be in that moment is during the run that created it, which is exactly when the controls are
+      // disabled, so this is unreachable rather than a case with behaviour. Nothing is guessed at: the
+      // id the store names is the only one whose record this layer may write.
+      if (activeId === null) return
+
+      touchSession({ id: activeId, activeSkillIds: result.activeSkillIds })
+    },
+    [touchSession]
+  )
   // The one write a session-driven switch makes: main checks the folder is still there, and this puts
   // the answer where every panel reads it.
   const setRootPath = useConveyorStore(workspaceStore).setRootPath
@@ -506,7 +580,19 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     // which is the same absent field a conversation with no turns has, and the reason a brand-new row
     // is not silently pinned to the last folder anyone opened.
     const lastRoot = planRootStamp({ sessionLastRoot: undefined, windowRoot: rootPathRef.current })
-    addSession({ id, title: UNTITLED, providerId, model, ...(lastRoot === null ? {} : { lastRoot }) })
+    // The skills the user turned on while there was no conversation to hold them. Written onto the row
+    // rather than kept beside it: from here on the record is the only place the choice lives, which is
+    // what makes it the conversation's choice and not the window's. An empty pending list adds no key
+    // at all, so a conversation started without skills says nothing rather than saying "none".
+    const chosenSkills = pendingSkillsRef.current
+    addSession({
+      id,
+      title: UNTITLED,
+      providerId,
+      model,
+      ...(lastRoot === null ? {} : { lastRoot }),
+      ...(chosenSkills.length > 0 ? { activeSkillIds: [...chosenSkills] } : {}),
+    })
     setActive({ id })
     // The startup restore is decided here as much as by the effect that reads the store's active id: a
     // conversation created by this window is one this window is already showing, and the store naming
@@ -547,6 +633,11 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     setError(null)
     setNotice(null)
     setOpenId(null)
+    // The pending skill choice goes with the conversation that carried it, for the reason the approval
+    // chip is reset here: a choice that has not been made is what the next conversation should start
+    // from, and "none" is what that is. What the conversation the user just left was working from is
+    // still on its own record.
+    setPendingSkillIds([])
     setTranscript({ turns: [], interrupted: false })
   }, [saveNow, setActive, setTranscript])
 
@@ -799,6 +890,8 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     setComposer,
     autoApprove,
     setAutoApprove,
+    activeSkillIds,
+    toggleSkill,
     streaming,
     setStreaming,
     stampRoot,

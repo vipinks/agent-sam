@@ -21,6 +21,7 @@ import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
 import { MentionChipRow } from './mention-chip'
+import { SkillChipRow, SkillPicker } from './skill-picker'
 import { PlanChecklist } from './plan-checklist'
 import { TurnEndNotice } from './turn-end-notice'
 import { useChatSessionsContext } from './chat-sessions-context'
@@ -33,6 +34,7 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
+import type { SkillListing } from '@/conveyor/protocol/skills'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
   ABANDONED_PAUSE_CODE,
@@ -76,6 +78,27 @@ function lastAskMentions(turns: readonly AgentTurn[]): string[] {
   return ask?.role === 'user' ? [...(ask.mentionPaths ?? [])] : []
 }
 
+/**
+ * The active skills as chips, and the picker's own view of what it is offering.
+ *
+ * What the picker shows before main answers, and what it shows when main answers with nothing: one
+ * value, so there is no second empty case to forget. Held at module scope because it is a constant, not
+ * because it is shared — a render must not build a new listing to say "nothing yet".
+ */
+const NO_SKILLS: SkillListing = { project: [], user: [], errors: [] }
+
+/**
+ * The name to show for an active skill id.
+ *
+ * The listing is where a title comes from, and a session stores ids. An id with no row behind it is a
+ * skill that has been removed, renamed or shadowed since it was turned on — shown as the id it is, so
+ * the chip says which skill it means and the refusal at the next turn start is not a surprise.
+ */
+function activeSkillTitle(listing: SkillListing, id: string): string {
+  const skill = listing.project.find((entry) => entry.id === id) ?? listing.user.find((entry) => entry.id === id)
+  return skill?.title ?? id
+}
+
 /** Stream failures, in the user's terms, branched on the error code rather than the message text. */
 function streamErrorMessage(error: unknown, providerName: string): string {
   if (error instanceof ConveyorError) {
@@ -92,6 +115,20 @@ function streamErrorMessage(error: unknown, providerName: string): string {
         return `${providerName} refused the request.`
       case 'NO_WORKSPACE':
         return 'Open a folder first — the agent works inside your workspace.'
+      // A skill the turn was told to use and could not: named, because the user turned it on and the
+      // fix is theirs — the folder is gone, the file is unreadable, or it no longer parses. Nothing was
+      // sent, which is the point of failing here rather than guessing at what the skill said.
+      case 'SKILL_NOT_FOUND':
+        return 'A skill this conversation uses could not be found. Turn it off, or put its SKILL.md back.'
+      case 'SKILL_PARSE_INVALID':
+      case 'SKILL_MANIFEST_INVALID':
+        return 'A skill this conversation uses could not be read. Check its SKILL.md, or turn it off.'
+      case 'SKILL_TOO_LARGE':
+        return 'A skill this conversation uses is too large to send. Shorten its SKILL.md, or turn it off.'
+      case 'SKILL_IO_ERROR':
+        return 'A skill this conversation uses could not be opened. Check the file, or turn it off.'
+      case 'SKILL_LIMIT_EXCEEDED':
+        return 'A conversation can run at most 3 skills. Turn one off first.'
       default:
         return error.message
     }
@@ -348,6 +385,15 @@ export function ChatPanel() {
   // Clamped rather than reset by an effect: narrowing the query can leave the index past the end, and
   // deriving the active row keeps the render and the selection in step without a second render.
   const activePickerIndex = mentionMatches.length === 0 ? 0 : Math.min(pickerIndex, mentionMatches.length - 1)
+
+  // The skills the composer can offer, from the registered query: main scans the open folder's
+  // `.sam/skills` and the user's own skills folder and hands back what it found. A session stores ids,
+  // so the titles behind the chips are looked up from this answer rather than carried on the record.
+  //
+  const skillsQuery = conveyor.skills.list.useQuery()
+  const skillListing = skillsQuery.data ?? NO_SKILLS
+  const activeSkillIds = sessions.activeSkillIds
+  const skillChips = activeSkillIds.map((id) => ({ id, title: activeSkillTitle(skillListing, id) }))
 
   /** Replace the chip row, keeping the ref `send` reads in step with what is on screen. */
   const setChips = useCallback((next: string[]) => {
@@ -648,6 +694,13 @@ export function ChatPanel() {
           // Copied rather than handed over as it stands: the chips are read-only where they came from,
           // and the payload is the wire's own array.
           mentionPaths: mentionPaths.length > 0 ? [...mentionPaths] : undefined,
+          // Ids only, for the same reason the paths above are paths: main reads each `SKILL.md` at the
+          // turn start, so what the model is told is the file as it is now rather than what the
+          // renderer happened to load. Read through the ref rather than closed over, because a skill
+          // turned on since this callback was built belongs to the turn about to be sent — the toggle
+          // changes the next turn, and this is the next turn.
+          activeSkillIds:
+            sessionsRef.current.activeSkillIds.length > 0 ? [...sessionsRef.current.activeSkillIds] : undefined,
         }),
         assistantTurn.id,
         sessionId
@@ -1210,6 +1263,19 @@ export function ChatPanel() {
           */}
           <PopoverAnchor asChild>
             <div className="relative">
+              {/*
+                What this conversation is working from, above the sentence being written about it. Chips
+                rather than a line of prose because the point is that they can be taken off again, and
+                beside the mention chips because both are "what goes with this message".
+              */}
+              {skillChips.length > 0 && (
+                <SkillChipRow
+                  skills={skillChips}
+                  disabled={isStreaming || pending !== null}
+                  onRemove={sessions.toggleSkill}
+                  className="mb-2"
+                />
+              )}
               {mentionPaths.length > 0 && (
                 <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
               )}
@@ -1309,8 +1375,28 @@ export function ChatPanel() {
           with. Off is what it says until it is set: a choice nobody has made is not consent, and a
           conversation that has never been told otherwise asks.
         */}
-        {atHome && (
-          <div className="mt-2 flex items-center justify-end border-t border-border pt-2">
+        {/*
+          The skills control, in the composer's own footer beside the approval chip: both are choices
+          about the next message rather than settings for the window, and this is where the one of them
+          that is only asked before a conversation already lives.
+
+          The row is drawn whether or not the approval chip is, so the control does not move as a
+          conversation starts. What a conversation runs with is shown above, as chips.
+        */}
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+          <SkillPicker
+            project={skillListing.project}
+            user={skillListing.user}
+            errors={skillListing.errors}
+            activeSkillIds={activeSkillIds}
+            // A toggle changes the turn after the one in flight, so it is offered exactly when there
+            // is no turn to confuse it with: nothing to interrupt, and no question waiting on an
+            // answer. This is also the condition the session layer refuses a toggle under.
+            disabled={isStreaming || pending !== null}
+            loading={skillsQuery.isPending}
+            onToggle={sessions.toggleSkill}
+          />
+          {atHome && (
             <button
               type="button"
               aria-label="Approval mode"
@@ -1328,8 +1414,8 @@ export function ChatPanel() {
                 {autoApprove ? 'Auto-approve' : 'Manual'}
               </span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/*

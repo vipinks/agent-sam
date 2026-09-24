@@ -109,6 +109,9 @@ const MANIFEST: Record<string, Record<string, string>> = {
   // registered rather than as an unlisted member, which is what the client's Proxy does with an
   // unknown name.
   mentions: { listFilesFlat: 'query' },
+  // The skills picker's only read: the same shape as the mentions read above it, and listed for the
+  // same reason — the composer calls it on mount, so an unlisted member would be dispatched wrongly.
+  skills: { list: 'query' },
   // The repository view: the reads the changes panel makes, and the commands it offers. Listed by
   // kind, so the client dispatches each the way main registered it.
   git: {
