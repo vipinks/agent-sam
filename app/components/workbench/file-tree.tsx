@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronRight, FileText, Folder, FolderOpen, Loader2 } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError } from 'electron-conveyor/react'
+import { CODE_RESIDENT, doubleClickDocksViewer } from '@/conveyor/protocol/dock'
 import { cn } from '@/lib/utils'
 import { useWorkbenchStore } from './store'
 
@@ -126,18 +127,42 @@ function FileNode({ entry, depth }: { entry: FileTreeEntry; depth: number }) {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
   const setSelectedFile = useWorkbenchStore((s) => s.setSelectedFile)
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
+  const rightPanel = useWorkbenchStore((s) => s.rightPanel)
+  const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel)
   const isSelected = selectedFile === entry.path
+
+  /**
+   * Point the viewer at this file.
+   *
+   * Opening a file closes any diff the viewer was showing, so the pane has one answer to "what is it
+   * showing" rather than two competing ones.
+   */
+  const select = () => {
+    setSelectedChange(null)
+    setSelectedFile(entry.path)
+  }
+
+  /**
+   * The file's second gesture: show it beside the conversation as well as in the viewer.
+   *
+   * Selecting again is not redundant bookkeeping — it is what makes this gesture's own claim true
+   * rather than borrowed from the two clicks that preceded it. The dock is then asked for through the
+   * resident's own action, the one the right rail's Code button calls, and only while it is not
+   * already the resident in the slot: docking what is already docked is a click that changes nothing,
+   * and putting it away is the opposite of what was asked. Whether there is anything to dock is the
+   * protocol layer's rule, so this row and its test read one statement of it rather than two.
+   */
+  const openBeside = () => {
+    select()
+    if (doubleClickDocksViewer('file', rightPanel)) toggleRightPanel(CODE_RESIDENT)
+  }
 
   return (
     <button
       type="button"
       aria-current={isSelected ? 'true' : undefined}
-      onClick={() => {
-        // Opening a file closes any diff the viewer was showing, so the pane has one answer to "what
-        // is it showing" rather than two competing ones.
-        setSelectedChange(null)
-        setSelectedFile(entry.path)
-      }}
+      onClick={select}
+      onDoubleClick={openBeside}
       className={cn(
         'flex w-full items-center gap-1.5 py-1 pr-2 text-left text-[12.5px] transition-colors',
         indentClass(depth),

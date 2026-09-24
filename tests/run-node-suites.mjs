@@ -45,6 +45,7 @@ const SUITES = [
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
   { name: 'terminal session', src: 'ui/terminal-session-test.ts' },
   { name: 'workspace change invalidation', src: 'ui/workspace-changes-test.ts' },
+  { name: 'dock rules (explorer double-click)', src: 'ui/dock-rules-test.ts' },
   { name: 'chat sessions', src: 'sessions/chat-sessions-test.ts' },
   { name: 'session resume', src: 'sessions/session-resume-test.ts' },
   { name: 'session click + title flow', src: 'sessions/session-flow-test.ts' },
