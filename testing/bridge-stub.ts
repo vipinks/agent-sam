@@ -122,6 +122,10 @@ const MANIFEST: Record<string, Record<string, string>> = {
     addServer: 'command',
     removeServer: 'command',
     setEnabled: 'command',
+    // The per-server auto-approve flag's own write. Listed by kind like its siblings, because the
+    // client refuses an unlisted member rather than dispatching it — so a suite about that control
+    // cannot reach main without this line.
+    setAutoApprove: 'command',
     setTrust: 'command',
     setSecret: 'command',
     clearSecret: 'command',

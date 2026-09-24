@@ -137,6 +137,22 @@ function streamErrorMessage(error: unknown, providerName: string): string {
 }
 
 /**
+ * What the Auto-approve shield says about itself, wherever it is offered.
+ *
+ * One wording for both of the controls that carry the setting — the switch in the header and the chip at
+ * home — because they are one setting, and a user who read one of them should not have to doubt the
+ * other. The exception is appended in *both* positions rather than only while the switch is on: a call to
+ * a running MCP server is not covered by this control either way, and naming that only in the on state
+ * would let the off state read as though nothing could ever run without asking.
+ */
+export function autoApproveHelperText(on: boolean): string {
+  const base = on
+    ? 'Writes and commands run without asking. Reads are always allowed.'
+    : 'Each write and command waits for your approval.'
+  return `${base} Built-in tools only — MCP servers ask unless their own auto-approve is on.`
+}
+
+/**
  * The chat pane: a virtualized transcript, a composer, and the agent's consent gate.
  *
  * The agent run is a sequence of streamed chunks that each either extend the assistant's prose or
@@ -1040,11 +1056,7 @@ export function ChatPanel() {
                 </label>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                <span className="text-[11.5px]">
-                  {autoApprove
-                    ? 'Writes and commands run without asking. Reads are always allowed.'
-                    : 'Each write and command waits for your approval.'}
-                </span>
+                <span className="text-[11.5px]">{autoApproveHelperText(autoApprove)}</span>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -1401,11 +1413,7 @@ export function ChatPanel() {
               type="button"
               aria-label="Approval mode"
               aria-pressed={autoApprove}
-              title={
-                autoApprove
-                  ? 'Writes and commands run without asking. Reads are always allowed.'
-                  : 'Each write and command waits for your approval.'
-              }
+              title={autoApproveHelperText(autoApprove)}
               onClick={() => sessions.setAutoApprove(!autoApprove)}
               className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >

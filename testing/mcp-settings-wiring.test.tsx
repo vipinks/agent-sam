@@ -38,6 +38,8 @@ interface FakeServer {
   /** Project scope only; a user server has no trust record. */
   trust?: 'matched' | 'mismatched' | 'absent'
   secrets?: Array<{ name: string; set: boolean }>
+  /** Absent in the file is off, and the view normalizes it — see `listing`. */
+  autoApprove?: boolean
 }
 
 /** Main's half of the section: both files, the running registry, and the log buffers. */
@@ -78,6 +80,9 @@ function listing(server: FakeServer, scope: 'user' | 'project') {
     scope,
     trust: scope === 'project' ? (server.trust ?? 'absent') : null,
     secrets: server.secrets ?? [],
+    // Normalized the way main normalizes it: a row's toggle has two positions, and the key not being in
+    // the file is not one of them.
+    autoApprove: server.autoApprove ?? false,
   }
 }
 
@@ -116,6 +121,24 @@ function fakeMcp(stub: BridgeStub, initial: FakeState): { state: FakeState } {
     const server = file(scope).find((candidate) => candidate.id === serverId)
     if (server) server.enabled = enabled
     return { id: serverId, enabled }
+  })
+
+  // The flag's write, and the consequence the real one has: for a project server it changes the config
+  // the grant was made against, so the next read compares the hash and reports a mismatch. Modelled here
+  // rather than left to the test, because the *screen* is what this file is about — the rule is main's,
+  // and `tests/mcp/mcp-servers-test.ts` proves it against a real file.
+  stub.on('setAutoApprove', (input) => {
+    const { scope, serverId, value } = input as {
+      scope: 'user' | 'project'
+      serverId: string
+      value: boolean
+    }
+    const server = file(scope).find((candidate) => candidate.id === serverId)
+    if (server) {
+      server.autoApprove = value
+      if (scope === 'project' && server.trust === 'matched') server.trust = 'mismatched'
+    }
+    return { id: serverId, autoApprove: value }
   })
 
   stub.on('setTrust', (input) => {
@@ -535,6 +558,139 @@ describe('the trust gate', () => {
     expect(
       (within(row('filesystem')).getByRole('button', { name: 'Start filesystem' }) as HTMLButtonElement).disabled
     ).toBe(false)
+  })
+})
+
+describe('the auto-approve flag on a row', () => {
+  it('offers the auto-approve toggle with a badge while it is on, and its own tooltip throughout', async () => {
+    const { stub, state } = stubSettings({
+      project: [{ id: 'docs', command: 'node', enabled: true, trust: 'matched' }],
+    })
+    renderSettings()
+    await openMcp()
+
+    const control = () => within(row('docs')).getByRole('button', { name: 'Auto-approve tools for docs' })
+    // Off to begin with, and it says so in the pressed state rather than only in its colour.
+    expect(control().getAttribute('aria-pressed')).toBe('false')
+    expect(row('docs').querySelector('[data-slot="mcp-auto-approve-badge"]')).toBeNull()
+    // The tooltip names the two things a user needs before pressing it: every conversation, and the fact
+    // that this is not a start. Without the second, the control reads like the power switch beside it.
+    expect(control().getAttribute('title')).toMatch(/without asking in every conversation/)
+    expect(control().getAttribute('title')).toMatch(/does not start the server/)
+
+    await userEvent.click(control())
+
+    await waitFor(() => expect(mcpMethods(stub)).toContain('setAutoApprove'))
+    expect(inputOf(stub, 'setAutoApprove')).toEqual({
+      scope: 'project',
+      rootPath: ROOT,
+      serverId: 'docs',
+      value: true,
+    })
+    // The write is the flag and nothing else: no start, and no trust written here — the mismatch below is
+    // the existing hash rule doing its job, and one Re-trust is how the user answers it.
+    expect(mcpMethods(stub)).not.toContain('startServer')
+    expect(mcpMethods(stub)).not.toContain('setTrust')
+    expect(state.project[0].autoApprove).toBe(true)
+
+    // The badge is what a glance at this section says about the server, drawn while the flag is on and
+    // gone the moment it is not.
+    await waitFor(() => expect(row('docs').querySelector('[data-slot="mcp-auto-approve-badge"]')).not.toBeNull())
+    expect(control().getAttribute('aria-pressed')).toBe('true')
+
+    await userEvent.click(control())
+
+    await waitFor(() => expect(row('docs').querySelector('[data-slot="mcp-auto-approve-badge"]')).toBeNull())
+    expect(state.project[0].autoApprove).toBe(false)
+  })
+
+  it('shows the mismatched warning after flagging a trusted project row, and withholds Start until Re-trust', async () => {
+    const { stub } = stubSettings({ project: [{ id: 'docs', command: 'node', enabled: true, trust: 'matched' }] })
+    renderSettings()
+    await openMcp()
+
+    // The row starts in order, with Start offered.
+    expect((within(row('docs')).getByRole('button', { name: 'Start docs' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(within(row('docs')).getByText('Trusted')).toBeTruthy()
+
+    await userEvent.click(within(row('docs')).getByRole('button', { name: 'Auto-approve tools for docs' }))
+
+    // Flagging changes what the server may do, so the grant made for the old behaviour no longer covers
+    // it: the existing comparison reports a mismatch, and Start is withheld until the user re-trusts.
+    await waitFor(() => expect(within(row('docs')).getByText(/changed since it was trusted/i)).toBeTruthy())
+    expect((within(row('docs')).getByRole('button', { name: 'Start docs' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await userEvent.click(within(row('docs')).getByRole('button', { name: 'Re-trust' }))
+
+    await waitFor(() =>
+      expect((within(row('docs')).getByRole('button', { name: 'Start docs' }) as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    )
+    // The confirmation is the line that has to say what was granted, and a grant that now covers calls
+    // nobody is asked about is a stronger one than either half alone — so it names the flag in words
+    // rather than leaving the badge to carry that meaning on its own.
+    expect(within(row('docs')).getByText(/its tools run without asking/i)).toBeTruthy()
+    await waitFor(() => expect(mcpMethods(stub)).toContain('setTrust'))
+  })
+
+  it('leaves a flagged user row out of the trust gate, which governs the project scope only', async () => {
+    stubSettings({ user: [{ id: 'filesystem', command: 'npx', enabled: true, autoApprove: true }] })
+    renderSettings()
+    await openMcp()
+
+    expect(row('filesystem').querySelector('[data-slot="mcp-auto-approve-badge"]')).not.toBeNull()
+    expect(
+      within(row('filesystem'))
+        .getByRole('button', { name: 'Auto-approve tools for filesystem' })
+        .getAttribute('aria-pressed')
+    ).toBe('true')
+    expect(
+      (within(row('filesystem')).getByRole('button', { name: 'Start filesystem' }) as HTMLButtonElement).disabled
+    ).toBe(false)
+    expect(within(row('filesystem')).queryByText(/trusted/i)).toBeNull()
+  })
+})
+
+describe('the add dialog and the flag', () => {
+  it('defaults the checkbox off and sends the flag only when it is ticked', async () => {
+    const { stub } = stubSettings()
+    renderSettings()
+    await openMcp()
+
+    await openAdd()
+    const box = () => screen.getByRole('checkbox', { name: /Auto-approve tools/ })
+    expect(box().getAttribute('data-state')).toBe('unchecked')
+
+    await type('Server id', 'quiet')
+    await type('Command', 'node')
+    await press('Save server')
+
+    await waitFor(() => expect(mcpMethods(stub)).toContain('addServer'))
+    // Absent rather than `false`: a server added without the tick is written exactly as one added before
+    // the flag existed, so nothing downstream has to tell "turned off" apart from "nobody has said".
+    expect(inputOf(stub, 'addServer')).toMatchObject({ server: { id: 'quiet', command: 'node', enabled: false } })
+    expect((inputOf(stub, 'addServer').server as Record<string, unknown>).autoApprove).toBeUndefined()
+
+    // And a fresh dialog is off again: the tick decides whether a server runs unattended, so it is never
+    // carried over from a draft that was abandoned.
+    await openAdd()
+    expect(
+      (screen.getByRole('checkbox', { name: /Auto-approve tools/ }) as HTMLElement).getAttribute('data-state')
+    ).toBe('unchecked')
+    await press('Cancel')
+
+    await openAdd()
+    await type('Server id', 'loud')
+    await type('Command', 'node')
+    await userEvent.click(screen.getByRole('checkbox', { name: /Auto-approve tools/ }))
+    await press('Save server')
+
+    await waitFor(() => expect(mcpMethods(stub).filter((method) => method === 'addServer')).toHaveLength(2))
+    const adds = stub.calls
+      .filter((call) => call.method === 'addServer')
+      .map((call) => call.args[0] as Record<string, unknown>)
+    expect((adds[1].server as Record<string, unknown>).autoApprove).toBe(true)
   })
 })
 

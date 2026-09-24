@@ -47,6 +47,17 @@ const toolStepSchema = z.object({
   status: z.enum(['running', 'awaiting', 'queued', 'interrupted', 'denied', 'ok', 'failed']),
   output: z.string().optional(),
   code: z.string().optional(),
+  /**
+   * The name of the flag that let this call run without a pause, when one did.
+   *
+   * Optional and additive, and it did *not* bump the version: a step saved before the flag existed has
+   * no key, a step whose call was asked about has no key, and both read as the call that was put to the
+   * user — which is what they were. A file that carries the key and is read by a build that predates it
+   * loses the key rather than the step, since an unknown key is stripped on the way in. The step is the
+   * wrong place to leave it out and the wrong place to spell a default: "nothing was asked" is the
+   * absence, and a written `false` would be a second way to say it.
+   */
+  autoApproved: z.string().optional(),
 })
 
 const turnSchema = z.object({

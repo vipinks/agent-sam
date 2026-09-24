@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { KeyRound, Loader2, Play, Plus, RefreshCw, ScrollText, Square, Trash2 } from 'lucide-react'
+import { KeyRound, Loader2, Play, Plus, RefreshCw, ScrollText, Square, Trash2, Zap } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -8,6 +8,7 @@ import { canStartServer, trustPresentation } from '@/conveyor/protocol/mcp-setti
 import { isSafeMcpSecretKey, isSafeMcpServerId } from '@/conveyor/protocol/mcp-ids'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Checkbox } from '../ui/checkbox'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Switch } from '../ui/switch'
@@ -206,6 +207,7 @@ function ServerRow({
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const setEnabled = conveyor.mcp.setEnabled.useMutation()
+  const setAutoApprove = conveyor.mcp.setAutoApprove.useMutation()
   const setTrust = conveyor.mcp.setTrust.useMutation()
   const start = conveyor.mcp.startServer.useMutation()
   const stop = conveyor.mcp.stopServer.useMutation()
@@ -227,6 +229,20 @@ function ServerRow({
 
   const onToggle = (next: boolean) => {
     void run(() => setEnabled.mutateAsync({ scope: server.scope, rootPath, serverId: server.id, enabled: next }))
+  }
+
+  /**
+   * Flag this server's tools as running without asking, or take the flag back.
+   *
+   * One field, one call, one refresh — the same shape as the switch above it. What it does *not* do is
+   * start anything: the flag says how a call would be treated, not that there is anything to call.
+   *
+   * For a project server the answer comes back with the grant no longer matching, because the flag is
+   * part of what trust covers, and the row says so and withholds Start until the user re-trusts. Nothing
+   * here invents that: `startAllowed` reads the state main just reported.
+   */
+  const onToggleAutoApprove = (next: boolean) => {
+    void run(() => setAutoApprove.mutateAsync({ scope: server.scope, rootPath, serverId: server.id, value: next }))
   }
 
   const onStart = () => run(() => start.mutateAsync({ scope: server.scope, rootPath, serverId: server.id }))
@@ -269,6 +285,15 @@ function ServerRow({
         <Badge variant="outline" className="shrink-0">
           {server.scope === 'user' ? 'User' : 'Project'}
         </Badge>
+        {/* Beside the id rather than in the action cluster, and drawn while the flag is on: it is a fact
+            about the server that stays true wherever else the user is looking on the row, and it is what
+            a glance at this section — or a screenshot of it — says about whose tools run without asking. */}
+        {server.autoApprove && (
+          <Badge data-slot="mcp-auto-approve-badge" variant="secondary" className="shrink-0 gap-1">
+            <Zap aria-hidden="true" className="size-3" />
+            Auto-approve tools
+          </Badge>
+        )}
         <code className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground" title={commandSummary(server)}>
           {commandSummary(server)}
         </code>
@@ -290,6 +315,27 @@ function ServerRow({
             disabled={setEnabled.isPending}
             onCheckedChange={onToggle}
           />
+
+          {/* Its own control, not a second meaning for the switch beside it: one decides whether the
+              server may run, the other whether its calls are put to the user, and a row that merged them
+              would make flagging a server look like starting one. The tooltip says both things a user
+              needs before pressing it — every conversation, and no, it does not start anything. */}
+          <Button
+            data-slot="mcp-auto-approve"
+            size="icon-sm"
+            variant={server.autoApprove ? 'secondary' : 'ghost'}
+            aria-label={`Auto-approve tools for ${server.id}`}
+            aria-pressed={server.autoApprove}
+            title={
+              server.autoApprove
+                ? `Auto-approve is on for ${server.id}: its tools run without asking in every conversation. This does not start the server.`
+                : `Let ${server.id}'s tools run without asking in every conversation. This does not start the server.`
+            }
+            disabled={setAutoApprove.isPending}
+            onClick={() => void onToggleAutoApprove(!server.autoApprove)}
+          >
+            {setAutoApprove.isPending ? <Loader2 className="animate-spin" /> : <Zap />}
+          </Button>
 
           <Button
             data-slot="mcp-start"
@@ -341,7 +387,13 @@ function ServerRow({
       {/* Trust governs the project scope only, so the line is drawn only where it means something. */}
       {trust && (
         <div data-slot="mcp-trust" data-trust={server.trust ?? 'absent'} className="mt-2 flex items-center gap-2">
-          <span className="text-[12px] text-muted-foreground">{trust.label}</span>
+          {/* The one line that confirms what was granted, so it is the line that has to name the flag in
+              words when it is on: a project server whose grant is current *and* whose tools run without
+              asking is a stronger grant than either half alone, and the badge says the flag without
+              saying that this folder has agreed to it. */}
+          <span className="text-[12px] text-muted-foreground">
+            {server.autoApprove ? `${trust.label} · its tools run without asking` : trust.label}
+          </span>
           <Button
             data-slot="mcp-trust-action"
             size="sm"
@@ -422,6 +474,13 @@ function AddServerDialog({
   const [cwd, setCwd] = useState('')
   const [envRows, setEnvRows] = useState<DraftRow[]>([])
   const [secretRows, setSecretRows] = useState<DraftRow[]>([])
+  /**
+   * Whether the server being added is flagged from the moment it exists, off in every new dialog.
+   *
+   * Reset on close like every other field: this one decides whether the server's calls will be put to
+   * the user, so it is never carried over from a draft that was abandoned.
+   */
+  const [autoApprove, setAutoApprove] = useState(false)
   const [error, setError] = useState<{ field: 'id' | 'command' | 'secrets' | 'form'; message: string } | null>(null)
 
   const addServer = conveyor.mcp.addServer.useMutation()
@@ -437,6 +496,7 @@ function AddServerDialog({
     setSecretRows([])
     setError(null)
     setScope('user')
+    setAutoApprove(false)
   }
 
   const onSave = async () => {
@@ -483,6 +543,10 @@ function AddServerDialog({
           cwd: cwd.trim() === '' ? null : cwd.trim(),
           env,
           enabled: false,
+          // Sent only when it was ticked. An absent flag means off, so a server added here without it is
+          // written exactly as one added before the flag existed — and nothing downstream has to tell
+          // "the user turned it off" apart from "nobody has said".
+          ...(autoApprove ? { autoApprove: true } : {}),
         },
       })
     } catch (err) {
@@ -620,6 +684,23 @@ function AddServerDialog({
                 onChange={(event) => setCwd(event.target.value)}
                 className="h-8 font-mono text-[12px]"
               />
+            </div>
+
+            {/* Off by default, and worded as what it does rather than what it is called: this is the
+                one field in the dialog that decides whether the server's calls are put to the user, and a
+                tick made by accident is the whole of a server running unattended. It does not start the
+                server — nothing in this dialog does, and the row's Start is what does. */}
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="mcp-add-auto-approve"
+                data-slot="mcp-add-auto-approve"
+                className="mt-0.5"
+                checked={autoApprove}
+                onCheckedChange={(value) => setAutoApprove(value === true)}
+              />
+              <Label htmlFor="mcp-add-auto-approve" className="text-[12.5px] font-normal">
+                Auto-approve tools — its calls run without asking, in every conversation
+              </Label>
             </div>
 
             <KeyValueRows

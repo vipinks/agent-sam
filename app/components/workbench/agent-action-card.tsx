@@ -10,6 +10,7 @@ import {
   ShieldQuestion,
   SquareTerminal,
   XCircle,
+  Zap,
 } from 'lucide-react'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { cn } from '@/lib/utils'
@@ -82,6 +83,20 @@ export function AgentActionCard({
 
       {expanded && (
         <div className="border-t border-border/70 px-2.5 py-2">
+          {/* Why nobody was asked about this call, on the calls nobody was asked about. A flagged
+              server's calls run without a pause, so the card names the flag that let this one through
+              instead of leaving a server call with no Approve button behind it and no explanation.
+              Absent on every call that *was* put to the user, and then nothing is drawn here at all. */}
+          {step.autoApproved && (
+            <p
+              data-slot="mcp-auto-approved"
+              className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground"
+            >
+              <Zap className="size-3.5 shrink-0 text-brand" />
+              Ran without asking — the {step.autoApproved} flag is on for this server.
+            </p>
+          )}
+
           {/* Arguments first: for a write, what is being changed matters more than that it changed.
               For a call to a running server the same room is spent on the consent block, which carries
               the same information with that server's own secrets taken out and cut to a length a card

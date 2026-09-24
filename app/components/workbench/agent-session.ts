@@ -65,6 +65,15 @@ export interface ToolStep {
    * more. The transcript drops it on the way out, exactly as it drops a `diff`.
    */
   mcp?: McpConsent
+  /**
+   * The name of the flag that let this call run without a pause, when one did.
+   *
+   * Unlike `mcp`, this one *is* written down: it says nothing about a decision still waiting to be
+   * made — the call these marks have already run — and a conversation reopened tomorrow should still
+   * show which of its calls nobody was asked about. Absent on every call that was put to the user, which
+   * is where a card draws nothing.
+   */
+  autoApproved?: string
 }
 
 /** A transcript turn. Assistant turns carry both their prose and any tool steps interleaved after it. */
@@ -552,6 +561,10 @@ export function applyAgentChunk(
       const callId = String(c.callId)
       const tool = String(c.tool)
       const args = (c.args && typeof c.args === 'object' ? c.args : {}) as Record<string, unknown>
+      // Read through `typeof`: this arrives over IPC, and a marker this reducer cannot read is no marker
+      // — the card draws nothing rather than a line naming a flag nobody can be shown. Absent is the
+      // ordinary case, and it is what every call that was put to the user carries.
+      const autoApproved = typeof c.autoApproved === 'string' ? c.autoApproved : undefined
       // Upsert, not append. A resumed run announces each call as its walk reaches it, and the calls
       // that walk reaches include the ones the pause was holding — which already have a card, waiting
       // its turn. Appending would put the same call in the transcript twice and split its outcome
@@ -559,7 +572,13 @@ export function applyAgentChunk(
       return {
         turns: replaceTurn(turns, turnId, (turn) => ({
           ...turn,
-          steps: upsertStep(turn.steps, { callId, tool, args, status: 'running' }),
+          steps: upsertStep(turn.steps, {
+            callId,
+            tool,
+            args,
+            status: 'running',
+            ...(autoApproved ? { autoApproved } : {}),
+          }),
         })),
         effect: {},
       }
