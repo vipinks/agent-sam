@@ -198,6 +198,18 @@ const PLAN = [
   { id: 'edit', text: 'Change the precedence table', status: 'pending' as const },
 ]
 
+/** A tool a running MCP server offers, under the identity this app gives it. */
+const MCP_TOOL = 'mcp:playwright:browser_navigate'
+
+/** What main hands over with that pause: the server, its standing, and a preview with its secret out. */
+const MCP_CONSENT = {
+  serverId: 'playwright',
+  toolName: 'browser_navigate',
+  scope: 'project',
+  trust: 'matched',
+  argsPreview: '{"url": "https://example.com", "token": "[REDACTED]"}',
+}
+
 /**
  * A pause as main sends one.
  *
@@ -267,6 +279,37 @@ beforeEach(() => {
   queryClient.clear()
 })
 
+/**
+ * The same pause, for a tool a running MCP server offers.
+ *
+ * A second builder rather than a parameter, because the difference is the whole point: this pause carries
+ * the consent block, and everything this file asserts about the ordinary one has to keep holding for it.
+ */
+async function pendingMcpApproval(stub: BridgeStub): Promise<string> {
+  const channel = await startRun(stub)
+  chunk(stub, channel, { type: 'plan', plan: PLAN })
+  chunk(stub, channel, {
+    type: 'tool_call_start',
+    callId: 'c1',
+    tool: MCP_TOOL,
+    args: { url: 'https://example.com', token: 's3cret-token' },
+  })
+  chunk(
+    stub,
+    channel,
+    pause({
+      callId: 'c1',
+      tool: MCP_TOOL,
+      args: { url: 'https://example.com', token: 's3cret-token' },
+      calls: [call('c1', MCP_TOOL, { url: 'https://example.com', token: 's3cret-token' })],
+      mcp: MCP_CONSENT,
+    })
+  )
+
+  expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy()
+  return channel
+}
+
 describe('a pending decision across a window-state swap', () => {
   it('stays decidable when the window is maximized', async () => {
     const stub = stubWorkbench()
@@ -329,6 +372,33 @@ describe('a pending decision across a window-state swap', () => {
     const echoed = resume.messages as Array<{ role: string; content: string }>
     expect(echoed.filter((message) => message.role === 'system').length).toBe(1)
     expect(echoed.at(-1)?.content).toBe('refactor the parser')
+  })
+
+  it('keeps an MCP consent card decidable, with the server it names still on it', async () => {
+    const stub = stubWorkbench()
+    const { container } = renderWorkbench()
+
+    await pendingMcpApproval(stub)
+    // Two swaps, the same as the pause above: the consent block is new state on the step, and state on
+    // a step is exactly what a remount is capable of losing.
+    await swapWindowState(container, stub, true)
+    await swapWindowState(container, stub, false)
+
+    expect(screen.getByText('playwright')).toBeTruthy()
+    expect(screen.getByText('project scope')).toBeTruthy()
+    expect(screen.getByText('trusted')).toBeTruthy()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    await waitFor(() => expect(starts(stub).length).toBe(2))
+    const resume = starts(stub)[1]
+    expect(resume.member.startsWith('agent.resume#')).toBe(true)
+    expect(resume.input.decision).toBe('approved')
+    // The call goes back exactly as the pause handed it over, Sam identity and all: the renderer is not
+    // the side that knows how a name is spelled on the wire.
+    const echoed = resume.input.calls as Array<{ id: string; function: { name: string } }>
+    expect(echoed.map((entry) => entry.id)).toEqual(['c1'])
+    expect(echoed[0].function.name).toBe(MCP_TOOL)
   })
 
   it('ends the turn on a denial after a swap, and asks the model nothing', async () => {

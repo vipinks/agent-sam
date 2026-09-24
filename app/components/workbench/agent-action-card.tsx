@@ -11,6 +11,7 @@ import {
   SquareTerminal,
   XCircle,
 } from 'lucide-react'
+import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { DiffView } from './diff-view'
@@ -81,10 +82,18 @@ export function AgentActionCard({
 
       {expanded && (
         <div className="border-t border-border/70 px-2.5 py-2">
-          {/* Arguments first: for a write, what is being changed matters more than that it changed. */}
-          <pre className="max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-            {formatArgs(step)}
-          </pre>
+          {/* Arguments first: for a write, what is being changed matters more than that it changed.
+              For a call to a running server the same room is spent on the consent block, which carries
+              the same information with that server's own secrets taken out and cut to a length a card
+              can hold — printing the raw arguments as well would put the secrets back on screen next to
+              their redaction, which is the one thing the preview exists to prevent. */}
+          {step.mcp ? (
+            <McpConsentBlock consent={step.mcp} />
+          ) : (
+            <pre className="max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+              {formatArgs(step)}
+            </pre>
+          )}
 
           {step.diff && <DiffView diff={step.diff} />}
 
@@ -134,6 +143,58 @@ export function AgentActionCard({
   )
 }
 
+/**
+ * Which server is asking, and what it wants to run.
+ *
+ * The one card that describes a process the user cannot see, so it says all four things a decision needs:
+ * the server's id, whether it belongs to the whole app or to this folder, what the config says about its
+ * trust, and the call's arguments as far as they can be shown — secrets already removed in main, where
+ * the values are known, and one line long, because the question is the call and not the JSON behind it.
+ */
+function McpConsentBlock({ consent }: { consent: McpConsent }) {
+  return (
+    <div className="rounded bg-background/60 p-2">
+      <div className="flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+        <span className="text-muted-foreground">MCP server</span>
+        <span className="font-medium">{consent.serverId}</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-muted-foreground">{scopeLabel(consent)}</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-muted-foreground">{trustLabel(consent)}</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+        <span className="text-muted-foreground">Tool</span>
+        <span className="font-mono">{consent.toolName}</span>
+      </div>
+      <pre className="mt-1 max-h-24 overflow-auto rounded bg-background/60 p-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+        {consent.argsPreview || 'No arguments.'}
+      </pre>
+    </div>
+  )
+}
+
+/** Where the server is configured: the whole app, or the folder this turn is running in. */
+function scopeLabel(consent: McpConsent): string {
+  if (consent.scope === 'project') return 'project scope'
+  if (consent.scope === 'user') return 'user scope'
+  return 'scope not recorded'
+}
+
+/**
+ * What the config says about the server, in the words the config layer itself uses.
+ *
+ * A missing state reads differently for the two scopes, because it means different things: trust governs
+ * the project scope alone, so a user-scope server is one the question does not apply to, while a server
+ * whose config can no longer be read is one nothing at all can be said about. Those must not read the
+ * same, since one of them is reassurance and the other is a reason to look.
+ */
+function trustLabel(consent: McpConsent): string {
+  if (consent.trust === 'matched') return 'trusted'
+  if (consent.trust === 'mismatched') return 'changed since it was trusted'
+  if (consent.trust === 'absent') return 'never trusted'
+  return consent.scope === 'user' ? 'trust not required' : 'trust unknown'
+}
+
 function ToolIcon({ tool }: { tool: string }) {
   const className = 'size-3.5 shrink-0 text-muted-foreground'
   switch (tool) {
@@ -169,6 +230,10 @@ function StatusMark({ status }: { status: ToolStep['status'] }) {
 
 /** The action in the user's words, since "run_command" means nothing to someone reading a chat. */
 function describe(step: ToolStep): string {
+  // A running server's tool is named by what it does and where it runs, because "which server" is half
+  // of what the user is being asked to allow: the same tool name on another server is another decision.
+  if (step.mcp) return `${step.mcp.toolName} on ${step.mcp.serverId}`
+
   const path = typeof step.args.path === 'string' ? step.args.path : ''
   const command = typeof step.args.command === 'string' ? step.args.command : ''
   switch (step.tool) {

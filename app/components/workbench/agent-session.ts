@@ -1,5 +1,6 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
+import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 import {
   AUTO_CONTINUE_MAX,
@@ -55,6 +56,15 @@ export interface ToolStep {
    * instead of only which file it touches.
    */
   diff?: FileDiff
+  /**
+   * Which MCP server is asking, and what the card must say to be answerable.
+   *
+   * It belongs to the pause rather than to the call, and it is deliberately not written down: a
+   * conversation reopened tomorrow holds calls that will never be decided, and a card that still named a
+   * server and previewed arguments for one of those would be showing a question nobody can answer any
+   * more. The transcript drops it on the way out, exactly as it drops a `diff`.
+   */
+  mcp?: McpConsent
 }
 
 /** A transcript turn. Assistant turns carry both their prose and any tool steps interleaved after it. */
@@ -349,6 +359,37 @@ function isFileDiff(value: unknown): value is FileDiff {
 }
 
 /**
+ * The MCP consent a pause carries, read through the same suspicion as everything else that crosses IPC.
+ *
+ * A block missing the two facts the card is *for* — which server, which tool — is dropped rather than
+ * half-rendered: the user is being asked to trust a process they cannot see, and a card naming the wrong
+ * server, or none, would be worse than a card that showed only the call and said nothing about where it
+ * would run. A scope or trust state this build cannot name is read as unknown, because those two are
+ * labels on a decision, and a label is allowed to be missing where the decision is not.
+ */
+function readMcpConsent(value: unknown): McpConsent | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Record<string, unknown>
+  const serverId = typeof candidate.serverId === 'string' ? candidate.serverId : ''
+  const toolName = typeof candidate.toolName === 'string' ? candidate.toolName : ''
+  if (!serverId || !toolName) return undefined
+
+  const scope = candidate.scope === 'user' || candidate.scope === 'project' ? candidate.scope : null
+  const trust =
+    candidate.trust === 'matched' || candidate.trust === 'mismatched' || candidate.trust === 'absent'
+      ? candidate.trust
+      : null
+
+  return {
+    serverId,
+    toolName,
+    scope,
+    trust,
+    argsPreview: typeof candidate.argsPreview === 'string' ? candidate.argsPreview : '',
+  }
+}
+
+/**
  * Whether a turn already carries a card for one call.
  *
  * Asked before a pause materialises its own card, so a call the fragments did announce keeps the step
@@ -568,6 +609,7 @@ export function applyAgentChunk(
       const messages = Array.isArray(c.messages) ? (c.messages as ChatMessage[]) : []
       const steps = typeof c.steps === 'number' ? c.steps : 0
       const diff = isFileDiff(c.diff) ? c.diff : undefined
+      const mcp = readMcpConsent(c.mcp)
       // The plan the turn paused with, read through the same rule the plan chunk uses: this crosses
       // IPC, and a resumed run is handed it back as the plan it continues from.
       const plan = Array.isArray(c.plan) ? (c.plan as PlanStep[]) : []
@@ -584,7 +626,7 @@ export function applyAgentChunk(
       // carded from the pause itself. Without this the pane would hold a decision with nothing on
       // screen to decide on — the one state this whole path exists to make impossible — and it happens
       // for real whenever a frame reaches the renderer without its `tool_call_start`.
-      next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting', diff }))
+      next = updateStep(next, turnId, headId, (step) => ({ ...step, status: 'awaiting', diff, ...(mcp ? { mcp } : {}) }))
       if (!hasStep(next, turnId, headId)) {
         const step: ToolStep = {
           callId: headId,
@@ -592,6 +634,7 @@ export function applyAgentChunk(
           args: callArgs(calls[0]),
           status: 'awaiting',
           ...(diff ? { diff } : {}),
+          ...(mcp ? { mcp } : {}),
         }
         next = replaceTurn(next, turnId, (turn) => ({ ...turn, steps: [...turn.steps, step] }))
       }
