@@ -47,6 +47,15 @@ import { useWorkbenchStore } from './store'
  * The secondary panel follows the rail: the explorer keeps the file tree, git keeps the working tree's
  * state, and the chat shows the conversation list the panel header has always promised.
  *
+ * The right rail stands inside the main column rather than beside the outer group, and that is a width
+ * decision rather than a styling one. A share is a share of the group's box, so a fixed column in the
+ * row beside the group is paid for by every panel in that group — the drawer first among them, which
+ * lost its share of the rail's sixty-four pixels, 34 of them windowed and 20 maximized, and with them
+ * the slack its own header had. The rail is the main area's edge strip: its residents dock into that
+ * column's inner group, so its pixels come out of that column's budget, which is where they came from
+ * before this phase. The row outside the outer group is the left icon rail and nothing else, and the
+ * drawer's saved share buys what it bought then.
+ *
  * The right rail is the outer edge's other end, and it is what decides whether the inner group has a
  * second column at all. At launch it has none: the inner group holds the conversation alone, and a
  * resident is docked by clicking its icon — Code for the open file's source and diffs, Preview for the
@@ -181,8 +190,13 @@ function WorkbenchLayout() {
       <IconRail />
 
       {activeActivity === 'settings' ? (
-        <div className="min-w-0 flex-1">
-          <SettingsView />
+        // The rail keeps the right edge here too: it is the main area's edge strip, and this branch is
+        // the main area shown whole, so the row it shares is the one the group would otherwise be in.
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="min-w-0 flex-1">
+            <SettingsView />
+          </div>
+          <RightRail />
         </div>
       ) : (
         <ResizablePanelGroup
@@ -218,6 +232,11 @@ function WorkbenchLayout() {
             // falls back to when the group's own layout names two ids.
             defaultSize={drawerCollapsed ? percentSize(100) : percentSize(sizes.outer.main)}
             minSize={420}
+            // The rail shares this column rather than the outer group, so its pixels are the main
+            // column's to pay: the class lands on the panel's own content box, which is what makes the
+            // group and the rail one row and takes the rail's sixty-four pixels off the group's inner
+            // share instead of off the outer group's box — and therefore off the drawer's share of it.
+            className="flex min-h-0"
           >
             <ResizablePanelGroup
               id="workbench-main"
@@ -296,11 +315,11 @@ function WorkbenchLayout() {
                 </ResizablePanel>
               )}
             </ResizablePanelGroup>
+
+            <RightRail />
           </ResizablePanel>
         </ResizablePanelGroup>
       )}
-
-      <RightRail />
     </div>
   )
 }

@@ -189,9 +189,19 @@ export function SessionListPanel({
           placeholder="Search"
           aria-label="Search conversations"
           type="search"
-          className="h-6 w-28 px-1.5 text-[11.5px] md:text-[11.5px]"
+          // The field gives up its width first, and stops at three rem: it is the only child of a
+          // drawer header that can be short without hiding anything, so it is what a narrow drawer costs
+          // before the title loses a character to its ellipsis.
+          className="h-6 w-28 min-w-12 px-1.5 text-[11.5px] md:text-[11.5px]"
         />
-        <Button variant="ghost" size="icon-xs" aria-label="New chat" title="New chat" onClick={onCreate}>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="New chat"
+          title="New chat"
+          className="shrink-0"
+          onClick={onCreate}
+        >
           <Plus />
         </Button>
         {/*
