@@ -112,6 +112,22 @@ const MANIFEST: Record<string, Record<string, string>> = {
   // The skills picker's only read: the same shape as the mentions read above it, and listed for the
   // same reason — the composer calls it on mount, so an unlisted member would be dispatched wrongly.
   skills: { list: 'query' },
+  // The MCP settings section: both reads it draws a row from, every write a row offers, and the two
+  // calls that start and stop a process. Listed by kind, so the client dispatches each the way main
+  // registered it — a member missing from this map is refused by the client's own manifest check.
+  mcp: {
+    listServers: 'query',
+    listRunningTools: 'query',
+    getServerLogs: 'query',
+    addServer: 'command',
+    removeServer: 'command',
+    setEnabled: 'command',
+    setTrust: 'command',
+    setSecret: 'command',
+    clearSecret: 'command',
+    startServer: 'command',
+    stopServer: 'command',
+  },
   // The repository view: the reads the changes panel makes, and the commands it offers. Listed by
   // kind, so the client dispatches each the way main registered it.
   git: {

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { conveyor } from '@/conveyor/client'
-import { deriveRunningServers, type McpRunningServer } from '../protocol/mcp'
+import { deriveRunningServers, type McpRunningServer } from '../protocol/mcp-settings'
 
 /**
  * The settings surface's mirror of the MCP reads.

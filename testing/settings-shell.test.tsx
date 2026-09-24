@@ -54,6 +54,10 @@ function stubWorkbench(overrides: Record<string, (input: unknown) => unknown> = 
     listConfigured: () => [],
     isEncryptionAvailable: () => true,
     listFilesFlat: () => [],
+    // The MCP section is mounted by the tab this file switches to, so its two reads are answered here
+    // too — emptily, because this suite is about the shell rather than about the servers in it.
+    listServers: () => ({ user: [], project: [], errors: [] }),
+    listRunningTools: () => [],
     ...overrides,
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })

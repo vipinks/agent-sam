@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { PaneHeader } from './pane-header'
 import { ProviderBox } from './provider-box'
 import { CustomProviders } from './custom-provider-settings'
+import { McpServersSection } from './mcp-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -126,7 +127,9 @@ export function SettingsView() {
             </div>
           </TabsContent>
 
-          <TabsContent value="mcp-servers" data-slot="settings-section-mcp" className="mx-auto max-w-2xl px-8 py-7" />
+          <TabsContent value="mcp-servers" data-slot="settings-section-mcp" className="mx-auto max-w-2xl px-8 py-7">
+            <McpServersSection />
+          </TabsContent>
         </div>
       </Tabs>
     </div>

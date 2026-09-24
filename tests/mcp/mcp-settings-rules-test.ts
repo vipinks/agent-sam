@@ -16,7 +16,7 @@ import {
   trustPresentation,
   type McpRunningToolRef,
   type McpTrustState,
-} from '../../conveyor/protocol/mcp'
+} from '../../conveyor/protocol/mcp-settings'
 
 const results: string[] = []
 
