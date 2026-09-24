@@ -160,7 +160,7 @@ function WorkbenchLayout() {
     >
       {activeActivity === 'chat' ? (
         <SessionListPanel
-          onCreate={() => void sessions.createSession()}
+          onCreate={() => sessions.goHome()}
           onOpen={(id) => void sessions.openSession(id)}
           onRename={sessions.renameSession}
           onExport={runSessionExport}

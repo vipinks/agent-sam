@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle, FolderTree, Loader2 } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
-import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
+import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { sameRoot } from '@/conveyor/protocol/recent-roots'
 import {
@@ -20,6 +20,7 @@ import { activityById, DrawerClose } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
 import { RootSwitcher } from './root-switcher'
 import { rootErrorMessage, rootTail } from './recent-roots'
+import { useRootSwitch } from './use-root-switch'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -34,7 +35,9 @@ import { useWorkbenchStore } from './store'
  * The switch flow lives here rather than in the switcher for the same reason the picker's does: the
  * switcher is a control, and what a switch *costs* is this panel's business. Opening another folder
  * throws away the unsaved buffer in the viewer, so the confirmation in front of that is owned by the
- * panel that can see both halves of it — the editor's state and the folder being opened.
+ * panel that can see both halves of it — the editor's state and the folder being opened. The call
+ * itself, and the code a refusal arrives as, are shared with the home screen's folder row through
+ * `useRootSwitch`: one place hands a path to main.
  */
 export function ExplorerPanel() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
@@ -42,21 +45,23 @@ export function ExplorerPanel() {
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
   const recentRoots = useConveyorStore(workspaceStore, (s) => s.recentRoots)
-  const { setRootPath, forgetRoot } = useConveyorStore(workspaceStore)
+  const { forgetRoot } = useConveyorStore(workspaceStore)
 
   const editorDirty = useWorkbenchStore((s) => s.editor.dirty)
   const setSelectedFile = useWorkbenchStore((s) => s.setSelectedFile)
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
   const setEditorDirty = useWorkbenchStore((s) => s.setEditorDirty)
-  const [pickError, setPickError] = useState<string | null>(null)
-  /** The code a refused switch reported. Cleared by the next attempt. */
-  const [switchError, setSwitchError] = useState<string | null>(null)
-  /** The folder a confirm is currently standing in front of, or null when nothing is pending. */
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null)
 
-  const pickFolder = conveyor.workspace.pickFolder.useMutation()
-  const openRoot = conveyor.workspace.openRoot.useMutation()
-  const busy = pickFolder.isPending || openRoot.isPending
+  /**
+   * The dialog and the switch it feeds, from the one place that owns the call.
+   *
+   * The error is read from there rather than held here: a refusal is a code that either route can
+   * produce — a folder that is gone, or a dialog that would not open — and the wording for both is
+   * chosen by that code below.
+   */
+  const rootSwitch = useRootSwitch()
+  const { error: switchError, busy } = rootSwitch
 
   // The root listing for whichever folder is open. Loading it is the query's whole job — children
   // load independently as they are expanded, so a deep tree is never walked up front.
@@ -69,29 +74,19 @@ export function ExplorerPanel() {
   /**
    * Hand a path to main and, if it is still a folder, open it.
    *
-   * Main does the checking — the `stat`, and the resolve that gives every folder one spelling — so the
-   * store only ever holds a path that was a directory a moment ago. That is also why a refused switch
-   * leaves the recents list untouched: the path never reaches the store, so there is nothing to take
-   * back out of it. A failure is kept as the *code* and worded here, never as a sentence main wrote.
-   *
-   * The viewer is cleared only on success, and only here. A switch that fails must leave everything
-   * exactly as it was — including the buffer the user may have chosen to keep — so nothing is touched
-   * until main has answered. And whatever was open *does* have to go, dirty or clean: a path that
-   * belonged to the previous root is now outside the workspace the tree, the git panel and the viewer
-   * are all pointed at.
+   * The checking and the store write are the shared switch's, so this is only what this panel adds: the
+   * call's own answer is the code it failed under, and the viewer is cleared on that answer alone. A
+   * switch that fails must leave everything exactly as it was — including the buffer the user may have
+   * chosen to keep — so nothing is touched until main has confirmed the folder opened. And whatever was
+   * open *does* have to go once it has, dirty or clean: a path that belonged to the previous root is now
+   * outside the workspace the tree, the git panel and the viewer are all pointed at.
    */
   const runSwitch = async (path: string) => {
-    setSwitchError(null)
-    try {
-      const opened = await openRoot.mutateAsync({ path })
+    if ((await rootSwitch.switchRoot(path)) !== null) return
 
-      setSelectedFile(null)
-      setSelectedChange(null)
-      setEditorDirty(null, false)
-      setRootPath(opened.path)
-    } catch (err) {
-      setSwitchError(err instanceof ConveyorError ? err.code : 'UNKNOWN')
-    }
+    setSelectedFile(null)
+    setSelectedChange(null)
+    setEditorDirty(null, false)
   }
 
   /**
@@ -103,7 +98,6 @@ export function ExplorerPanel() {
    * folder is a switch, not a decision.
    */
   const requestSwitch = (path: string) => {
-    setSwitchError(null)
     if (rootPath !== null && sameRoot(path, rootPath)) return
     if (editorDirty) {
       setPendingSwitch(path)
@@ -114,15 +108,10 @@ export function ExplorerPanel() {
 
   /** The open folder's own dialog, as before — with the picked path routed through the same switch. */
   const onOpenFolder = async () => {
-    setPickError(null)
-    setSwitchError(null)
-    try {
-      const picked = await pickFolder.mutateAsync(undefined)
-      // A cancelled dialog returns null, which is an ordinary outcome, not a failure.
-      if (picked) requestSwitch(picked)
-    } catch {
-      setPickError('The folder picker could not be opened.')
-    }
+    const picked = await rootSwitch.chooseFolder()
+    // A cancelled dialog returns null, which is an ordinary outcome, not a failure — and the call that
+    // did fail has already said so, under its own code.
+    if (picked) requestSwitch(picked)
   }
 
   const picker = (
@@ -147,6 +136,19 @@ export function ExplorerPanel() {
         <DrawerClose />
       </PaneHeader>
 
+      {/*
+        A refused switch is reported against the folder that is still open, because that is what is on
+        screen: nothing moved, and the message has to say so rather than leave the user wondering which
+        of the two folders the tree is showing. Above both states because a folder that could not be
+        opened is worth saying in either of them — with nothing open, this sentence is the whole answer
+        the click gets, and the picker is the only thing beside it.
+      */}
+      {switchError && (
+        <p className="shrink-0 border-b border-border px-3 py-1.5 text-[12px] text-destructive">
+          {rootErrorMessage(switchError)}
+        </p>
+      )}
+
       {rootPath === null ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <FolderTree className="size-6 text-muted-foreground/40" />
@@ -157,7 +159,6 @@ export function ExplorerPanel() {
             </p>
           </div>
           {picker}
-          {pickError && <p className="text-[12px] text-destructive">{pickError}</p>}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -171,17 +172,6 @@ export function ExplorerPanel() {
               {rootPath}
             </p>
           </div>
-
-          {/*
-            A refused switch is reported against the folder that is still open, because that is what is
-            on screen: nothing moved, and the message has to say so rather than leave the user
-            wondering which of the two folders the tree is showing.
-          */}
-          {switchError && (
-            <p className="shrink-0 border-b border-border px-3 py-1.5 text-[12px] text-destructive">
-              {rootErrorMessage(switchError)}
-            </p>
-          )}
 
           {root.error ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

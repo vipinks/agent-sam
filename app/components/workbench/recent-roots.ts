@@ -23,7 +23,16 @@ export function rootTail(path: string): string {
 }
 
 /**
- * What the explorer says when a switch was refused.
+ * The code a folder dialog is reported under when it could not be opened at all.
+ *
+ * Renderer-owned, unlike `WORKSPACE_MISSING`: nothing crosses the boundary with it. It exists so the
+ * one failure that is not about a folder — the dialog itself — is worded from a code like every other
+ * refusal, rather than being a bare string at the call site that the next surface has to invent again.
+ */
+export const PICK_FAILED = 'PICK_FAILED'
+
+/**
+ * What a surface says when a switch was refused.
  *
  * Branched on the code, never on a sentence main wrote: the wording is the renderer's to own, and
  * main's is free to change without the UI changing with it. The missing case names the one thing the
@@ -34,6 +43,8 @@ export function rootErrorMessage(code: string): string {
   switch (code) {
     case WORKSPACE_MISSING:
       return 'That folder is no longer there. Forget it, or open another one.'
+    case PICK_FAILED:
+      return 'The folder picker could not be opened.'
     default:
       return 'That folder could not be opened.'
   }

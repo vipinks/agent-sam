@@ -63,6 +63,13 @@ export function SessionListPanel({
   error,
   notice,
 }: {
+  /**
+   * The new-chat control was used.
+   *
+   * What a new chat costs is the session layer's decision rather than this panel's: a conversation is
+   * created by its first message, so asking for a new one puts the window on the home screen and
+   * creates nothing. The panel reports the click and draws whatever the layer ends up holding.
+   */
   onCreate: () => void
   onOpen: (id: string) => void
   onRename: (id: string, title: string) => void

@@ -41,11 +41,11 @@ import type { PlanStep } from '@/conveyor/protocol/plan'
  * The same act the explorer's own switch performs, and for the same reason: a path from the previous
  * root is now outside the workspace the tree, the git panel and the viewer are all pointed at.
  *
- * Only when the buffer is clean. An unsaved edit is the user's work, and a click on a conversation is
- * not a decision to throw it away — the confirmation in front of that belongs to the pane that can ask
- * for it, which is not this one.
+ * Only when the buffer is clean. An unsaved edit is the user's work, and a click on a conversation — or
+ * a folder chosen from the home screen — is not a decision to throw it away: the confirmation in front
+ * of that belongs to the pane that can ask for it, which is not this one.
  */
-function releaseViewer(): void {
+export function releaseViewer(): void {
   const workbench = useWorkbenchStore.getState()
   if (workbench.editor.dirty) return
   workbench.setSelectedFile(null)
@@ -231,6 +231,31 @@ export interface ChatSessions {
   holdPause: (approval: PendingApproval) => void
   /** Drop the pause of one conversation: the decision was made, or the conversation is gone. */
   clearPause: (id: string) => void
+  /**
+   * Whether the pane is showing the home screen rather than a conversation.
+   *
+   * Two facts, and both are needed. There is no active session — nothing is open in this window, which
+   * is what home *is* — and nothing has been loaded into the pane either, because the store broadcast
+   * that names a new conversation arrives a round trip after the send that created it. Reading only
+   * the store would leave the first message of a conversation sitting on a welcome screen until main
+   * answered; reading only the pane would flash the welcome screen on every launch that resumes a
+   * conversation. Together they say the thing both are trying to: nothing is being worked on here.
+   */
+  atHome: boolean
+  /**
+   * Put the pane back on the home screen, creating nothing.
+   *
+   * The create path is the first message, and this is the other half of that decision: a new chat is
+   * not a conversation until there are words in it, so the control that asks for one only clears the
+   * window. That is also what retires the empty row every new-session click used to leave in the list
+   * — the transcript that made it a conversation never arrives, so neither does the row.
+   *
+   * The composer is deliberately left alone: a half-written message is the user's, and moving to a
+   * blank window is not a reason to delete it. The approval chip is reset with the transcript, because
+   * its value is the one the next conversation will be created with, and "off" is what a choice that
+   * has not been made means.
+   */
+  goHome: () => void
   createSession: () => string
   openSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
@@ -410,6 +435,13 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const autoApprove = transcript.autoApprove === true
 
   /**
+   * Whether the pane is on the home screen. Read as the state it is: the store's pointer names no
+   * conversation, and the pane is not showing one either — which differ only in the round trip after a
+   * send creates one. See the interface for why both halves are read.
+   */
+  const atHome = activeSessionId === null && openId === null
+
+  /**
    * Write the consent setting onto the conversation.
    *
    * Saved the moment it changes rather than at the next turn boundary: the toggle is a deliberate act
@@ -476,6 +508,13 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     const lastRoot = planRootStamp({ sessionLastRoot: undefined, windowRoot: rootPathRef.current })
     addSession({ id, title: UNTITLED, providerId, model, ...(lastRoot === null ? {} : { lastRoot }) })
     setActive({ id })
+    // The startup restore is decided here as much as by the effect that reads the store's active id: a
+    // conversation created by this window is one this window is already showing, and the store naming
+    // it a moment later must not be read as "restore the one from last time" — reading it back from a
+    // file that does not exist yet would empty the transcript the first message is filling. That is
+    // the home screen's ordinary path: nothing is open, so nothing was restored, and the send that
+    // creates the conversation is the first thing that touches the store.
+    hydratedOnceRef.current = true
     activeIdRef.current = id
     savedRef.current = null
     setError(null)
@@ -487,6 +526,29 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     setTranscript({ turns: [], interrupted: false })
     return id
   }, [addSession, model, providerId, setActive, setTranscript])
+
+  /**
+   * Leave whatever is open and go home, creating nothing.
+   *
+   * The save comes first and is not awaited: a turn that ended a moment ago may still be waiting on the
+   * debounced write, and it belongs to the session the pointer still names — clearing first would leave
+   * that save describing the empty transcript of the window it was moved to. `saveNow` is also the
+   * guard that makes this free: a conversation with no turns and no choice of its own writes nothing.
+   *
+   * The pointer is cleared before anything else, so the two facts home is read from agree as soon as
+   * the broadcast lands rather than a render later.
+   */
+  const goHome = useCallback(() => {
+    void saveNow()
+    setActive({ id: null })
+    activeIdRef.current = null
+    savedRef.current = null
+    hydratedIdRef.current = null
+    setError(null)
+    setNotice(null)
+    setOpenId(null)
+    setTranscript({ turns: [], interrupted: false })
+  }, [saveNow, setActive, setTranscript])
 
   /**
    * Apply a plan's transcript: set it, and remember which session it belongs to.
@@ -501,6 +563,9 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // are already in the transcript.
       resumeTurnNumbering(next.turns)
       hydratedIdRef.current = id
+      // A conversation is on screen, so the startup question — is there one from last time to restore?
+      // — has been settled by getting here, whatever the store names next.
+      hydratedOnceRef.current = true
       setOpenId(id)
       setTranscript(next)
     },
@@ -664,6 +729,8 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     (firstMessage: string) => {
       const activeId = activeIdRef.current
       const activeTitle = sessionsRef.current.find((s) => s.id === activeId)?.title ?? null
+      // Read before the create, which replaces the transcript a session is about to be built from.
+      const pendingApproval = transcriptRef.current.autoApprove === true
 
       const plan = planFirstSend({
         activeId,
@@ -680,9 +747,13 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
 
       const id = createSession()
       if (plan.title) touchSession({ id, title: plan.title })
+      // And the choice the user made before there was a conversation to make it on: with the chip set,
+      // the record has to answer that the conversation on screen is already running that way — the
+      // session was entered from the chip's own value, and re-reading it would say off.
+      if (pendingApproval) setTranscript({ ...transcriptRef.current, autoApprove: true })
       return id
     },
-    [createSession, touchSession]
+    [createSession, setTranscript, touchSession]
   )
 
   /**
@@ -734,6 +805,8 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     pauses,
     holdPause,
     clearPause,
+    atHome,
+    goHome,
     createSession,
     openSession,
     deleteSession,

@@ -8,6 +8,7 @@ import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
+import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor } from '../ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
@@ -15,6 +16,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { COMPOSER_MIN_HEIGHT, clampComposerHeight, composerBounds } from './composer-resize'
+import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
@@ -114,6 +116,14 @@ function streamErrorMessage(error: unknown, providerName: string): string {
  * rather than one long pause: decide the head, the loop runs it and hands back the next, until the
  * frame is settled and the model is asked again. Only the head is ever actionable, and the pane holds
  * exactly one pending decision at a time, which is what makes that true in the UI as well as in main.
+ *
+ * With no conversation open the pane is the home screen, and it is the same pane: the composer keeps
+ * its place and its state, and the space above it — which is where a transcript would be — holds the
+ * headline instead, with the folder row and the ways back into the work beneath the composer. Home is
+ * therefore not a second way to send anything. A message typed there goes out through this pane's own
+ * send path, which is what creates the conversation, and the screen is left the moment the store says
+ * one exists. The control that asks for a new chat asks for *this*: nothing is created until words are,
+ * so no empty conversation is left behind in the list.
  */
 export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
@@ -189,6 +199,12 @@ export function ChatPanel() {
   // the setting, so a conversation that had it on opens with it on, and one that has never had it set
   // opens with it off.
   const autoApprove = sessions.autoApprove
+  /**
+   * Whether the pane is on the home screen — no conversation open, which is where a launch with nothing
+   * to resume begins. Read from the session layer rather than derived here, because it is a state of the
+   * window rather than a view of this component.
+   */
+  const atHome = sessions.atHome
   /** The pause of the conversation on screen, which is the only one the pane may act on. */
   const pending = (sessions.openId ? sessions.pauses[sessions.openId] : undefined) ?? null
 
@@ -645,6 +661,21 @@ export function ChatPanel() {
     [activeModel, activeProviderId, autoApprove, rootPath, runProvider, runStream, stickToBottom, updateMessages]
   )
 
+  /**
+   * Put a starter prompt in the box, and nothing else.
+   *
+   * Written through this pane's own draft setter so the mirror a handler reads stays in step, and
+   * focused so the next thing typed lands where the prompt is. Deliberately not sent: a starter is a
+   * sentence to edit, and sending one on a click would put words in the user's mouth.
+   */
+  const prefillComposer = useCallback(
+    (prompt: string) => {
+      setDraft(prompt)
+      textareaRef.current?.focus()
+    },
+    [setDraft]
+  )
+
   const sendText = useCallback(
     async (raw: string, options: { mentionPaths?: readonly string[]; keepComposer?: boolean } = {}) => {
       const text = raw.trim()
@@ -935,30 +966,36 @@ export function ChatPanel() {
         {/*
           Auto-approve sits beside the model picker because it is the other thing that decides what a
           send does: whether the agent acts on its own or asks first.
+
+          Not on the home screen, where there is no conversation for it to be a setting of: the choice
+          made before one exists is the chip in the composer's own footer, and it becomes the created
+          conversation's value rather than a value written onto a conversation that is not there.
         */}
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <label className="flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-accent">
-                <ShieldCheck className="size-3.5 text-muted-foreground" />
-                <span className="text-[11px] text-muted-foreground">Auto-approve</span>
-                <Switch
-                  size="sm"
-                  checked={autoApprove}
-                  onCheckedChange={sessions.setAutoApprove}
-                  aria-label="Auto-approve tool actions"
-                />
-              </label>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              <span className="text-[11.5px]">
-                {autoApprove
-                  ? 'Writes and commands run without asking. Reads are always allowed.'
-                  : 'Each write and command waits for your approval.'}
-              </span>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        {!atHome && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label className="flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-accent">
+                  <ShieldCheck className="size-3.5 text-muted-foreground" />
+                  <span className="text-[11px] text-muted-foreground">Auto-approve</span>
+                  <Switch
+                    size="sm"
+                    checked={autoApprove}
+                    onCheckedChange={sessions.setAutoApprove}
+                    aria-label="Auto-approve tool actions"
+                  />
+                </label>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <span className="text-[11.5px]">
+                  {autoApprove
+                    ? 'Writes and commands run without asking. Reads are always allowed.'
+                    : 'Each write and command waits for your approval.'}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
 
         {/*
           One control, two axes: the value is `provider::model`, so picking either changes both.
@@ -1059,44 +1096,48 @@ export function ChatPanel() {
         )}
       </PaneHeader>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
-        {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-            <MessageSquare className="size-6 text-muted-foreground/40" />
-            <p className="text-[13px] font-medium">Start a conversation</p>
-            <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-              Answers stream in here, and the agent shows every file it reads and command it runs.
-            </p>
-          </div>
-        ) : (
-          // Virtualized: the transcript can grow without bound while the DOM stays small.
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-            {virtualizer.getVirtualItems().map((item) => (
-              <div
-                key={messages[item.index].id}
-                ref={virtualizer.measureElement}
-                data-index={item.index}
-                className="absolute top-0 left-0 w-full"
-                style={{ transform: `translateY(${item.start}px)` }}
-              >
-                {/* The controls that would cut the transcript are unavailable while the conversation is
+      {atHome ? (
+        <HomeHero />
+      ) : (
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+          {messages.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
+              <MessageSquare className="size-6 text-muted-foreground/40" />
+              <p className="text-[13px] font-medium">Start a conversation</p>
+              <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
+                Answers stream in here, and the agent shows every file it reads and command it runs.
+              </p>
+            </div>
+          ) : (
+            // Virtualized: the transcript can grow without bound while the DOM stays small.
+            <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+              {virtualizer.getVirtualItems().map((item) => (
+                <div
+                  key={messages[item.index].id}
+                  ref={virtualizer.measureElement}
+                  data-index={item.index}
+                  className="absolute top-0 left-0 w-full"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
+                  {/* The controls that would cut the transcript are unavailable while the conversation is
                     moving: a run in flight is producing the turns an edit or a regenerate would remove, and
                     a paused decision belongs to a turn that has not ended. Both are facts about the pane, so
                     it is the pane that decides. */}
-                <MessageBubble
-                  message={messages[item.index]}
-                  canEdit={editAllowed}
-                  laterTurns={messages.length - item.index - 1}
-                  onResend={resendEditedMessage}
-                  onRegenerate={regenerateReply}
-                  onApprove={() => void decide(true)}
-                  onDeny={() => void decide(false)}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+                  <MessageBubble
+                    message={messages[item.index]}
+                    canEdit={editAllowed}
+                    laterTurns={messages.length - item.index - 1}
+                    onResend={resendEditedMessage}
+                    onRegenerate={regenerateReply}
+                    onApprove={() => void decide(true)}
+                    onDeny={() => void decide(false)}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/*
         Between the transcript and the composer, outside both the scrolling region and the composer's
@@ -1107,21 +1148,39 @@ export function ChatPanel() {
         Rendered from the live transcript, so a chunk updates it in place, and from the stored snapshot
         after a reopen, so a conversation resumed from disk shows the plan its turn ended with.
       */}
-      <div className="shrink-0 px-3">
-        <PlanChecklist plan={plan} />
-        {/*
+      {/* A plan and a turn that stopped early are both about a conversation; home has neither. */}
+      {!atHome && (
+        <div className="shrink-0 px-3">
+          <PlanChecklist plan={plan} />
+          {/*
           The other thing that is about now: a turn that stopped before it was done. Below the plan,
           because it is the immediate question — the plan says what the work is, this says that the
           work has just stopped. Continuing sends the resume text through the ordinary send path, so a
           resumed turn is an ordinary turn in the transcript rather than a special case.
         */}
-        <TurnEndNotice
-          notice={endNotice}
-          {...(endNotice?.resumable ? { onContinue: () => void sendText(RESUME_MESSAGE) } : {})}
-        />
-      </div>
+          <TurnEndNotice
+            notice={endNotice}
+            {...(endNotice?.resumable ? { onContinue: () => void sendText(RESUME_MESSAGE) } : {})}
+          />
+        </div>
+      )}
 
-      <div ref={composerRef} className="relative shrink-0 border-t border-border p-3">
+      {/*
+        The composer: docked under the transcript in a conversation, and a card of its own on the home
+        screen, centred and one width rather than stretched across the column. The height, the drag, the
+        chips, the picker and the send button are the same element either way — which is the point. A
+        second composer drawn for the home screen would be a second thing to keep in step with this one,
+        and the send it performed would be the second send path the doc above rules out.
+      */}
+      <div
+        ref={composerRef}
+        className={cn(
+          'relative p-3',
+          atHome
+            ? 'mx-auto w-full max-w-3xl rounded-xl border border-border bg-card'
+            : 'shrink-0 border-t border-border'
+        )}
+      >
         {/*
           The composer's top edge, as a grab target. A separator rather than a button because what it
           does is resize the region below it, and `cursor-row-resize` is the cursor that says so before
@@ -1241,7 +1300,44 @@ export function ChatPanel() {
             {mentionNote}
           </p>
         )}
+
+        {/*
+          The approval choice, made before there is a conversation to make it on.
+
+          It is the same setting the header's toggle shows once a conversation exists — one value, two
+          places that can make it — and it is what the conversation created by the next send starts
+          with. Off is what it says until it is set: a choice nobody has made is not consent, and a
+          conversation that has never been told otherwise asks.
+        */}
+        {atHome && (
+          <div className="mt-2 flex items-center justify-end border-t border-border pt-2">
+            <button
+              type="button"
+              aria-label="Approval mode"
+              aria-pressed={autoApprove}
+              title={
+                autoApprove
+                  ? 'Writes and commands run without asking. Reads are always allowed.'
+                  : 'Each write and command waits for your approval.'
+              }
+              onClick={() => sessions.setAutoApprove(!autoApprove)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ShieldCheck aria-hidden="true" className="size-3.5" />
+              <span className={autoApprove ? 'text-foreground' : undefined}>
+                {autoApprove ? 'Auto-approve' : 'Manual'}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
+
+      {/*
+        Under the card, and deliberately in this order: the folder the next conversation will run in, the
+        conversations already there, and three ways to start one. Nothing above it is repeated here — the
+        headline said what the screen is for, and these are the things to do about it.
+      */}
+      {atHome && <HomePanel onStarter={prefillComposer} />}
     </div>
   )
 }

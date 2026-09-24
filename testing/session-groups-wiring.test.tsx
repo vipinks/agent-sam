@@ -186,7 +186,7 @@ function Rail({ notice = null }: { notice?: string | null }) {
   const sessions = useChatSessionsContext()
   return (
     <SessionListPanel
-      onCreate={() => void sessions.createSession()}
+      onCreate={() => sessions.goHome()}
       onOpen={(id) => void sessions.openSession(id)}
       onRename={() => {}}
       onExport={() => {}}
@@ -194,6 +194,23 @@ function Rail({ notice = null }: { notice?: string | null }) {
       error={null}
       notice={notice}
     />
+  )
+}
+
+/**
+ * A first message, sent the way the composer sends one.
+ *
+ * The create path is reached through `ensureSession`, and that is now the only way it is reached at all:
+ * the control that asks for a new chat puts the window on the home screen and creates nothing, because a
+ * conversation is created by its first message. So the harness reaches the create path the way the pane
+ * does rather than through a list control that no longer creates anything.
+ */
+function FirstMessage({ text }: { text: string }) {
+  const sessions = useChatSessionsContext()
+  return (
+    <button type="button" onClick={() => void sessions.ensureSession(text)}>
+      send a first message
+    </button>
   )
 }
 
@@ -424,10 +441,16 @@ describe('the conversation list, grouped by project', () => {
 
   it('creates the new conversation in the open folder, so its row lands in that group', async () => {
     const { actions } = stubGroups({ sessions: fourGroups() })
-    const { container } = renderHarness(<Rail />)
+    const { container } = renderHarness(
+      <>
+        <Rail />
+        <FirstMessage text="a first message" />
+      </>
+    )
     await screen.findByText('parser work')
 
-    await userEvent.click(screen.getByLabelText('New chat'))
+    // A conversation is created by its first message, so this is the click that creates one.
+    await userEvent.click(screen.getByRole('button', { name: 'send a first message' }))
 
     // Created in the folder the user is working in, in one write: the row's project is written with
     // the row, so there is no window in which it belongs to nowhere.
@@ -456,10 +479,15 @@ describe('the conversation list, grouped by project', () => {
 
   it('gives a conversation created with no folder open no project at all', async () => {
     const { actions } = stubGroups({ sessions: fourGroups(), rootPath: null })
-    renderHarness(<Rail />)
+    renderHarness(
+      <>
+        <Rail />
+        <FirstMessage text="a first message" />
+      </>
+    )
     await screen.findByText('parser work')
 
-    await userEvent.click(screen.getByLabelText('New chat'))
+    await userEvent.click(screen.getByRole('button', { name: 'send a first message' }))
 
     // No folder open is not a project: the key is absent rather than empty, because an empty path
     // would read as a folder nobody can open.
