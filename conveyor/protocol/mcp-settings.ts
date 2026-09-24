@@ -105,3 +105,36 @@ export function canStartServer(input: { scope: McpScope; enabled: boolean; trust
   if (input.scope === 'user') return true
   return input.trust === 'matched'
 }
+
+/**
+ * The name a call that ran without a pause is stamped with, in the transcript.
+ *
+ * The flag's own name in the config file, because that is the thing the user turned on: a record read
+ * back says *why* nothing was asked, and a second reason for skipping a pause would be a second value
+ * here rather than a second field on the step. Read by the card, which draws a line for it, and by the
+ * reducer, which carries it across the IPC hop.
+ */
+export const MCP_SERVER_AUTO_APPROVE = 'autoApprove'
+
+/** The one thing about a server this rule reads: whether the user flagged it. */
+export interface McpAutoApproveView {
+  autoApprove: boolean
+}
+
+/**
+ * Whether one call skips the consent pause because of the server behind it.
+ *
+ * Two facts, and both are load-bearing. A call this app's own tools answer is the shield's business:
+ * the session's Auto-approve covers exactly those, and this rule never speaks for them — which is why
+ * `isMcpCall` is half the input rather than something the caller decides before asking. A call to a
+ * running server is *not* the shield's business: it runs in another process, against another project's
+ * configuration, in a server this app did not write, so the session's setting cannot have answered for
+ * it. The only thing that lets one of those run without asking is that *that server* was flagged.
+ *
+ * A server this app can say nothing about — not in either file any more, or a name that is not an
+ * identity at all — is not flagged, and the call is asked about as it always was.
+ */
+export function mcpCallSkipsConsent(input: { isMcpCall: boolean; server: McpAutoApproveView | null }): boolean {
+  if (!input.isMcpCall) return false
+  return input.server?.autoApprove === true
+}

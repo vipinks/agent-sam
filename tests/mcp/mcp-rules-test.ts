@@ -110,6 +110,7 @@ function aValidFileParses() {
     env: {},
     secretEnv: {},
     enabled: false,
+    autoApprove: false,
   })
   assert.deepEqual(
     Object.keys(bare.raw).sort(),
@@ -279,11 +280,18 @@ function theHashIgnoresKeyOrderAndTheEnabledFlag() {
     'switching a server on or off is not a change to what it runs'
   )
 
-  // The hash is over exactly the five fields that decide what will be executed.
+  // The hash is over exactly the fields that decide what will be executed, and the flag is one of them
+  // because it decides whether the call is put to the user at all.
   assert.equal(
     hashMcpServerConfig(off),
     hashMcpServerConfig(configOf({ ...BASE_SERVER, enabled: true, note: 'hand-written' })),
     'and an unknown key is not part of it either'
+  )
+
+  assert.notEqual(
+    hashMcpServerConfig(off),
+    hashMcpServerConfig(configOf({ ...BASE_SERVER, autoApprove: true })),
+    'while the per-server auto-approve flag is: it changes what the grant permits, not just when it runs'
   )
 
   results.push('the trust hash is canonical, and the enabled flag is not part of it')
@@ -298,6 +306,7 @@ function everyRunnableFieldIsCoveredByTheHash() {
     ['cwd', { cwd: 'C:\\work' }],
     ['env', { env: { PATH: '/other/bin' } }],
     ['secretEnv', { secretEnv: { TOKEN: 'AQAB' } }],
+    ['autoApprove', { autoApprove: true }],
   ]
 
   for (const [what, change] of changes) {
@@ -308,7 +317,7 @@ function everyRunnableFieldIsCoveredByTheHash() {
     )
   }
 
-  results.push('command, args, cwd, env and secretEnv each move the hash; nothing else does')
+  results.push('command, args, cwd, env, secretEnv and autoApprove each move the hash; nothing else does')
 }
 
 function theTrustComparisonHasThreeAnswers() {

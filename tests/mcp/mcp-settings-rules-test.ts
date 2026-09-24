@@ -13,6 +13,8 @@ import { strict as assert } from 'node:assert'
 import {
   canStartServer,
   deriveRunningServers,
+  MCP_SERVER_AUTO_APPROVE,
+  mcpCallSkipsConsent,
   trustPresentation,
   type McpRunningToolRef,
   type McpTrustState,
@@ -117,12 +119,45 @@ function startIsAllowedPerScopeAndState() {
   results.push('start needs enabled plus, for a project server, matched trust')
 }
 
+// ---------------------------------------------------------------- the per-server exception
+
+/**
+ * The per-server skip rule, and the two halves of its input.
+ *
+ * This is the whole of the exception, so it is asserted in both directions: a flagged server's call
+ * skips the pause, and nothing else does — not an unflagged server's call, and not any call to this
+ * app's own tools, whose consent is the session's business. The two are separate clauses rather than one
+ * `&&` so that neither can be dropped without a case failing.
+ */
+function onlyAFlaggedServersCallSkipsConsent() {
+  const flagged = { autoApprove: true }
+  const unflagged = { autoApprove: false }
+
+  assert.equal(mcpCallSkipsConsent({ isMcpCall: true, server: flagged }), true, "a flagged server's call skips it")
+  assert.equal(mcpCallSkipsConsent({ isMcpCall: true, server: unflagged }), false, 'an unflagged one does not')
+  assert.equal(mcpCallSkipsConsent({ isMcpCall: true, server: null }), false, 'and neither does one with no server')
+
+  // The other half: a built-in call is never this rule's to answer, whatever it is handed. Passing a
+  // flagged view alongside `isMcpCall: false` is the shape a caller would produce by forgetting which
+  // call it is looking at, and it must still be `false` — the session's shield decides those.
+  assert.equal(mcpCallSkipsConsent({ isMcpCall: false, server: flagged }), false)
+  assert.equal(mcpCallSkipsConsent({ isMcpCall: false, server: unflagged }), false)
+  assert.equal(mcpCallSkipsConsent({ isMcpCall: false, server: null }), false)
+
+  // The marker is the flag's own name in the config file, because that is the thing the user turned on
+  // and the thing a record read back has to name.
+  assert.equal(MCP_SERVER_AUTO_APPROVE, 'autoApprove')
+
+  results.push("only a flagged server's own call skips the consent pause; every other call is unchanged")
+}
+
 // ---------------------------------------------------------------- harness
 
 async function main() {
   await step('running: grouped counts', theRunningSetIsGroupedByServerWithCounts)
   await step('trust: three readings', trustHasThreeReadingsAndOnlyOneOfThemAllowsAStart)
   await step('start: scope and state', startIsAllowedPerScopeAndState)
+  await step('consent: per-server exception', onlyAFlaggedServersCallSkipsConsent)
 
   console.log(`mcp settings rules: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)

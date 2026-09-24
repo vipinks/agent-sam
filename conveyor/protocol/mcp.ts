@@ -148,6 +148,16 @@ export interface McpServerConfig {
   env: Record<string, string>
   secretEnv: Record<string, string>
   enabled: boolean
+  /**
+   * Whether this server's tools run without asking, in every conversation.
+   *
+   * Absent means off, and off is the ordinary reading: a server nobody has flagged is asked about on
+   * every call. Like `enabled` it is a *meaning* — the file keeps not having the key. Unlike `enabled`,
+   * it *is* among the fields a project grant covers: the flag decides whether this server may act without
+   * asking at all, so a grant made against a server that asked every time must not quietly come to cover
+   * one that does not.
+   */
+  autoApprove: boolean
 }
 
 /** A record that passed the rules: the raw object to write back, and its normalized meaning. */
@@ -302,6 +312,19 @@ export function validateMcpServerRecord(
     }
   }
 
+  // Absent is off and nothing else: the flag is the user's own instruction to stop asking, so a server
+  // nobody flagged must read as unflagged. A value that is *there* and not a boolean is refused rather
+  // than coerced — `"true"` means something this build would have to guess at, and guessing here would
+  // turn a hand-edit into a server whose tools run without asking.
+  const autoApproveValue = raw.autoApprove
+  const autoApprove = autoApproveValue === undefined ? false : autoApproveValue
+  if (typeof autoApprove !== 'boolean') {
+    return {
+      ok: false,
+      error: failureFor(scope, rawId, `${where} (${rawId}) has an autoApprove flag that is not true or false.`),
+    }
+  }
+
   return {
     ok: true,
     entry: {
@@ -315,6 +338,7 @@ export function validateMcpServerRecord(
         env,
         secretEnv,
         enabled,
+        autoApprove,
       },
     },
   }
@@ -421,13 +445,19 @@ export function canonicalJson(value: unknown): string {
 }
 
 /**
- * The hash trust is granted against: sha256 over the canonical form of exactly the five fields that
- * decide what will be executed.
+ * The hash trust is granted against: sha256 over the canonical form of exactly the six fields that
+ * decide what will be executed, and how it behaves while it runs.
  *
  * `enabled` is deliberately not among them. Switching a server on is a statement about whether it may
  * run now, not about what it would run, so it must not invalidate a grant the user already made. That
  * is also why the hash is taken over the *normalized* config: `args` absent and `args: []` mean the same
  * thing, and a file that spells one of them must not look different from a file that spells the other.
+ *
+ * `autoApprove` *is* among them, and for the opposite reason: it says this server's calls run without
+ * asking, which changes what the grant permits rather than when it may run. Flipping it on a project
+ * server therefore moves the hash, and the existing comparison reports the grant as no longer matching —
+ * the user re-trusts the server they just flagged. That is the whole mechanism, and it needs no second
+ * invalidation path.
  */
 export function hashMcpServerConfig(config: McpServerConfig): string {
   const trustFields = {
@@ -436,6 +466,7 @@ export function hashMcpServerConfig(config: McpServerConfig): string {
     cwd: config.cwd,
     env: config.env,
     secretEnv: config.secretEnv,
+    autoApprove: config.autoApprove,
   }
   return createHash('sha256').update(canonicalJson(trustFields), 'utf8').digest('hex')
 }

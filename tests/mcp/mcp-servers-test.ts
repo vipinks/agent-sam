@@ -34,6 +34,7 @@ import {
   readMcpConfigFile,
   readMcpTrustFile,
   removeMcpServer,
+  setMcpServerAutoApprove,
   setMcpServerEnabled,
   setMcpServerSecret,
   setMcpServerTrust,
@@ -418,6 +419,7 @@ async function aGrantedTrustSurvivesTheFlagButNotAChange() {
     ['cwd', { cwd: 'C:\\work' }],
     ['env', { env: { PATH: '/other/bin' } }],
     ['secretEnv', { secretEnv: { TOKEN: 'AQAB' } }],
+    ['autoApprove', { autoApprove: true }],
   ]
 
   for (const [field, change] of edits) {
@@ -445,6 +447,23 @@ async function aGrantedTrustSurvivesTheFlagButNotAChange() {
     'and the enabled toggle is still not part of it'
   )
 
+  // The flag, through the command rather than through a hand-edited file: same answer, which is what
+  // makes the row's mismatch after a toggle something the existing rule produced rather than something
+  // the screen decided. Turning it on changes what the server may do, so the grant it was given for the
+  // old behaviour no longer describes it — and re-trusting is the one way back.
+  await setMcpServerAutoApprove(env, { scope: 'project', rootPath: root, serverId: 'filesystem', value: true })
+  assert.equal(
+    (await listMcpServers(env, root)).project[0].trust,
+    'mismatched',
+    "flipping a server's own auto-approve moves the hash the grant was made against"
+  )
+  await setMcpServerTrust(env, { rootPath: root, serverId: 'filesystem', trusted: true })
+  assert.equal(
+    (await listMcpServers(env, root)).project[0].trust,
+    'matched',
+    'and one re-trust of the server the user just flagged puts the row back in order'
+  )
+
   await setMcpServerTrust(env, { rootPath: root, serverId: 'filesystem', trusted: false })
   const revoked = (await listMcpServers(env, root)).project[0].trust
   assert.equal(revoked, 'absent', 'revoking leaves nothing to compare against')
@@ -463,6 +482,109 @@ async function aGrantedTrustSurvivesTheFlagButNotAChange() {
   )
 
   results.push('trust is invalidated by every runnable change, survived by the enabled flag, and guarded by code')
+}
+
+// ---------------------------------------------------------------- auto-approve flag
+
+/**
+ * The per-server flag: one field, and absent means off.
+ *
+ * A pair of properties, and they are the pair that makes a flag safe to add to files that already have
+ * servers in them: reading a record that never had the key says off without writing the key, and writing
+ * it is one field's worth of writing. The rest is the validator's own rule and the command's own rule —
+ * a value that is present and not a boolean is that one record's error rather than a guess, and a flag
+ * cannot be written against an id nothing answers for, because that would be a flag with no server
+ * behind it.
+ */
+async function theAutoApproveFlagIsOneFieldAndAbsentMeansOff() {
+  const env = makeEnv()
+  const root = makeRoot()
+  writeProjectConfig(root, [
+    // A record spelled the way a file written before the flag existed spells one: no key, and one key
+    // this build knows nothing about.
+    {
+      id: 'legacy',
+      transport: 'stdio',
+      command: 'npx',
+      args: [],
+      cwd: null,
+      env: {},
+      secretEnv: {},
+      enabled: true,
+      somethingElse: 'kept',
+    },
+    serverRecord({ id: 'flagged', autoApprove: true }),
+    serverRecord({ id: 'plain', enabled: false }),
+  ])
+
+  const listed = await listMcpServers(env, root)
+  assert.deepEqual(
+    listed.project.map((server) => [server.id, server.autoApprove]),
+    [
+      ['legacy', false],
+      ['flagged', true],
+      ['plain', false],
+    ],
+    'a record without the key reads as off, a flagged one reads as on, and the view always says one or the other'
+  )
+  assert.equal(listed.errors.length, 0, 'and none of them is an error')
+
+  const afterRead = readJson(mcpProjectConfigPath(root)).servers as Array<Record<string, unknown>>
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(afterRead[0], 'autoApprove'),
+    'reading a server does not write the key it read as absent: the file is untouched until a toggle writes it'
+  )
+
+  // A write to one record, and a write to the flag of another: neither may touch anything else.
+  await setMcpServerEnabled(env, { scope: 'project', rootPath: root, serverId: 'plain', enabled: true })
+  await setMcpServerAutoApprove(env, { scope: 'project', rootPath: root, serverId: 'flagged', value: false })
+
+  const written = readJson(mcpProjectConfigPath(root)).servers as Array<Record<string, unknown>>
+  assert.equal(written[1].autoApprove, false, 'switching the flag off writes the off the user chose')
+  assert.equal(written[1].enabled, false, 'the record the flag was written to keeps its other fields')
+  assert.equal(written[2].enabled, true, 'and the unrelated write is the only thing that changed on its record')
+  assert.equal(written[0].somethingElse, 'kept', 'an unknown key survives every write, as it always has')
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(written[0], 'autoApprove'),
+    'and a record that never had the flag is never given one'
+  )
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(written[1], 'autoApprove'),
+    true,
+    'while the record the user toggled does hold the key, because that is what they decided'
+  )
+
+  await setMcpServerAutoApprove(env, { scope: 'project', rootPath: root, serverId: 'plain', value: true })
+  assert.equal(
+    (await listMcpServers(env, root)).project[2].autoApprove,
+    true,
+    'and flagging a server that had no key at all is written and read back'
+  )
+
+  await assert.rejects(
+    () => setMcpServerAutoApprove(env, { scope: 'project', rootPath: root, serverId: 'nowhere', value: true }),
+    (error: unknown) => codeOf(error) === MCP_SERVER_NOT_FOUND,
+    'a flag cannot be written against an id nothing in that scope answers for'
+  )
+
+  // A value that is there and not a boolean is refused rather than coerced: `"true"` is a guess, and a
+  // guess here would turn a hand-edit into a server whose tools run without asking.
+  writeProjectConfig(root, [serverRecord({ id: 'bad-flag', autoApprove: 'yes' }), serverRecord({ id: 'good' })])
+  const invalid = await listMcpServers(env, root)
+  assert.deepEqual(
+    invalid.errors.map((error) => [error.id, error.code, error.scope]),
+    [['bad-flag', MCP_CONFIG_INVALID, 'project']],
+    "a present non-boolean flag is that one record's error, under the config code"
+  )
+  assert.deepEqual(
+    invalid.project.map((server) => server.id),
+    ['good'],
+    'and the valid sibling still loads'
+  )
+
+  results.push(
+    "the auto-approve flag is one optional field: absent reads as off, toggling writes it, and a bad value is one record's error"
+  )
 }
 
 // ---------------------------------------------------------------- secrets
@@ -805,6 +927,7 @@ async function main() {
     await step('write: remove + trust', removingAServerRemovesItsTrustRecord)
     await step('trust: lifecycle', aGrantedTrustSurvivesTheFlagButNotAChange)
     await step('secrets: set, list, clear', aSecretIsStoredAsCiphertextAndNeverListedBack)
+    await step('flag: one field, absent means off', theAutoApproveFlagIsOneFieldAndAbsentMeansOff)
     await step('secrets: crypto failure', anEncryptionFailureLeavesTheFileAlone)
     await step('commands: registered', theRegisteredCommandsReadTheScopesTheyAreToldTo)
     await step('listing: plain env, no secrets', theListingCarriesThePlainEnvAndStillHidesTheSecrets)

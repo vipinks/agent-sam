@@ -85,6 +85,9 @@ function fixtureConfig(id: string, mode = 'normal', over: Partial<McpServerConfi
     env: {},
     secretEnv: {},
     enabled: true,
+    // The runtime neither reads nor cares about this: it is a statement about how a *call* is gated, made
+    // in the loop above it, and a start hands the process the config whatever the flag says.
+    autoApprove: false,
     ...over,
   }
 }

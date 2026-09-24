@@ -10,6 +10,7 @@ import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type Too
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
 import { nextGateIndex, type FrameCall } from '../protocol/approval'
 import { createMcpToolNames, isMcpToolName, type McpConsent, type McpToolNames } from '../protocol/mcp-tools'
+import { mcpCallSkipsConsent, MCP_SERVER_AUTO_APPROVE } from '../protocol/mcp-settings'
 import { computeFileDiff, type FileDiff } from '../protocol/diff'
 import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
@@ -214,17 +215,25 @@ export function needsApproval(tool: string): boolean {
 }
 
 /**
- * Whether one call must be put to the user before it runs, given the session's own setting.
+ * Whether one call must be put to the user before it runs, given the session's own setting and
+ * whatever the server behind the call says about itself.
  *
- * Two rules, and the order between them is the whole of this function. An MCP call is always asked
- * about, whatever the Auto-approve shield says: the shield is the user answering *this app's* tools in
- * advance, and a call that runs in another process, against another project's configuration, in a server
- * this app did not write, is not a question that has already been answered. Everything else keeps the
- * behaviour it had — the exempt reads run, and a write or a command waits unless the user turned the
- * gate off.
+ * Two rules, and the order between them is the whole of this function. A call to a running server is
+ * normally always asked about, whatever the Auto-approve shield says: the shield is the user answering
+ * *this app's* tools in advance, and a call that runs in another process, against another project's
+ * configuration, in a server this app did not write, is not a question that has already been answered.
+ * The exception is a server the user flagged itself — `serverAutoApprove`, which the caller reads from
+ * that server's config at the moment of the call. Then, and only then, the call runs without a pause,
+ * because the user has answered this exact question for this exact server, in advance, on purpose.
+ *
+ * Everything else keeps the behaviour it had — the exempt reads run, and a write or a command waits
+ * unless the user turned the gate off. Note which way the shield does *not* reach: an mcp call against
+ * an unflagged server is still asked about with the shield on.
  */
-function callNeedsApproval(tool: string, autoApprove: boolean): boolean {
-  if (isMcpToolName(tool)) return true
+export function callNeedsApproval(tool: string, autoApprove: boolean, serverAutoApprove = false): boolean {
+  const mcpCall = isMcpToolName(tool)
+  if (mcpCallSkipsConsent({ isMcpCall: mcpCall, server: { autoApprove: serverAutoApprove } })) return false
+  if (mcpCall) return true
   return needsApproval(tool) && !autoApprove
 }
 
@@ -419,7 +428,23 @@ export type AgentChunk =
    * record it on the turn. This is only for what it could not know — which of them did not make it.
    */
   | { type: 'context_notice'; path: string; code: MentionSkipCode }
-  | { type: 'tool_call_start'; callId: string; tool: string; args: Record<string, unknown> }
+  | {
+      type: 'tool_call_start'
+      callId: string
+      tool: string
+      args: Record<string, unknown>
+      /**
+       * Present only when the call ran without a pause because its own server is flagged, and then it is
+       * the flag's name.
+       *
+       * Additive and optional: the ordinary announcement does not carry it, a record without it reads as
+       * the call that was asked about, and a loader that does not know the key drops it rather than
+       * refusing the step. It is here rather than in a chunk of its own because it describes the call
+       * being announced — what the user should understand about this card — and a second chunk would let
+       * the two disagree about which call it was.
+       */
+      autoApproved?: string
+    }
   | { type: 'tool_result'; callId: string; tool: string; ok: boolean; code?: string; output: string }
   /**
    * The plan as it stands after a `set_plan` declaration, merged in the loop rather than handed over
@@ -1071,14 +1096,28 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
    * it may take the next step.
    */
   async function* walkFrame(frame: ToolCall[], cursor: number): AsyncGenerator<AgentChunk, WalkEnd, void> {
-    const calls: FrameCall[] = frame.map((call) => ({
-      callId: call.id,
+    const calls: FrameCall[] = []
+    // The calls that will run because their own server is flagged, by call id, holding the flag's name
+    // for the announcement to carry.
+    const skippedConsent = new Map<string, string>()
+    for (const call of frame) {
+      const tool = call.function.name
       // Auto-approve answers this app's own questions in advance, so the gate has nothing to stop at
-      // for them. It is read here, once, where the flags are built: a walk that consulted the setting
-      // per call would be a second place for the same decision about the same run. An MCP call is asked
-      // about whatever the setting says — see `callNeedsApproval`.
-      needsApproval: callNeedsApproval(call.function.name, opts.autoApprove),
-    }))
+      // for them. The session's setting is read here, once, where the flags are built: a walk that
+      // consulted the setting per call would be a second place for the same decision about the same
+      // run. An MCP call is asked about whatever that setting says — see `callNeedsApproval`.
+      //
+      // The server's own flag is a different read and cannot be folded into that one. It lives in a
+      // config file that can be edited while the turn runs, so it is asked for at the call rather than
+      // once per run — a server flagged a moment ago decides the calls made after it — and it is asked
+      // of the server, which means only a call that reaches one.
+      const mcpCall = isMcpToolName(tool)
+      const serverAutoApprove = mcpCall ? await mcp.autoApproves(tool) : false
+      if (mcpCallSkipsConsent({ isMcpCall: mcpCall, server: { autoApprove: serverAutoApprove } })) {
+        skippedConsent.set(call.id, MCP_SERVER_AUTO_APPROVE)
+      }
+      calls.push({ callId: call.id, needsApproval: callNeedsApproval(tool, opts.autoApprove, serverAutoApprove) })
+    }
     const gate = nextGateIndex(calls, cursor)
     // Where the stretch with nothing to decide ends: the gate itself when there is one, and the end
     // of the frame when there is not.
@@ -1087,7 +1126,16 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     for (let index = cursor; index < stop; index += 1) {
       const call = frame[index]
       const tool = call.function.name
-      yield { type: 'tool_call_start', callId: call.id, tool, args: argsForDisplay(call) }
+      const skipped = skippedConsent.get(call.id)
+      yield {
+        type: 'tool_call_start',
+        callId: call.id,
+        tool,
+        args: argsForDisplay(call),
+        // Only a call that ran because its own server is flagged carries this, and then it is the
+        // record of *why* nothing was asked. Every other announcement is the shape it always was.
+        ...(skipped ? { autoApproved: skipped } : {}),
+      }
 
       const outcome = await runCall(tool, call.function.arguments)
       if (opts.signal.aborted) return 'aborted'

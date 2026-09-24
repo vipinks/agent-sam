@@ -277,6 +277,14 @@ export interface McpServerListing {
   env: Record<string, string>
   /** The names of the secrets this server holds, and whether each one has a value. Never the value. */
   secrets: Array<{ name: string; set: boolean }>
+  /**
+   * Whether this server's tools run without asking, as the file reads for display.
+   *
+   * Normalized here rather than left absent: a row shows a toggle, a toggle has two positions, and
+   * "the key is not there" is not one of them. Absent in the file is off on screen, and off stays off —
+   * nothing about reading a server writes the key back.
+   */
+  autoApprove: boolean
 }
 
 /** Both scopes, plus everything either file refused to load. */
@@ -298,6 +306,7 @@ function toListing(entry: McpServerEntry, scope: McpScope, trust: McpTrustState 
     scope,
     trust,
     secrets: secretEnvListing(entry.config),
+    autoApprove: entry.config.autoApprove,
   }
 }
 
@@ -348,6 +357,7 @@ export interface McpServerInput {
   cwd?: string | null
   env?: Record<string, string>
   enabled?: boolean
+  autoApprove?: boolean
 }
 
 /**
@@ -357,6 +367,11 @@ export interface McpServerInput {
  * a transport rule cannot be enforced in one place and not the other. Absent fields get their documented
  * defaults here — a record is being *created*, so there is no earlier spelling to preserve — and
  * `secretEnv` starts empty because no plaintext secret is ever accepted at this boundary.
+ *
+ * `autoApprove` is the one optional field that is *not* spelled out when it is off. Every other default
+ * here is a value the file has to hold for the record to mean anything; this one means off by being
+ * absent, so a server added without the flag is written exactly as a server added before the flag
+ * existed — and a true is written because that is the whole of what the user asked for.
  */
 function newServerRecord(server: McpServerInput, scope: McpScope): McpServerEntry {
   const candidate: McpServerRaw = {
@@ -368,6 +383,7 @@ function newServerRecord(server: McpServerInput, scope: McpScope): McpServerEntr
     env: server.env ?? {},
     secretEnv: {},
     enabled: server.enabled ?? false,
+    ...(server.autoApprove === true ? { autoApprove: true } : {}),
   }
 
   const checked = validateMcpServerRecord(candidate, scope, 0)
@@ -451,6 +467,38 @@ export async function setMcpServerEnabled(
   )
 
   return { id: input.serverId, enabled: input.enabled }
+}
+
+/**
+ * Flag one server as running its tools without asking, or take the flag back.
+ *
+ * Deliberately nothing else, exactly like `setEnabled` beside it: the flag is one field, the record goes
+ * back with every other key it had, and no other file is touched. Trust is not written here either — but
+ * for a project server this *does* change the hash the grant was made against, so the next read reports
+ * the grant as no longer matching and the row offers Re-trust. That is the existing rule doing its job,
+ * not a second invalidation path: the user changed what the server may do, so the grant they gave for the
+ * old behaviour no longer describes it.
+ *
+ * The value is written as given, `false` included. Absence means off when a file is *read*, but a user who
+ * switches this off has decided something, and the file says so.
+ */
+export async function setMcpServerAutoApprove(
+  env: McpEnv,
+  input: { scope: McpScope; rootPath: string | null; serverId: string; value: boolean }
+): Promise<{ id: string; autoApprove: boolean }> {
+  const path = configPathFor(env, input.scope, input.rootPath)
+  const loaded = await loadForWrite(path, input.scope)
+  requireEntry(loaded.entries, input.scope, input.serverId)
+
+  await writeConfigFile(
+    path,
+    loaded.document,
+    loaded.entries.map((entry) =>
+      entry.config.id === input.serverId ? { ...entry.raw, autoApprove: input.value } : entry.raw
+    )
+  )
+
+  return { id: input.serverId, autoApprove: input.value }
 }
 
 /**
@@ -695,6 +743,15 @@ export interface McpServerCallContext {
    * `listing` above is where the renderer's view of a server is built, without them.
    */
   secrets: string[]
+  /**
+   * Whether the user flagged this server, read from the config as it stands at the call.
+   *
+   * The one field here that decides something rather than describing it: it is what the loop branches on
+   * to skip the consent pause, and it is read from the file at the moment of the call rather than carried
+   * from the start — a server flagged while a turn was running decides the calls made after the flag, and
+   * one unflagged again stops skipping them. Absent in the file is `false`, like everywhere else.
+   */
+  autoApprove: boolean
 }
 
 export async function readMcpServerCallContext(
@@ -704,7 +761,15 @@ export async function readMcpServerCallContext(
 ): Promise<McpServerCallContext | null> {
   const user = await readMcpConfigFile(mcpUserConfigPath(env.appDataPath), 'user')
   const userEntry = user.entries.find((entry) => entry.config.id === serverId)
-  if (userEntry) return { serverId, scope: 'user', trust: null, secrets: secretValues(env, userEntry.config) }
+  if (userEntry) {
+    return {
+      serverId,
+      scope: 'user',
+      trust: null,
+      secrets: secretValues(env, userEntry.config),
+      autoApprove: userEntry.config.autoApprove,
+    }
+  }
 
   // No folder open, so there is no project file to look in — and nothing to report about one.
   if (!rootPath) return null
@@ -719,6 +784,7 @@ export async function readMcpServerCallContext(
     scope: 'project',
     trust: compareMcpTrust(projectEntry.config, roots[serverId]),
     secrets: secretValues(env, projectEntry.config),
+    autoApprove: projectEntry.config.autoApprove,
   }
 }
 
@@ -767,6 +833,9 @@ const serverInputSchema = z.object({
   cwd: z.string().nullable().optional(),
   env: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional(),
+  // Accepted rather than ignored, which is the whole difference between an add that flags a server and
+  // one that silently drops what the user ticked.
+  autoApprove: z.boolean().optional(),
 })
 
 /**
@@ -819,6 +888,26 @@ export const mcpModule = defineModule({
         rootPath: input.rootPath ?? null,
         serverId: input.serverId,
         enabled: input.enabled,
+      })
+    }
+  ),
+
+  /**
+   * Flag one server's tools as running without asking, or take the flag back.
+   *
+   * A sibling of `setEnabled` rather than a field on it: the two are different statements — one is about
+   * whether the server may run now, the other about whether its calls are put to the user — and a screen
+   * offers them as two controls. The server has to exist in the scope named, so a flag cannot be written
+   * against an id nothing answers for.
+   */
+  setAutoApprove: command(
+    z.object({ scope: scopeSchema, rootPath: rootPathSchema, serverId: serverIdSchema, value: z.boolean() }),
+    async ({ input }) => {
+      return setMcpServerAutoApprove(mcpEnv(), {
+        scope: input.scope,
+        rootPath: input.rootPath ?? null,
+        serverId: input.serverId,
+        value: input.value,
       })
     }
   ),

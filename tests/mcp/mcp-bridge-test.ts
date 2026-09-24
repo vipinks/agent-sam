@@ -439,6 +439,70 @@ async function autoApproveDoesNotBypassAnMcpCall() {
   results.push('auto-approve does not bypass an MCP call, and the pause never continues itself')
 }
 
+/**
+ * A flagged server's call, through the loop, with the marker on the chunk main sends.
+ *
+ * The whole feature at the gate it actually gates on: the loop asks the bridge whether *this* server is
+ * flagged, the flag decides there is no pause, and the announcement carries the name of the flag that let
+ * it through — which is what the card renders and what a reopened transcript reads back. `contexts` is
+ * where the fake config answers, so this is the same read the consent card makes of that server.
+ *
+ * Two claims, and the second is the one that matters most: the session's Auto-approve is *on* here, and an
+ * unflagged server's call under it still pauses. A per-server flag read as a session-wide one would have
+ * made this test pass with the wrong cause.
+ */
+async function aFlaggedServerCallSkipsThePauseAndSaysWhy() {
+  const servers = fakeServers({
+    tools: ALPHA,
+    contexts: {
+      alpha: { serverId: 'alpha', scope: 'project', trust: 'matched', secrets: [], autoApprove: true },
+    },
+  })
+  const provider = scriptedProvider([
+    askFrame([{ id: 'c1', name: ALPHA_WIRE, args: { url: 'https://example.com' } }]),
+    proseFrame(),
+  ])
+
+  const chunks = await collect(runAgentLoop(loopOptions({ mcp: bridgeOver(servers), provider, autoApprove: true })))
+
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'awaiting_approval'),
+    false,
+    `a flagged server's call must not pause: ${JSON.stringify(chunks.map((c) => c.type))}`
+  )
+  assert.equal(servers.calls.length, 1, 'and it really reached the server, rather than being dropped')
+  const start = chunks.find((chunk) => chunk.type === 'tool_call_start')
+  assert.equal(start?.autoApproved, 'autoApprove', 'the announcement names the flag that let it through')
+  assert.equal(chunks.find((chunk) => chunk.type === 'tool_result')?.ok, true, 'and the result came back')
+
+  // The other server, in the same session and under the same shield. This is the case the exception could
+  // have swallowed, and it is asserted here rather than only in the pure rule's suite because the read of
+  // the flag is what this test exercises.
+  const unflagged = fakeServers({
+    tools: ALPHA,
+    contexts: {
+      alpha: { serverId: 'alpha', scope: 'project', trust: 'matched', secrets: [], autoApprove: false },
+    },
+  })
+  const secondProvider = scriptedProvider([
+    askFrame([{ id: 'c2', name: ALPHA_WIRE, args: { url: 'https://example.com' } }]),
+  ])
+  const secondChunks = await collect(
+    runAgentLoop(loopOptions({ mcp: bridgeOver(unflagged), provider: secondProvider, autoApprove: true }))
+  )
+  assert.ok(
+    secondChunks.some((chunk) => chunk.type === 'awaiting_approval'),
+    'an unflagged server still asks, with the shield on'
+  )
+  assert.equal(
+    secondChunks.find((chunk) => chunk.type === 'tool_call_start')?.autoApproved,
+    undefined,
+    'and its announcement carries no marker, because nothing skipped anything'
+  )
+
+  results.push('a flagged server runs unasked and says why; an unflagged one still pauses under the shield')
+}
+
 async function autoApproveStillBypassesABuiltIn() {
   // The other half of the same rule: the setting is untouched for the tools it was written for.
   const root = mkdtempSync(join(tmpdir(), 'sam-mcp-bridge-'))
@@ -628,7 +692,13 @@ async function thePauseCarriesWhatTheCardMustShow() {
   const servers = fakeServers({
     tools: ALPHA,
     contexts: {
-      alpha: { serverId: 'alpha', scope: 'project', trust: 'matched', secrets: ['s3cret-token'] },
+      alpha: {
+        serverId: 'alpha',
+        scope: 'project',
+        trust: 'matched',
+        secrets: ['s3cret-token'],
+        autoApprove: false,
+      },
     },
   })
   const provider = scriptedProvider([
@@ -715,6 +785,7 @@ async function main() {
   await step('a collision is suffixed', aCollisionIsSuffixed)
   await step('a preview is redacted and cut', thePreviewIsRedactedThenCut)
   await step('auto-approve does not bypass an MCP call', autoApproveDoesNotBypassAnMcpCall)
+  await step('a flagged server skips the pause and says why', aFlaggedServerCallSkipsThePauseAndSaysWhy)
   await step('auto-approve still bypasses a built-in', autoApproveStillBypassesABuiltIn)
   await step('a call behind an undecided head waits', aCallBehindAnUndecidedHeadDoesNotRun)
   await step('approve-once unblocks one call', approveOnceUnblocksExactlyOneCall)

@@ -52,6 +52,15 @@ export interface McpToolBridge {
   call(identity: string, argsJson: string): Promise<McpCallOutcome>
   /** What the consent card must show for one call, or undefined when the name is not an identity. */
   consent(identity: string, argsJson: string): Promise<McpConsent | undefined>
+  /**
+   * Whether the server behind one call was flagged to run its tools without asking.
+   *
+   * Asked before a call is made, and answered from the config as it stands then, because this is the one
+   * thing that decides whether the loop stops in front of the call. `false` for a name that is not an
+   * identity, and for a server the config can no longer be read for: a server this app can say nothing
+   * about is not a server it may stop asking about.
+   */
+  autoApproves(identity: string): Promise<boolean>
 }
 
 /** What a bridge is built from. Every member has a real default; a suite replaces what it measures. */
@@ -209,6 +218,17 @@ export function createMcpToolBridge(options: McpToolBridgeOptions = {}): McpTool
         // would otherwise survive as its own first half.
         argsPreview: truncateMcpPreview(redactSecrets(argsJson || '{}', context?.secrets ?? [])),
       }
+    },
+
+    async autoApproves(identity: string): Promise<boolean> {
+      const target = parseMcpToolIdentity(identity)
+      if (!target) return false
+
+      // Through the same read the consent card uses, and through its own failure rule: a config that
+      // cannot be read yields no context, and no context is not a flag. The call is then put to the user
+      // exactly as an unflagged server's would be — which is the answer that fails closed.
+      const context = await contextOf(target.serverId)
+      return context?.autoApprove === true
     },
   }
 }
