@@ -1,6 +1,7 @@
 /**
- * The rules for MCP stdio servers: what a config file may contain, what a server id may be, and the
- * hash that says a project server is still the one that was trusted.
+ * The rules for MCP stdio servers: what a config file may contain, what a server id may be, the hash
+ * that says a project server is still the one that was trusted, and the budgets and the redaction rule
+ * the runtime runs on.
  *
  * Nothing here touches the disk or Electron. The files these rules describe are read and written by
  * `conveyor/modules/mcp.ts`, and every decision below is exercised directly by the node suites — the
@@ -63,6 +64,11 @@ export function isSafeMcpSecretKey(value: unknown): value is string {
  * The codes this phase raises. A caller branches on one of these, never on a message: the message is
  * for the person reading it, and the code is the contract.
  *
+ * The first block is what reading and writing a config file can raise. The second is what running a
+ * server can, and each one of those is a statement about a *process*: whether it could be started at
+ * all, whether it answered in time, whether what it said was usable, and whether it is still there to
+ * be asked.
+ *
  * `MCP_CONFIG_INVALID` covers both a whole file this build cannot use and one record inside it that
  * fails the rules — the entry carries the scope either way, and `id` tells the two apart when a record
  * is what failed.
@@ -73,12 +79,73 @@ export const MCP_SERVER_NOT_FOUND = 'MCP_SERVER_NOT_FOUND'
 export const MCP_SECRET_CRYPTO_FAILED = 'MCP_SECRET_CRYPTO_FAILED'
 export const MCP_TRUST_MISMATCH = 'MCP_TRUST_MISMATCH'
 
+export const MCP_SPAWN_FAILED = 'MCP_SPAWN_FAILED'
+export const MCP_START_TIMEOUT = 'MCP_START_TIMEOUT'
+export const MCP_PROTOCOL_ERROR = 'MCP_PROTOCOL_ERROR'
+export const MCP_SERVER_NOT_RUNNING = 'MCP_SERVER_NOT_RUNNING'
+export const MCP_TOOL_ERROR = 'MCP_TOOL_ERROR'
+
 export type McpErrorCode =
   | typeof MCP_CONFIG_INVALID
   | typeof MCP_SERVER_DUPLICATE
   | typeof MCP_SERVER_NOT_FOUND
   | typeof MCP_SECRET_CRYPTO_FAILED
   | typeof MCP_TRUST_MISMATCH
+  | typeof MCP_SPAWN_FAILED
+  | typeof MCP_START_TIMEOUT
+  | typeof MCP_PROTOCOL_ERROR
+  | typeof MCP_SERVER_NOT_RUNNING
+  | typeof MCP_TOOL_ERROR
+
+/**
+ * The two budgets a running server is held to.
+ *
+ * Stated here rather than in the runtime because a timeout is a product decision, not an
+ * implementation detail: ten seconds is about how long a person will wait for a server to say hello,
+ * and thirty is about how long a tool call may take before the model should be told it did not finish.
+ *
+ * Both are enforced through the SDK's own request timeout, which raises its failure as a
+ * `RequestTimeout` *code* — and a code is what the runtime branches on. Injectable, so a suite proving
+ * a ten-second timeout does not take ten seconds; not configurable, because nothing outside a suite has
+ * a reason to change them.
+ */
+export const MCP_START_TIMEOUT_MS = 10_000
+export const MCP_CALL_TIMEOUT_MS = 30_000
+
+/**
+ * How many stderr lines are kept per server.
+ *
+ * A line count rather than a byte budget, because stderr is read by a person: two hundred lines is a
+ * stack trace and the run-up to it, and the oldest line past the bound is the one that has stopped
+ * being worth the memory. This is only about how many lines survive — what is *in* them is the rule
+ * below.
+ */
+export const MCP_STDERR_MAX_LINES = 200
+
+/** What a secret value becomes in a log line. */
+export const MCP_REDACTED = '[REDACTED]'
+
+/**
+ * Replace every occurrence of every secret value with `MCP_REDACTED`.
+ *
+ * Longest value first, so a value that contains another cannot be left half-replaced: given `abc` and
+ * `abc123`, replacing the short one first would leave `[REDACTED]123` behind — a partial secret, in a
+ * log file, which is exactly what this function exists to prevent.
+ *
+ * Empty values are dropped rather than replaced. An empty string matches everywhere, so honouring one
+ * would turn the whole log into a single `[REDACTED]` and destroy the diagnostics the buffer is for.
+ * There are no bytes behind it to leak either: an empty ciphertext is what a hand-edit that erased a
+ * value leaves behind.
+ *
+ * Every non-empty value is replaced, however short, and that is deliberate: a secret is secret, and the
+ * alternative — a length threshold — is a rule that leaks the one thing it was written to protect.
+ */
+export function redactSecrets(text: string, secrets: readonly string[]): string {
+  const values = [...new Set(secrets.filter((secret) => secret !== ''))].sort((a, b) => b.length - a.length)
+  let redacted = text
+  for (const value of values) redacted = redacted.split(value).join(MCP_REDACTED)
+  return redacted
+}
 
 /** Which of the two config files a record came from. */
 export type McpScope = 'user' | 'project'
@@ -427,6 +494,31 @@ export function compareMcpTrust(config: McpServerConfig, entry: unknown): McpTru
   const record = readMcpTrustEntry(entry)
   if (record === null) return 'absent'
   return record.configHash === hashMcpServerConfig(config) ? 'matched' : 'mismatched'
+}
+
+/**
+ * Whether a project server may run, and what to say when it may not.
+ *
+ * The judgment is here, and only here, because two places have to reach the same answer — the trust
+ * guard a config-layer caller uses, and the runtime that must not spawn without one — and the two are in
+ * modules that cannot import each other. A single rule both of them read is what keeps "matched" from
+ * meaning one thing in one of them and something else in the other. `null` means yes.
+ *
+ * `absent` is not a lesser refusal than `mismatched`: nobody ever granted this server anything, which is
+ * the same fact to the process that was about to start — this is not the thing that was trusted.
+ */
+export function mcpTrustRefusal(
+  serverId: string,
+  state: McpTrustState
+): { code: typeof MCP_TRUST_MISMATCH; message: string } | null {
+  if (state === 'matched') return null
+  return {
+    code: MCP_TRUST_MISMATCH,
+    message:
+      state === 'absent'
+        ? `The project server "${serverId}" has not been trusted, so it will not be started.`
+        : `The project server "${serverId}" changed since it was trusted, so it will not be started.`,
+  }
 }
 
 /**

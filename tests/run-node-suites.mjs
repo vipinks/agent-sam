@@ -61,6 +61,7 @@ const SUITES = [
   { name: 'skill files', src: 'skills/skills-files-test.ts' },
   { name: 'mcp config rules', src: 'mcp/mcp-rules-test.ts' },
   { name: 'mcp servers (files, trust, secrets)', src: 'mcp/mcp-servers-test.ts' },
+  { name: 'mcp runtime (spawn, tools, stderr)', src: 'mcp/mcp-runtime-test.ts' },
   { name: 'git porcelain parser', src: 'git/porcelain-test.ts' },
   { name: 'git module', src: 'git/git-module-test.ts' },
   { name: 'write guard rules', src: 'workspace/write-guard-test.ts' },
@@ -110,6 +111,11 @@ for (const suite of SUITES) {
         // into every one of those bundles — paying a per-suite cost for a parser most of them never
         // call — and would test an artifact the app never runs.
         '--external:exceljs',
+        // Also external, for the same reason: the MCP SDK is a main-process dependency the app
+        // externalizes too, and it is the thing that actually spawns the child the runtime suite
+        // measures. Inlining it would test a copy of the spawner rather than the shipped one.
+        '--external:@modelcontextprotocol/sdk',
+        '--external:@modelcontextprotocol/sdk/*',
         '--log-level=error',
       ],
       { stdio: 'inherit' }

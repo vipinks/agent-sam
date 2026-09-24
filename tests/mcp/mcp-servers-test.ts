@@ -20,6 +20,7 @@ import { strict as assert } from 'node:assert'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import { ConveyorError } from 'electron-conveyor/main'
 import {
   addMcpServer,
@@ -36,10 +37,12 @@ import {
   setMcpServerEnabled,
   setMcpServerSecret,
   setMcpServerTrust,
+  startMcpServer,
   type McpCryptoPort,
   type McpEnv,
   type McpTrustRead,
 } from '../../conveyor/modules/mcp'
+import type { McpRuntime, McpStartRequest } from '../../conveyor/modules/mcp-runtime'
 import {
   MCP_CONFIG_INVALID,
   MCP_SECRET_CRYPTO_FAILED,
@@ -68,14 +71,23 @@ function makeDir(prefix: string): string {
  * Stands in for `safeStorage`: a real encoding of a real plaintext, so a case can prove that neither
  * the plaintext nor the ciphertext appears in what a listing carries, and that the ciphertext is what
  * the file holds.
+ *
+ * The decrypt half mirrors what the real port does with the same base64, which is what lets a start be
+ * driven end to end from here: a stored secret has to come back out as the plaintext a child would be
+ * spawned with, and the only way to prove that outside Electron is to have a keychain that behaves
+ * like one.
  */
 const fakeCrypto: McpCryptoPort = {
   encrypt: (plaintext) => Buffer.from(`enc:${plaintext}`, 'utf8').toString('base64'),
+  decrypt: (ciphertext) => Buffer.from(ciphertext, 'base64').toString('utf8').replace(/^enc:/, ''),
 }
 
 /** The other half of the port's contract: an encryption that cannot happen at all. */
 const failingCrypto: McpCryptoPort = {
   encrypt: () => {
+    throw new Error('no OS keychain is available')
+  },
+  decrypt: () => {
     throw new Error('no OS keychain is available')
   },
 }
@@ -543,6 +555,171 @@ async function anEncryptionFailureLeavesTheFileAlone() {
   results.push('an encryption failure raises MCP_SECRET_CRYPTO_FAILED and leaves the file untouched')
 }
 
+async function theListingCarriesThePlainEnvAndStillHidesTheSecrets() {
+  const env = makeEnv()
+  const root = makeRoot()
+  const plainEnv = { GREETING: 'hello', LOG_LEVEL: 'debug' }
+  writeProjectConfig(root, [serverRecord({ id: 'filesystem', env: plainEnv })])
+  await setMcpServerSecret(env, {
+    scope: 'project',
+    rootPath: root,
+    serverId: 'filesystem',
+    name: 'API_TOKEN',
+    value: 'secret-value',
+  })
+
+  const listing = await listMcpServers(env, root)
+  assert.deepEqual(
+    listing.project[0].env,
+    plainEnv,
+    'the non-secret env travels with the server, keys and values: it is configuration, and a UI has to prefill it'
+  )
+  assert.deepEqual(
+    listing.project[0].secrets,
+    [{ name: 'API_TOKEN', set: true }],
+    'while a secret is still a name and a flag, and nothing else'
+  )
+
+  const payload = JSON.stringify(listing)
+  assert.ok(payload.includes('debug'), 'the plain value is on the wire')
+  assert.ok(!payload.includes('secret-value'), 'and no secret plaintext is')
+  assert.ok(!payload.includes(fakeCrypto.encrypt('secret-value')), 'nor its ciphertext')
+  assert.ok(!payload.includes('secretEnv'), 'nor the secretEnv block itself: the raw record is not what travels')
+
+  results.push('listServers carries the plain env and still carries no secret in either form')
+}
+
+// ---------------------------------------------------------------- the runtime hand-off
+
+/**
+ * A runtime that records what it was asked to start instead of starting it.
+ *
+ * Handing over a config, its decrypted secrets and the trust state read from the disk is the command's
+ * whole job; whether a process then appears is the runtime's, and the runtime suite is where that is
+ * proved. This is the seam that keeps the two halves separately accountable.
+ */
+function recordingRuntime(): { requests: McpStartRequest[]; start: McpRuntime['startServer'] } {
+  const requests: McpStartRequest[] = []
+  return {
+    requests,
+    start: async (request) => {
+      requests.push(request)
+      return [
+        { name: 'echo', description: 'Answer with the text it was given.', inputSchema: { type: 'object' } },
+      ] as Tool[]
+    },
+  }
+}
+
+async function aStartHandsTheRuntimeTheConfigItsSecretsAndItsTrust() {
+  const env = makeEnv()
+  const root = makeRoot()
+  const plainEnv = { LOG_LEVEL: 'debug' }
+  writeProjectConfig(root, [serverRecord({ id: 'filesystem', args: ['-y', 'server-one'], env: plainEnv })])
+  await setMcpServerSecret(env, {
+    scope: 'project',
+    rootPath: root,
+    serverId: 'filesystem',
+    name: 'API_TOKEN',
+    value: 'token-plain',
+  })
+  await setMcpServerTrust(env, { rootPath: root, serverId: 'filesystem', trusted: true })
+
+  const granted = recordingRuntime()
+  const answer = await startMcpServer(env, { scope: 'project', rootPath: root, serverId: 'filesystem' }, granted.start)
+
+  assert.equal(answer.id, 'filesystem', 'the command answers under the id it was asked for')
+  assert.deepEqual(
+    answer.tools.map((tool) => tool.name),
+    ['echo'],
+    'with the tools the runtime discovered'
+  )
+  assert.equal(granted.requests.length, 1, 'and the runtime was asked exactly once')
+
+  const request = granted.requests[0]
+  assert.equal(request.scope, 'project')
+  assert.equal(request.trust, 'matched', 'a grant that matches on disk is the state the runtime is handed')
+  assert.deepEqual(request.config.env, plainEnv, 'the plain env goes to the child as it was configured')
+  assert.deepEqual(
+    request.plaintextSecrets,
+    { API_TOKEN: 'token-plain' },
+    'and the secret arrives decrypted, not as the ciphertext the file holds'
+  )
+  assert.ok(
+    !JSON.stringify(request).includes(fakeCrypto.encrypt('token-plain')),
+    'so the ciphertext is not handed on at all'
+  )
+
+  // A config edited after the grant describes a different server, and the state read back says so — so
+  // the start is refused by code, and the runtime is never asked to run it. The guard is the same one the
+  // runtime applies, and it is applied here as well because this is where the config and the grant are
+  // both in hand: a caller that could not spawn anything at all is the outcome a refusal should have.
+  writeProjectConfig(root, [serverRecord({ id: 'filesystem', args: ['-y', 'server-two'], env: plainEnv })])
+  const edited = recordingRuntime()
+  await assert.rejects(
+    () => startMcpServer(env, { scope: 'project', rootPath: root, serverId: 'filesystem' }, edited.start),
+    (error: unknown) => codeOf(error) === MCP_TRUST_MISMATCH,
+    'a server edited since its grant is refused with MCP_TRUST_MISMATCH'
+  )
+  assert.deepEqual(edited.requests, [], 'and the runtime is handed nothing to run')
+
+  // A server nobody has ever trusted is refused the same way, not merely counted as untrusted.
+  writeProjectConfig(root, [serverRecord({ id: 'stranger' })])
+  const stranger = recordingRuntime()
+  await assert.rejects(
+    () => startMcpServer(env, { scope: 'project', rootPath: root, serverId: 'stranger' }, stranger.start),
+    (error: unknown) => codeOf(error) === MCP_TRUST_MISMATCH,
+    'an absent grant is refused with the same code as a changed one'
+  )
+  assert.deepEqual(stranger.requests, [], 'and that start never reaches the runtime either')
+
+  // The user scope states no trust at all, because trust does not govern it.
+  writeUserConfig(env, [serverRecord({ id: 'user-fs' })])
+  const user = recordingRuntime()
+  await startMcpServer(env, { scope: 'user', rootPath: null, serverId: 'user-fs' }, user.start)
+  assert.equal(user.requests[0].scope, 'user')
+  assert.ok(!('trust' in user.requests[0]), 'a user start carries no trust field, because none applies to it')
+
+  results.push('a start hands the runtime the config, its decrypted secrets and the trust state read from disk')
+}
+
+async function aSecretThatCannotBeDecryptedStopsTheStart() {
+  const env = makeEnv()
+  const root = makeRoot()
+  writeProjectConfig(root, [serverRecord({ id: 'filesystem', secretEnv: { API_TOKEN: 'ciphertext-1' } })])
+
+  const recorder = recordingRuntime()
+  await assert.rejects(
+    () =>
+      startMcpServer(
+        { appDataPath: env.appDataPath, crypto: failingCrypto },
+        { scope: 'project', rootPath: root, serverId: 'filesystem' },
+        recorder.start
+      ),
+    (error: unknown) => codeOf(error) === MCP_SECRET_CRYPTO_FAILED,
+    'a secret that cannot be decrypted fails by code rather than running a server without its credentials'
+  )
+  assert.deepEqual(recorder.requests, [], 'and the runtime is never asked to run it')
+
+  results.push('a secret that cannot be decrypted stops a start with MCP_SECRET_CRYPTO_FAILED')
+}
+
+async function aStartForAServerThatIsNotThereIsNotFound() {
+  const env = makeEnv()
+  const root = makeRoot()
+  writeProjectConfig(root, [serverRecord({ id: 'filesystem' })])
+
+  const recorder = recordingRuntime()
+  await assert.rejects(
+    () => startMcpServer(env, { scope: 'project', rootPath: root, serverId: 'ghost' }, recorder.start),
+    (error: unknown) => codeOf(error) === MCP_SERVER_NOT_FOUND,
+    'starting a server the file does not hold is not-found, not a spawn attempt'
+  )
+  assert.deepEqual(recorder.requests, [], 'and nothing is handed to the runtime')
+
+  results.push('a start for a server that is not configured is refused by code, before the runtime is asked')
+}
+
 // ---------------------------------------------------------------- the registered commands
 
 /** One registered member, reached the way the suites reach the others. */
@@ -630,6 +807,10 @@ async function main() {
     await step('secrets: set, list, clear', aSecretIsStoredAsCiphertextAndNeverListedBack)
     await step('secrets: crypto failure', anEncryptionFailureLeavesTheFileAlone)
     await step('commands: registered', theRegisteredCommandsReadTheScopesTheyAreToldTo)
+    await step('listing: plain env, no secrets', theListingCarriesThePlainEnvAndStillHidesTheSecrets)
+    await step('start: config, secrets, trust', aStartHandsTheRuntimeTheConfigItsSecretsAndItsTrust)
+    await step('start: undecryptable secret', aSecretThatCannotBeDecryptedStopsTheStart)
+    await step('start: unknown server', aStartForAServerThatIsNotThereIsNotFound)
 
     console.log(`mcp servers: ${results.length} passed`)
     for (const r of results) console.log(`  pass: ${r}`)

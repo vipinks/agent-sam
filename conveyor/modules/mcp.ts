@@ -34,24 +34,27 @@ import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { app, safeStorage } from 'electron'
 import { z } from 'zod'
+import type { Tool } from '@modelcontextprotocol/sdk/types'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, command } from '../init'
+import { getMcpRuntime, type McpStartRequest } from './mcp-runtime'
 import {
   compareMcpTrust,
   hashMcpServerConfig,
   isSafeMcpSecretKey,
+  mcpTrustRefusal,
   MCP_CONFIG_INVALID,
   MCP_CONFIG_VERSION,
   MCP_SECRET_CRYPTO_FAILED,
   MCP_SERVER_DUPLICATE,
   MCP_SERVER_NOT_FOUND,
   MCP_TRANSPORT_STDIO,
-  MCP_TRUST_MISMATCH,
   parseMcpConfigText,
   secretEnvListing,
   validateMcpServerRecord,
   type McpConfigParse,
   type McpScope,
+  type McpServerConfig,
   type McpServerConfigError,
   type McpServerEntry,
   type McpServerRaw,
@@ -85,20 +88,27 @@ export function mcpProjectConfigPath(rootPath: string): string {
 }
 
 /**
- * How a secret is encrypted.
+ * How a secret is encrypted, and decrypted again.
  *
  * A port rather than a direct call, for the same reason the paths are arguments: the suites have to be
- * able to store a secret and prove that what comes back out is a name and a flag. `setSecret` treats a
- * throw from it as the only failure it can have — there is no keychain, or the keychain refused — and
- * reports both as `MCP_SECRET_CRYPTO_FAILED`, because from the caller's side they are one fact: this
- * secret could not be stored.
+ * able to store a secret and prove that what comes back out is a name and a flag, and to run a server
+ * from a config whose secrets are stored without a keychain being present on the machine running the
+ * suite.
+ *
+ * `encrypt` failing is `MCP_SECRET_CRYPTO_FAILED` on `setSecret` — there is no keychain, or the keychain
+ * refused — because from the caller's side those are one fact: this secret could not be stored.
+ * `decrypt` failing is the same code on a start, and for the same reason: this secret could not be
+ * read, so the server cannot be given it. Both directions refuse rather than degrade, because a server
+ * started without its credentials is a server that fails in a way nobody can explain.
  */
 export interface McpCryptoPort {
   /** Encrypt one plaintext, returning the ciphertext to store. Throws when it cannot. */
   encrypt(plaintext: string): string
+  /** Recover one stored plaintext. Throws when it cannot. */
+  decrypt(ciphertext: string): string
 }
 
-/** Where the user-level files live, and how a secret is encrypted. */
+/** Where the user-level files live, and how a secret is encrypted and read back. */
 export interface McpEnv {
   appDataPath: string
   crypto: McpCryptoPort
@@ -111,6 +121,12 @@ const safeStoragePort: McpCryptoPort = {
       throw new Error('No OS keychain is available.')
     }
     return safeStorage.encryptString(plaintext).toString('base64')
+  },
+  decrypt(ciphertext: string): string {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('No OS keychain is available.')
+    }
+    return safeStorage.decryptString(Buffer.from(ciphertext, 'base64'))
   },
 }
 
@@ -257,6 +273,8 @@ export interface McpServerListing {
   scope: McpScope
   /** Null for a user server: trust governs the project scope only. */
   trust: McpTrustState | null
+  /** The plaintext, non-secret environment for this server: configuration a UI must be able to show. */
+  env: Record<string, string>
   /** The names of the secrets this server holds, and whether each one has a value. Never the value. */
   secrets: Array<{ name: string; set: boolean }>
 }
@@ -275,6 +293,7 @@ function toListing(entry: McpServerEntry, scope: McpScope, trust: McpTrustState 
     command: entry.config.command,
     args: [...entry.config.args],
     cwd: entry.config.cwd,
+    env: { ...entry.config.env },
     enabled: entry.config.enabled,
     scope,
     trust,
@@ -289,9 +308,10 @@ function toListing(entry: McpServerEntry, scope: McpScope, trust: McpTrustState 
  * user's and are listed regardless, while there is no project server list to read at all — so no
  * project file is opened and nothing is reported about one.
  *
- * `env` (the plaintext, non-secret environment) is deliberately not carried. It is not a secret on disk,
- * but it is not this phase's business on the wire either: what a UI needs in order to *act* on a server
- * is its command, its id, whether it is enabled, how its trust stands, and which secrets it holds.
+ * `env` (the plaintext, non-secret environment) travels with each server, keys and values: it is
+ * configuration, not a credential, and a settings pane cannot prefill a server it cannot read. What
+ * does *not* travel is any part of `secretEnv`: a secret is a name and a set flag, in neither plaintext
+ * nor ciphertext form.
  */
 export async function listMcpServers(env: McpEnv, rootPath: string | null): Promise<McpServerListingResult> {
   const user = await readMcpConfigFile(mcpUserConfigPath(env.appDataPath), 'user')
@@ -493,17 +513,17 @@ export async function setMcpServerTrust(
  *
  * A later turn's runtime is the consumer; the code is defined and tested here so that the runtime cannot
  * invent its own reading of the three states. Only `matched` passes. `absent` is not a lesser failure
- * than `mismatched` — it means nobody ever granted this server anything — and both are the same fact to
- * the process that was about to start: this is not the thing that was trusted.
+ * than `mismatched` — it means nobody ever trusted this server — and both are the same fact to the
+ * process that was about to start: this is not the thing that was trusted.
+ *
+ * The judgment itself is `mcpTrustRefusal` in `protocol/mcp.ts`, because the runtime has to reach the
+ * same answer and cannot import this module: a start reads its config here and runs there, so importing
+ * in both directions would close a cycle. One rule read from both sides is what keeps them from
+ * disagreeing, and this function stays the name a config-layer caller uses.
  */
 export function assertMcpTrustMatched(serverId: string, state: McpTrustState): void {
-  if (state === 'matched') return
-  throw new ConveyorError(
-    MCP_TRUST_MISMATCH,
-    state === 'absent'
-      ? `The project server "${serverId}" has not been trusted, so it will not be started.`
-      : `The project server "${serverId}" changed since it was trusted, so it will not be started.`
-  )
+  const refusal = mcpTrustRefusal(serverId, state)
+  if (refusal) throw new ConveyorError(refusal.code, refusal.message)
 }
 
 /**
@@ -580,6 +600,74 @@ export async function clearMcpServerSecret(
   return { id: input.serverId, name: input.name }
 }
 
+/**
+ * Read one server's secrets into the clear, for the one caller that must hand them to a process.
+ *
+ * Every name is attempted before anything is returned, and one failure refuses the whole start. A server
+ * started with three of its four credentials is worse than one that did not start: it comes up, it looks
+ * healthy, and it fails later at whatever the missing value was for.
+ */
+function decryptSecrets(env: McpEnv, config: McpServerConfig): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [name, ciphertext] of Object.entries(config.secretEnv)) {
+    try {
+      out[name] = env.crypto.decrypt(ciphertext)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new ConveyorError(
+        MCP_SECRET_CRYPTO_FAILED,
+        `The secret "${name}" on "${config.id}" could not be read, so the server was not started. ${reason}`
+      )
+    }
+  }
+  return out
+}
+
+/**
+ * Find one server, check it may run, hand it to the runtime, and report the tools it answered with.
+ *
+ * The runtime arrives as a *function* rather than as an import: this module reads the config and the
+ * trust records, the runtime owns the processes, and the two cannot import each other — a start is the
+ * one road between them. A command passes the app's runtime; a suite passes a recorder, so what the
+ * config layer decided can be asserted apart from what the process then did.
+ *
+ * The trust state is read here rather than taken from the caller. Trust compares a grant on disk with the
+ * config on disk, so a renderer that supplied its own answer could declare a server trusted — the one
+ * thing this gate exists to prevent. The guard is applied here, and the runtime applies the same one
+ * again, because it is the last place a process can be created.
+ */
+export async function startMcpServer(
+  env: McpEnv,
+  input: { scope: McpScope; rootPath: string | null; serverId: string },
+  start: (request: McpStartRequest) => Promise<Tool[]>
+): Promise<{ id: string; tools: Tool[] }> {
+  const path = configPathFor(env, input.scope, input.rootPath)
+  const loaded = await readMcpConfigFile(path, input.scope)
+  if (loaded.failure) throw new ConveyorError(loaded.failure.code, loaded.failure.message)
+  const entry = requireEntry(loaded.entries, input.scope, input.serverId)
+
+  const request: McpStartRequest = {
+    // `secretEnv` is emptied rather than passed through. The runtime is handed the plaintexts it has to
+    // spawn with, in `plaintextSecrets`, and it has no use for the stored ciphertext — so carrying it
+    // further than the file and the one decryption would put the stored form somewhere it can be dumped.
+    // The keys that remain are the ones that describe what will run.
+    config: { ...entry.config, secretEnv: {} },
+    plaintextSecrets: decryptSecrets(env, entry.config),
+    scope: input.scope,
+  }
+
+  if (input.scope === 'project') {
+    // The root is non-null here: `configPathFor` above refuses the project scope without one. Trust
+    // governs this scope only, which is why a user start states no trust state at all.
+    const roots = (await readMcpTrustFile(mcpTrustFilePath(env.appDataPath))).roots[input.rootPath as string] ?? {}
+    request.trust = compareMcpTrust(entry.config, roots[input.serverId])
+    assertMcpTrustMatched(input.serverId, request.trust)
+  }
+
+  const tools = await start(request)
+  return { id: input.serverId, tools }
+}
+
 /** The environment the registered commands run with: the real app data folder and the real keychain. */
 function mcpEnv(): McpEnv {
   return {
@@ -613,12 +701,15 @@ const serverInputSchema = z.object({
 })
 
 /**
- * The MCP configuration surface: configuration, trust and secrets — and no runtime.
+ * The MCP surface: configuration, trust and secrets on disk, and the four calls that run a server.
  *
- * Every command here is main-process and code-branched, and none of them starts a process, opens a
- * socket, or exposes a tool. Reading a record is a query; anything that writes is a command. The scope
- * and the root path come from the caller, the app data folder from main, and the renderer therefore
- * cannot point a write at a directory it named.
+ * Every command here is main-process and code-branched. Reading is a query; anything that writes, or
+ * changes what is running, is a command. The scope and the root path come from the caller, the app data
+ * folder from main, and the renderer therefore cannot point a write at a directory it named.
+ *
+ * The four runtime commands are the only members of this module that reach beyond the two config files,
+ * and they reach through `getMcpRuntime()`: the runtime owns the processes, this module owns the files,
+ * and the start path is the one place a request crosses between them.
  */
 export const mcpModule = defineModule({
   /** Both scopes as one read: user servers, project servers with their trust state, and config errors. */
@@ -707,4 +798,51 @@ export const mcpModule = defineModule({
       })
     }
   ),
+
+  /**
+   * Start one configured server and answer with the tools it offers.
+   *
+   * A command rather than a query, though it changes no file: it creates a process, and that is a change
+   * to what is running. `serverId` is the whole of the input — the command, its arguments, its directory,
+   * its environment and its secrets are read from the config on disk, so a caller cannot run something the
+   * user did not configure, and cannot name the secrets it is handed.
+   */
+  startServer: command(
+    z.object({ scope: scopeSchema, rootPath: rootPathSchema, serverId: serverIdSchema }),
+    async ({ input }) => {
+      return startMcpServer(
+        mcpEnv(),
+        { scope: input.scope, rootPath: input.rootPath ?? null, serverId: input.serverId },
+        getMcpRuntime().startServer
+      )
+    }
+  ),
+
+  /** Stop one running server: its client, its process, and its registry entry. */
+  stopServer: command(z.object({ serverId: serverIdSchema }), async ({ input }) => {
+    const runtime = getMcpRuntime()
+    await runtime.stopServer(input.serverId)
+    return { id: input.serverId, running: false }
+  }),
+
+  /**
+   * The stderr one running server has written, oldest line first, secrets already redacted.
+   *
+   * A query: it reads a buffer and changes nothing, and the buffer it reads is only redacted content.
+   * An empty answer for a server that is not running is the honest one — the log belongs to the process,
+   * and there is no process.
+   */
+  getServerLogs: query(z.object({ serverId: serverIdSchema }), ({ input }) => {
+    return { serverId: input.serverId, lines: getMcpRuntime().readServerLogs(input.serverId) }
+  }),
+
+  /**
+   * Every tool every running server offers, in the shape the server sent it and tagged with its server.
+   *
+   * Raw and tagged, deliberately: naming these for the agent's tool list is the next turn's decision, and
+   * a summary invented here would be a second, quieter answer to a question that has not been asked yet.
+   */
+  listRunningTools: query(() => {
+    return getMcpRuntime().listRunningTools()
+  }),
 })
