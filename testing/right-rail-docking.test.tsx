@@ -13,7 +13,7 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  * The right rail, and the panels it docks into the inner group's right slot.
  *
  * Phase 39's shell restructure is a claim about the *layout*, not about styling: the inner group now
- * holds whichever of three panels the right rail has docked, and nothing at all at launch. So the
+ * holds whichever of the right rail's panels is docked, and nothing at all at launch. So the
  * assertions are on the group's own panel children — the columns sharing the width — and on which
  * panel's own node is inside the slot, never on a measured width, which is jsdom's business only.
  *
@@ -228,15 +228,15 @@ describe('the right rail, at launch', () => {
     await waitFor(() => expect(screen.getByLabelText('Message')).toBeTruthy())
   })
 
-  it('offers its three residents, in order, with none of them pressed', async () => {
+  it('offers its four residents, in order, with none of them pressed', async () => {
     stubWorkbench()
     renderWorkbench()
 
     const labels = [...rightRail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    expect(labels).toEqual(['Code', 'Preview', 'Terminal'])
+    expect(labels).toEqual(['Code', 'Preview', 'Terminal', 'Tools'])
     expect(
       labels.map((_, index) => [...rightRail().querySelectorAll('button')][index]?.getAttribute('aria-pressed'))
-    ).toEqual(['false', 'false', 'false'])
+    ).toEqual(['false', 'false', 'false', 'false'])
   })
 })
 

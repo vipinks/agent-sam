@@ -14,6 +14,7 @@ import { SettingsView } from './settings-view'
 import { TerminalPanel } from './terminal-panel'
 import { PreviewPanel } from './preview-panel'
 import { RightRail } from './right-rail'
+import { ToolsPanel } from './tools-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
@@ -285,7 +286,7 @@ function WorkbenchLayout() {
 
               {/*
                 The right slot, while a resident is docked in it. One panel whatever is in it, because
-                the rail's three residents are three things shown in one column rather than three
+                the rail's four residents are four things shown in one column rather than four
                 columns; the resident's own component is what changes.
 
                 The id is the group's key for the pane beside the chat and is the same for every
@@ -309,8 +310,10 @@ function WorkbenchLayout() {
                     <CodeViewer />
                   ) : rightPanel === 'preview' ? (
                     <PreviewPanel />
-                  ) : (
+                  ) : rightPanel === 'terminal' ? (
                     <TerminalPanel />
+                  ) : (
+                    <ToolsPanel />
                   )}
                 </ResizablePanel>
               )}

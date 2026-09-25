@@ -1,4 +1,13 @@
-import { Eye, FileCode, Maximize2, Minimize2, PanelRightClose, SquareTerminal, type LucideIcon } from 'lucide-react'
+import {
+  Eye,
+  FileCode,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  SquareTerminal,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'
@@ -7,9 +16,10 @@ import { useWorkbenchStore } from './store'
  * The right rail, and the panels it docks.
  *
  * The rail is the left rail's mirror and its opposite in one way: an icon click here does not switch
- * between columns but *docks* one panel into the inner group, beside the chat. Three residents, one at
- * a time, because the slot they share is one column — the file's source, the same file rendered, and
- * the shell command transcript are three things a reader looks at in the same place, not three places.
+ * between columns but *docks* one panel into the inner group, beside the chat. Its residents are docked
+ * one at a time, because the slot they share is one column — the file's source, the same file rendered,
+ * the shell command transcript and the tools panel are things a reader looks at in the same place rather
+ * than four places.
  *
  * At launch nothing is docked. That is the phase's decision rather than a default that fell out of the
  * code: the inner group holds the conversation alone, and the rail is where you go to open the file
@@ -23,7 +33,7 @@ import { useWorkbenchStore } from './store'
  */
 
 /** The ids of the panels the right rail can dock. */
-export type RightPanelId = 'code' | 'preview' | 'terminal'
+export type RightPanelId = 'code' | 'preview' | 'terminal' | 'tools'
 
 /** One resident of the rail: what it is called, and the glyph it is drawn as. */
 export interface RightResident {
@@ -34,13 +44,16 @@ export interface RightResident {
 
 /**
  * The residents, in the order they are read: the file's source and its diffs, then that same file
- * rendered, then the shell. The first two are the same open file seen two ways and sit together for
- * that reason; the terminal is a different thing entirely and comes last.
+ * rendered, then the shell. The first two are the same open file seen two ways and sit together for that
+ * reason; the terminal and the tools are different things entirely and come after them, in that order
+ * because the shell is what a reader reaches for while working in a file and the tools are what they
+ * reach for while deciding what the app is working *from*.
  */
 export const RIGHT_RESIDENTS: RightResident[] = [
   { id: 'code', label: 'Code', icon: FileCode },
   { id: 'preview', label: 'Preview', icon: Eye },
   { id: 'terminal', label: 'Terminal', icon: SquareTerminal },
+  { id: 'tools', label: 'Tools', icon: Wrench },
 ]
 
 /**
@@ -55,7 +68,7 @@ export function rightResidentById(id: string): RightResident {
 }
 
 /**
- * The right rail: three buttons, one per resident, and nothing else — the same shape the left rail
+ * The right rail: one button per resident, and nothing else — the same shape the left rail
  * has, icons only, each stating its label through a tooltip for pointers and an `aria-label` for
  * everything else.
  *

@@ -48,6 +48,20 @@ interface WorkbenchState {
   settingsReturnView: string | null
   /** Open the settings screen, remembering the drawer view it is taking over. */
   openSettings: () => void
+  /**
+   * Open the settings screen at one of its sections.
+   *
+   * The whole of a deep link, in one dispatch, for a surface that is a *view of* something the settings
+   * screen owns: the tools panel's rows can switch a skill on or off and nothing more, and everything
+   * else about a skill is the advanced screen's business. Setting the section and opening the screen are
+   * one step rather than two, so no caller can reach settings after a write that failed halfway and land
+   * on whichever section happened to be showing.
+   *
+   * The section is the visit's, exactly as it is for a tab the user clicks: written nowhere, so a launch
+   * opens the first section and the screen a deep link landed on is not a preference anyone chose to
+   * keep.
+   */
+  openSettingsAt: (section: SettingsSection) => void
   /** Leave the settings screen for the view it took over, or the conversation when there is none. */
   closeSettings: () => void
   /** Path of the file previewed in the code viewer, or null for the empty state. */
@@ -359,6 +373,19 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   openSettings: () =>
     set((state) => ({
       activeActivity: 'settings',
+      settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
+    })),
+  /**
+   * The same entry as `openSettings`, plus the section to land on.
+   *
+   * The remembered view is resolved here as well rather than by calling `openSettings` and setting the
+   * section beside it: the two would be two renders and, for a caller that got the order wrong, a visit
+   * that remembered the wrong place to come back to.
+   */
+  openSettingsAt: (settingsSection) =>
+    set((state) => ({
+      activeActivity: 'settings',
+      settingsSection,
       settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
     })),
   /**

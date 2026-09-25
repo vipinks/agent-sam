@@ -31,7 +31,6 @@ import {
   isSkillHidden,
   MAX_ACTIVE_SKILLS,
   MAX_SKILL_ID_CHARS,
-  skillFolderPath,
   tierById,
   tierKindOf,
   WRITABLE_SKILL_TIERS,
@@ -60,6 +59,12 @@ import { Label } from '../ui/label'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { MarkdownContent } from './markdown'
+import { WriteConfirm, type PendingConfirm } from './skills-confirm'
+// The failure sentences and the write confirm used to be defined in this file. They live in
+// `./skills-notices` and `./skills-confirm` now, and this screen imports them rather than keeping copies:
+// the tools panel draws the same read and makes one of the same writes, so one code has to have one
+// sentence and one dialog. Their bodies are unchanged, and the panel imports both modules as well.
+import { listingFailure, scopeLabel, writeFailure } from './skills-notices'
 import { useWorkbenchStore } from './store'
 
 export function SkillsSection() {
@@ -424,12 +429,6 @@ function SkillCard({
   )
 }
 
-/** What one confirm is about: which skill, and which of the four writes it is. */
-interface PendingConfirm {
-  kind: 'copy' | 'delete' | 'disable' | 'enable'
-  skill: SkillSummary
-}
-
 /**
  * The create dialog: two destinations, and what the new file says.
  *
@@ -588,107 +587,6 @@ function CreateSkillDialog({
   )
 }
 
-/**
- * One confirm, for whichever write is waiting.
- *
- * A single dialog for all four: they differ in their sentence and in nothing else, and four copies of the
- * same footer would be four places for the wording to drift. The description is a string rather than
- * markup because its whole job is to name the paths and the cost in words a reader can check against what
- * they are looking at — the source and destination of a copy, the folder a delete takes, and how many
- * conversations lose the skill they are holding.
- */
-function WriteConfirm({
-  pending,
-  failure,
-  holders,
-  projectDir,
-  onOpenChange,
-  onConfirm,
-}: {
-  pending: PendingConfirm | null
-  failure: string | null
-  holders: number
-  projectDir: string | null
-  onOpenChange: (open: boolean) => void
-  onConfirm: () => void
-}) {
-  const skill = pending?.skill ?? null
-  const kind = pending?.kind ?? 'copy'
-
-  return (
-    <AlertDialog open={pending !== null} onOpenChange={onOpenChange}>
-      <AlertDialogContent data-slot="skill-confirm">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{skill ? confirmTitle(kind, skill) : 'Confirm'}</AlertDialogTitle>
-          <AlertDialogDescription>{skill ? confirmWords(kind, skill, holders, projectDir) : ''}</AlertDialogDescription>
-        </AlertDialogHeader>
-        {failure && (
-          <p role="alert" data-slot="skill-confirm-failure" className="text-[12.5px] leading-relaxed text-destructive">
-            {failure}
-          </p>
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <Button type="button" variant={kind === 'delete' ? 'destructive' : 'default'} onClick={onConfirm}>
-            {confirmAction(kind)}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-/** What one confirm asks. */
-function confirmTitle(kind: PendingConfirm['kind'], skill: SkillSummary): string {
-  if (kind === 'copy') return `Copy ${skill.title} into the project?`
-  if (kind === 'delete') return `Delete ${skill.title}?`
-  if (kind === 'disable') return `Turn ${skill.title} off?`
-  return `Turn ${skill.title} back on?`
-}
-
-/** What one confirm's button says: the verb, not "OK". */
-function confirmAction(kind: PendingConfirm['kind']): string {
-  if (kind === 'copy') return 'Copy into project'
-  if (kind === 'delete') return 'Delete skill'
-  if (kind === 'disable') return 'Turn it off'
-  return 'Turn it on'
-}
-
-/**
- * What one confirm tells the user before they agree to it.
- *
- * Every sentence names the thing it is about — a folder, a destination — because a confirm a user cannot
- * check against the screen is a confirm they have to take on trust. The conversation count is said only
- * when a skill goes off, and only when there is one: becoming available again takes nothing away from
- * anybody, and saying "0 conversations" would suggest something was about to happen to none of them.
- */
-function confirmWords(
-  kind: PendingConfirm['kind'],
-  skill: SkillSummary,
-  holders: number,
-  projectDir: string | null
-): string {
-  const folder = skillFolderPath(skill.sourcePath)
-  if (kind === 'copy') {
-    const destination = projectDir === null ? 'this project' : `${projectDir}/${skill.id}`
-    return `The whole folder ${folder} will be copied to ${destination}, assets and all. A skill already in the project with this id is left alone and the copy is refused.`
-  }
-  if (kind === 'delete') {
-    return `The folder ${folder} and everything in it will be deleted. ${conversationCost(holders)}`
-  }
-  if (kind === 'disable') {
-    return `It disappears from the composer's picker, and stays on disk where it is. ${conversationCost(holders)}`
-  }
-  return 'It becomes available to the composer again, and stays off in every folder it is already off in. No conversation gets it back: availability is all this restores.'
-}
-
-/** How many conversations lose a skill, said in the only two ways it can be true. */
-function conversationCost(holders: number): string {
-  if (holders === 1) return '1 conversation has this skill active and will drop it.'
-  if (holders > 1) return `${holders} conversations have this skill active and will drop it.`
-  return 'No conversation has this skill active, so nothing else changes.'
-}
-
 /** A file that could not be read, in the module's own words, with the code it was named. */
 function SkillErrorRow({ error }: { error: SkillLoadError }) {
   return (
@@ -702,52 +600,4 @@ function SkillErrorRow({ error }: { error: SkillLoadError }) {
       </span>
     </div>
   )
-}
-
-/**
- * What a failure of the whole listing says, branched on the code main named.
- *
- * A code is a fact about which part of the read failed, and each part has a different answer for the
- * reader: an unreadable folder is something they can fix and try again, a folder that has gone is
- * something only reopening the project can settle. The per-skill codes are listed rather than left to a
- * default because none of them should arrive here at all — a read of the whole library does not raise one
- * — so if one does, main's own sentence about it is more use than this file's guess. A failure that is not
- * one of ours is the one case with nothing to say beyond the plain fact.
- */
-function listingFailure(error: unknown): string {
-  if (error instanceof ConveyorError) {
-    switch (error.code) {
-      case 'SKILL_IO_ERROR':
-        return 'The skill folders could not be opened. Check that they are readable, then reopen this screen.'
-      case 'SKILL_NOT_FOUND':
-        return 'A folder this screen was reading is gone. Reopen the project, then try again.'
-      case 'SKILL_PARSE_INVALID':
-      case 'SKILL_MANIFEST_INVALID':
-      case 'SKILL_TOO_LARGE':
-      case 'SKILL_LIMIT_EXCEEDED':
-      case 'SKILL_ID_TAKEN':
-        return error.message
-    }
-    return error.message
-  }
-  return 'The skill folders could not be read.'
-}
-
-/**
- * What a failed write says beside the control that started it.
- *
- * The one code worth its own words is the one the user can act on without knowing anything about files: a
- * name that is already taken, which they change by editing an id.
- */
-function writeFailure(error: unknown): string {
-  if (error instanceof ConveyorError) {
-    if (error.code === 'SKILL_ID_TAKEN') return 'A skill with that id is already in the project.'
-    return error.message
-  }
-  return 'That change could not be written.'
-}
-
-/** How a scope reads in a sentence, said once so the error row and anything later agree. */
-function scopeLabel(scope: SkillScope): string {
-  return scope === 'project' ? 'this project' : 'your skills folder'
 }

@@ -733,7 +733,7 @@ export function CodeViewer() {
       >
         {/*
           The viewer's expansion, and the panel's collapse, both taken from the rail module rather
-          than written again here: this pane is one of three residents of that slot, and the two
+          than written again here: this pane is one of the slot's residents, and the two
           controls belong to the slot. Expansion still means what it always did — the docked column
           takes the chat's width — and it is offered by whichever resident is docked, so a reader
           looking at the rendered preview is not told the layout control is somewhere else.
