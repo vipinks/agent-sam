@@ -16,7 +16,7 @@ import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
  * A launch opens the first, and the choice is the run's rather than the machine's: noting that you are
  * the kind of person who configures MCP servers is not something this app has any business remembering.
  */
-export type SettingsSection = 'providers' | 'mcp-servers'
+export type SettingsSection = 'providers' | 'mcp-servers' | 'skills'
 
 /**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —

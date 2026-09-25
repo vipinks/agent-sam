@@ -11,13 +11,19 @@
  * toggle does to the record are the rules' answers, held one level up in the sessions layer, and the
  * component is handed the outcome so that the disabled state and the store can never disagree.
  *
+ * The filter box is what makes the control usable over a large library. It narrows against the id, the
+ * title and the summary through `filterSkillSummaries`, so a rule rather than a rendering decides what
+ * matches; and it narrows the *list*, which is what the rows are drawn from — a hidden row is not
+ * clickable, so a filtered-out skill cannot be activated from behind a query.
+ *
  * Load errors are drawn beside the skills that did load, in their own group, with the code the module
  * named: a folder that could not be read is worth knowing about, and it is not a reason to hide the
  * rest of the list or to take the control away.
  */
-import { BookOpen, Check, TriangleAlert, X } from 'lucide-react'
-import { useState } from 'react'
+import { BookOpen, Check, Search, TriangleAlert, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import {
+  filterSkillSummaries,
   MAX_ACTIVE_SKILLS,
   skillLimitReached,
   type SkillLoadError,
@@ -26,6 +32,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 /** One skill the composer knows the name of, for the chip row. */
@@ -98,6 +105,7 @@ function SkillRow({
   return (
     <button
       type="button"
+      data-slot="skill-picker-row"
       aria-pressed={active}
       disabled={disabled}
       onClick={() => onToggle(skill.id)}
@@ -178,10 +186,32 @@ export function SkillPicker({
   onToggle: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [filter, setFilter] = useState('')
   const activeCount = activeSkillIds.length
 
+  // Derived rather than stored: the filter is a view of the listing, and a second copy of the rows in
+  // state is a second thing that can go stale when main rescans the folders.
+  const filtered = useMemo(
+    () => ({
+      project: filterSkillSummaries(project, filter),
+      user: filterSkillSummaries(user, filter),
+    }),
+    [project, user, filter]
+  )
+  // What the rows would be if they were drawn, which is what the empty note is about.
+  const shown = filtered.project.length + filtered.user.length
+  const listingIsEmpty = project.length === 0 && user.length === 0 && errors.length === 0
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        // Cleared on the way out: the box is how the list is *narrowed now*, and reopening onto a stale
+        // query would make a skill look missing until the user remembered they had typed something.
+        if (!next) setFilter('')
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -208,10 +238,24 @@ export function SkillPicker({
             : `Up to ${MAX_ACTIVE_SKILLS} can be active in one conversation.`}
         </p>
 
+        <div className="relative px-1 pt-1 pb-1.5">
+          <Search
+            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            aria-label="Filter skills"
+            placeholder="Filter skills"
+            className="h-7 pl-7 text-[12px]"
+          />
+        </div>
+
         <SkillGroup
           label="Project"
           emptyNote="No skills in this project's .sam/skills folder."
-          skills={project}
+          skills={filtered.project}
           activeSkillIds={activeSkillIds}
           disabled={disabled}
           onToggle={onToggle}
@@ -219,11 +263,17 @@ export function SkillPicker({
         <SkillGroup
           label="User"
           emptyNote="No skills in your user skills folder."
-          skills={user}
+          skills={filtered.user}
           activeSkillIds={activeSkillIds}
           disabled={disabled}
           onToggle={onToggle}
         />
+
+        {/* Said once, in the middle, when nothing at all matches: two per-group notes for the same query
+            would read as two separate misses. */}
+        {filter.trim() !== '' && shown === 0 && (
+          <p className="px-2 pb-1 text-[11px] text-muted-foreground">No skills match “{filter.trim()}”.</p>
+        )}
 
         {(errors.length > 0 || loading) && (
           <div className="pt-1">
@@ -248,7 +298,7 @@ export function SkillPicker({
           </div>
         )}
 
-        {!loading && project.length === 0 && user.length === 0 && errors.length === 0 && (
+        {!loading && listingIsEmpty && filter.trim() === '' && (
           <p className="px-2 pb-1 text-[11px] text-muted-foreground">
             No skills found. A skill is a folder with a SKILL.md in it, under .sam/skills in a project or the user
             skills folder.

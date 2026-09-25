@@ -10,6 +10,7 @@ import { PaneHeader } from './pane-header'
 import { ProviderBox } from './provider-box'
 import { CustomProviders } from './custom-provider-settings'
 import { McpServersSection } from './mcp-settings'
+import { SkillsSection } from './skills-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -77,6 +78,7 @@ export function SettingsView() {
           <TabsList data-slot="settings-sections">
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="mcp-servers">MCP Servers</TabsTrigger>
+            <TabsTrigger value="skills">Skills</TabsTrigger>
           </TabsList>
         </div>
 
@@ -129,6 +131,10 @@ export function SettingsView() {
 
           <TabsContent value="mcp-servers" data-slot="settings-section-mcp" className="mx-auto max-w-2xl px-8 py-7">
             <McpServersSection />
+          </TabsContent>
+
+          <TabsContent value="skills" data-slot="settings-section-skills" className="mx-auto max-w-2xl px-8 py-7">
+            <SkillsSection />
           </TabsContent>
         </div>
       </Tabs>
