@@ -1,420 +1,123 @@
-# Electron React App
+# Sam AI
 
-A modern Electron starter kit with React, Vite, TypeScript, and TailwindCSS — built
-around **[electron-conveyor](https://github.com/guasam/electron-conveyor)** for type-safe IPC and
-cross-window state.
+An Electron + React + TypeScript agentic workstation.
 
-<br />
+Sam AI is a local-first desktop coding assistant. You open a folder, and an agent works inside it —
+reading files, writing files, running commands — while everything that changes something waits for
+your answer. Conversations, settings, and credentials stay on your machine.
 
-<p align="center">
-    <img src="app/assets/era-conveyor.webp" target="_blank" />
-</p>
+## Features
 
-<br />
+- **MCP server integration.** Stdio MCP servers declared in user and project configuration are
+  listed, started, and trusted one at a time. A server's command, arguments, directory, and
+  environment are what its permission is really about, so that configuration is hashed when you
+  trust it: a server whose file has changed since then refuses to start, and a server nobody has
+  trusted never runs. Every tool call a server offers passes through the same consent gate as the
+  agent's own tools, and auto-approval is granted per server.
+- **Skills discovery and activation.** Skills are found in four tiers — the project's own folder, the
+  user's, and the two `.agents` compatibility folders this app reads but never writes. A name
+  collision resolves to the higher tier, and the skill that lost is dropped rather than offered
+  beside the winner. A file that cannot be read is reported next to the skills that did load, and at
+  most ten skills may be active in a conversation at once.
+- **Custom LLM providers.** Any server speaking the OpenAI `chat/completions` dialect can be added:
+  a base URL, a name to show in Settings, an optional key, and the models it offers. The key is
+  optional because the ordinary case is a server running on your own machine.
+- **Git panel.** Repository status, current branch, recent log, and per-file diffs, with staging,
+  unstaging, commit, discarding worktree changes, and branch checkout.
+- **File explorer with a guarded editor.** A file tree over the open workspace and an editor that
+  remembers the modification time it read. If something else writes the file before you save, the
+  save is refused as a conflict instead of silently discarding a version, and overwriting takes a
+  second, deliberate confirmation.
+- **Terminal host.** A real shell in the workspace — PowerShell on Windows, bash elsewhere — rendered
+  with xterm.js. The working directory is validated to stay inside the open workspace.
+- **Five themes with brightness control.** Crimson, Ocean, Forest, Amber, and Violet, each a complete
+  light and dark palette. A brightness control moves a theme's colours together without disturbing
+  hue or saturation, and each theme's text is checked against its own surfaces so contrast holds at
+  every step.
+- **Bounded auto-continue.** A turn that ends with plan steps still unfinished is picked back up
+  rather than left hanging, for a bounded number of segments; each seam is marked, so you can see
+  that the machine kept going and why.
+- **Consent gate with pending-decision serialization.** A turn's calls run in the order the model
+  wrote them and the walk stops at the first call that needs a decision — calls behind an undecided
+  one neither run nor record an outcome. Decisions are answered one at a time.
 
-<p align="center">
+## Tech stack
 
-![Electron](https://img.shields.io/badge/v43.5.1-Electron-blue) &nbsp;
-![React](https://img.shields.io/badge/v19.2.8-React-blue) &nbsp;
-![TypeScript](https://img.shields.io/badge/v6.0.3-TypeScript-blue) &nbsp;
-![Vite](https://img.shields.io/badge/v7.3.6-Vite-blue) &nbsp;
-![Shadcn](https://img.shields.io/badge/Shadcn-UI-blue) &nbsp;
-![Tailwind](https://img.shields.io/badge/v4.3.3-Tailwind-blue) &nbsp;
-![Conveyor](https://img.shields.io/badge/v0.4.0-Conveyor-ff5c3a)
-
-</p>
-
-<br />
-
-## Stack
-
-🔹 **[Electron](https://www.electronjs.org)** - Cross-platform desktop application framework.<br />
-🔹 **[React](https://react.dev)** - The library for web and native user interfaces.<br />
-🔹 **[electron-conveyor](https://github.com/guasam/electron-conveyor)** - Type-safe IPC + cross-window state.<br />
-🔹 **[TypeScript](https://www.typescriptlang.org)** - Type-safe JavaScript.<br />
-🔹 **[Shadcn UI](https://ui.shadcn.com)** - Beautiful and accessible component library.<br />
-🔹 **[TailwindCSS](https://tailwindcss.com)** - Utility-first CSS framework.<br />
-🔹 **[Electron Vite](https://electron-vite.org)** - Lightning-fast build tool based on **Vite** for fastest hot-reload.<br />
-🔹 **[Electron Builder](https://www.electron.build/index.html)** - Configured for packaging applications.<br />
-
-<br />
-
-## In-Built Features
-
-| Feature                     | Description                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------ |
-| **Conveyor**                | Type-safe IPC: queries, commands, streams, events — end-to-end inference       |
-| **Cross-Window Stores**     | Main-owned state synced live across every window, with opt-in persistence      |
-| **Demo Branch**             | Live playground of every primitive on the `demo` branch, main stays minimal    |
-| **Sandboxed Renderer**      | `sandbox: true` out of the box — the conveyor preload is sandbox-compatible    |
-| **Custom Titlebar & Menus** | Style the window titlebar and menus as you want                                |
-| **Clean Project Structure** | Separation of main and renderer processes                                      |
-| **Resources Protocol**      | Access local file resources via `res://` protocol                              |
-| **Import Path Aliases**     | Keep your imports organized and clean                                          |
-| **Theme Switcher**          | Built-in theme switching for dark and light mode                               |
-| **Error Boundary**          | Built-in React error boundary with detailed error reporting                    |
-| **Code Formatting**         | Prettier and ESLint pre-configured for code quality                            |
-| **Hot Reload**              | Lightning-fast development with Vite's HMR                                     |
-| **VS Code Debugging**       | Pre-configured launch configurations for debugging main and renderer processes |
-
-<br />
+- **Electron** — the desktop shell, and the main process that owns the file system, the shell, the
+  network, and the model calls.
+- **React + TypeScript** — the renderer, in `app/`.
+- **Vite** via electron-vite — dev server with hot reload, and the production build.
+- **Tailwind CSS + shadcn/ui primitives** — every component and every style. Colour lives in the
+  theme token stylesheet rather than in per-component files, and no second CSS framework is present.
+- **electron-conveyor** — typed IPC and cross-window state, in three layers:
+  `conveyor/modules/` (main-process logic), `conveyor/protocol/` (pure rules both sides share), and
+  `conveyor/stores/` (state main owns and every window mirrors live).
 
 ## Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/guasam/electron-react-app
-
-# Change directory
-cd electron-react-app
-
-# Install dependencies (use any package manager: npm, yarn, pnpm, bun)
+```shell
+git clone <repository-url> sam-ai
+cd sam-ai
 npm install
+npm start
 ```
 
-<br />
+`npm start` runs the built app; `npm run dev` runs it with hot reload.
+
+Application data lives under the platform's app-data directory — `%APPDATA%\era` on Windows, and the
+equivalent on macOS and Linux. Settings, encrypted provider keys, conversation transcripts, and the
+mirrored store files all resolve under that directory, and the directory name is a storage contract
+rather than branding: moving it would orphan credentials that cannot be decrypted elsewhere.
+
+## Usage
+
+- **Left rail.** The resident views, in order: the conversation, the folder it is about, and the state
+  of that folder — with Settings last, since it is a place you visit and leave. The rail also collapses
+  the secondary panel.
+- **Drawer.** The secondary panel for the active view: the conversation list (new, resume, rename,
+  search, delete), or the file tree, or the git panel.
+- **Center.** The conversation with the agent, with the composer beneath it and the code viewer beside
+  it. Settings and the rendered preview take the whole main area rather than a column.
+- **Right rail.** Docks one panel at a time beside the conversation: the file's source, the same file
+  rendered, the terminal transcript, and the tools panel.
+- **Composer.** Type an instruction, mention files with `@`, attach an image or spreadsheet, choose a
+  model, pick the skills to activate for this conversation, and raise or lower the auto-approve shield.
+  While a turn runs, the send button becomes a stop.
+- **Settings.** Providers and their keys, custom providers, MCP servers and their trust state, skills,
+  themes, and application preferences.
+
+## Architecture
+
+Three layers, and one boundary between them. `conveyor/modules/` holds the main-process logic — the
+only place that touches the file system, spawns a process, calls a provider, or starts an MCP server.
+`conveyor/protocol/` holds the rules as pure data-in, data-out functions, so the decisions that matter
+(trust, consent, auto-continue, which write may proceed) are provable without a filesystem, an
+Electron app, or a browser. `conveyor/stores/` holds the state the main process owns and every window
+mirrors. `conveyor/router.ts` registers the whole IPC surface in one place, and the renderer imports
+only `type AppRouter` from it plus the typed `conveyor` client. The law that keeps the boundary real:
+nothing under `app/` may import `fs`, `path`, `child_process`, or `electron` — if the renderer needs
+the disk, it is a query or command in a module, never a direct call.
 
 ## Development
 
-```bash
-npm run dev
-```
-
-This starts Electron with hot-reload. `main` is deliberately minimal — a themed window frame,
-titlebar, menus, and the typed IPC layer — so you can start building your app on top of it
-immediately.
-
-### Removing the welcome screen
-
-The window opens on a short tour of the stack. It is the one piece meant to be thrown away, and it
-is built so that costs nothing: it lives entirely in `app/components/welcome`, nothing else imports
-it, and it adds no IPC modules of its own.
-
-```bash
-rm -rf app/components/welcome
-```
-
-Then drop the `<Welcome />` line and its import from `app/app.tsx`. What's left is an empty window
-with the shell still around it, ready for your app.
-
-### Try the demo
-
-Want to see everything the stack can do first? The **`demo`** branch is an interactive
-playground of every IPC primitive (cross-window state, streaming, background tasks, middleware),
-with the real source behind each demo:
-
-```bash
-git switch demo
-npm install
-npm run dev
-```
-
-Switch back to `main` (and re-run `npm install`) when you're ready to build.
-
-<br />
-
-## Conveyor — Inter-Process Communication
-
-IPC is powered by [electron-conveyor](https://github.com/guasam/electron-conveyor).
-One definition in main is the single source of truth for a feature; the renderer client is
-**inferred** from it — no channel strings, no hand-written API classes, no query keys.
-
-Five primitives:
-
-| You want…                            | Use           | Renderer side                        |
-| ------------------------------------ | ------------- | ------------------------------------ |
-| Read something from main             | `query()`     | `await it()`, or `.useQuery()`       |
-| Tell main to do something            | `command()`   | `await it()`, or `.useMutation()`    |
-| Chunks pushed as they're produced    | `stream()`    | `for await`, or `.useStream()`       |
-| Main pushing to the renderer         | `event()`     | `.subscribe(cb)`, or `.useEvent(cb)` |
-| State shared live across all windows | `defineStore` | `useConveyorStore(def)`              |
-
-### Adding a feature (two edits)
-
-**1. Define the module** in `conveyor/modules/`:
-
-```ts
-// conveyor/modules/notes.ts — runs in MAIN only
-import { z } from 'zod'
-import { defineModule, query, command } from '../init'
-
-export const notesModule = defineModule({
-  list: query(() => readNotes()),
-
-  // input crosses the trust boundary → schema required, validated on every call
-  save: command(z.object({ title: z.string(), body: z.string() }), ({ input }) => saveNote(input)),
-})
-```
-
-**2. Register it** in `conveyor/router.ts`:
-
-```ts
-export const router = createRouter(
-  {
-    window: windowModule,
-    web: webModule,
-    notes: notesModule, // ← the key becomes the module id
-  },
-  { createContext, use: [devLogger] }
-)
-```
-
-Done — the renderer client already knows it, fully typed:
-
-```tsx
-import { conveyor } from '@/conveyor/client'
-
-function Notes() {
-  const notes = conveyor.notes.list.useQuery() // key derived from the path — never hand-written
-  const save = conveyor.notes.save.useMutation({
-    onSuccess: () => conveyor.notes.list.invalidate(),
-  })
-
-  return <button onClick={() => save.mutate({ title: 'Hi', body: '...' })}>Save</button>
-}
-```
-
-Outside React, every member is a plain typed call: `await conveyor.notes.list()`.
-
-### Handler context
-
-Every handler receives `ctx`: the calling `window` and `sender`, plus the app context defined in
-`conveyor/init.ts` (this starter kit provides `appStartedAt`, the `windows` manager, and
-`openWindow`). Middleware can guard and widen it:
-
-```ts
-const authed = command.use(requireUser) // a reusable guarded base
-export const account = defineModule({
-  delete: authed(({ ctx }) => deleteAccount(ctx.user.id)),
-})
-```
-
-### Streams (LLM-style)
-
-```ts
-// main
-respond: stream(z.string(), async function* ({ input, signal }) {
-  for await (const token of llm.complete(input)) {
-    if (signal.aborted) return
-    yield token
-  }
-})
-
-// renderer
-for await (const token of conveyor.stream.respond(prompt)) append(token)
-```
-
-### Events (main → renderer push)
-
-```ts
-// main — typed emitters per window or fan-out via the window manager
-const emit = createEmitter(windowModule, win)
-win.on('focus', () => emit.onFocusChange(true))
-
-// renderer
-conveyor.window.onFocusChange.useEvent(setFocused)
-```
-
-### Cross-window stores
-
-```ts
-// conveyor/stores/shared.ts — pure, imported by BOTH processes
-export const sharedStore = defineStore('shared', {
-  state: { count: 0, notes: [] as string[] },
-  schemas: { add: z.string() }, // payloads validated in main; types flow from the schema
-  actions: {
-    add: (s, note) => {
-      s.notes.push(note)
-    },
-    increment: (s) => {
-      s.count += 1
-    },
-  },
-  persist: true, // survives restarts (JSON under userData)
-})
-
-// renderer — feels local, synced across every window
-const count = useConveyorStore(sharedStore, (s) => s.count)
-const { add, increment } = useConveyorActions(sharedStore)
-```
-
-### Errors
-
-Failures re-throw in the renderer as `ConveyorError` with a stable `code` — including custom codes
-thrown by your handlers (`throw new ConveyorError('LOCKED', '...')`). Branch on `err.code`, never
-on message strings. See the `demo` branch's **Middleware** page for a working example.
-
-📖 **Full API documentation: [electron-conveyor](https://github.com/guasam/electron-conveyor)**
-
-<br />
-
-## Custom Window Components
-
-This starter kit includes a custom window implementation with:
-
-- Custom titlebar with app icon
-- Window control buttons (minimize, maximize, close)
-- Menu system with keyboard shortcuts
-- Dark/light mode toggle
-- Cross-platform support for Windows and macOS
-
-<br />
-
-### Titlebar Menu Toggle
-
-The titlebar menu can be toggled using:
-
-- **Windows**: Press the `Alt` key
-- **macOS**: Press the `Option (⌥)` key
-
-When you press the toggle key:
-
-- If the menu is hidden, it becomes visible
-- If the menu is already visible, it gets hidden
-- The menu only toggles if menu items are available
-
-<br />
-
-### Customizing Menu Items
-
-To add, remove or modify menu items, update the following file:
-
-- `app/shell/menu.ts`
-
-<br />
-
-## Key Directories Explained
-
-#### `app/` - Renderer Process
-
-- **React application** that runs in the browser window
-- `app/shell/` — titlebar, menus, window frame, theme
-
-#### `conveyor/` - The IPC Surface
-
-- `conveyor/init.ts` — authoring primitives bound to the app's context
-- `conveyor/modules/` — feature modules (**main-process only**; the renderer imports only `type AppRouter`)
-- `conveyor/router.ts` — the single registration point (modules, stores, middleware, context)
-- `conveyor/client.ts` — the typed renderer client with hooks
-
-#### `lib/main/` - Main Process
-
-- Window creation (`app.ts`, with the window manager), app lifecycle, `res://` protocol
-
-#### `lib/preload/` - Preload Script
-
-- Two lines: expose the conveyor bridge. It never changes as your API grows, and it is
-  sandbox-compatible — the renderer runs with `sandbox: true`
-
-<br />
-
-## Path Aliases
-
-```ts
-import { Button } from '@/app/components/ui/button'
-import { conveyor } from '@/conveyor/client'
-```
-
-- `@/app/` → `app/` (renderer)
-- `@/lib/` → `lib/` (main + preload)
-- `@/conveyor/` → `conveyor/` (the IPC surface)
-- `@/resources/` → `resources/` (build resources)
-
-<br />
-
-## Development Workflow
-
-1. **UI Development**: Work in `app/` with React components
-2. **IPC**: Add a module in `conveyor/modules/`, register it in `conveyor/router.ts`
-3. **Window Features**: Customize the shell in `app/shell/`
-4. **Checks**: `npm run typecheck`, `npm run lint`, `npm run format`
-
-<br />
-
-## Building for Production
-
-```bash
-# For Windows
-npm run build:win
-
-# For macOS
-npm run build:mac
-
-# For Linux
-npm run build:linux
-
-# Unpacked for all platforms
-npm run build:unpack
-```
-
-Distribution files will be located in the `dist` directory.
-
-<br />
-
-## Packaging
-
-Sam AI ships as a personal-use desktop app. Builds are unsigned, and this section is the honest
-version of what that means.
-
-### Targets
-
-Running a build script produces an installer plus a portable archive:
-
-| Script                | Produces                                                            |
-| --------------------- | ------------------------------------------------------------------- |
-| `npm run build:win`   | NSIS installer (`sam-ai-<version>-setup.exe`) and a portable `.zip` |
-| `npm run build:mac`   | `.dmg` (arm64 + x64)                                                |
-| `npm run build:linux` | `.AppImage`                                                         |
-
-Output lands in `dist/`. `npm run build:unpack` produces an unpacked directory instead, which is what
-the smoke test in this repository uses because it launches faster than an installer round-trip.
-
-Each script runs `vite:build:app` first, so `out/` (what the main process loads) is always rebuilt
-from the current sources before electron-builder packs it. `main` in `package.json` is
-`./out/main/main.js`, and `resources/` is shipped beside `out/` inside the app — the main process
-resolves its window icon at `../../resources/build/icon.png`, so both must stay in the packaged tree.
-
-### Code signing: not configured
-
-**Windows builds are unsigned.** On first run Windows SmartScreen will show "Windows protected your
-PC" and the user has to choose _More info_ → _Run anyway_. A freshly downloaded file may also carry an
-"isn't commonly downloaded" warning. This is expected behaviour for an unsigned binary, not a
-malfunction, and it is acceptable for the current goal of distributing to people who already know what
-the app is.
-
-macOS builds are unsigned and un-notarized too: Gatekeeper will refuse a plain double-click, and the
-workaround is right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/Sam AI.app"`.
-Hardened runtime is deliberately off, because it only earns its keep alongside real signing — enabling
-it now would add breakage without removing any warning.
-
-The intended path when this stops being personal-use is **SignPath-style signing** — a managed
-code-signing service (SignPath.io, or Azure Trusted Signing) that holds the certificate and signs
-builds in CI rather than on a developer machine. The pieces that would need to change are confined to
-CI and `electron-builder.yml`: add the signing identity and the platform `sign` configuration first,
-then notarization for macOS, and only then enable `hardenedRuntime`. The app itself needs no change,
-which is why signing is deferred rather than simulated now.
-
-### User data and the directory name
-
-Encrypted API keys, session transcripts and window state live under the OS's per-user application data
-directory, in a directory named `era`:
-
-- Windows: `%APPDATA%\era`
-- macOS: `~/Library/Application Support/era`
-- Linux: `~/.config/era`
-
-That name is **not** branding and must not be renamed. It is pinned in code
-(`lib/main/identity.ts`, which runs before any persisted state is read). The reason is not
-sentimentality about the folder name: Chromium keeps the key that protects `safeStorage` ciphertext in
-`<userData>/Local State`, so pointing the app at a new userData directory makes saved API keys
-permanently undecryptable, with the old file still on disk and unreadable. That failure was measured,
-not assumed — see the commit that introduced this section, or run the probe:
-
-```bash
-bash tests/probes/run-law0-matrix.sh
-```
-
-One caveat that is untested: on macOS, `safeStorage`'s master key is additionally wrapped by a Keychain
-item named after the app, so a rename _might_ break key decryption there even with the directory
-pinned. The probe covers the `Local State` layer; the Keychain layer has not been exercised on a real
-macOS build. Treat macOS key carry-over as unverified until someone runs the probe there.
+| Script                   | What it runs                                        |
+| ------------------------ | --------------------------------------------------- |
+| `npm run test:node`      | The Node suites.                                    |
+| `npm run test:dom`       | The DOM suites, under vitest and jsdom.             |
+| `npm run typecheck`      | `tsc --noEmit` over both the node and web projects. |
+| `npm run lint:check`     | ESLint over the whole repository.                   |
+| `npm run format:check`   | Prettier over the whole repository.                 |
+| `npm run vite:build:app` | The production build.                               |
+
+Those six are the gauntlet: they are run together, on the final tree, once per commit, and a change
+is not ready while any one of them fails. The formatter runs over every file a change touches before
+it is committed, and a commit is only made when it is green on its own.
+
+Operations that could destroy work — a force-push, a recursive delete, a publish — are gated by a
+reviewer component: each such command is approved on its own before it runs, and a refusal is a hard
+stop rather than an obstacle to route around. Sam AI's own consent gate is the same discipline applied
+to the agent.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
