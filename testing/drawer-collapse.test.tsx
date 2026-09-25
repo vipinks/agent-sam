@@ -17,9 +17,9 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
  * The rail's top slot held a status dot: a `<span>` with a brand mark in it, no `title`, no `aria-label`
  * and no handler. Phase 29 repurposed that slot as the drawer's collapse control; Phase 39 moves the way
  * *in* to the drawer's own header, where it is a panel-left-close glyph, and keeps the slot for the way
- * *back* alone — so the expanded rail leads with a resident and holds no collapse control at all, and the
- * mirrored glyph is rendered at the rail's top only while the drawer is away. Both are pinned below
- * rather than left to the diff.
+ * *back* alone; Phase 45 gives the leading position to the Home affordance, which leads in both drawer
+ * states, so the mirrored glyph is the control after it while the drawer is away and is not there at
+ * all otherwise. All of it is pinned below rather than left to the diff.
  *
  * What only a rendered workbench can show, and what no rule test would catch, is the composition. The
  * collapse removes the drawer *panel* from the outer group rather than narrowing it, hiding it or
@@ -174,17 +174,20 @@ describe('the rail', () => {
     renderWorkbench()
 
     // DOM order is the tab order and the visual order at once: the buttons are the rail's children in
-    // the order the registry holds, so one reading answers for the others. The collapsed rail leads with
-    // the way back into the drawer, then the conversation, the folder it is about, that folder's state,
-    // and the foot — Settings, which is a place you visit and leave rather than one of the residents.
+    // the order the registry holds, so one reading answers for the others. Home leads in both drawer
+    // states — it is the rail's way back to the start rather than one of the drawer's views — and the
+    // collapsed rail follows it with the way back into the drawer, then the conversation, the folder it
+    // is about, that folder's state, and the foot — Settings, which is a place you visit and leave
+    // rather than one of the residents.
     const labels = [...rail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    expect(labels).toEqual(['Expand drawer', 'Chat', 'Explorer', 'Git', 'Settings'])
+    expect(labels).toEqual(['Home', 'Expand drawer', 'Chat', 'Explorer', 'Git', 'Settings'])
 
     await userEvent.click(railControl('Expand drawer'))
 
-    // The same rail with the drawer on screen: three residents and the foot, and no collapse control —
-    // that direction belongs to the header of whatever panel the drawer is showing.
+    // The same rail with the drawer on screen: Home, the same three residents and the foot, and no
+    // collapse control — that direction belongs to the header of whatever panel the drawer is showing.
     expect([...rail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Home',
       'Chat',
       'Explorer',
       'Git',
@@ -295,7 +298,7 @@ describe('the collapse control', () => {
 })
 
 describe('the slot the status dot held', () => {
-  it('is retired: the rail leads with a resident, and the expand glyph is there only while the drawer is away', async () => {
+  it('is retired: the Home glyph leads, and the expand glyph is there only while the drawer is away', async () => {
     stubWorkbench()
     useWorkbenchStore.setState({ drawerCollapsed: true })
     const { container } = renderWorkbench()
@@ -303,21 +306,20 @@ describe('the slot the status dot held', () => {
     // Named before it was retired, so the retirement is recorded rather than smuggled: the rail's first
     // element was a decorative `<span>` around a brand dot — no `title`, no `aria-label`, no handler, so
     // a status mark and nothing else. Phase 29 made it the collapse control; Phase 39 keeps the slot for
-    // the way back alone, so it leads while the drawer is away and is not there at all otherwise.
-    const top = rail().firstElementChild as HTMLElement
-    expect(top.tagName).toBe('BUTTON')
-    expect(top.getAttribute('aria-label')).toBe('Expand drawer')
-    expect(top.getAttribute('title')).toBe('Expand drawer')
+    // the way back alone, so it is there while the drawer is away and is not there at all otherwise; and
+    // Phase 45 gives the rail's leading position to Home, which leads in both states rather than only
+    // while there is nothing to expand.
+    expect((rail().firstElementChild as HTMLElement).getAttribute('aria-label')).toBe('Home')
 
     // The retired markup: the rail held a nameless span, and it holds none at all now.
     expect(rail().querySelectorAll('span')).toHaveLength(0)
 
-    await userEvent.click(top)
+    await userEvent.click(railControl('Expand drawer'))
 
-    // The slot goes with the state it was for: the rail's first element is a resident, and no expand
-    // glyph is anywhere in it — while the drawer is on screen there is nothing to expand.
-    expect(rail().firstElementChild?.getAttribute('aria-label')).toBe('Chat')
+    // The slot goes with the state it was for: no expand glyph is anywhere in the rail, and Home still
+    // leads it — while the drawer is on screen there is nothing to expand.
     expect(rail().querySelector('[aria-label="Expand drawer"]')).toBeNull()
+    expect((rail().firstElementChild as HTMLElement).getAttribute('aria-label')).toBe('Home')
     expect(drawer(container)).not.toBeNull()
   })
 })

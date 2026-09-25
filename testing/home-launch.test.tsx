@@ -283,6 +283,17 @@ function renderWorkbench() {
   )
 }
 
+/**
+ * The rail's Home affordance, by the label it states to everything that is not a pointer.
+ *
+ * Scoped to the rail rather than found document-wide: the label is the rail's own, and a search that
+ * could reach anything else on screen would make the claim about the rail depend on the rest of the
+ * window.
+ */
+function homeGlyph(): HTMLElement {
+  return within(screen.getByRole('navigation', { name: 'Workbench' })).getByRole('button', { name: 'Home' })
+}
+
 /** The chat column's own node: what scopes a home-screen query away from the conversation list. */
 function chatColumn(container: HTMLElement): HTMLElement {
   const column = container.querySelector<HTMLElement>('[data-panel]#chat')
@@ -398,6 +409,81 @@ describe('the New chat control', () => {
     // Home, and nothing created: the control is a way back to the start, not a row nobody typed into.
     expect(sessionActions.some((a) => a.method === 'addSession')).toBe(false)
     expect(sessionActions).toContainEqual({ method: 'setActive', payload: { payload: { id: null } } })
+  })
+})
+
+describe('the rail’s Home glyph', () => {
+  it('returns home from an open conversation without creating one', async () => {
+    const { sessionActions } = stubWorkbench({
+      state: { sessions: [row(FIRST, 'an open conversation', { lastRoot: ROOT })], activeSessionId: FIRST },
+      transcripts: { [FIRST]: storedTranscript('what the parser work turned up') },
+    })
+    const { container } = renderWorkbench()
+
+    expect(await screen.findByText('what the parser work turned up')).toBeTruthy()
+    expect(screen.queryByText(HOME_HEADLINE)).toBeNull()
+
+    await userEvent.click(homeGlyph())
+
+    // The whole home screen, drawn in the column the transcript was in: the hero, the composer, and
+    // the row of folders it offers back.
+    const chat = chatColumn(container)
+    expect(await within(chat).findByText(HOME_HEADLINE)).toBeTruthy()
+    expect(within(chat).getByLabelText('Message')).toBeTruthy()
+    expect(within(chat).getByText(HOME_RECENT_PROJECTS)).toBeTruthy()
+
+    // The same action the list's own new-chat control dispatches, and nothing created by either: the
+    // pointer is cleared and no row is written.
+    expect(sessionActions.some((a) => a.method === 'addSession')).toBe(false)
+    expect(sessionActions).toContainEqual({ method: 'setActive', payload: { payload: { id: null } } })
+  })
+
+  it('is inert at home, and drawn in the rail’s active style there', async () => {
+    const { sessionActions } = stubWorkbench({ state: launchState(persistedState()) })
+    renderWorkbench()
+
+    expect(await screen.findByText(HOME_HEADLINE)).toBeTruthy()
+
+    // Home is where the window already is, so the glyph says so in the rail's own active style — the
+    // brand-soft fill and brand text the resident of the panel showing carries — and states the place
+    // rather than a pressed toggle.
+    const home = homeGlyph()
+    expect(home.className).toContain('bg-brand-soft')
+    expect(home.getAttribute('aria-current')).toBe('page')
+
+    const dispatched = sessionActions.length
+    await userEvent.click(home)
+
+    // Inert: the click reaches nothing at all — not the store, and not the screen.
+    expect(sessionActions).toHaveLength(dispatched)
+    expect(screen.getByText(HOME_HEADLINE)).toBeTruthy()
+  })
+
+  it('refuses the click mid-stream and changes nothing', async () => {
+    const { stub, sessionActions } = stubWorkbench({
+      state: { sessions: [row(FIRST, 'an open conversation', { lastRoot: ROOT })], activeSessionId: FIRST },
+      transcripts: { [FIRST]: storedTranscript('what the parser work turned up') },
+    })
+    renderWorkbench()
+
+    expect(await screen.findByText('what the parser work turned up')).toBeTruthy()
+
+    await userEvent.type(screen.getByLabelText('Message'), 'carry on')
+    await userEvent.keyboard('{Enter}')
+
+    // The turn is streaming: the control beside the composer offers to stop it, and the stream itself
+    // is still open, which is the state the guard is about.
+    await screen.findByRole('button', { name: 'Stop' })
+    expect(stub.calls.some((call) => call.channel === 'conveyor:stream:start')).toBe(true)
+
+    await userEvent.click(homeGlyph())
+
+    // Refused, and nothing changed: the conversation is still the one on screen, no home hero was
+    // drawn, and the window was not taken off the session — the selection the session list makes is
+    // refused in this state, and this is the same refusal reached from the rail.
+    expect(screen.queryByText(HOME_HEADLINE)).toBeNull()
+    expect(screen.getByText('what the parser work turned up')).toBeTruthy()
+    expect(sessionActions.filter((a) => a.method === 'setActive')).toHaveLength(0)
   })
 })
 

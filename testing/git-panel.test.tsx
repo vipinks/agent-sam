@@ -106,12 +106,13 @@ describe('the rail', () => {
     // Every item states its label through `aria-label`, because the buttons are icons. Phase 39 left this
     // rail with the drawer's own three views: the shell is a resident of the right rail now, and the
     // collapse control retired from here when the way into the drawer moved to the drawer's own header.
-    // Settings is listed with them and is not one of them — it is a place you visit and leave.
+    // Phase 45 puts the Home affordance at its leading position, and Settings is listed with the
+    // residents and is not one of them — it is a place you visit and leave.
     const nav = screen.getByRole('navigation', { name: 'Workbench' })
     const labels = [...nav.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
 
-    expect(labels).toEqual(['Chat', 'Explorer', 'Git', 'Settings'])
-    expect(labels.filter((label) => label !== 'Settings')).toHaveLength(3)
+    expect(labels).toEqual(['Home', 'Chat', 'Explorer', 'Git', 'Settings'])
+    expect(labels.filter((label) => label !== 'Settings' && label !== 'Home')).toHaveLength(3)
   })
 
   it('marks the git item as the current view once it is selected', async () => {

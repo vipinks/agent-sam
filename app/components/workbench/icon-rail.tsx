@@ -1,6 +1,7 @@
 import {
   Folder,
   GitBranch,
+  House,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -10,6 +11,8 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'
+import { useChatSessionsContext } from './chat-sessions-context'
+import { planSessionSwitch } from './session-project'
 
 /** The activity views the workbench switches between. */
 export interface Activity {
@@ -132,13 +135,22 @@ export function DrawerClose() {
 
 /**
  * The icon rail: the workbench's top-level navigation. Icons only, so each button states its label
- * through a tooltip for pointers and an `aria-label` for everything else. Settings sits at the
- * foot because it is a place you visit and leave, not a mode you work in.
+ * through a tooltip for pointers and an `aria-label` for everything else. Home leads, Settings sits at
+ * the foot because it is a place you visit and leave, not a mode you work in.
  *
  * An activity click means what the screen makes it mean, which is three cases rather than one. While
  * the drawer is away, any icon is the way back and brings the drawer with the panel it names. While it
  * is here, the icon of the panel already showing puts it away, because that is what a second click on
  * "the thing that is open" means everywhere else. Any other icon is the switch it has always been.
+ *
+ * Home is not one of those cases and is not an activity: it is the conversation layer's own way back
+ * to the start, the same action the conversation list's new-chat control dispatches. It leads the rail
+ * because going back to the start is not a view of the drawer — it is a place the window is either at
+ * or not — so it is the one control here that stays put while the drawer comes and goes. Where the
+ * window is at home it is drawn in the rail's active style and does nothing, because there is nowhere
+ * to go from there; and while a turn is streaming it refuses the click through the same rule the
+ * session list is refused by, so the run writing into the transcript on screen is never left without
+ * the screen it was writing to.
  *
  * Settings is the one control here that does not go through `choose`, and it is not an exception to
  * that reading: it takes over the whole main area rather than the drawer, so it has nothing to switch
@@ -152,6 +164,11 @@ export function IconRail() {
   const openSettings = useWorkbenchStore((s) => s.openSettings)
   const drawerCollapsed = useWorkbenchStore((s) => s.drawerCollapsed)
   const setDrawerCollapsed = useWorkbenchStore((s) => s.setDrawerCollapsed)
+  // The conversation layer, for the two facts the Home affordance is drawn from and the action it
+  // dispatches. Read here rather than passed down, because the rail is the control's only home and
+  // the layer is above every pane the rail stands beside.
+  const sessions = useChatSessionsContext()
+  const atHome = sessions.atHome
 
   const choose = (id: string) => {
     if (drawerCollapsed) {
@@ -166,8 +183,52 @@ export function IconRail() {
     setActiveActivity(id)
   }
 
+  /**
+   * The Home click: leave nothing open, or refuse while a turn owns the transcript.
+   *
+   * The action itself is the conversation layer's `goHome`, unchanged, and the refusal is the same
+   * rule the session list's clicks already answer to rather than a second guard written for this
+   * control — a selection that leaves a conversation is refused by one rule wherever it is made. Only
+   * the streaming clause can fire here: the pause clause refuses moving the *folder* under a standing
+   * decision, and going home moves no folder. Nothing is reported when it refuses, for the same
+   * reason: the refusal is the list's sentence to draw, and the rail has no list to draw it beside.
+   *
+   * At home the click is inert before the rule is even asked: the window is already there, and the
+   * only thing `goHome` would write is a second clearing of a pointer that is already clear.
+   */
+  const goHome = () => {
+    if (atHome) return
+    const refusal = planSessionSwitch({
+      streaming: sessions.streaming,
+      pendingDecision: Object.keys(sessions.pauses).length > 0,
+      movesRoot: false,
+    })
+    if (refusal !== null) return
+    sessions.goHome()
+  }
+
   return (
     <nav aria-label="Workbench" className="flex w-16 shrink-0 flex-col items-center gap-1 bg-card py-2">
+      {/*
+      The way back to the start, at the leading position and in both drawer states: it is the one
+      control here that is about the window rather than about the drawer, so the drawer's arrival and
+      departure are not things it moves for.
+      */}
+      <button
+        type="button"
+        title="Home"
+        aria-label="Home"
+        aria-current={atHome ? 'page' : undefined}
+        onClick={goHome}
+        className={cn(
+          'flex size-10 items-center justify-center rounded-md outline-none transition-colors',
+          'focus-visible:ring-2 focus-visible:ring-ring',
+          atHome ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+        )}
+      >
+        <House className="size-4.5" />
+      </button>
+
       <DrawerOpen className="mb-1 flex size-8 items-center justify-center rounded-md border border-brand/35 bg-brand-soft text-brand outline-none transition-colors hover:bg-brand-soft/80 focus-visible:ring-2 focus-visible:ring-ring" />
 
       {ACTIVITIES.map((activity) => {
