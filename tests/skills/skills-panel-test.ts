@@ -132,7 +132,7 @@ function theListingBecomesRowsInOneStatedOrder() {
 
   // The switch written for the project folder is read as one: `ship-it` is hidden by an entry naming
   // this listing's root, exactly as the Settings card classifies it.
-  assert.equal(rows.find((row) => row.skill?.id === 'ship-it')?.status, 'hidden')
+  assert.equal(rows.find((row) => row.status !== 'load-error' && row.skill.id === 'ship-it')?.status, 'hidden')
 
   results.push('a listing becomes rows: errors first, then the tiers, each classified against its switches')
 }
