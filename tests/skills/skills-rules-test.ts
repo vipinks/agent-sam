@@ -177,12 +177,17 @@ function anInvalidManifestIsALoadError() {
 // ---------------------------------------------------------------- activation
 
 function theActiveCapIsEnforced() {
-  assert.equal(MAX_ACTIVE_SKILLS, 3, 'the documented cap is three')
-  assert.equal(skillLimitReached(['a', 'b', 'c']), true, 'three is the cap')
-  assert.equal(skillLimitReached(['a', 'b']), false, 'two is not')
+  // Ten, raised from three in phase 43: the fixture below is stated once as a list of ten ids so the
+  // boundary is read off the constant rather than retyped, and the four short lists further down stay
+  // short on purpose — they are about ordering and idempotence, not about the number.
+  const full = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10']
 
-  const refused = applySkillToggle(['a', 'b', 'c'], 'd', true)
-  assert.equal(refused.ok, false, 'a fourth skill is refused rather than silently stored')
+  assert.equal(MAX_ACTIVE_SKILLS, 10, 'the documented cap is ten')
+  assert.equal(skillLimitReached(full), true, 'ten is the cap')
+  assert.equal(skillLimitReached(full.slice(0, 9)), false, 'nine is not')
+
+  const refused = applySkillToggle(full, 'a11', true)
+  assert.equal(refused.ok, false, 'an eleventh skill is refused rather than silently stored')
   assert.equal(refused.code, SKILL_LIMIT_EXCEEDED)
   assert.equal(refused.message.includes(String(MAX_ACTIVE_SKILLS)), true, 'and the refusal names the cap')
 
@@ -210,9 +215,9 @@ function theActiveCapIsEnforced() {
   assert.equal(unsafe.code, SKILL_PARSE_INVALID)
 
   // A session that somehow holds more than the cap reads as at the cap rather than as short of it.
-  assert.equal(skillLimitReached(['a', 'a', 'a', 'a']), true)
+  assert.equal(skillLimitReached([...full, 'a1']), true)
 
-  results.push('at most three skills are active, and a fourth is refused by code')
+  results.push('at most ten skills are active, and an eleventh is refused by code')
 }
 
 // ---------------------------------------------------------------- the prompt section
@@ -332,7 +337,12 @@ async function theSessionRecordKeepsTheKeyAdditive(): Promise<void> {
   const bare = await acceptedPayload('touchSession', { id })
   assert.equal('activeSkillIds' in bare, false, 'an absent key is stripped rather than defaulted to []')
 
-  await refusedPayload('touchSession', { id, activeSkillIds: ['a', 'b', 'c', 'd'] })
+  // Eleven ids, written out rather than sliced from a helper: this is the boundary the session record's
+  // own schema decides, and it has to be a list a reader can count.
+  await refusedPayload('touchSession', {
+    id,
+    activeSkillIds: ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10', 'a11'],
+  })
 
   // Whole-record spread semantics: everything the payload does not name is carried through.
   harness.run('touchSession', { id, title: 'renamed', activeSkillIds: ['code-review'] })

@@ -34,7 +34,7 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
-import { scopeSkills, type SkillListing } from '@/conveyor/protocol/skills'
+import { MAX_ACTIVE_SKILLS, offeredSkills, scopeSkills, type SkillListing } from '@/conveyor/protocol/skills'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
   ABANDONED_PAUSE_CODE,
@@ -85,7 +85,12 @@ function lastAskMentions(turns: readonly AgentTurn[]): string[] {
  * value, so there is no second empty case to forget. Held at module scope because it is a constant, not
  * because it is shared — a render must not build a new listing to say "nothing yet".
  */
-const NO_SKILLS: SkillListing = { tiers: [], errors: [], counts: { total: 0, project: 0, user: 0, errors: 0 } }
+const NO_SKILLS: SkillListing = {
+  tiers: [],
+  errors: [],
+  disabled: [],
+  counts: { total: 0, project: 0, user: 0, errors: 0, hidden: 0 },
+}
 
 /**
  * The name to show for an active skill id.
@@ -131,7 +136,7 @@ function streamErrorMessage(error: unknown, providerName: string): string {
       case 'SKILL_IO_ERROR':
         return 'A skill this conversation uses could not be opened. Check the file, or turn it off.'
       case 'SKILL_LIMIT_EXCEEDED':
-        return 'A conversation can run at most 3 skills. Turn one off first.'
+        return `A conversation can run at most ${MAX_ACTIVE_SKILLS} skills. Turn one off first.`
       default:
         return error.message
     }
@@ -415,8 +420,18 @@ export function ChatPanel() {
   // a skill came from, and the picker is for choosing rather than for auditing — so the tiers are
   // flattened back into their scopes here, in tier order, which keeps the precedence visible as order
   // when the same id exists in two folders.
-  const projectSkills = useMemo(() => scopeSkills(skillListing.tiers, 'project'), [skillListing])
-  const userSkills = useMemo(() => scopeSkills(skillListing.tiers, 'user'), [skillListing])
+  //
+  // A skill the user switched off is dropped here, at the one place the picker is fed from: availability
+  // is a decision about what may be chosen, and a row that could be chosen would contradict it. The scan
+  // still reports it, because the settings screen needs it to offer the switch back.
+  const projectSkills = useMemo(
+    () => offeredSkills(scopeSkills(skillListing.tiers, 'project'), skillListing.disabled),
+    [skillListing]
+  )
+  const userSkills = useMemo(
+    () => offeredSkills(scopeSkills(skillListing.tiers, 'user'), skillListing.disabled),
+    [skillListing]
+  )
   const activeSkillIds = sessions.activeSkillIds
   const skillChips = activeSkillIds.map((id) => ({ id, title: activeSkillTitle(skillListing, id) }))
 

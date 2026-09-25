@@ -123,6 +123,14 @@ export const chatSessionsStore = defineStore('chat-sessions', {
     }),
     removeSession: z.object({ id: sessionIdSchema }),
     setActive: z.object({ id: sessionIdSchema.nullable() }),
+    /**
+     * One skill, out of every conversation that holds it.
+     *
+     * No payload for a whole record, because there is nothing else to say: the id is what a conversation
+     * stores, so it is what a switch can take away. The bound is the same one the resting schema uses —
+     * see `activeSkillIdsSchema` — so an id this action would accept is an id a conversation could hold.
+     */
+    dropSkill: z.object({ id: z.string().min(1).max(MAX_SKILL_ID_CHARS) }),
   },
 
   actions: {
@@ -195,6 +203,30 @@ export const chatSessionsStore = defineStore('chat-sessions', {
 
     setActive: (state, { id }) => {
       state.activeSessionId = id
+    },
+
+    /**
+     * Take one skill out of every conversation that has it.
+     *
+     * The whole record is spread and one key is replaced, rather than the record being rebuilt: this is a
+     * write about skills, and a field the action says nothing about — a title, the project the
+     * conversation belongs to — must come through it unchanged.
+     *
+     * `updatedAt` is deliberately untouched. It orders the conversation list, so stamping it would
+     * reorder the user's list underneath them because they switched a skill off in a settings screen; a
+     * skill leaving a conversation is not the conversation being used.
+     *
+     * An empty list *is* written when the id was the last one — the same rule `touchSession` follows.
+     * The id was there and now it is not, and a record that kept a key it had emptied would be lying.
+     * A conversation that never had the id is returned as the same object, so a prune of a skill nobody
+     * holds is not a re-render of every row.
+     */
+    dropSkill: (state, { id }) => {
+      state.sessions = state.sessions.map((s) => {
+        const active = s.activeSkillIds
+        if (active === undefined || !active.includes(id)) return s
+        return { ...s, activeSkillIds: active.filter((existing) => existing !== id) }
+      })
     },
 
     /**

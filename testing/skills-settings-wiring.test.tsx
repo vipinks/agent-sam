@@ -82,7 +82,8 @@ const TIER_LISTING: SkillTierListing[] = [
 const LISTING: SkillListing = {
   tiers: TIER_LISTING,
   errors: [],
-  counts: { total: 3, project: 2, user: 1, errors: 0 },
+  disabled: [],
+  counts: { total: 3, project: 2, user: 1, errors: 0, hidden: 0 },
 }
 
 /** The same four tiers, with one malformed file reported beside the skills that did load. */
@@ -97,7 +98,7 @@ const LISTING_WITH_ERRORS: SkillListing = {
       message: 'The manifest is not valid YAML or JSON.',
     },
   ],
-  counts: { total: 3, project: 2, user: 1, errors: 1 },
+  counts: { total: 3, project: 2, user: 1, errors: 1, hidden: 0 },
 }
 
 /**
@@ -208,13 +209,17 @@ describe('the Skills settings section', () => {
     expect(within(user).getByText('user')).toBeTruthy()
     expect(within(user).getByText('native')).toBeTruthy()
 
-    // The compatibility tier is badged as one, and says it is read-only — with no edit or delete
-    // affordance anywhere, because this turn offers none.
+    // The compatibility tier is badged as one, and says it is read-only: no edit and no delete on a
+    // card there, whichever file inside it claims otherwise. Phase 43 added those two controls to the
+    // writable tiers, so the assertion is now that the compat card is the one without them — the
+    // compat-only half of this is asserted in `skills-manage-wiring`.
     const compat = card('shared')
     expect(within(compat).getByText('compat')).toBeTruthy()
     expect(within(tierBlock('project-compat')).getByText(/read-only/i)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /delete/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /edit/i })).toBeNull()
+    expect(within(compat).queryByRole('button', { name: /delete/i })).toBeNull()
+    expect(within(compat).queryByRole('button', { name: /edit/i })).toBeNull()
+    expect(within(card('code-review')).getByRole('button', { name: /delete/i })).toBeTruthy()
+    expect(within(card('code-review')).getByRole('button', { name: /edit/i })).toBeTruthy()
   })
 
   it('shows the winning tier’s badge and path when two tiers offer the same id', async () => {
@@ -244,7 +249,7 @@ describe('the Skills settings section', () => {
               ? { ...tier, skills: [] }
               : tier
         ),
-        counts: { total: 3, project: 2, user: 1, errors: 0 },
+        counts: { total: 3, project: 2, user: 1, errors: 0, hidden: 0 },
       },
     })
 

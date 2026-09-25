@@ -91,7 +91,8 @@ const LISTING: SkillListing = {
     { tier: 'user-compat', scope: 'user', kind: 'compat', sourceDir: 'C:/Users/me/.agents/skills', skills: [] },
   ],
   errors: [],
-  counts: { total: 2, project: 1, user: 1, errors: 0 },
+  disabled: [],
+  counts: { total: 2, project: 1, user: 1, errors: 0, hidden: 0 },
 }
 
 /** Three that fit under the cap, and one that does not, so the limit has something to refuse. */
@@ -119,7 +120,8 @@ const CROWDED: SkillListing = {
     { tier: 'user-compat', scope: 'user', kind: 'compat', sourceDir: 'C:/Users/me/.agents/skills', skills: [] },
   ],
   errors: [],
-  counts: { total: 4, project: 3, user: 1, errors: 0 },
+  disabled: [],
+  counts: { total: 4, project: 3, user: 1, errors: 0, hidden: 0 },
 }
 
 /** One row of a fixture tier, so a crowded listing stays readable. */
@@ -284,7 +286,7 @@ describe('the composer skills control', () => {
             message: 'The manifest is not valid JSON.',
           },
         ],
-        counts: { total: 2, project: 1, user: 1, errors: 1 },
+        counts: { total: 2, project: 1, user: 1, errors: 1, hidden: 0 },
       },
     })
 
@@ -358,17 +360,38 @@ describe('the composer skills control', () => {
   })
 
   it('disables the skills that do not fit under the cap', async () => {
+    // Ten ids held by the conversation, which is the cap, so every row the picker draws is past it. The
+    // ids are deliberately not in the listing: what is being tested is the count, not the rows.
     await renderChat({
       listing: CROWDED,
-      state: sessionState({ activeSkillIds: ['a-skill', 'b-skill', 'c-skill'] }),
+      state: sessionState({
+        activeSkillIds: ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10'],
+      }),
     })
 
     await userEvent.click(skillControl())
     const row = await skillRow(/Delta Skill/)
 
-    expect(MAX_ACTIVE_SKILLS).toBe(3)
+    expect(MAX_ACTIVE_SKILLS).toBe(10)
     expect(row.disabled).toBe(true)
-    expect(screen.getByText(/of 3 active/)).toBeTruthy()
+    expect(screen.getByText(/of 10 active/)).toBeTruthy()
+  })
+
+  it('leaves a skill the user switched off out of the picker', async () => {
+    await renderChat({
+      listing: {
+        ...LISTING,
+        disabled: [{ tier: 'project-native', rootPath: 'C:/w', skillId: 'code-review' }],
+        counts: { total: 2, project: 1, user: 1, errors: 0, hidden: 1 },
+      },
+    })
+
+    await userEvent.click(skillControl())
+
+    // The user's own skill is still offered; the one switched off is not. Availability is decided outside
+    // the conversation, and a row here that could be chosen would contradict the switch that hid it.
+    expect(await skillRow(/Deploy Runbook/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Code Review/ })).toBeNull()
   })
 
   it('carries a choice made on the home screen onto the conversation the first message creates', async () => {

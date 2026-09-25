@@ -39,8 +39,8 @@ import {
   type PlanStep,
 } from '../protocol/plan'
 import { readMentions } from './mentions'
-import { resolveActiveSkills, skillTierPathsFor } from './skills'
-import { assembleSkillsSection, MAX_ACTIVE_SKILLS, planSkillsInjection } from '../protocol/skills'
+import { readDisabledSkills, resolveActiveSkills, skillTierPathsFor } from './skills'
+import { assembleSkillsSection, MAX_ACTIVE_SKILLS, planSkillsInjection, planTurnSkillIds } from '../protocol/skills'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -1031,7 +1031,15 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       appDataPath: app.getPath('appData'),
       homePath: app.getPath('home'),
     }),
-    activeSkillIds: opts.activeSkillIds ?? [],
+    // Asked of the availability store rather than of the conversation alone. Switching a skill off already
+    // takes its id out of every session, so this mostly restates that — but a conversation written before
+    // the switch, or restored from disk in the moment before the store is read, still names it, and the
+    // turn that finally sends a skill the user switched off must not be this one.
+    activeSkillIds: planTurnSkillIds(
+      opts.activeSkillIds ?? [],
+      await readDisabledSkills(app.getPath('userData')),
+      opts.workspaceRoot
+    ),
   })
   const skillsInjection = planSkillsInjection(history, assembleSkillsSection(activeSkills))
 

@@ -81,7 +81,12 @@ const SKILLS: SkillTierListing[] = [
   { tier: 'user-compat', scope: 'user', kind: 'compat', sourceDir: 'C:/u/.agents/skills', skills: [] },
 ]
 
-const LISTING: SkillListing = { tiers: SKILLS, errors: [], counts: { total: 3, project: 2, user: 1, errors: 0 } }
+const LISTING: SkillListing = {
+  tiers: SKILLS,
+  errors: [],
+  disabled: [],
+  counts: { total: 3, project: 2, user: 1, errors: 0, hidden: 0 },
+}
 
 const STORE_CHANNEL = `conveyor:store:${CHAT_SESSIONS_STORE_ID}`
 

@@ -29,23 +29,29 @@
  * It imports electron for `app.getPath`, like `mentions.ts` does. The suites still run outside Electron
  * because `tests/stubs/register.cjs` redirects the import, and nothing in the scanning itself consults it.
  */
-import { readFile, readdir, stat } from 'fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
-import { defineModule, query } from '../init'
+import { command, defineModule, query } from '../init'
 import { MAX_FILE_BYTES } from './workspace'
 import { workspaceRootFromStoreFile } from './terminal'
 import { orderDirectoryEntries } from '../protocol/mentions'
 import { parseSkillText } from '../protocol/skill-manifest'
 import {
+  buildSkillFileText,
   deriveSkillCounts,
+  disabledRefsForRoot,
+  isReadOnlyTier,
   isSafeSkillId,
   isSkillTierId,
   MAX_SKILL_BODY_CHARS,
+  MAX_SKILL_ID_CHARS,
   mergeSkillTiers,
   skillBodyOverCap,
+  SKILL_ID_TAKEN,
   SKILL_IO_ERROR,
   SKILL_NOT_FOUND,
   SKILL_PARSE_INVALID,
@@ -53,6 +59,8 @@ import {
   SKILL_TOO_LARGE,
   tierById,
   tierIdFor,
+  withSkillAvailability,
+  type DisabledSkillRef,
   type ResolvedSkill,
   type SkillBody,
   type SkillErrorCode,
@@ -288,8 +296,17 @@ async function scanSkillTier(skillsDir: string | null, tier: SkillTierId, scope:
  *
  * The errors come back in tier order, so the reported order is the order the screen draws the tiers in
  * rather than whichever scan happened to finish first.
+ *
+ * `disabled` is passed in rather than read here: availability lives in main's sidecar store, and a
+ * listing is a function of the folders *and* of the switches that apply to them. The caller hands over
+ * the store and the root it is listing for, and this keeps only the entries that speak about that root —
+ * another project's switches are not this screen's business, and a count that included them would claim
+ * to be hiding rows the screen never had.
  */
-export async function listSkills(paths: SkillTierPaths): Promise<SkillListing> {
+export async function listSkills(
+  paths: SkillTierPaths,
+  options: { disabled?: readonly DisabledSkillRef[]; rootPath?: string | null } = {}
+): Promise<SkillListing> {
   // Sequential, in `SKILL_TIERS` order, so the error list is ordered by the folders as drawn rather than
   // by whichever scan settled first. There are four of them and this runs once on a screen's open.
   const scans = new Map<SkillTierId, SkillTierScan>()
@@ -307,8 +324,9 @@ export async function listSkills(paths: SkillTierPaths): Promise<SkillListing> {
     }))
   )
   const errors = SKILL_TIERS.flatMap((tier) => scans.get(tier.id)?.errors ?? [])
+  const disabled = disabledRefsForRoot(options.disabled ?? [], options.rootPath ?? null)
 
-  return { tiers: merged, errors, counts: deriveSkillCounts(merged, errors) }
+  return { tiers: merged, errors, disabled, counts: deriveSkillCounts(merged, errors, disabled) }
 }
 
 /** What a turn start hands the resolver: the four folders, and the ids the session carries. */
@@ -452,7 +470,339 @@ export async function getSkillBody(paths: SkillTierPaths, tier: SkillTierId, id:
   }
 }
 
-/** The input `getSkillBody` takes across the boundary, and the tier pair it names. */
+// ---------------------------------------------------------------- availability
+
+/**
+ * Where this machine records which skills the user switched off.
+ *
+ * `settings/disabled-skills.json` under `userData`: outside every skill folder, because availability is
+ * not part of a skill. A compatibility folder belongs to another agent and this app never writes in one,
+ * and a `SKILL.md` in the user's own folder is the user's to edit — so a switch that lived in either
+ * would be a change this app made to someone else's file. Named here once, so the file the module writes
+ * and the file a later launch reads are the same file.
+ */
+export function disabledSkillsPath(userDataDir: string): string {
+  return join(userDataDir, 'settings', 'disabled-skills.json')
+}
+
+/** What the sidecar file holds: the version that wrote it, and the switches themselves. */
+interface DisabledSkillsFile {
+  version: number
+  disabled: DisabledSkillRef[]
+}
+
+const DISABLED_SKILLS_VERSION = 1
+
+/**
+ * The switches this machine is holding, or none.
+ *
+ * Absent, empty and unreadable all answer the same way on purpose: this file is a preference, and a
+ * preference that cannot be read is not a failure the user asked to see — it costs them a toggle, not a
+ * skill. A launch after a half-written file therefore comes up with everything available rather than with
+ * a screen that refuses to open.
+ *
+ * Entries are re-checked here rather than trusted. A name that could not be a folder is dropped: the
+ * store is a place names are read back from and compared with folder names, and a hand-edited file must
+ * not be able to put anything else into that comparison.
+ */
+export async function readDisabledSkills(userDataDir: string): Promise<DisabledSkillRef[]> {
+  let text: string
+  try {
+    text = await readFile(disabledSkillsPath(userDataDir), 'utf8')
+  } catch {
+    return []
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  const entries = parsed !== null && typeof parsed === 'object' ? (parsed as { disabled?: unknown }).disabled : null
+  if (!Array.isArray(entries)) return []
+  return entries.flatMap((entry) => {
+    const ref = readDisabledSkillRef(entry)
+    return ref === null ? [] : [ref]
+  })
+}
+
+/** One entry of that file, or nothing when it is not the shape this build writes. */
+function readDisabledSkillRef(entry: unknown): DisabledSkillRef | null {
+  if (entry === null || typeof entry !== 'object') return null
+  const { tier, rootPath, skillId } = entry as { tier?: unknown; rootPath?: unknown; skillId?: unknown }
+  if (typeof tier !== 'string' || !isSkillTierId(tier)) return null
+  if (typeof skillId !== 'string' || !isSafeSkillId(skillId)) return null
+  if (rootPath !== null && typeof rootPath !== 'string') return null
+  const scope = tierById(tier).scope
+  // A user tier has nothing to key an entry by, and a project tier without a root names no folder at all,
+  // so neither shape can decide anything later and neither is kept.
+  if (scope === 'user' && rootPath !== null) return null
+  if (scope === 'project' && rootPath === null) return null
+  return { tier, rootPath, skillId }
+}
+
+/** Writes the store, creating `settings/` if this is the first switch this install ever made. */
+export async function writeDisabledSkills(userDataDir: string, disabled: readonly DisabledSkillRef[]): Promise<void> {
+  await mkdir(join(userDataDir, 'settings'), { recursive: true })
+  const file: DisabledSkillsFile = { version: DISABLED_SKILLS_VERSION, disabled: [...disabled] }
+  await writeFile(disabledSkillsPath(userDataDir), `${JSON.stringify(file, null, 2)}\n`, 'utf8')
+}
+
+/**
+ * Applies one availability toggle, and answers with the store as it now stands.
+ *
+ * Reading before writing is what makes this a store rather than a log: the entry is added or removed by
+ * `withSkillAvailability`, which keeps the order stable, and the file that lands holds every switch this
+ * machine has rather than the last one the user made. The root is stored as the caller spelled it — the
+ * comparison that has to survive two spellings is `normalizedRootPath`, and lower-casing what is written
+ * would make the file unreadable to a human looking for their project in it.
+ *
+ * Pruning the id out of the conversations that hold it is the second half of switching a skill off, and it
+ * is done here rather than by the caller: the rule belongs to the switch, and a path that reached the
+ * store without it would leave a conversation naming a skill the picker no longer offers. Enabling prunes
+ * nothing — availability is all it restores, and a conversation that had the skill before the switch does
+ * not get it back on its own.
+ */
+export async function setSkillAvailability(input: {
+  userDataDir: string
+  ref: DisabledSkillRef
+  disabled: boolean
+}): Promise<DisabledSkillRef[]> {
+  const stored = await readDisabledSkills(input.userDataDir)
+  const next = withSkillAvailability(stored, input.ref, input.disabled)
+  await writeDisabledSkills(input.userDataDir, next)
+  if (input.disabled) pruneSessionsWithSkill(input.ref.skillId)
+  return next
+}
+
+/**
+ * Prunes one id from every conversation that holds it, installed from `router.ts`.
+ *
+ * A sink rather than an import: the session store belongs to the router, and a module that reached for
+ * it directly would be a second owner of state that already has one. Defaulting to a no-op keeps this
+ * module loadable outside the router, which is how its suites load it.
+ */
+let pruneSessionsWithSkill: (skillId: string) => void = () => {}
+
+/** Installs the session-store half of availability, once, from `router.ts`. */
+export function setSkillPruneSink(sink: (skillId: string) => void): void {
+  pruneSessionsWithSkill = sink
+}
+
+// ---------------------------------------------------------------- writes
+
+/** What a completed write answers with: which folder's skill it was, and the file it wrote. */
+export interface SkillWritten {
+  tier: SkillTierId
+  skillId: string
+  path: string
+}
+
+/** What a created skill is made of, before it is a file. */
+export interface SkillDraft {
+  tier: SkillTierId
+  skillId: string
+  title: string
+  summary: string
+  body: string
+}
+
+/**
+ * A skill id that can be a folder name, or a refusal.
+ *
+ * The one place a name becomes a path. The dialog checks the same rule to fail fast on a field, and this
+ * checks it because the folder below is about to be built from it — a client is not what decides which
+ * names a filesystem is asked to hold.
+ */
+function requireSafeSkillId(skillId: string): string {
+  const id = skillId.trim()
+  if (!isSafeSkillId(id)) {
+    throw new ConveyorError(
+      SKILL_PARSE_INVALID,
+      `"${skillId}" is not a usable skill id. Use lower-case letters, digits and single hyphens, up to ${MAX_SKILL_ID_CHARS} characters.`
+    )
+  }
+  return id
+}
+
+/**
+ * The folder a write goes to, or a refusal naming why there is none.
+ *
+ * Read-only tiers are refused here rather than at each call site: this app never writes in a `.agents`
+ * folder, and it does not matter which path asked. A project tier with no project open has nowhere to
+ * write either, and both answers are the same one — there is no folder of ours for that tier — so both
+ * raise `SKILL_NOT_FOUND`. That is also what a delete aimed at a compatibility tier raises, and it is
+ * honest: for a write, a folder this app has no handle on and a folder that is not there are the same
+ * answer.
+ */
+function writableSkillDir(paths: SkillTierPaths, tier: SkillTierId): string {
+  if (isReadOnlyTier(tier)) {
+    throw new ConveyorError(SKILL_NOT_FOUND, `${tierById(tier).label} is a folder this app reads, not one it writes.`)
+  }
+  const dir = tierDir(paths, tier)
+  if (dir === null) {
+    throw new ConveyorError(
+      SKILL_NOT_FOUND,
+      `No project is open, so there is no ${tierById(tier).label} folder to write in.`
+    )
+  }
+  return dir
+}
+
+/**
+ * Creates one skill in a folder this app writes.
+ *
+ * The manifest and the body are authored here and written with `writeFile`, so the bytes on disk are the
+ * ones `parseSkillText` is tested against. A taken id is `SKILL_ID_TAKEN` rather than a write failure:
+ * the folder is a skill's identity, and the field the user has to change is the id. The check is on the
+ * folder rather than on the file inside it, so a folder someone made by hand still counts as taken —
+ * this app does not adopt a skill it did not write and would not be able to say what is in it.
+ */
+export async function createSkill(paths: SkillTierPaths, draft: SkillDraft): Promise<SkillWritten> {
+  const skillsDir = writableSkillDir(paths, draft.tier)
+  const skillId = requireSafeSkillId(draft.skillId)
+  if (skillBodyOverCap(draft.body)) {
+    throw new ConveyorError(
+      SKILL_TOO_LARGE,
+      `A skill's body is capped at ${MAX_SKILL_BODY_CHARS} characters, and this one is ${draft.body.length}.`
+    )
+  }
+  const folder = join(skillsDir, skillId)
+  if (existsSync(folder)) {
+    throw new ConveyorError(SKILL_ID_TAKEN, `A skill called "${skillId}" is already in ${tierById(draft.tier).label}.`)
+  }
+  await mkdir(folder, { recursive: true })
+  const path = join(folder, SKILL_FILE_NAME)
+  await writeFile(path, buildSkillFileText(draft), 'utf8')
+  return { tier: draft.tier, skillId, path }
+}
+
+/**
+ * Copies one skill's whole folder into the project that is open.
+ *
+ * The source may be any tier, a compatibility one included — this reads, and reading another agent's
+ * folder is the point of the copy — while the destination is always the project's own folder, which is
+ * also what makes a root a precondition. The folder is copied recursively rather than re-authored from
+ * its parts: a skill may carry an asset beside its `SKILL.md`, and a copy that dropped it would hand the
+ * user a skill pointing at a file it lost.
+ */
+export async function copySkillIntoProject(
+  paths: SkillTierPaths,
+  tier: SkillTierId,
+  skillId: string
+): Promise<SkillWritten> {
+  const sourceDir = tierDir(paths, tier)
+  if (sourceDir === null) {
+    throw new ConveyorError(
+      SKILL_NOT_FOUND,
+      `No project is open, so there is no ${tierById(tier).label} folder to copy from.`
+    )
+  }
+  const id = requireSafeSkillId(skillId)
+  const source = join(sourceDir, id)
+  if (!existsSync(source)) {
+    throw new ConveyorError(SKILL_NOT_FOUND, `No skill called "${id}" is in ${tierById(tier).label}.`)
+  }
+  const destinationDir = writableSkillDir(paths, 'project-native')
+  const destination = join(destinationDir, id)
+  if (existsSync(destination)) {
+    throw new ConveyorError(SKILL_ID_TAKEN, `The project already has a skill called "${id}".`)
+  }
+  await cp(source, destination, { recursive: true })
+  return { tier: 'project-native', skillId: id, path: join(destination, SKILL_FILE_NAME) }
+}
+
+/**
+ * Deletes one skill's folder from a folder this app writes.
+ *
+ * The folder rather than the file: `SKILL.md` is what makes a folder a skill, but a skill may carry
+ * assets beside it, and deleting the file alone would leave a folder the next scan reports as a load
+ * error. A compatibility tier is refused by `writableSkillDir` — this app never deletes another agent's
+ * skills — and a name that is not there is `SKILL_NOT_FOUND` rather than a success that quietly did
+ * nothing.
+ */
+export async function deleteSkill(paths: SkillTierPaths, tier: SkillTierId, skillId: string): Promise<SkillWritten> {
+  const skillsDir = writableSkillDir(paths, tier)
+  const id = requireSafeSkillId(skillId)
+  const folder = join(skillsDir, id)
+  if (!existsSync(folder)) {
+    throw new ConveyorError(SKILL_NOT_FOUND, `No skill called "${id}" is in ${tierById(tier).label}.`)
+  }
+  await rm(folder, { recursive: true })
+  return { tier, skillId: id, path: join(folder, SKILL_FILE_NAME) }
+}
+
+/** How long a title or a summary may be before it is not a title or a summary. */
+const SKILL_DRAFT_FIELD_CHARS = 500
+
+/**
+ * The input `createSkill` takes across the boundary: where it goes, and what it says.
+ *
+ * The two writable tiers are named the same way every other call names one — a scope and a kind — so the
+ * module has one spelling for a destination and the dialog cannot invent a third. Nothing here is a
+ * path: the folder is composed from the tier table inside the module, which is why a renderer cannot
+ * aim a write at a folder outside the four this app knows about.
+ */
+const createSkillInputSchema = z.object({
+  rootPath: z.string().min(1).nullable().optional(),
+  scope: z.enum(['project', 'user']),
+  tier: z.enum(['native', 'compat']),
+  // The slug rule is enforced by `requireSafeSkillId`; this is only the outer bound a payload has to fit
+  // before a name is even considered, so a megabyte of id is refused as a shape rather than as a name.
+  skillId: z
+    .string()
+    .min(1)
+    .max(MAX_SKILL_ID_CHARS * 2),
+  title: z.string().max(SKILL_DRAFT_FIELD_CHARS),
+  summary: z.string().max(SKILL_DRAFT_FIELD_CHARS),
+  body: z.string(),
+})
+
+/** The input the copy and delete commands take: which folder's skill, and which skill. */
+const skillWriteInputSchema = z.object({
+  rootPath: z.string().min(1).nullable().optional(),
+  scope: z.enum(['project', 'user']),
+  tier: z.enum(['native', 'compat']),
+  skillId: z
+    .string()
+    .min(1)
+    .max(MAX_SKILL_ID_CHARS * 2),
+})
+
+/** The same, plus the state the user asked for. */
+const skillAvailabilityInputSchema = skillWriteInputSchema.extend({ disabled: z.boolean() })
+
+/** The root a command works in: the one it named, or the folder main already owns for this window. */
+function commandRootPath(rootPath: string | null | undefined): string | null {
+  return rootPath !== undefined && rootPath !== null ? rootPath : workspaceRootFromStoreFile(app.getPath('userData'))
+}
+
+/**
+ * The entry one availability toggle is about, or a refusal naming why that folder cannot answer for it.
+ *
+ * The folder has to be there. A switch decides whether a skill is offered, and an entry for a folder that
+ * does not exist is a switch nobody can see or turn back off — so it is refused rather than written. A
+ * project tier with no project open has no folder to ask at all.
+ *
+ * Note what this does *not* require: a compatibility tier is switchable. Availability is a preference
+ * this app keeps *about* another agent's folder, and nothing about it is written into one.
+ */
+function disabledSkillRefFor(
+  paths: SkillTierPaths,
+  tier: SkillTierId,
+  skillId: string,
+  namedRoot: string | null | undefined
+): DisabledSkillRef {
+  const id = requireSafeSkillId(skillId)
+  const dir = tierDir(paths, tier)
+  if (dir === null) {
+    throw new ConveyorError(SKILL_NOT_FOUND, `No project is open, so there is no ${tierById(tier).label} to switch.`)
+  }
+  if (!existsSync(join(dir, id))) {
+    throw new ConveyorError(SKILL_NOT_FOUND, `No skill called "${id}" is in ${tierById(tier).label}.`)
+  }
+  return { tier, rootPath: tierById(tier).scope === 'project' ? commandRootPath(namedRoot) : null, skillId: id }
+}
 const skillBodyInputSchema = z.object({
   rootPath: z.string().min(1).nullable().optional(),
   scope: z.enum(['project', 'user']),
@@ -474,16 +824,20 @@ function pathsFor(rootPath: string | null): SkillTierPaths {
 /**
  * The skills surface, as main offers it.
  *
- * Two queries and nothing that writes: this turn is read-only, and the folder list a scan reads is passed
- * in rather than reached for by the renderer. `listSkills` takes an optional root so the settings screen
- * can name the folder it is showing — omitted, it answers for the folder that is open, which is the same
- * workspace store file main already owns for `mentions.listFilesFlat`.
+ * Four folders are read and two of them can be written: a scan, one body for the card that was expanded,
+ * and then create, copy-into-project, delete and the availability switch. Every entrance takes an optional
+ * root so the settings screen can name the folder it is showing — omitted, it answers for the folder that
+ * is open, which is the same workspace store file main already owns for `mentions.listFilesFlat`.
+ *
+ * Nothing here takes a path: a destination is a scope and a kind, composed into a folder by the module
+ * against the tier table, so a renderer cannot aim a write at a folder this app does not own.
  */
 export const skillsModule = defineModule({
-  /** Every tier, every skill, its metadata, and the counts a header shows. */
+  /** Every tier, every skill, its metadata, the switches that apply, and the counts a header shows. */
   listSkills: query(z.object({ rootPath: z.string().min(1).optional() }).optional(), async ({ input }) => {
     const rootPath = input?.rootPath ?? workspaceRootFromStoreFile(app.getPath('userData'))
-    return listSkills(pathsFor(rootPath))
+    const disabled = await readDisabledSkills(app.getPath('userData'))
+    return listSkills(pathsFor(rootPath), { disabled, rootPath })
   }),
 
   /** One skill's body, for the card that was expanded. */
@@ -494,5 +848,53 @@ export const skillsModule = defineModule({
     // refused by `getSkillBody` itself, which is the one place that decides what an unknown tier means.
     const tier: SkillTierKind = input.tier
     return getSkillBody(pathsFor(rootPath), tierIdFor(input.scope, tier), input.skillId)
+  }),
+
+  /** Creates one skill in a folder this app writes. */
+  createSkill: command(createSkillInputSchema, async ({ input }) => {
+    return createSkill(pathsFor(commandRootPath(input.rootPath)), {
+      tier: tierIdFor(input.scope, input.tier),
+      skillId: input.skillId,
+      title: input.title,
+      summary: input.summary,
+      body: input.body,
+    })
+  }),
+
+  /** Copies one skill's whole folder into the project that is open. */
+  copySkillIntoProject: command(skillWriteInputSchema, async ({ input }) => {
+    return copySkillIntoProject(
+      pathsFor(commandRootPath(input.rootPath)),
+      tierIdFor(input.scope, input.tier),
+      input.skillId
+    )
+  }),
+
+  /** Deletes one skill's folder from a folder this app writes. */
+  deleteSkill: command(skillWriteInputSchema, async ({ input }) => {
+    const written = await deleteSkill(
+      pathsFor(commandRootPath(input.rootPath)),
+      tierIdFor(input.scope, input.tier),
+      input.skillId
+    )
+    // The confirm promised that conversations holding this skill would drop it, so they do — in the same
+    // step, rather than leaving the next turn to fail on an id whose folder is gone.
+    pruneSessionsWithSkill(written.skillId)
+    return written
+  }),
+
+  /** Switches one skill's availability; switching it off drops it from every conversation that holds it. */
+  setSkillAvailability: command(skillAvailabilityInputSchema, async ({ input }) => {
+    const paths = pathsFor(commandRootPath(input.rootPath))
+    const tier = tierIdFor(input.scope, input.tier)
+    const ref = disabledSkillRefFor(paths, tier, input.skillId, input.rootPath)
+    const disabled = await setSkillAvailability({
+      userDataDir: app.getPath('userData'),
+      ref,
+      disabled: input.disabled,
+    })
+    // Pruning a skill out of the conversations that hold it is part of the switch itself, so it happens in
+    // the function above; nothing is left to do here but answer with the store as it now stands.
+    return { disabled }
   }),
 })

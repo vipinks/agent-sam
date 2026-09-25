@@ -11,7 +11,7 @@ import { terminalModule } from './modules/terminal'
 import { agentModule } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
 import { mentionsModule } from './modules/mentions'
-import { skillsModule } from './modules/skills'
+import { skillsModule, setSkillPruneSink } from './modules/skills'
 import { mcpModule } from './modules/mcp'
 import { gitModule } from './modules/git'
 import { workspaceStore } from './stores/workspace'
@@ -110,6 +110,15 @@ setWorkspaceChangeSink(emitWorkspaceChanged.onChanged)
  * adds to is not the list this file saw at startup.
  */
 setCustomProviderIds(() => router.stores['provider-config'].getState().customProviders.map((p) => p.id))
+
+/**
+ * Give the skills module the session store, so switching a skill off can take it out of every conversation.
+ *
+ * Installed here for the same reason as the two sinks above: the store does not exist until `createRouter`
+ * has returned, and the module is imported *by* this file. Dispatched rather than written, because pruning
+ * is a change to session state and the store is the only thing that owns one.
+ */
+setSkillPruneSink((skillId) => router.stores['chat-sessions'].dispatch('dropSkill', { id: skillId }))
 
 /** Wire per-window push events. Call once per created window. */
 export function setupEvents(win: BrowserWindow): void {

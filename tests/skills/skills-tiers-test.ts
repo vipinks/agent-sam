@@ -325,7 +325,7 @@ function countAndFilterDerivations() {
   const counts = deriveSkillCounts(merged, [])
   assert.deepEqual(
     counts,
-    { total: 4, project: 3, user: 1, errors: 0 },
+    { total: 4, project: 3, user: 1, errors: 0, hidden: 0 },
     'the counts are the tier list counted, not a second walk of the disk'
   )
 
@@ -407,7 +407,7 @@ async function listReadsAllFourTiers() {
 
   assert.deepEqual(
     listing.counts,
-    { total: 4, project: 2, user: 2, errors: 0 },
+    { total: 4, project: 2, user: 2, errors: 0, hidden: 0 },
     'and the listing carries the counts the settings header shows'
   )
 
@@ -442,7 +442,7 @@ async function theHighestTierWinsACollision() {
   )
   assert.deepEqual(
     listing.counts,
-    { total: 4, project: 2, user: 2, errors: 0 },
+    { total: 4, project: 2, user: 2, errors: 0, hidden: 0 },
     'and a shadowed copy is not a skill in the counts either'
   )
 
@@ -480,7 +480,7 @@ async function missingDirectoriesAreEmptyAndNotErrors() {
     'each one is empty rather than absent'
   )
   assert.deepEqual(listing.errors, [], 'a folder that is not there yet is the ordinary case, not a failure')
-  assert.deepEqual(listing.counts, { total: 0, project: 0, user: 0, errors: 0 })
+  assert.deepEqual(listing.counts, { total: 0, project: 0, user: 0, errors: 0, hidden: 0 })
 
   // With no root open the two project tiers have no directory at all, and say so rather than inventing one.
   const withoutRoot = await listSkills(tierPaths({ root: null, userNative, userCompat }))
