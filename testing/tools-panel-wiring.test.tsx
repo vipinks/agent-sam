@@ -21,16 +21,27 @@
  *
  * The listing is a fixture, and a small one on purpose: seven rows, so the second page is short by two
  * and the count line has a range to state. A scan is the node suites' subject.
+ *
+ * The MCP servers tab is the second turn's, and it is the same panel rather than a second one: the same
+ * two reads, the same four-value status filter, the same five-row window, and the same one dispatch out.
+ * What it adds to the tab row is a count of its own — the mirror store's, so it is stated before either
+ * tab is visited — and what it must not add is any second write: the switch on a row dispatches the
+ * settings section's own `setEnabled`, and nothing here starts or stops anything. The rows' rules are
+ * `conveyor/protocol/mcp-panel.ts`'s, asserted directly in `tests/mcp/mcp-panel-test.ts`; what is here
+ * is what only a render can show — which of those rows the panel draws, what each mark on one says, and
+ * which of the two tabs a reader's own typing belongs to.
  */
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
+import { ConveyorError } from 'electron-conveyor/react'
 import { Workbench } from '@/app/components/workbench/workbench'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { percentSize, type LayoutSizes } from '@/app/components/workbench/layout'
 import { queryClient } from '@/conveyor/client'
+import { useMcpServersStore } from '@/conveyor/stores/mcp-servers'
 import type { SkillListing, SkillScope, SkillSummary, SkillTierId, SkillTierListing } from '@/conveyor/protocol/skills'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
@@ -127,6 +138,62 @@ const LISTING: SkillListing = {
   counts: { total: 6, project: 3, user: 3, errors: 1, hidden: 1 },
 }
 
+/** One server, as `mcp.listServers` reports one: the fields the panel's rows read, and no secrets. */
+function mcpServer(scope: 'user' | 'project', id: string, enabled: boolean, trust?: 'matched' | 'mismatched') {
+  return {
+    id,
+    transport: 'stdio' as const,
+    command: 'npx',
+    args: ['-y', `${id}-server`],
+    cwd: null,
+    env: {},
+    enabled,
+    scope,
+    trust: scope === 'project' ? (trust ?? 'absent') : null,
+    secrets: [],
+    autoApprove: false,
+  }
+}
+
+/**
+ * Three of the user's servers and six of this folder's: nine rows, two pages, and every status present.
+ *
+ * `filesystem` and `github` are the two runners, one per scope; `playwright` and `legacy` are switched off,
+ * one of them untrusted as well; `atlas` is running with no grant at all, which is the row that tells
+ * "needs trust" apart from "running"; `notes` is the grant that no longer matches; and `memory` and
+ * `serena` and `chrome-devtools` are the ordinary stopped rows the second page is made of.
+ */
+const MCP_LISTING = {
+  user: [
+    mcpServer('user', 'filesystem', true),
+    mcpServer('user', 'memory', true),
+    mcpServer('user', 'playwright', false),
+  ],
+  project: [
+    mcpServer('project', 'github', true, 'matched'),
+    mcpServer('project', 'atlas', true),
+    mcpServer('project', 'notes', true, 'mismatched'),
+    mcpServer('project', 'legacy', false),
+    mcpServer('project', 'serena', true, 'matched'),
+    mcpServer('project', 'chrome-devtools', true, 'matched'),
+  ],
+  errors: [],
+}
+
+/**
+ * The live tool list, as `mcp.listRunningTools` reports it: which servers answer, and with how many tools.
+ *
+ * `atlas` is among them on purpose, so the tab has a running row whose status is still `needs-trust`.
+ */
+const MCP_TOOLS = [
+  { serverId: 'filesystem', tool: { name: 'read_file' } },
+  { serverId: 'filesystem', tool: { name: 'write_file' } },
+  { serverId: 'github', tool: { name: 'search_issues' } },
+  { serverId: 'github', tool: { name: 'create_issue' } },
+  { serverId: 'github', tool: { name: 'list_branches' } },
+  { serverId: 'atlas', tool: { name: 'lookup' } },
+]
+
 /** One conversation, holding one project skill — what the disable confirm has to be able to name. */
 function sessionStore() {
   return {
@@ -169,6 +236,17 @@ function stubWorkbench(overrides: Record<string, (input: unknown) => unknown> = 
     listFilesFlat: () => [],
     listSkills: () => LISTING,
     setSkillAvailability: () => ({ disabled: [] }),
+    // The two reads the MCP tab draws from, and the one write it has. The second tab forced these three
+    // lines and no other change to this stub: the panel now refreshes the mirror when it opens — the
+    // count in the tab row is the mirror's — so a docked Tools panel reaches for both reads whether or
+    // not the MCP tab is ever opened, and a read with no handler would fail the dock rather than this
+    // suite's claim about it.
+    listServers: () => MCP_LISTING,
+    listRunningTools: () => MCP_TOOLS,
+    setEnabled: (input) => ({
+      id: (input as { serverId: string }).serverId,
+      enabled: (input as { enabled: boolean }).enabled,
+    }),
     ...overrides,
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
@@ -254,6 +332,9 @@ async function chooseStatus(label: string): Promise<void> {
 beforeEach(() => {
   standIn.groups.clear()
   localStorage.clear()
+  // The MCP mirror is a renderer-side store rather than a mirrored one, so it outlives a test unless it
+  // is put back: a listing left over from the case above would be drawn before this case's read lands.
+  useMcpServersStore.setState({ loading: true, listing: null, running: [], error: null })
   useWorkbenchStore.setState({
     activeActivity: 'chat',
     settingsSection: 'providers',
@@ -503,5 +584,334 @@ describe('the manage button', () => {
     // one of the views.
     expect(useWorkbenchStore.getState().rightPanel).toBe('tools')
     await screen.findByLabelText('Search skills')
+  })
+})
+
+describe('the MCP servers tab', () => {
+  /** One of the panel's own tabs, which the settings screen's row of tabs is not. */
+  function panelTab(name: RegExp): HTMLElement {
+    const list = document.querySelector<HTMLElement>('[data-slot="tools-tabs"]')
+    if (!list) throw new Error('no tools tab row')
+    return within(list).getByRole('tab', { name })
+  }
+
+  /** Every MCP row the panel is drawing, in the order it drew them. */
+  function mcpRows(): HTMLElement[] {
+    return [...document.querySelectorAll<HTMLElement>('[data-slot="mcp-panel-row"]')]
+  }
+
+  /** The ids those rows are about, which is what a filter claim is really about. */
+  function mcpRowIds(): string[] {
+    return mcpRows().map((row) => row.getAttribute('data-row-id') ?? '?')
+  }
+
+  /** The ranged count line under the MCP list. */
+  function mcpCountLine(): string {
+    return document.querySelector('[data-slot="tools-mcp-range"]')?.textContent ?? ''
+  }
+
+  /** One drawn MCP row, by the server it is about. */
+  function mcpRow(id: string): HTMLElement {
+    const row = document.querySelector<HTMLElement>(`[data-slot="mcp-panel-row"][data-row-id="${id}"]`)
+    if (!row) throw new Error(`no MCP row for ${id}`)
+    return row
+  }
+
+  /** The second tab of the docked panel, open on its own read. */
+  async function dockMcp(): Promise<void> {
+    await userEvent.click(panelTab(/^MCP servers/))
+    await screen.findByLabelText('Search MCP servers')
+  }
+
+  it('states both tabs with their own counts, and keeps each tab’s narrowing across a switch', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+
+    // The tab row lists both, Skills first as shipped, and each count is of a whole listing rather than of
+    // the page under it: six skills, and nine servers across the user's file and this folder's.
+    const list = document.querySelector<HTMLElement>('[data-slot="tools-tabs"]')
+    expect(
+      within(list as HTMLElement)
+        .getAllByRole('tab')
+        .map((tab) => tab.getAttribute('data-slot'))
+    ).toEqual(['tools-tab-skills', 'tools-tab-mcp'])
+    expect(document.querySelector('[data-slot="tools-skills-count"]')?.textContent).toBe('6')
+    // The MCP count is the mirror's, which is read when the panel opens rather than when its tab does:
+    // a tab row stating one of its two counts would be a tab row that says half of what it knows.
+    await waitFor(() => expect(document.querySelector('[data-slot="tools-mcp-count"]')?.textContent).toBe('9'))
+
+    // The skills list, on its own second page.
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(rowIds()).toEqual(['echo', 'gamma'])
+    expect(countLine()).toBe('6–7 of 7')
+
+    // The other tab, narrowed its own way: a query that keeps six of its nine, and its second page.
+    await dockMcp()
+    await userEvent.type(screen.getByLabelText('Search MCP servers'), 'e')
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(mcpRowIds()).toEqual(['chrome-devtools'])
+    expect(mcpCountLine()).toBe('6 of 6')
+
+    // Back, and the page the reader left is the page they return to — with an empty search box, because a
+    // query belongs to the tab it was typed in.
+    await userEvent.click(panelTab(/^Skills/))
+    expect(rowIds()).toEqual(['echo', 'gamma'])
+    expect(countLine()).toBe('6–7 of 7')
+    expect((screen.getByLabelText('Search skills') as HTMLInputElement).value).toBe('')
+
+    // And the MCP tab's own query and page are still its own.
+    await dockMcp()
+    expect((screen.getByLabelText('Search MCP servers') as HTMLInputElement).value).toBe('e')
+    expect(mcpRowIds()).toEqual(['chrome-devtools'])
+    expect(mcpCountLine()).toBe('6 of 6')
+  })
+
+  it('draws each row’s id, scope, running state and tool count, and the trust chip only where it belongs', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    // The first page of the whole list, in the order the settings section draws the same two reads in.
+    expect(mcpRowIds()).toEqual(['filesystem', 'memory', 'playwright', 'github', 'atlas'])
+
+    // A running user row: the id, the scope it came from, and what the process is offering.
+    const file = mcpRow('filesystem')
+    expect(within(file).getByText('filesystem')).toBeTruthy()
+    expect(within(file).getByText('User')).toBeTruthy()
+    expect(within(file).getByText('Running · 2 tools')).toBeTruthy()
+    expect(within(file).queryByText('Needs trust')).toBeNull()
+
+    // The same three marks on a trusted project server, with its own tool count.
+    const github = mcpRow('github')
+    expect(within(github).getByText('Project')).toBeTruthy()
+    expect(within(github).getByText('Running · 3 tools')).toBeTruthy()
+    expect(within(github).queryByText('Needs trust')).toBeNull()
+
+    // An enabled server with nothing behind it says so rather than claiming a count of none.
+    expect(within(mcpRow('memory')).getByText('Stopped')).toBeTruthy()
+
+    // The chip: a project row whose grant is absent (`atlas`) carries it even though it is running, which
+    // is the one thing a row's marks say that its status does not.
+    expect(within(mcpRow('atlas')).getByText('Needs trust')).toBeTruthy()
+
+    // A mismatched grant, and a switched-off untrusted row: both keep the chip behind whatever else the
+    // row is about, and neither is a user row.
+    await userEvent.type(screen.getByLabelText('Search MCP servers'), 'legacy')
+    expect(mcpRowIds()).toEqual(['legacy'])
+    expect(within(mcpRow('legacy')).getByText('Needs trust')).toBeTruthy()
+
+    await userEvent.clear(screen.getByLabelText('Search MCP servers'))
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(within(mcpRow('notes')).getByText('Needs trust')).toBeTruthy()
+    // A grant that still matches is not a chip, and neither is any user row.
+    expect(within(mcpRow('serena')).queryByText('Needs trust')).toBeNull()
+    expect(within(mcpRow('chrome-devtools')).queryByText('Needs trust')).toBeNull()
+  })
+
+  it('keeps the rows one status names: running, stopped, disabled, or the ones that need trust', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    // `atlas` is running and is not in this first answer: the missing grant is what its row is about.
+    await chooseStatus('Running')
+    expect(mcpRowIds()).toEqual(['filesystem', 'github'])
+    expect(mcpCountLine()).toBe('1–2 of 2')
+
+    await chooseStatus('Stopped')
+    expect(mcpRowIds()).toEqual(['memory', 'serena', 'chrome-devtools'])
+    expect(mcpCountLine()).toBe('1–3 of 3')
+
+    // A switched-off untrusted row is switched off, not needing trust: the flag decides first.
+    await chooseStatus('Disabled')
+    expect(mcpRowIds()).toEqual(['playwright', 'legacy'])
+
+    await chooseStatus('Needs trust')
+    expect(mcpRowIds()).toEqual(['atlas', 'notes'])
+    expect(mcpCountLine()).toBe('1–2 of 2')
+
+    await chooseStatus('All statuses')
+    expect(mcpRows()).toHaveLength(5)
+    expect(mcpCountLine()).toBe('1–5 of 9')
+  })
+
+  it('narrows by server id, case-insensitively, and says which query came back empty', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    const search = screen.getByLabelText('Search MCP servers')
+    await userEvent.type(search, 'GitHub')
+    expect(mcpRowIds()).toEqual(['github'])
+
+    await userEvent.clear(search)
+    await userEvent.type(search, 'null')
+    expect(mcpRows()).toEqual([])
+    expect(document.querySelector('[data-slot="tools-mcp-nomatch"]')?.textContent).toContain('null')
+    expect(mcpCountLine()).toBe('0 of 0')
+  })
+
+  it('draws five rows with the ranged count line, and advances to the short last page', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    expect(mcpRows()).toHaveLength(5)
+    expect(mcpCountLine()).toBe('1–5 of 9')
+    expect((screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    // The last page is partial, and the line names the four rows it is holding.
+    expect(mcpRowIds()).toEqual(['notes', 'legacy', 'serena', 'chrome-devtools'])
+    expect(mcpCountLine()).toBe('6–9 of 9')
+    expect((screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+    expect(mcpRows()).toHaveLength(5)
+    expect(mcpCountLine()).toBe('1–5 of 9')
+  })
+
+  it('switches a row off through the settings command, and asks for the list again', async () => {
+    const stub = stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    const readsBefore = stub.methodsOn('mcp').filter((method) => method === 'listServers').length
+    await userEvent.click(within(mcpRow('filesystem')).getByRole('switch'))
+
+    await waitFor(() => expect(stub.methodsOn('mcp')).toContain('setEnabled'))
+    // The whole write the settings section makes, and nothing else: no start, no stop, no trust, no secret.
+    const write = stub.callsTo('mcp').find((entry) => entry.method === 'setEnabled')
+    expect(write?.args[0]).toEqual({ scope: 'user', rootPath: ROOT, serverId: 'filesystem', enabled: false })
+    expect(stub.methodsOn('mcp')).not.toContain('startServer')
+    expect(stub.methodsOn('mcp')).not.toContain('stopServer')
+    expect(stub.methodsOn('mcp')).not.toContain('setTrust')
+    // The list is the disk's answer, so it is asked for again rather than patched here.
+    await waitFor(() =>
+      expect(stub.methodsOn('mcp').filter((method) => method === 'listServers').length).toBe(readsBefore + 1)
+    )
+  })
+
+  it('switches a row back on, which is the same command with the row’s own scope and flag', async () => {
+    const stub = stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    // A switched-off project row, found by id: the scope and the direction both travel from the row rather
+    // than from anything this tab assumes about either.
+    await userEvent.type(screen.getByLabelText('Search MCP servers'), 'legacy')
+    expect(mcpRowIds()).toEqual(['legacy'])
+    await userEvent.click(within(mcpRow('legacy')).getByRole('switch'))
+
+    await waitFor(() => expect(stub.methodsOn('mcp')).toContain('setEnabled'))
+    const write = stub.callsTo('mcp').find((entry) => entry.method === 'setEnabled')
+    expect(write?.args[0]).toEqual({ scope: 'project', rootPath: ROOT, serverId: 'legacy', enabled: true })
+  })
+
+  it('says what the code means when the switch is refused', async () => {
+    stubWorkbench({
+      setEnabled: () => {
+        throw new ConveyorError('MCP_CONFIG_INVALID', 'main says the record is malformed')
+      },
+    })
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    await userEvent.click(within(mcpRow('filesystem')).getByRole('switch'))
+
+    // The sentence is chosen by the code rather than by main's message, and the row is left saying what it
+    // said: the write did not happen.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tools-mcp-write-error"]')?.textContent).toBe(
+        'This configuration is not one this app can run.'
+      )
+    )
+  })
+
+  it('opens Settings on the MCP Servers section, in one dispatch', async () => {
+    stubWorkbench()
+    renderWorkbench()
+
+    // A view other than the conversation, so "back" has a different place to go to than the fallback.
+    await userEvent.click(railControl('Explorer'))
+    await dockTools()
+    await dockMcp()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage MCPs' }))
+
+    expect(useWorkbenchStore.getState().activeActivity).toBe('settings')
+    expect(useWorkbenchStore.getState().settingsSection).toBe('mcp-servers')
+    expect(useWorkbenchStore.getState().settingsReturnView).toBe('files')
+    await screen.findByRole('heading', { name: 'MCP servers' })
+    expect(screen.getByRole('tab', { name: 'MCP Servers' }).getAttribute('aria-selected')).toBe('true')
+    // The section a visit landed on is a memory, not a preference, so nothing was written for it.
+    expect(localStorage.getItem(STORED_KEY)).toBeNull()
+  })
+
+  it('says what the code means when the whole listing could not be read', async () => {
+    stubWorkbench({
+      listServers: () => {
+        throw new ConveyorError('MCP_CONFIG_INVALID', 'main says the file is not JSON')
+      },
+    })
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    // The code-branched sentence, which is the settings section's own wording for the same code rather
+    // than a second copy of it — the shared map is `mcp-notices.ts`, and one code cannot come to mean two
+    // things depending on which surface was open when the read failed.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tools-mcp-read-error"]')?.textContent).toBe(
+        'This configuration could not be read, so the server lists may be incomplete.'
+      )
+    )
+    // No list at all is not an empty list: the failure is the whole answer, and there are no rows to page.
+    expect(mcpRows()).toEqual([])
+  })
+
+  it('falls back to the plain sentence for a failure that carries no code of ours', async () => {
+    stubWorkbench({ listServers: () => Promise.reject(new Error('the bridge is gone')) })
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tools-mcp-read-error"]')?.textContent).toBe(
+        'The server lists could not be read. The last answer is still shown.'
+      )
+    )
+  })
+})
+
+describe('a failed skills read', () => {
+  it('renders the code-branched sentence in the panel, as the settings section already does', async () => {
+    stubWorkbench({
+      listSkills: () => {
+        throw new ConveyorError('SKILL_IO_ERROR', 'main says the folder is not readable')
+      },
+    })
+    renderWorkbench()
+
+    // The panel is opened by hand rather than through `dockTools`, because a failed listing is exactly the
+    // case with no search box to wait for: the sentence is the whole tab.
+    await userEvent.click(resident('Tools'))
+
+    // The sentence the shared map holds for this code, asserted on the panel this turn closes the gap for:
+    // the wording is one function, and both surfaces that draw the read now have a case that pins it.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tools-skills-read-error"]')?.textContent).toBe(
+        'The skill folders could not be opened. Check that they are readable, then reopen this screen.'
+      )
+    )
   })
 })

@@ -12,15 +12,23 @@
  * surfaces import rather than each keeping a copy — a skill's availability has one implementation and one
  * explanation.
  *
- * The tab row states one tab this turn, Skills, and it is a real tab list with the count inside its trigger
- * rather than a heading with a number beside it: the MCP servers tab is the next turn's, and it arrives as
- * another trigger and another content pane rather than as a restructure of this one. The second tab is not
- * drawn empty in the meantime, because a control that does nothing is worse than a row with one entry.
+ * The tab row states two tabs, and each count sits inside its trigger rather than beside a heading: the
+ * skills the listing holds, and the servers the mirror holds. Both counts are the panel's, so both reads are
+ * the panel's — a body that owned a read could only report its total upwards, and the tab whose body did
+ * would state its count a visit later than the other. Skills came first and stays first: appending a tab is
+ * the change this row was written to take, and reordering it to match the settings sections' order would be
+ * a change this turn has no reason to make.
+ *
+ * Which tab a reader is looking at is the panel's state, and so is the narrowing inside it: the query, the
+ * status and the page. A tab that is not showing is not in the document, so state held inside a pane would
+ * be state a reader loses by glancing at the other one. Held here, each tab's own search and page survive
+ * the switch, and neither can overwrite the other's.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, TriangleAlert, Wrench } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
+import { MCP_PANEL_STATUS_FILTERS } from '@/conveyor/protocol/mcp-panel'
 import {
   planSkillPanelView,
   SKILL_PANEL_STATUS_FILTERS,
@@ -30,6 +38,8 @@ import {
 } from '@/conveyor/protocol/skill-panel'
 import { tierKindOf, type SkillListing, type SkillLoadError, type SkillSummary } from '@/conveyor/protocol/skills'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
+import { useMcpServersStore } from '@/conveyor/stores/mcp-servers'
+import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -37,6 +47,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { PaneHeader } from './pane-header'
+import { usePanelNarrowing, type PanelNarrowing } from './panel-narrowing'
+import { McpServersTabBody } from './mcp-tab'
 import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 import { WriteConfirm, type PendingConfirm } from './skills-confirm'
 import { listingFailure, writeFailure } from './skills-notices'
@@ -51,6 +63,19 @@ import { useWorkbenchStore } from './store'
  */
 export function ToolsPanel() {
   const listing = conveyor.skills.listSkills.useQuery()
+  const mcpListing = useMcpServersStore((s) => s.listing)
+  const refreshMcp = useMcpServersStore((s) => s.refresh)
+  const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath) ?? null
+  const skillsNarrowing = usePanelNarrowing(SKILL_PANEL_STATUS_FILTERS)
+  const mcpNarrowing = usePanelNarrowing(MCP_PANEL_STATUS_FILTERS)
+
+  // The count in the MCP tab is the mirror's, so the read behind it is the panel's: made when the tab row is
+  // drawn rather than when that tab is opened, which is what lets both counts be stated from the first
+  // paint. The tab asks again for its own visit — see `McpServersTabBody` — because the panel stays mounted
+  // while it is docked, and the settings screen can start, stop or delete a server in the meantime.
+  useEffect(() => {
+    void refreshMcp(rootPath)
+  }, [refreshMcp, rootPath])
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -71,6 +96,14 @@ export function ToolsPanel() {
               {listing.data && (
                 <span data-slot="tools-skills-count" className="ml-1.5 text-[11px] text-muted-foreground tabular-nums">
                   {listing.data.counts.total}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="mcp" data-slot="tools-tab-mcp">
+              MCP servers
+              {mcpListing && (
+                <span data-slot="tools-mcp-count" className="ml-1.5 text-[11px] text-muted-foreground tabular-nums">
+                  {mcpListing.user.length + mcpListing.project.length}
                 </span>
               )}
             </TabsTrigger>
@@ -97,22 +130,26 @@ export function ToolsPanel() {
               {listingFailure(listing.error)}
             </p>
           )}
-          {listing.data && <SkillsTabBody listing={listing.data} onWritten={() => void listing.refetch()} />}
+          {listing.data && (
+            <SkillsTabBody
+              listing={listing.data}
+              narrowing={skillsNarrowing}
+              onWritten={() => void listing.refetch()}
+            />
+          )}
+        </TabsContent>
+
+        {/*
+         * The second tab: the same shell, and a body of its own, because what it draws comes from a
+         * different read. Its rows, its filter and its page are `protocol/mcp-panel.ts`'s rules; what is
+         * here is only the pane they are drawn in.
+         */}
+        <TabsContent value="mcp" data-slot="tools-mcp" className="min-h-0 flex-1 overflow-auto p-3">
+          <McpServersTabBody narrowing={mcpNarrowing} />
         </TabsContent>
       </Tabs>
     </div>
   )
-}
-
-/**
- * The filter the picker reports, narrowed back to the values this panel knows.
- *
- * The picker hands over a string, and this is where a value that is not one of the four is dropped rather
- * than trusted. Which rows a status keeps is the protocol layer's rule, and a value it does not know would
- * quietly keep nothing at all — an empty list that looks like an empty project.
- */
-function asStatusFilter(value: string): SkillPanelStatusFilter {
-  return SKILL_PANEL_STATUS_FILTERS.find((candidate) => candidate === value) ?? 'all'
 }
 
 /**
@@ -142,37 +179,33 @@ function rowKey(row: SkillPanelRow): string {
  * The Skills tab: the quick surface's whole body.
  *
  * Which rows to show is `planSkillPanelView`'s decision, computed in one pass and memoised on its four
- * inputs; what is left here is the state a reader moves — the query, the status, the page — and the one
- * write. The page it *renders* is the view's rather than the state's, because the view clamps: a list that
- * shortened under a reader leaves a page number that no longer exists, and the honest answer is the last
- * page there is.
+ * inputs; the narrowing it is computed from belongs to the panel rather than to this pane, because a tab's
+ * search has to outlive the pane the tab is drawn in; and what is left here is the one write. The page it
+ * *renders* is the view's rather than the state's, because the view clamps: a list that shortened under a
+ * reader leaves a page number that no longer exists, and the honest answer is the last page there is.
  */
-function SkillsTabBody({ listing, onWritten }: { listing: SkillListing; onWritten: () => void }) {
+function SkillsTabBody({
+  listing,
+  narrowing,
+  onWritten,
+}: {
+  listing: SkillListing
+  narrowing: PanelNarrowing<SkillPanelStatusFilter>
+  onWritten: () => void
+}) {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const openSettingsAt = useWorkbenchStore((s) => s.openSettingsAt)
 
-  const [query, setQuery] = useState('')
-  const [status, setStatus] = useState<SkillPanelStatusFilter>('all')
-  const [page, setPage] = useState(1)
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
 
   const availability = conveyor.skills.setSkillAvailability.useMutation()
-  const view = useMemo(() => planSkillPanelView(listing, query, status, page), [listing, query, status, page])
+  const view = useMemo(
+    () => planSkillPanelView(listing, narrowing.query, narrowing.status, narrowing.page),
+    [listing, narrowing.query, narrowing.status, narrowing.page]
+  )
 
   const holders = pending ? sessions.filter((session) => session.activeSkillIds?.includes(pending.skill.id)).length : 0
-
-  // Narrowing the list starts it again at the top: a page number chosen under one filter means nothing under
-  // the next, and letting the clamp absorb it would look like a page the reader asked for.
-  function narrowQuery(next: string): void {
-    setQuery(next)
-    setPage(1)
-  }
-
-  function narrowStatus(next: SkillPanelStatusFilter): void {
-    setStatus(next)
-    setPage(1)
-  }
 
   async function writeAvailability(): Promise<void> {
     if (!pending) return
@@ -200,12 +233,12 @@ function SkillsTabBody({ listing, onWritten }: { listing: SkillListing; onWritte
         <Input
           aria-label="Search skills"
           data-slot="tools-skills-search"
-          value={query}
-          onChange={(event) => narrowQuery(event.target.value)}
+          value={narrowing.query}
+          onChange={(event) => narrowing.setQuery(event.target.value)}
           placeholder="Search skills"
           className="h-7 min-w-0 flex-1 text-[12.5px]"
         />
-        <Select value={status} onValueChange={(value) => narrowStatus(asStatusFilter(value))}>
+        <Select value={narrowing.status} onValueChange={narrowing.setStatusValue}>
           <SelectTrigger
             aria-label="Filter by status"
             data-slot="tools-skills-status"
@@ -225,7 +258,7 @@ function SkillsTabBody({ listing, onWritten }: { listing: SkillListing; onWritte
 
       {view.rows.length === 0 ? (
         <p data-slot="tools-skills-nomatch" className="px-1 py-2 text-[12.5px] text-muted-foreground">
-          {emptyLine(query, status)}
+          {emptyLine(narrowing.query, narrowing.status)}
         </p>
       ) : (
         <ul data-slot="skill-panel-list" className="flex flex-col gap-1.5">
@@ -246,7 +279,7 @@ function SkillsTabBody({ listing, onWritten }: { listing: SkillListing; onWritte
             size="icon-xs"
             aria-label="Previous page"
             disabled={view.page <= 1}
-            onClick={() => setPage(view.page - 1)}
+            onClick={() => narrowing.setPage(view.page - 1)}
           >
             <ChevronLeft />
           </Button>
@@ -256,7 +289,7 @@ function SkillsTabBody({ listing, onWritten }: { listing: SkillListing; onWritte
             size="icon-xs"
             aria-label="Next page"
             disabled={view.page >= view.pageCount}
-            onClick={() => setPage(view.page + 1)}
+            onClick={() => narrowing.setPage(view.page + 1)}
           >
             <ChevronRight />
           </Button>
