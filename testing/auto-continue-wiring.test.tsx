@@ -166,11 +166,19 @@ describe('bounded auto-continue', () => {
     chunk(stub, channel, { type: 'text_delta', text: 'The rest of the table.' })
     chunk(stub, channel, { type: 'auto_continue', count: 2, max: AUTO_CONTINUE_MAX, cause: 'model_stop' })
     chunk(stub, channel, { type: 'text_delta', text: 'And the tests.' })
+    // The third ending a seam can name, and the one that used to be nameless: the model stopped and said
+    // nothing, so the line has to say that rather than fall back to the plain stop it looks like.
+    chunk(stub, channel, { type: 'auto_continue', count: 3, max: AUTO_CONTINUE_MAX, cause: 'empty_stop' })
+    chunk(stub, channel, { type: 'text_delta', text: 'And the docs.' })
     chunk(stub, channel, { type: 'done', reason: 'complete', steps: 4 })
     stub.emit(channel, { type: 'end' })
 
     expect(await screen.findByText(`Auto-continuing after the output cap — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
     expect(await screen.findByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    // Distinct from the two above it, not a relocation of either: a turn picked up after an empty stop is
+    // its own event, and a user who saw the seam appear wants to know which of the three it was.
+    expect(await screen.findByText(`Auto-continuing after an empty stop — 3 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
+    expect(screen.queryAllByText(/Auto-continuing after a plain stop/)).toHaveLength(1)
   })
 
   it('draws the marker between the capped text and the work that resumed it', async () => {

@@ -282,4 +282,74 @@ describe('the turn-end notice', () => {
     // History is a record, not a thing to click: the run behind this notice is not in this process.
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
+
+  it('says the model stopped without saying anything, and continues from there', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    // The ending the card could not see: no output cap to blame, no dropped line to wait out, and no plan
+    // — the reply simply never came. Before this build the only copy the user got for it was silence.
+    chunk(stub, channel, { type: 'turn_end', cause: 'empty_stop' })
+    chunk(stub, channel, { type: 'turn_end_notice', cause: 'empty_stop', resumable: true })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText('Ended early: the model stopped without saying anything')).toBeTruthy()
+    // Worded by its own branch, and not by either of the two a reply that was cut short gets: the two are
+    // different news, and the difference is the actionable part.
+    expect(screen.queryByText(/output limit/)).toBeNull()
+    expect(screen.queryByText(/connection dropped/)).toBeNull()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+
+    // The same resume every other card sends, because there is nothing different to send: the conversation
+    // is intact in the history, and what is missing is the answer to it.
+    await waitFor(() => expect(starts(stub).length).toBe(2))
+    const messages = starts(stub)[1].input?.messages ?? []
+    expect(messages.at(-1)).toEqual({ role: 'user', content: RESUME_MESSAGE })
+    expect(messages[0]).toEqual({ role: 'user', content: 'refactor the parser' })
+
+    // And the card clears by the ordinary act of continuing, like every other one.
+    await waitFor(() => expect(screen.queryByText(/Ended early/)).toBeNull())
+  })
+
+  it('names both when the reply never arrived and the plan is unfinished', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, { type: 'plan', plan: [{ id: 'read', text: 'Read the parser', status: 'in_progress' }] })
+    chunk(stub, channel, { type: 'turn_end', cause: 'empty_stop' })
+    chunk(stub, channel, { type: 'turn_end_notice', cause: 'empty_stop', resumable: true, unfinishedSteps: 1 })
+    stub.emit(channel, { type: 'end' })
+
+    // One card, two facts, composed the way every other pairing is: the ending first, then the work.
+    const causeLine = await screen.findByText('Ended early: the model stopped without saying anything')
+    const planLine = await screen.findByText('Ended with the plan unfinished — 1 step remain')
+    expect(causeLine.compareDocumentPosition(planLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+  })
+
+  it('shows a reopened transcript that stopped on an empty reply, with nothing to click', async () => {
+    const snapshot: TranscriptSnapshot = {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        { id: 'user-1', role: 'user', content: 'refactor the parser', steps: [] },
+        {
+          id: 'assistant-2',
+          role: 'assistant',
+          // The stored turn exactly as the silent signature leaves it: the narration before the last tool
+          // call, and no answer after it.
+          content: 'Let me check the routes.',
+          steps: [],
+          endNotice: { cause: 'empty_stop' },
+        },
+      ],
+    }
+
+    stubChat({ loadTranscript: () => snapshot })
+    renderChat()
+
+    expect(await screen.findByText('Ended early: the model stopped without saying anything')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
 })

@@ -84,6 +84,17 @@ function proseFrames(text: string, reason: string, dialect: 'openai' | 'anthropi
   return [JSON.stringify({ choices: [{ delta: { content: text } }] }), stopFrame(reason, dialect), '[DONE]']
 }
 
+/**
+ * A reply that says nothing: no prose, no tool call, and an ordinary finish reason.
+ *
+ * The shape the loop had no way to name. The model stopped, the provider reported `stop`, and the only
+ * thing missing was the answer — so every piece of evidence the diagnosis collected was ordinary, and
+ * the turn ended on whatever its last tool result had been with nothing on screen to say why.
+ */
+function silentFrames(): string[] {
+  return [stopFrame('stop'), '[DONE]']
+}
+
 /** A `set_plan` call that declares one step in progress and one pending. */
 function planFrames(callId: string, steps: readonly PlanStep[]): string[] {
   const args = JSON.stringify({ steps })
@@ -371,10 +382,72 @@ async function aCleanStopSaysSoAndShowsNothing() {
   results.push('a clean stop yields model_stop and no card')
 }
 
+async function aStopThatSaysNothingIsNamed() {
+  // The ending the live signature had: the model stopped with an empty reply. Every other fact about
+  // this turn is ordinary — no finish reason that means truncation, no cut payload, no broken stream —
+  // so nothing but the empty reply itself can tell the user why the conversation went quiet. Before
+  // this phase nothing did: the cause was `model_stop`, whose copy is deliberately null, and a notice
+  // is emitted for that cause only when a plan is unfinished — so a silent stop with no plan ended as a
+  // bare tool outcome with no card and no cause.
+  const chunks = await runLoop([silentFrames()])
+
+  assert.deepEqual(
+    chunks.map((c) => c.type),
+    ['turn_end', 'turn_end_notice', 'done'],
+    `unexpected chunk sequence: ${JSON.stringify(chunks.map((c) => c.type))}`
+  )
+  assert.equal(causeOf(chunks.slice(0, -1)), 'empty_stop', 'the ending is named for what it was')
+  const notice = chunks.at(-2) as { cause?: unknown; resumable?: unknown; unfinishedSteps?: unknown }
+  assert.equal(notice.cause, 'empty_stop')
+  assert.equal(notice.resumable, true, 'and there is something to continue: the answer never arrived')
+  assert.equal(notice.unfinishedSteps, undefined, 'with no plan, the card is about the reply alone')
+
+  // The record keeps it, so a reopened conversation says what happened rather than showing a turn that
+  // merely stopped.
+  const snapshot = record(chunks)
+  assert.equal(snapshot.turns[0].endNotice?.cause, 'empty_stop', 'the ending is part of the record')
+  const reopened = rehydrateTranscript(snapshot)
+  assert.equal(currentEndNotice(reopened.turns)?.cause, 'empty_stop')
+  assert.equal(currentEndNotice(reopened.turns)?.resumable, false, 'a stored notice offers no button')
+
+  results.push('a reply that says nothing ends the turn with an empty-stop notice')
+}
+
+async function aReplyThatOnlyAsksForToolsIsNotASilentOne() {
+  // The guard on the rule above, and the shape most assistant turns actually have: a model that asks
+  // for a tool and writes no prose. Its text is empty, so a rule reading the text alone would call this
+  // a silent stop — and the loop ends a reply that was cut short over whatever it asked for, so the very
+  // call the model asked for would never run.
+  const steps: PlanStep[] = [
+    { id: 'read', text: 'Read the parser', status: 'done' },
+    { id: 'edit', text: 'Change the table', status: 'pending' },
+  ]
+
+  // The budget is spent, so the run ends as soon as the declared plan meets a silent reply. What is
+  // asserted is that the `set_plan` call ran on the way there.
+  const chunks = await runLoop([planFrames('call_1', steps), silentFrames()], {
+    continuations: AUTO_CONTINUE_MAX,
+  })
+
+  assert.deepEqual(
+    chunks.filter((c) => c.type === 'tool_call_start' || c.type === 'plan').map((c) => c.type),
+    ['tool_call_start', 'plan'],
+    `a frame whose only content is a tool call must still be walked: ${JSON.stringify(chunks.map((c) => c.type))}`
+  )
+  // Only the second round was silent, so that is the ending — and the plan's unfinished steps ride on
+  // its notice rather than on a card that would have had no way to say why.
+  const notice = chunks.at(-2) as { cause?: unknown; unfinishedSteps?: unknown }
+  assert.equal(notice.cause, 'empty_stop')
+  assert.equal(notice.unfinishedSteps, 1)
+  assert.ok(!chunks.some((c) => c.type === 'auto_continue'), 'and a spent budget is not nudged')
+
+  results.push('a reply whose only content is a tool call still runs it, and is not a silent stop')
+}
+
 function everyCauseIsAccountedFor() {
   // The vocabulary is closed, and this suite exercised all of it: a cause added later without a case
   // here would leave a transcript that could store an ending nothing knows how to word.
-  const seen = ['model_stop', 'truncated', 'stream_error']
+  const seen = ['model_stop', 'empty_stop', 'truncated', 'stream_error']
   assert.deepEqual([...TURN_END_CAUSES].sort(), [...seen].sort())
   results.push('the causes exercised here are the whole vocabulary')
 }
@@ -387,6 +460,8 @@ async function main() {
     ['the reply stops arriving', theReplyStopsArriving],
     ['a refused request is not a dead turn', refusedRequestsStillThrow],
     ['a clean stop', aCleanStopSaysSoAndShowsNothing],
+    ['a stop that says nothing', aStopThatSaysNothingIsNamed],
+    ['a reply that only asks for tools', aReplyThatOnlyAsksForToolsIsNotASilentOne],
     ['the cause vocabulary', everyCauseIsAccountedFor],
   ]
 

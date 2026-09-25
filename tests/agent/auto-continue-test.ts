@@ -75,6 +75,17 @@ function proseFrames(text: string, reason = 'stop'): string[] {
 }
 
 /**
+ * A reply that says nothing at all: no prose, no tool call, an ordinary finish reason.
+ *
+ * The shape that used to end a turn in silence. Every fact the loop collected about it was ordinary —
+ * `stop`, a frame with nothing in it, a stream that ended cleanly — so the ending was diagnosed as the
+ * model stopping on its own, which is the one cause whose copy words nothing.
+ */
+function silentFrames(): string[] {
+  return [stopFrame('stop'), '[DONE]']
+}
+
+/**
  * The same frames, on a connection that then goes away.
  *
  * The frames arrive as one chunk and the next pull fails, which is what a dropped connection is: a reply
@@ -815,6 +826,106 @@ async function aTurnThatHitsTheStepCeilingNineTimesGetsTheCard() {
   results.push('a turn that hits the step ceiling past its budget gets the card, cause and work stored')
 }
 
+// ---------------------------------------------------------------- the stop that says nothing
+
+async function aSilentStopMidPlanIsNudgedLikeAnyOther() {
+  // The ending the card could not see. Nothing about it is dramatic — no output cap, no dropped line —
+  // which is exactly why it used to be indistinguishable from a finished turn: the cause copy words
+  // nothing for a plain stop, and with no plan on the turn there was no plan-unfinished card either.
+  const { chunks, sent } = await runLoop({
+    rounds: [
+      planFrames('p1', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+      ]),
+      silentFrames(),
+      planFrames('p2', [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'done' },
+      ]),
+      proseFrames('The precedence table is updated.'),
+    ],
+  })
+
+  const spent = marks(chunks)
+  assert.deepEqual(
+    spent.map((mark) => mark.count),
+    [1],
+    'one silent stop, one continuation'
+  )
+  assert.equal(
+    spent.every((mark) => mark.cause === 'empty_stop'),
+    true,
+    'and the seam names the empty stop, which is the only actionable part of the line'
+  )
+  assert.equal(nudges(sent).length, 1, 'the provider was asked again rather than the user carded')
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'turn_end_notice'),
+    false,
+    'the plan got done, so there is nothing for a card to announce'
+  )
+  assert.equal(chunks.at(-1)?.type, 'done', 'and the turn ends the ordinary way')
+
+  // One turn, with the seam on it and in the record: the pane that never saw this run still says why
+  // the turn picked itself up.
+  const turns = transcript(chunks)
+  assert.equal(turns.length, 1, 'still one turn')
+  assert.equal(
+    turns.some((turn) => turn.role === 'user'),
+    false,
+    'with no user message in it'
+  )
+  assert.equal(turns[0].continuations?.[0]?.cause, 'empty_stop', 'the seam keeps the ending it named')
+  assert.equal(
+    rehydrateTranscript(record(chunks)).turns[0].continuations?.[0]?.cause,
+    'empty_stop',
+    'and a saved and reopened transcript says it too'
+  )
+  results.push('a silent stop with an unfinished plan is nudged, naming the empty stop')
+}
+
+async function aSilentStopIsContinuedOnAPlainOnesTerms() {
+  // The matrix, as two runs that differ by exactly one thing: whether the reply said anything. A silent
+  // stop is continuable on the same terms as a plain one — left alone by the same spent budget, and
+  // carded with the same flags — so the only difference is the cause the card and the seam name.
+  const plan: PlanStep[] = [
+    { id: 'read', text: 'Read the parser', status: 'done' },
+    { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+    { id: 'tests', text: 'Add tests for it', status: 'pending' },
+  ]
+  const declared = () => planFrames('p1', plan)
+
+  const silent = await runLoop({
+    rounds: [declared(), silentFrames()],
+    continuations: AUTO_CONTINUE_MAX,
+  })
+  const plain = await runLoop({
+    rounds: [declared(), proseFrames('Still working on the table.')],
+    continuations: AUTO_CONTINUE_MAX,
+  })
+
+  // Refused past the budget, both of them, and neither pays for a round-trip to find that out.
+  assert.deepEqual(marks(silent.chunks), [], 'a spent budget is not spent on a silent stop either')
+  assert.deepEqual(marks(plain.chunks), [], 'nor on a plain one')
+  assert.equal(nudges(silent.sent).length, nudges(plain.sent).length, 'both go straight to the card')
+
+  // The same card, differing only in the cause: what the user is offered is identical, which is what
+  // "on the same terms" has to mean for the Continue button to be worth showing here.
+  assert.equal(notice(silent.chunks)?.cause, 'empty_stop')
+  assert.equal(notice(plain.chunks)?.cause, 'model_stop', 'the plain stop keeps the cause it always had')
+  assert.equal(notice(silent.chunks)?.unfinishedSteps, notice(plain.chunks)?.unfinishedSteps)
+  assert.equal(notice(silent.chunks)?.resumable, notice(plain.chunks)?.resumable)
+  assert.equal(notice(silent.chunks)?.unfinishedSteps, 2, 'with the work that is left on the plan')
+  assert.equal(notice(silent.chunks)?.resumable, true, 'and the Continue click as the way on')
+
+  // And the record keeps it the same way, so a reopened conversation says the same two things about an
+  // ending it cannot reconstruct from the reply.
+  const saved = record(silent.chunks)
+  assert.equal(saved.turns[0].endNotice?.cause, 'empty_stop', 'the ending is stored with the turn')
+  assert.equal(saved.turns[0].endNotice?.unfinishedSteps, 2, 'and so is the work it stopped on')
+  results.push('a silent stop is continued on a plain one\u2019s terms, and carded at the same budget')
+}
+
 // ---------------------------------------------------------------- the run
 
 async function main() {
@@ -827,6 +938,8 @@ async function main() {
   await aDroppedConnectionEndsTheTurnWithTheCard()
   await theStepCeilingIsNudgedAndItsBudgetStartsOver()
   await aTurnThatHitsTheStepCeilingNineTimesGetsTheCard()
+  await aSilentStopMidPlanIsNudgedLikeAnyOther()
+  await aSilentStopIsContinuedOnAPlainOnesTerms()
 
   console.log(`\nbounded auto-continue: ${results.length} checks passed`)
   for (const line of results) console.log(`  pass: ${line}`)

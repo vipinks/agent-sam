@@ -31,7 +31,7 @@ import type { TurnEndCause } from '@/conveyor/protocol/turn-end'
 /**
  * What the line says the turn was picked up after.
  *
- * The two endings that can produce a seam, and nothing else: a dropped connection is never nudged, so a
+ * The three endings that can produce a seam, and nothing else: a dropped connection is never nudged, so a
  * mark claiming one cannot be produced by this loop. The fallback is the ending a mark without a cause
  * could have had — every mark written before the loop reported one was made after a plain stop — which is
  * also why the set is read through a lookup rather than rendered from the cause itself.
@@ -39,6 +39,11 @@ import type { TurnEndCause } from '@/conveyor/protocol/turn-end'
 const SEAM_CAUSES: Partial<Record<TurnEndCause, string>> = {
   truncated: 'Auto-continuing after the output cap',
   model_stop: 'Auto-continuing after a plain stop',
+  // Named apart from the plain stop it resembles, because the two are the reason this line exists at all:
+  // a turn picked up after a plain stop went on because its plan said there was more, and a turn picked up
+  // after an empty stop went on because there was no answer to read. A user who saw the seam appear wants
+  // to know which of the three it was, and "after a plain stop" would tell them the wrong one.
+  empty_stop: 'Auto-continuing after an empty stop',
 }
 
 export function AutoContinueMark({ mark }: { mark: AutoContinueMarkData }) {

@@ -13,7 +13,7 @@ import { Button } from '../ui/button'
  *
  * The wording is branched on the cause and lives here rather than crossing IPC, which is the rule the
  * rest of the app's failures follow: main reports a cause, the UI says what happened in the user's
- * terms. Two sentences, because the user needs to know the reply is incomplete and, from the reason,
+ * terms. Three sentences, because the user needs to know the reply is incomplete and, from the reason,
  * whether asking again is likely to help.
  *
  * `model_stop` words nothing and renders nothing. That is the point of the card's existence: the
@@ -22,6 +22,12 @@ import { Button } from '../ui/button'
  * a model that quits with steps still on its plan is nudged along by the loop, up to a budget, and
  * the card appears once that budget is spent — which is why the plan's line below is now the
  * exception rather than the routine.
+ *
+ * `empty_stop` is the one ending that breaks the pattern above without contradicting it. It is an
+ * ordinary stop, so it wards nothing about a failure; but the answer it should have carried never
+ * arrived, and nothing else in the turn says so — not the last tool result, which looks like every
+ * other tool result, and not the plan, which may not exist at all. That absence is the one thing a
+ * user cannot see for themselves, which is exactly what earns a card.
  *
  * A notice can say more than one thing, which is why the lines are a list rather than a single
  * sentence: a turn whose reply was cut off *and* whose plan is unfinished is one card that reports
@@ -34,9 +40,17 @@ import { Button } from '../ui/button'
  * the Continue button worth offering once the app has stopped clicking it for the user.
  */
 
-/** What each ending says. `null` for the ending that says nothing. */
+/**
+ * What each ending says. `null` for the ending that says nothing.
+ *
+ * `empty_stop` is the one addition since the card was built, and it is the reason the map is worth
+ * reading as a list of endings rather than as a list of failures: this line is not about something that
+ * went wrong. The model stopped, which is ordinary, and the sentence exists because the answer that
+ * should have followed it did not arrive — the one thing a user cannot see for themselves.
+ */
 const WORDING: Record<TurnEndCause, string | null> = {
   model_stop: null,
+  empty_stop: 'Ended early: the model stopped without saying anything',
   truncated: 'Ended early: the reply was cut off (output limit)',
   stream_error: 'Ended early: the reply was cut off (the connection dropped)',
 }

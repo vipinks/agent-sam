@@ -187,11 +187,11 @@ export interface AutoContinueMark {
 /**
  * What a turn says about its own ending, on the turn and in the card above the composer.
  *
- * `cause` is the diagnosis of the reply — the model finished, or it was cut off — and it is always
- * present, because the vocabulary is closed and every ending is one of its three values. `lostPending`
- * beside it is about something else the ending has to report, so a notice whose cause words nothing
- * (`model_stop`) can still say something rather than a turn ending silently because its reply arrived
- * complete.
+ * `cause` is the diagnosis of the reply — the model finished, or it was cut off, or it stopped without
+ * saying anything — and it is always present, because the vocabulary is closed and every ending is one of
+ * its values. `lostPending` beside it is about something else the ending has to report, so a notice whose
+ * cause words nothing (`model_stop`) can still say something rather than a turn ending silently because
+ * its reply arrived complete.
  */
 export interface TurnEndNotice {
   cause: TurnEndCause
@@ -696,8 +696,8 @@ export function applyAgentChunk(
     case 'turn_end': {
       // Reported, never recorded. Every ending is diagnosed, so the reducer has to answer for the
       // ordinary one — but a turn the model finished is the normal case, and a transcript that kept a
-      // row for it would grow a field on every reply to say nothing happened. The two endings that do
-      // need saying arrive as the notice below.
+      // row for it would grow a field on every reply to say nothing happened. The endings that do need
+      // saying arrive as the notice below.
       const cause = asTurnEndCause(c.cause)
       if (!cause) return { turns, effect: {} }
       return { turns, effect: { turnEnd: { cause } } }

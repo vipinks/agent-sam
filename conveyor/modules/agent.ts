@@ -20,6 +20,7 @@ import { instructionsFileName, planAgentPrompt, planSystemInjection } from '../p
 import {
   AUTO_CONTINUE_MAX,
   autoContinueNudge,
+  isReplyCutShort,
   isResumable,
   isToolCallCut,
   planUnfinishedNotice,
@@ -521,10 +522,10 @@ export type AgentChunk =
    * How the assistant's reply ended, for every turn that ends by the model's own answering rather
    * than by a pause or the step budget.
    *
-   * Yielded whether or not anything went wrong, because "the model finished" is a diagnosis too and
-   * the one the renderer must be able to distinguish from the two that went wrong. Nothing is
-   * recorded from this chunk: the ordinary ending needs no memory, and the two endings that do are
-   * carried by the notice below.
+   * Yielded whether or not anything went wrong, because "the model finished" is a diagnosis too, and
+   * because one of the endings that went wrong is only distinguishable from it by the reply's own text.
+   * Nothing is recorded from this chunk: the ordinary ending needs no memory, and the endings that do
+   * are carried by the notice below.
    */
   | { type: 'turn_end'; cause: TurnEndCause }
   /**
@@ -1314,14 +1315,23 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
 
     const assistantText = text.join('')
 
+    // The frame as the provider sent it, parsed once: the diagnosis below reads how many calls the reply
+    // asked for, and the walk below runs them. Parsed here rather than inside the diagnosis so the two
+    // sides are answering about the same frame rather than about two reads of it.
+    const parsedCalls = finalizeCalls(partials)
+
     // Before anything is done with them: did this reply actually finish? Every ending is diagnosed,
     // including the ordinary one — "the model stopped" is a fact the caller has to be able to tell
     // apart from a reply that was cut off, and a diagnosis that only spoke up on failure would leave
-    // the two indistinguishable.
+    // the two indistinguishable. The reply's own text and its call count are part of the evidence,
+    // because the ending with neither is the one this diagnosis had no name for: a stop that arrived
+    // with nothing in it, which was read as the ordinary ending and so rendered as nothing at all.
     const cause = turnEndCause({
       finishReasons,
       toolCallCut: isToolCallCut([...partials.values()].map((partial) => partial.args)),
       streamErrorCode,
+      finalText: assistantText,
+      toolCalls: parsedCalls.length,
     })
 
     // The frame a reply the provider cut off is allowed to keep: none of its calls.
@@ -1346,8 +1356,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // calls that were never run.
     //
     // A dropped connection keeps its frame as it arrived: `shouldAutoContinue` refuses that cause
-    // outright, so that ending is the card whatever the frame holds.
-    const calls = cause === 'truncated' ? [] : resolveCalls(finalizeCalls(partials), mcpNames)
+    // outright, so that ending is the card whatever the frame holds. An empty stop keeps its frame too,
+    // and it is the case that makes the predicate worth naming at all: a model that asks for a tool and
+    // writes no prose is most turns, so a rule reading the text alone would have voided the frame of
+    // nearly every working turn.
+    const calls = isReplyCutShort(cause) ? [] : resolveCalls(parsedCalls, mcpNames)
 
     // The assistant turn is recorded either way: an OpenAI-compatible provider expects the turn
     // that asked for tools to be present when its results are sent back.
@@ -1366,8 +1379,9 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // asks the loop for the rest, which is the click the user would have made. That is what the flag
     // below says, and it is now true of every truncated frame, because there is no call left in one to
     // be work in hand. A connection that dropped asks for nothing and continues nothing, whatever the
-    // frame said.
-    if (cause !== 'model_stop') {
+    // frame said. An empty stop does not arrive here at all: it is not a reply that was cut short, so it
+    // owns its calls, and the reply's own ending below is what judges it.
+    if (isReplyCutShort(cause)) {
       const nudge = yield* finishTurn(plan, cause, steps, null, continuations, calls.length === 0)
       if (nudge === null) return
 

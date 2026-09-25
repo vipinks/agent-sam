@@ -3,6 +3,7 @@ import { reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 import {
   AUTO_CONTINUE_MAX,
   autoContinueNudge,
+  isReplyCutShort,
   isResumable,
   isToolCallCut,
   planUnfinishedNotice,
@@ -27,8 +28,15 @@ import {
  * pass here and be wrong in the app.
  */
 
+/**
+ * One reply's evidence, with the two facts the loop always has about it filled in for the ordinary case.
+ *
+ * Written as a whole reply rather than as the observations the parser happened to make, because the loop
+ * always knows what the model said and what it asked for — and a rule that decided without them could not
+ * tell an answer that arrived from one that never did. Every case below overrides what it is about.
+ */
 function evidence(overrides: Partial<TurnEndEvidence> = {}): TurnEndEvidence {
-  return { finishReasons: [], toolCallCut: false, ...overrides }
+  return { finishReasons: [], toolCallCut: false, finalText: 'The parser is fine.', toolCalls: 0, ...overrides }
 }
 
 describe('turnEndCause', () => {
@@ -76,6 +84,68 @@ describe('turnEndCause', () => {
     expect(turnEndCause(evidence({ streamErrorCode: 'STREAM_ERROR', toolCallCut: true }))).toBe('stream_error')
     expect(turnEndCause(evidence({ streamErrorCode: 'STREAM_ERROR', finishReasons: ['length'] }))).toBe('stream_error')
   })
+
+  it('names a stop whose reply never arrived, which is the ending that used to be invisible', () => {
+    // Every other fact about this reply is ordinary — an ordinary reason, no cut payload, a stream that
+    // ended cleanly — so the absent answer is the only evidence there is. Without a name for it the turn
+    // ended as `model_stop`, the one cause whose copy renders nothing, and with no plan on the turn no
+    // notice was emitted either: the conversation simply stopped on a tool outcome.
+    expect(turnEndCause(evidence({ finishReasons: ['stop'], finalText: '' }))).toBe('empty_stop')
+    // Whitespace is not an answer. A reply of three spaces is a reply that said nothing, and treating it
+    // as prose would leave the silence exactly where it was.
+    expect(turnEndCause(evidence({ finalText: '   \n\t ' }))).toBe('empty_stop')
+  })
+
+  it('leaves a reply that says anything at all as the ordinary stop', () => {
+    // The other half of the rule, and the reason it is written on the text rather than on its absence: the
+    // card exists for the turns that need explaining, and a card under every answer is how the one that
+    // matters stops being read.
+    expect(turnEndCause(evidence({ finalText: 'The parser is fine.' }))).toBe('model_stop')
+    expect(turnEndCause(evidence({ finishReasons: ['stop'], finalText: '  ok ' }))).toBe('model_stop')
+  })
+
+  it('does not call a reply empty when it asked for a tool, whatever its prose says', () => {
+    // The shape most assistant turns actually have: a tool call and no narration at all. Reading the text
+    // alone would call this a silent stop, and the loop ends a reply that was cut short over whatever it
+    // asked for — so the call the model asked for would never be announced and never be run.
+    expect(turnEndCause(evidence({ finalText: '', toolCalls: 1 }))).toBe('model_stop')
+    expect(turnEndCause(evidence({ finishReasons: ['tool_calls'], finalText: '', toolCalls: 2 }))).toBe('model_stop')
+  })
+
+  it('keeps the two cut-short endings whatever the reply said', () => {
+    // The reply's content is not evidence about how it stopped: a cap and a dropped line are facts about
+    // the stream, and an empty reply is no less truncated for being empty. Only the fallback ending is
+    // decided by what the model wrote.
+    for (const finalText of ['', '   ', 'The parser works by ']) {
+      expect(turnEndCause(evidence({ finishReasons: ['length'], finalText }))).toBe('truncated')
+      expect(turnEndCause(evidence({ toolCallCut: true, finalText }))).toBe('truncated')
+      expect(turnEndCause(evidence({ streamErrorCode: 'STREAM_ERROR', finalText }))).toBe('stream_error')
+    }
+  })
+  it('reads a broken stream as outranking an empty reply, as it outranks everything else', () => {
+    // Order matters, and this is the case that pins it: a connection that dropped on an empty reply is a
+    // dropped connection — the wording a user can act on — rather than a model that had nothing to say.
+    expect(turnEndCause(evidence({ streamErrorCode: 'STREAM_ERROR', finalText: '', toolCalls: 0 }))).toBe(
+      'stream_error'
+    )
+  })
+})
+
+describe('isReplyCutShort', () => {
+  // The one distinction the loop runs a frame on: a reply the provider cut short is over whatever it asked
+  // for, because acting on half a request is worse than acting on none of it — while a reply that simply
+  // stopped, said or unsaid, owns its calls and always runs them.
+  it('is true for the two endings where the reply itself was cut short', () => {
+    expect(isReplyCutShort('truncated')).toBe(true)
+    expect(isReplyCutShort('stream_error')).toBe(true)
+  })
+
+  it('is false for the endings where the reply simply ended, whether it said anything or not', () => {
+    // `empty_stop` belongs with `model_stop` here and not with the two above it, which is the whole of
+    // what keeps a silent stop from being treated as a turn that must discard what it asked for.
+    expect(isReplyCutShort('model_stop')).toBe(false)
+    expect(isReplyCutShort('empty_stop')).toBe(false)
+  })
 })
 
 describe('isToolCallCut', () => {
@@ -106,9 +176,15 @@ describe('isResumable', () => {
     expect(isResumable('model_stop')).toBe(false)
   })
 
+  it('offers a way on for an ending that said nothing, because the answer never arrived', () => {
+    // The reply is incomplete in the only sense that matters to this predicate: the model stopped short of
+    // answering, and asking it to carry on is the same click a capped reply gets.
+    expect(isResumable('empty_stop')).toBe(true)
+  })
+
   it('answers for every cause in the vocabulary, so a new one cannot be forgotten', () => {
     const answers = TURN_END_CAUSES.map((cause: TurnEndCause) => isResumable(cause))
-    expect(answers).toEqual([false, true, true])
+    expect(answers).toEqual([false, true, true, true])
   })
 })
 
@@ -203,6 +279,33 @@ describe('shouldAutoContinue', () => {
     }
   })
 
+  it('continues a silent stop that left work on the plan, on exactly a plain stop’s terms', () => {
+    // The two endings are the same ending with and without words, so the rule must not be able to tell
+    // them apart at any point: the same budget, the same work, the same answer for every input. The
+    // comparison rather than a table of expectations is the assertion — a table would pin today's answers
+    // and let the two causes drift apart later, which is the thing being prevented.
+    const plans = [
+      [],
+      [step('a', 'pending')],
+      [step('a', 'done'), step('b', 'done')],
+      reconcilePlanOnTurnEnd([step('a', 'in_progress')]),
+    ]
+    for (const plan of plans) {
+      for (const used of [0, 1, AUTO_CONTINUE_MAX - 1, AUTO_CONTINUE_MAX, AUTO_CONTINUE_MAX + 1]) {
+        expect(shouldAutoContinue('empty_stop', plan, used)).toBe(shouldAutoContinue('model_stop', plan, used))
+      }
+    }
+    // And what that amounts to for the case that matters, said outright so the comparison above is anchored:
+    // work left and budget to spend is continued, and a spent budget is not.
+    expect(shouldAutoContinue('empty_stop', reconcilePlanOnTurnEnd(unfinished), 0)).toBe(true)
+    expect(shouldAutoContinue('empty_stop', reconcilePlanOnTurnEnd(unfinished), AUTO_CONTINUE_MAX)).toBe(false)
+  })
+
+  it('still refuses a dropped connection, which no cause beside it may change', () => {
+    // The one ending a further request cannot fix, and the one line kept from the phase that split them.
+    expect(shouldAutoContinue('stream_error', unfinished, 0)).toBe(false)
+  })
+
   it('answers for the loop’s own step ceiling the same way, because the ceiling is not a cause', () => {
     // The step budget is the loop ending a turn rather than the model ending it, and the phase that made
     // it continuable added no cause, no flag and no parameter to this rule: the ending it produces is
@@ -212,7 +315,7 @@ describe('shouldAutoContinue', () => {
     // with the segment the nudge opens, which is a fact about the caller's counter rather than about this
     // rule. Pinned here so a later reader tempted to widen the vocabulary for the ceiling — a
     // `step_ceiling` cause, or a fourth argument — has a test to argue with first.
-    expect(TURN_END_CAUSES).toEqual(['model_stop', 'truncated', 'stream_error'])
+    expect(TURN_END_CAUSES).toEqual(['model_stop', 'empty_stop', 'truncated', 'stream_error'])
     expect(shouldAutoContinue('model_stop', unfinished, 0)).toBe(true)
     expect(shouldAutoContinue('model_stop', unfinished, AUTO_CONTINUE_MAX)).toBe(false)
   })

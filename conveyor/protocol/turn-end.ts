@@ -7,15 +7,28 @@ import type { PlanStep } from './plan'
  * the ending — it is the side holding the provider's stream — and the renderer decides what to say
  * about it, so the vocabulary and the mapping into it have to be one thing rather than two.
  *
- * The rule exists because a turn can die in three ways and two of them used to look exactly like
- * success. The model can finish (`model_stop`), the provider can cut the reply off at its own output
- * limit (`truncated`), or the reply can stop arriving mid-sentence (`stream_error`). The first is the
- * ordinary ending and needs nothing said about it. The other two are a conversation that stopped
- * without announcing itself, which is what this vocabulary exists to make sayable.
+ * The rule exists because a turn can die in several ways and every one of them used to look exactly
+ * like success. The model can finish (`model_stop`), the provider can cut the reply off at its own
+ * output limit (`truncated`), or the reply can stop arriving mid-sentence (`stream_error`). The first
+ * is the ordinary ending and needs nothing said about it. The other two are a conversation that
+ * stopped without announcing itself, which is what this vocabulary exists to make sayable.
+ *
+ * A fourth was added once live use showed the ordinary ending's cousin: a model stop whose reply never
+ * arrived at all (`empty_stop`). Nothing had gone wrong by any measure the other three read — an
+ * ordinary finish reason, no cut payload, a stream that ended cleanly — and yet the answer was absent,
+ * so the conversation ended on whatever its last tool result had been, with no card and no cause. It is
+ * the ordinary ending with nothing written where the answer belongs, and it is named separately because
+ * the two need different things said about them: one is the model's answer, which says nothing, and the
+ * other is the absence of an answer, which is the whole of what the user is owed.
  */
 
-/** The three endings. Closed set, because every one of them is something the UI must word. */
-export const TURN_END_CAUSES = ['model_stop', 'truncated', 'stream_error'] as const
+/**
+ * The endings. Closed set, because every one of them is something the UI must word.
+ *
+ * `empty_stop` sits beside `model_stop` rather than behind the two cut-short endings: from the model's
+ * side those two are one event that differs only in whether it wrote anything.
+ */
+export const TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error'] as const
 export type TurnEndCause = (typeof TURN_END_CAUSES)[number]
 
 /**
@@ -49,6 +62,22 @@ export interface TurnEndEvidence {
   /** True when an accumulated tool-call payload was not valid JSON when the stream ended. */
   toolCallCut: boolean
   /**
+   * The reply's text, exactly as the loop assembled it off the stream.
+   *
+   * Evidence of its own, and the only evidence there is for the ending that has no other: a reply that
+   * said nothing is distinguishable from a reply that said something by its own text and by nothing
+   * else, and the side holding the stream is the only side that has it to hand.
+   */
+  finalText: string
+  /**
+   * How many tool calls the reply asked for, once its fragments were assembled.
+   *
+   * The other half of that question rather than a detail: a model that asks for a tool and writes no
+   * prose has an empty `finalText` on most of its turns, so a rule reading the text alone would end the
+   * turn over the very call the model asked for.
+   */
+  toolCalls: number
+  /**
    * The code of a failure raised while the reply was arriving, if one was.
    *
    * Only failures from that phase arrive here. A provider that refused the request outright — no
@@ -64,13 +93,18 @@ export interface TurnEndEvidence {
  * The order is the whole rule. A stream that broke explains every other observation — a truncated
  * reply that is also cut mid-JSON is a reply that stopped arriving — so it is read first. A
  * truncating finish reason outranks a cut payload because the provider said so in its own words,
- * while a cut payload is an inference drawn from JSON that does not parse. And the fallback is the
- * ordinary ending rather than an accusation: nothing observed means nothing went wrong.
+ * while a cut payload is an inference drawn from JSON that does not parse. An empty reply is read last
+ * of all, because it is the weakest evidence here: a cap and a dropped line say something about the
+ * ending whatever the text says, and a reply that asked for a call has spoken without prose. What is
+ * left at the end of that order — a reply that stopped on its own and left nothing behind — is the one
+ * ending nothing else can name. And the fallback is the ordinary ending rather than an accusation:
+ * nothing observed means nothing went wrong.
  */
 export function turnEndCause(evidence: TurnEndEvidence): TurnEndCause {
   if (evidence.streamErrorCode !== undefined) return 'stream_error'
   if (evidence.finishReasons.some((reason) => isTruncating(reason))) return 'truncated'
   if (evidence.toolCallCut) return 'truncated'
+  if (evidence.toolCalls === 0 && evidence.finalText.trim() === '') return 'empty_stop'
   return 'model_stop'
 }
 
@@ -101,6 +135,20 @@ export function isToolCallCut(payloads: readonly string[]): boolean {
 }
 
 /**
+ * Whether this ending is one the reply itself was cut short by.
+ *
+ * One distinction, asked in one place. The loop empties a cut reply's frame before anything runs —
+ * acting on half a request is worse than acting on none of it — and that holds for both of the causes
+ * here and for neither of the other two. A reply that stopped on its own owns the calls it asked for,
+ * whether or not it wrote a word around them, which is why `empty_stop` is answered with `model_stop`
+ * rather than with the two beside it. Read from the cause rather than from the frame, so the one place
+ * that decides what an ending is stays the one place that decides what may run.
+ */
+export function isReplyCutShort(cause: TurnEndCause): boolean {
+  return cause === 'truncated' || cause === 'stream_error'
+}
+
+/**
  * Whether a turn that ended this way can be picked up again.
  *
  * A turn the model stopped on its own has nothing to continue — it said what it had to say, and
@@ -112,6 +160,11 @@ export function isToolCallCut(payloads: readonly string[]): boolean {
  * reply where the loop answers about the work. The two sets differ on both sides and deliberately: this
  * one allows every reply that was cut short, while `shouldAutoContinue` below also allows a stop with a
  * plan left and still excludes a dropped connection.
+ *
+ * An empty stop is resumable, and it is the case that makes this rule's subtraction worth stating
+ * plainly: the model did stop on its own, but the one thing it did not do is answer, and there is
+ * therefore something to continue. What this refuses is not "the model stopped" but "the model
+ * finished" — which is why the ordinary ending is the only one it refuses.
  */
 export function isResumable(cause: TurnEndCause): boolean {
   return cause !== 'model_stop'
@@ -221,6 +274,12 @@ export const AUTO_CONTINUE_MAX = 8
  *
  * Written as a predicate over the reconciled plan, like every other rule here: the caller reconciles
  * once, and this decides on the same list the card would have counted.
+ *
+ * `empty_stop` needs no line of its own, and that is the point: the rule refuses one cause and otherwise
+ * asks about the work, so a silent stop is continued exactly as a plain one is — same plan, same budget,
+ * same answer. A cause added to the vocabulary joins on those terms by construction rather than by being
+ * remembered here, which is why the test for it compares the two causes instead of listing today's
+ * answers for each.
  */
 export function shouldAutoContinue(cause: TurnEndCause, plan: readonly PlanStep[], usedBudget: number): boolean {
   if (cause === 'stream_error') return false
