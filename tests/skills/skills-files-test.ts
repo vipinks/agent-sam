@@ -22,10 +22,9 @@ import { join } from 'node:path'
 import { ConveyorError } from 'electron-conveyor/main'
 import {
   listSkills,
+  projectAgentsSkillsDir,
   projectSkillsDir,
   resolveActiveSkills,
-  skillsModule,
-  userSkillsDir,
 } from '../../conveyor/modules/skills'
 import {
   MAX_SKILL_BODY_CHARS,
@@ -33,6 +32,10 @@ import {
   SKILL_NOT_FOUND,
   SKILL_PARSE_INVALID,
   SKILL_TOO_LARGE,
+  type SkillListing,
+  type SkillSummary,
+  type SkillTierId,
+  type SkillTierPaths,
 } from '../../conveyor/protocol/skills'
 
 const results: string[] = []
@@ -78,6 +81,29 @@ function makeUserDir(): string {
   return dir
 }
 
+/**
+ * The four tier directories this suite reads, from the two bases it seeds.
+ *
+ * The native tiers are the ones with content; the compatibility ones are pointed at a directory that
+ * does not exist, which is what most workspaces look like and what this suite is not about — the
+ * `.agents` tiers have a suite of their own.
+ */
+function tierPaths(root: string | null, userDir: string): SkillTierPaths {
+  return {
+    projectNative: root === null ? null : projectSkillsDir(root),
+    projectCompat: root === null ? null : projectAgentsSkillsDir(root),
+    userNative: userDir,
+    userCompat: join(makeRoot('sam-absent-agents-'), '.agents', 'skills'),
+  }
+}
+
+/** One tier's skills, so an assertion names the folder rather than the scope it happens to share. */
+function tierSkills(listing: SkillListing, tier: SkillTierId): SkillSummary[] {
+  const found = listing.tiers.find((entry) => entry.tier === tier)
+  assert.ok(found, `${tier} must be listed even when it is empty`)
+  return found.skills
+}
+
 // ---------------------------------------------------------------- listing
 
 async function aListingReadsBothScopes() {
@@ -87,25 +113,31 @@ async function aListingReadsBothScopes() {
   const userDir = makeUserDir()
   writeSkill(userDir, 'gamma', manifested('Gamma Skill'))
 
-  const listing = await listSkills(root, userDir)
+  const listing = await listSkills(tierPaths(root, userDir))
 
   assert.deepEqual(
-    listing.project.map((s) => s.id),
+    tierSkills(listing, 'project-native').map((s) => s.id),
     ['alpha', 'beta'],
     'project skills are listed by folder name, in a stable order'
   )
   assert.deepEqual(
-    listing.user.map((s) => s.id),
+    tierSkills(listing, 'user-native').map((s) => s.id),
     ['gamma'],
     'and user skills come from the user skills directory'
   )
   assert.deepEqual(listing.errors, [], 'a clean tree produces no load errors')
 
-  const alpha = listing.project[0]
+  const alpha = tierSkills(listing, 'project-native')[0]
   assert.equal(alpha.title, 'Alpha Skill', 'a manifest title is shown as written')
   assert.equal(alpha.summary, 'Alpha Skill in one line.')
   assert.equal(alpha.scope, 'project')
-  const beta = listing.project[1]
+  assert.equal(alpha.tier, 'project-native', 'and the folder it was read from, which is the tier')
+  assert.equal(
+    alpha.sourcePath,
+    join(projectSkillsDir(root), 'alpha', 'SKILL.md'),
+    'with the file it came from, so the surface can show a path rather than only a name'
+  )
+  const beta = tierSkills(listing, 'project-native')[1]
   assert.equal(beta.title, 'Beta', 'and a skill with no manifest is titled from its id')
   assert.equal(beta.summary, 'Beta', 'with the first non-empty body line as its summary')
 
@@ -119,28 +151,34 @@ async function aProjectSkillWinsOverAUserSkillOfTheSameId() {
   writeSkill(userDir, 'shared', manifested('User Shared'))
   writeSkill(userDir, 'only-user', manifested('Only User'))
 
-  const listing = await listSkills(root, userDir)
+  const listing = await listSkills(tierPaths(root, userDir))
 
-  const shared = listing.project.filter((s) => s.id === 'shared')
+  const shared = tierSkills(listing, 'project-native').filter((s) => s.id === 'shared')
   assert.equal(shared.length, 1, 'the project skill is listed once')
   assert.equal(shared[0].title, 'Project Shared')
   assert.ok(
-    !listing.user.some((s) => s.id === 'shared'),
+    !tierSkills(listing, 'user-native').some((s) => s.id === 'shared'),
     'and the shadowed user skill is not offered as a second, different skill of the same id'
   )
   assert.ok(
-    listing.user.some((s) => s.id === 'only-user'),
+    tierSkills(listing, 'user-native').some((s) => s.id === 'only-user'),
     'while a user skill nothing shadows is still listed'
   )
 
   // The same precedence decides what an activation actually reads.
-  const [resolved] = await resolveActiveSkills({ rootPath: root, userDir, activeSkillIds: ['shared'] })
+  const [resolved] = await resolveActiveSkills({
+    paths: tierPaths(root, userDir),
+    activeSkillIds: ['shared'],
+  })
   assert.equal(resolved.scope, 'project', 'an activated id resolves to the project folder when both exist')
   assert.equal(resolved.title, 'Project Shared')
   assert.ok(resolved.body.includes('Project Shared guidance.'), 'and the body it carries is that file’s')
 
   // And with no folder open the user copy is what is left.
-  const [userOnly] = await resolveActiveSkills({ rootPath: null, userDir, activeSkillIds: ['shared'] })
+  const [userOnly] = await resolveActiveSkills({
+    paths: tierPaths(null, userDir),
+    activeSkillIds: ['shared'],
+  })
   assert.equal(userOnly.scope, 'user', 'with no root open the user skill of that id is the one that resolves')
 
   results.push('a project skill of an id overrides the user skill of the same id, and is what resolves')
@@ -150,25 +188,26 @@ async function aMissingSkillsDirectoryIsNotAnError() {
   const root = makeRoot()
   const userDir = join(makeRoot('sam-absent-user-'), 'era', 'skills')
 
-  const listing = await listSkills(root, userDir)
-  assert.deepEqual(listing.project, [], 'a project with no .sam/skills lists nothing')
-  assert.deepEqual(listing.user, [], 'and so does a user directory that does not exist')
+  const listing = await listSkills(tierPaths(root, userDir))
+  assert.deepEqual(tierSkills(listing, 'project-native'), [], 'a project with no .sam/skills lists nothing')
+  assert.deepEqual(tierSkills(listing, 'user-native'), [], 'and so does a user directory that does not exist')
   assert.deepEqual(listing.errors, [], 'neither is a failure: no folder yet is the ordinary case')
+  assert.equal(listing.counts.total, 0, 'and an empty library counts as nothing rather than as a failure')
 
   // No root at all is the other shape of the same rule: whatever the user folder holds is the answer.
   const seeded = makeUserDir()
   writeSkill(seeded, 'standalone', manifested('Standalone'))
-  const withoutRoot = await listSkills(null, seeded)
-  assert.deepEqual(withoutRoot.project, [], 'with no root open there are no project skills')
+  const withoutRoot = await listSkills(tierPaths(null, seeded))
+  assert.deepEqual(tierSkills(withoutRoot, 'project-native'), [], 'with no root open there are no project skills')
   assert.deepEqual(
-    withoutRoot.user.map((s) => s.id),
+    tierSkills(withoutRoot, 'user-native').map((s) => s.id),
     ['standalone'],
     'and the user skills are still available'
   )
   assert.deepEqual(withoutRoot.errors, [])
 
   // And nothing to activate is an empty resolution rather than a failure.
-  assert.deepEqual(await resolveActiveSkills({ rootPath: null, userDir: seeded, activeSkillIds: [] }), [])
+  assert.deepEqual(await resolveActiveSkills({ paths: tierPaths(null, seeded), activeSkillIds: [] }), [])
 
   results.push('a missing skill directory lists nothing and is not an error, and no root means user skills only')
 }
@@ -181,10 +220,10 @@ async function oneBadFileDoesNotFailTheList() {
   mkdirSync(join(projectSkillsDir(root), 'not a skill id'), { recursive: true })
   writeFileSync(join(projectSkillsDir(root), 'not a skill id', 'SKILL.md'), manifested('Unreachable'), 'utf8')
 
-  const listing = await listSkills(root, makeUserDir())
+  const listing = await listSkills(tierPaths(root, makeUserDir()))
 
   assert.deepEqual(
-    listing.project.map((s) => s.id),
+    tierSkills(listing, 'project-native').map((s) => s.id),
     ['good'],
     'the readable skill is still listed when its neighbours are not readable'
   )
@@ -192,6 +231,7 @@ async function oneBadFileDoesNotFailTheList() {
   assert.equal(listing.errors.length, 3, 'every failure is reported, one entry per file')
   assert.equal(byId.get('broken-manifest')?.code, SKILL_MANIFEST_INVALID, 'a malformed manifest is named as one')
   assert.equal(byId.get('broken-manifest')?.scope, 'project')
+  assert.equal(byId.get('broken-manifest')?.tier, 'project-native', 'and the folder it was found in')
   assert.ok(byId.get('broken-manifest')?.message.length, 'and carries a message rather than a bare code')
   assert.equal(byId.get('no-file')?.code, SKILL_NOT_FOUND, 'a folder with no SKILL.md says so')
   assert.equal(
@@ -211,7 +251,7 @@ async function anActiveSkillThatIsGoneFailsTheTurnByCode() {
   writeSkill(projectSkillsDir(root), 'present', manifested('Present'))
 
   await assert.rejects(
-    () => resolveActiveSkills({ rootPath: root, userDir, activeSkillIds: ['present', 'ghost'] }),
+    () => resolveActiveSkills({ paths: tierPaths(root, userDir), activeSkillIds: ['present', 'ghost'] }),
     (err: unknown) => {
       assert.ok(err instanceof ConveyorError, 'a missing active skill is a ConveyorError')
       assert.equal(err.code, SKILL_NOT_FOUND, 'named by code, so the renderer can branch on it')
@@ -224,7 +264,7 @@ async function anActiveSkillThatIsGoneFailsTheTurnByCode() {
   // the meaning is "this could not name a skill at all", which is a different failure from a skill that
   // exists and is not there.
   await assert.rejects(
-    () => resolveActiveSkills({ rootPath: root, userDir, activeSkillIds: ['../../etc'] }),
+    () => resolveActiveSkills({ paths: tierPaths(root, userDir), activeSkillIds: ['../../etc'] }),
     (err: unknown) => err instanceof ConveyorError && err.code === SKILL_PARSE_INVALID
   )
 
@@ -237,12 +277,12 @@ async function anOversizedBodyFailsTheTurnByCode() {
   const atCap = writeSkill(projectSkillsDir(root), 'at-cap', 'x'.repeat(MAX_SKILL_BODY_CHARS))
   writeSkill(projectSkillsDir(root), 'over-cap', 'x'.repeat(MAX_SKILL_BODY_CHARS + 1))
 
-  const [ok] = await resolveActiveSkills({ rootPath: root, userDir, activeSkillIds: ['at-cap'] })
+  const [ok] = await resolveActiveSkills({ paths: tierPaths(root, userDir), activeSkillIds: ['at-cap'] })
   assert.equal(ok.body.length, MAX_SKILL_BODY_CHARS, 'a body exactly at the cap is carried whole')
   assert.ok(atCap.endsWith('at-cap'), 'and the fixture is the file the assertion is about')
 
   await assert.rejects(
-    () => resolveActiveSkills({ rootPath: root, userDir, activeSkillIds: ['over-cap'] }),
+    () => resolveActiveSkills({ paths: tierPaths(root, userDir), activeSkillIds: ['over-cap'] }),
     (err: unknown) => {
       assert.ok(err instanceof ConveyorError)
       assert.equal(err.code, SKILL_TOO_LARGE, 'a body over the cap is refused, not truncated')
@@ -261,8 +301,7 @@ async function resolutionKeepsTheActivatedOrderAndScope() {
   writeSkill(userDir, 'user-one', manifested('User One'))
 
   const resolved = await resolveActiveSkills({
-    rootPath: root,
-    userDir,
+    paths: tierPaths(root, userDir),
     activeSkillIds: ['user-one', 'project-one'],
   })
 
@@ -277,52 +316,6 @@ async function resolutionKeepsTheActivatedOrderAndScope() {
   results.push('resolution reports each active skill with its scope, and nothing is silently dropped')
 }
 
-// ---------------------------------------------------------------- the registered query
-
-async function theRegisteredQueryListsTheOpenWorkspace() {
-  const member = skillsModule.record['list'] as unknown as {
-    kind?: string
-    resolver: (opts: { input: unknown; ctx?: unknown }) => Promise<unknown>
-  }
-  assert.ok(member?.resolver, 'list must have a resolver')
-  assert.equal(member.kind, 'query', 'and must be a query: it reads the disk and takes no input')
-  assert.equal(
-    (member as { input?: unknown }).input,
-    undefined,
-    'the walk takes no input, so it cannot be pointed anywhere the renderer chooses'
-  )
-
-  const userData = process.env.SAM_TEST_USER_DATA
-  assert.ok(userData, 'the suite runs with a private userData directory')
-
-  // The project side comes from the workspace store file the module reads, and the user side from
-  // `app.getPath('appData')`, which the shared electron stub points at the same private directory.
-  const root = makeRoot()
-  writeSkill(projectSkillsDir(root), 'from-project', manifested('From Project'))
-  mkdirSync(join(userData, 'conveyor-stores'), { recursive: true })
-  writeFileSync(join(userData, 'conveyor-stores', 'workspace.json'), JSON.stringify({ rootPath: root }), 'utf8')
-  const appData = makeRoot('sam-appdata-')
-  writeSkill(join(appData, 'era', 'skills'), 'from-user', manifested('From User'))
-  assert.equal(
-    userSkillsDir(appData),
-    join(appData, 'era', 'skills'),
-    'the user skills directory is era/skills under the app data directory'
-  )
-
-  const listing = (await member.resolver({ input: undefined })) as {
-    project: Array<{ id: string }>
-    user: Array<{ id: string }>
-  }
-  assert.ok(Array.isArray(listing.project), 'the query resolves to a listing')
-  assert.deepEqual(
-    listing.project.map((s) => s.id),
-    ['from-project'],
-    'and the project list is the open workspace’s skills'
-  )
-
-  results.push('skills.list is registered as an inputless query over the open workspace and the user folder')
-}
-
 // ---------------------------------------------------------------- harness
 
 async function main() {
@@ -334,7 +327,6 @@ async function main() {
     await step('resolve: missing', anActiveSkillThatIsGoneFailsTheTurnByCode)
     await step('resolve: too large', anOversizedBodyFailsTheTurnByCode)
     await step('resolve: scopes', resolutionKeepsTheActivatedOrderAndScope)
-    await step('query: wired', theRegisteredQueryListsTheOpenWorkspace)
 
     console.log(`skills files: ${results.length} passed`)
     for (const r of results) console.log(`  pass: ${r}`)

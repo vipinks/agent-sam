@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageSquare, Paperclip, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
@@ -34,7 +34,7 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
-import type { SkillListing } from '@/conveyor/protocol/skills'
+import { scopeSkills, type SkillListing } from '@/conveyor/protocol/skills'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
   ABANDONED_PAUSE_CODE,
@@ -85,7 +85,7 @@ function lastAskMentions(turns: readonly AgentTurn[]): string[] {
  * value, so there is no second empty case to forget. Held at module scope because it is a constant, not
  * because it is shared — a render must not build a new listing to say "nothing yet".
  */
-const NO_SKILLS: SkillListing = { project: [], user: [], errors: [] }
+const NO_SKILLS: SkillListing = { tiers: [], errors: [], counts: { total: 0, project: 0, user: 0, errors: 0 } }
 
 /**
  * The name to show for an active skill id.
@@ -95,8 +95,11 @@ const NO_SKILLS: SkillListing = { project: [], user: [], errors: [] }
  * the chip says which skill it means and the refusal at the next turn start is not a surprise.
  */
 function activeSkillTitle(listing: SkillListing, id: string): string {
-  const skill = listing.project.find((entry) => entry.id === id) ?? listing.user.find((entry) => entry.id === id)
-  return skill?.title ?? id
+  for (const tier of listing.tiers) {
+    const skill = tier.skills.find((entry) => entry.id === id)
+    if (skill) return skill.title
+  }
+  return id
 }
 
 /** Stream failures, in the user's terms, branched on the error code rather than the message text. */
@@ -402,12 +405,18 @@ export function ChatPanel() {
   // deriving the active row keeps the render and the selection in step without a second render.
   const activePickerIndex = mentionMatches.length === 0 ? 0 : Math.min(pickerIndex, mentionMatches.length - 1)
 
-  // The skills the composer can offer, from the registered query: main scans the open folder's
-  // `.sam/skills` and the user's own skills folder and hands back what it found. A session stores ids,
-  // so the titles behind the chips are looked up from this answer rather than carried on the record.
+  // The skills the composer can offer, from the registered query: main scans the four folders a skill
+  // may live in and hands back what it found, tier by tier. A session stores ids, so the titles behind
+  // the chips are looked up from this answer rather than carried on the record.
   //
-  const skillsQuery = conveyor.skills.list.useQuery()
+  const skillsQuery = conveyor.skills.listSkills.useQuery()
   const skillListing = skillsQuery.data ?? NO_SKILLS
+  // The picker draws two groups rather than four blocks — a toggle is the same toggle whichever folder
+  // a skill came from, and the picker is for choosing rather than for auditing — so the tiers are
+  // flattened back into their scopes here, in tier order, which keeps the precedence visible as order
+  // when the same id exists in two folders.
+  const projectSkills = useMemo(() => scopeSkills(skillListing.tiers, 'project'), [skillListing])
+  const userSkills = useMemo(() => scopeSkills(skillListing.tiers, 'user'), [skillListing])
   const activeSkillIds = sessions.activeSkillIds
   const skillChips = activeSkillIds.map((id) => ({ id, title: activeSkillTitle(skillListing, id) }))
 
@@ -1397,8 +1406,8 @@ export function ChatPanel() {
         */}
         <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
           <SkillPicker
-            project={skillListing.project}
-            user={skillListing.user}
+            project={projectSkills}
+            user={userSkills}
             errors={skillListing.errors}
             activeSkillIds={activeSkillIds}
             // A toggle changes the turn after the one in flight, so it is offered exactly when there

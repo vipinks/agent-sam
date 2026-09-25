@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
-import { MAX_ACTIVE_SKILLS, type SkillListing } from '@/conveyor/protocol/skills'
+import { MAX_ACTIVE_SKILLS, type SkillListing, type SkillSummary } from '@/conveyor/protocol/skills'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -52,36 +52,87 @@ const STORE_CHANGED = `${STORE_CHANNEL}:changed`
 
 /** A project skill and a user skill, which is the two scopes a picker has to show apart. */
 const LISTING: SkillListing = {
-  project: [
+  tiers: [
     {
-      id: 'code-review',
+      tier: 'project-native',
       scope: 'project',
-      title: 'Code Review',
-      summary: 'Review a diff before it lands.',
-      tags: [],
+      kind: 'native',
+      sourceDir: 'C:/w/.sam/skills',
+      skills: [
+        {
+          id: 'code-review',
+          scope: 'project',
+          tier: 'project-native',
+          title: 'Code Review',
+          summary: 'Review a diff before it lands.',
+          tags: [],
+          sourcePath: 'C:/w/.sam/skills/code-review/SKILL.md',
+        },
+      ],
     },
-  ],
-  user: [
+    { tier: 'project-compat', scope: 'project', kind: 'compat', sourceDir: 'C:/w/.agents/skills', skills: [] },
     {
-      id: 'deploy-runbook',
+      tier: 'user-native',
       scope: 'user',
-      title: 'Deploy Runbook',
-      summary: 'Ship it, then watch the logs.',
-      tags: [],
+      kind: 'native',
+      sourceDir: 'C:/u/era/skills',
+      skills: [
+        {
+          id: 'deploy-runbook',
+          scope: 'user',
+          tier: 'user-native',
+          title: 'Deploy Runbook',
+          summary: 'Ship it, then watch the logs.',
+          tags: [],
+          sourcePath: 'C:/u/era/skills/deploy-runbook/SKILL.md',
+        },
+      ],
     },
+    { tier: 'user-compat', scope: 'user', kind: 'compat', sourceDir: 'C:/Users/me/.agents/skills', skills: [] },
   ],
   errors: [],
+  counts: { total: 2, project: 1, user: 1, errors: 0 },
 }
 
 /** Three that fit under the cap, and one that does not, so the limit has something to refuse. */
 const CROWDED: SkillListing = {
-  project: [
-    { id: 'a-skill', scope: 'project', title: 'Alpha Skill', summary: 'First.', tags: [] },
-    { id: 'b-skill', scope: 'project', title: 'Beta Skill', summary: 'Second.', tags: [] },
-    { id: 'c-skill', scope: 'project', title: 'Gamma Skill', summary: 'Third.', tags: [] },
+  tiers: [
+    {
+      tier: 'project-native',
+      scope: 'project',
+      kind: 'native',
+      sourceDir: 'C:/w/.sam/skills',
+      skills: [
+        skill('a-skill', 'Alpha Skill', 'First.'),
+        skill('b-skill', 'Beta Skill', 'Second.'),
+        skill('c-skill', 'Gamma Skill', 'Third.'),
+      ],
+    },
+    { tier: 'project-compat', scope: 'project', kind: 'compat', sourceDir: 'C:/w/.agents/skills', skills: [] },
+    {
+      tier: 'user-native',
+      scope: 'user',
+      kind: 'native',
+      sourceDir: 'C:/u/era/skills',
+      skills: [skill('d-skill', 'Delta Skill', 'Fourth.')],
+    },
+    { tier: 'user-compat', scope: 'user', kind: 'compat', sourceDir: 'C:/Users/me/.agents/skills', skills: [] },
   ],
-  user: [{ id: 'd-skill', scope: 'user', title: 'Delta Skill', summary: 'Fourth.', tags: [] }],
   errors: [],
+  counts: { total: 4, project: 3, user: 1, errors: 0 },
+}
+
+/** One row of a fixture tier, so a crowded listing stays readable. */
+function skill(id: string, title: string, summary: string): SkillSummary {
+  return {
+    id,
+    scope: 'project',
+    tier: 'project-native',
+    title,
+    summary,
+    tags: [],
+    sourcePath: `C:/w/.sam/skills/${id}/SKILL.md`,
+  }
 }
 
 /** The session list main holds, with the conversation open unless a test says otherwise. */
@@ -105,7 +156,7 @@ function sessionState(options: { activeSkillIds?: string[]; open?: boolean } = {
 /** Install a stub whose `skills.list` answers with what main would have scanned, and render the pane. */
 async function renderChat(options: { listing?: SkillListing; state?: unknown } = {}) {
   const stub = createBridgeStub({
-    list: () => options.listing ?? LISTING,
+    listSkills: () => options.listing ?? LISTING,
     listProviders: () => [],
     defaultModels: () => ({}),
     listConfigured: () => [],
@@ -217,7 +268,7 @@ describe('the composer skills control', () => {
     expect(screen.getByText('Code Review')).toBeTruthy()
     expect(screen.getByText('Deploy Runbook')).toBeTruthy()
     // And they came from the query main registered, not from anything the renderer read itself.
-    expect(stub.methodsOn('skills')).toContain('list')
+    expect(stub.methodsOn('skills')).toContain('listSkills')
   })
 
   it('shows a per-file load error beside the skills that did load', async () => {
@@ -228,10 +279,12 @@ describe('the composer skills control', () => {
           {
             id: 'broken',
             scope: 'project' as const,
+            tier: 'project-native' as const,
             code: 'SKILL_MANIFEST_INVALID' as const,
             message: 'The manifest is not valid JSON.',
           },
         ],
+        counts: { total: 2, project: 1, user: 1, errors: 1 },
       },
     })
 

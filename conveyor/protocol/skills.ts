@@ -1,25 +1,36 @@
 /**
- * Skills: what a `SKILL.md` parses to, how many may be active at once, and how they reach the prompt.
+ * Skills: the tiers a skill may come from, how many may be active at once, and how they reach the prompt.
  *
  * Pure, and shared rather than main-only, for the same reason the transcript shape is: main does the
- * walking and the reading, but the *rules* — where a manifest ends, what counts as a valid one, what a
- * skill with no manifest is called, what an Active Skills section says — are decisions a test should be
- * able to make without a filesystem. So the disk lives in `conveyor/modules/skills.ts` and everything
- * here is text in, data out.
+ * walking and the reading, but the *rules* — which folder outranks which, what a collision resolves to,
+ * how many may be active, what an Active Skills section says — are decisions a test should be able to
+ * make without a filesystem. So the disk lives in `conveyor/modules/skills.ts` and everything here is
+ * data in, data out.
  *
- * A skill is an instruction artifact, not code. Nothing in this module executes anything it reads: a
- * body is carried to the provider as prose and to the renderer as a summary line, and the one thing the
- * app does with the text is put it in front of the model with a note saying what it cannot override.
+ * There are four tiers rather than the two scopes there used to be, because two of the four folders are
+ * a compatibility surface this app reads and never writes. `project` and `user` still say which world a
+ * skill belongs to, and `native` and `compat` say whether it is this app's own folder or one it merely
+ * understands: a `.agents` folder belongs to whatever else the user runs, so Sam never creates, edits,
+ * or deletes inside one. That is a property of the *tier* rather than a flag on a skill, which is why it
+ * is decided here once and nowhere else — no skill file can argue its way out of it.
  *
- * Three rules are load-bearing enough to state up front.
+ * Two rules are load-bearing enough to state up front.
  *
- * The manifest is a *leading* block. Its delimiters are only the first non-empty line and the next line
- * that is exactly `---`; a horizontal rule further down a body is a rule, not a delimiter, so a skill
- * whose prose uses `---` is not quietly read as one with a broken manifest.
+ * Precedence is the order of the four tiers, and a collision resolves to the highest one. A project
+ * skill outranks a user one because the folder travels with the repository and a repository can pin its
+ * own version of a skill the user also has; a native tier outranks a compatibility one because this
+ * app's own folder is the one it can also write. The loser of a collision is *dropped* rather than
+ * offered beside the winner, because activating it would resolve to the winner's file — a row that
+ * turns on something other than itself is worse than a row that is not there.
  *
- * A skill that could not be read is reported, not dropped. The listing carries per-file errors beside
- * the skills that did load, because one malformed file must not cost the user every other skill in the
+ * A skill that could not be read is reported, not dropped. A listing carries per-file errors beside the
+ * skills that did load, because one malformed file must not cost the user every other skill in the
  * folder — and a skill that vanished silently would read as a skill that was never there.
+ *
+ * The manifest itself — where it begins and ends, what it may say, how a YAML frontmatter and a JSON
+ * block both become the same skill — is `conveyor/protocol/skill-manifest.ts`. It is a separate file
+ * because it is the one part of this that needs a parser dependency, and this module is in the
+ * renderer's bundle: the screen reads the *shape* of a skill, and only main ever reads its text.
  *
  * The cap is on *active* skills and it is small. Three is the number of instruction documents a model
  * can be expected to hold as standing context without one of them shading the others, and it is
@@ -44,9 +55,6 @@ export const MAX_ACTIVE_SKILLS = 3
  * it could not start.
  */
 export const MAX_SKILL_BODY_CHARS = 32_000
-
-/** How much of a derived summary is kept. One line, because that is all a row in the picker has room for. */
-export const MAX_SKILL_SUMMARY_CHARS = 160
 
 /**
  * How long a skill id may be.
@@ -81,23 +89,116 @@ export const SKILL_ERROR_CODES = [
 export type SkillErrorCode = (typeof SKILL_ERROR_CODES)[number]
 
 /**
- * Where a skill came from.
+ * Which world a skill belongs to.
  *
- * `project` is the open folder's own `.sam/skills`; `user` is the machine-level folder under the app
- * data directory. The two are listed apart because which one a skill came from is the whole reason the
- * precedence rule exists: a repository can pin its own version of a skill the user also has.
+ * `project` is the open folder's own skills and travels with the repository; `user` is the machine's and
+ * is available everywhere. Kept apart from the tier below because the two questions are different: this
+ * one is *where*, and the tier's kind is *whose*.
  */
 export type SkillScope = 'project' | 'user'
 
 export const SKILL_SCOPES: readonly SkillScope[] = ['project', 'user']
 
+/**
+ * Whether a tier is this app's own folder or a compatibility surface it only reads.
+ *
+ * `native` is `.sam` or `era`: folders this app creates and wrote, so it may write in them. `compat` is
+ * a `.agents` folder, which belongs to whatever else the user runs — so Sam reads it and never changes
+ * it, and the screen says so on the tier's own heading rather than per skill.
+ */
+export type SkillTierKind = 'native' | 'compat'
+
+/** One of the four folders a skill may be found in. */
+export interface SkillTier {
+  id: SkillTierId
+  scope: SkillScope
+  kind: SkillTierKind
+  /** The heading a list of this tier's skills is drawn under. */
+  label: string
+}
+
+export type SkillTierId = 'project-native' | 'project-compat' | 'user-native' | 'user-compat'
+
+/**
+ * The four tiers, in precedence order: the first entry wins a collision.
+ *
+ * Stated as one array because the order *is* the rule. Every walk, every merge and every badge reads
+ * this list rather than repeating the ordering, so there is exactly one place for the precedence to be
+ * right — and the suite asserts the order as an array of ids, not as a property each entry claims.
+ */
+export const SKILL_TIERS: readonly SkillTier[] = [
+  { id: 'project-native', scope: 'project', kind: 'native', label: 'Project · native' },
+  { id: 'project-compat', scope: 'project', kind: 'compat', label: 'Project · compat' },
+  { id: 'user-native', scope: 'user', kind: 'native', label: 'User · native' },
+  { id: 'user-compat', scope: 'user', kind: 'compat', label: 'User · compat' },
+]
+
+const TIER_BY_ID: Record<SkillTierId, SkillTier> = {
+  'project-native': SKILL_TIERS[0],
+  'project-compat': SKILL_TIERS[1],
+  'user-native': SKILL_TIERS[2],
+  'user-compat': SKILL_TIERS[3],
+}
+
+/** One tier by the id a listing, an error or a body request names it by. Total: the id is the key. */
+export function tierById(id: SkillTierId): SkillTier {
+  return TIER_BY_ID[id]
+}
+
+/**
+ * The id of the tier a scope and a kind name, which is how the two halves are joined anywhere they
+ * arrive apart — a body request carries `scope` and `tier` as its own fields, and a path builder has one
+ * of each. Derived from the two words rather than looked up, and the suite asserts that derivation
+ * agrees with `SKILL_TIERS`, so a renamed tier is caught rather than silently unmatched.
+ */
+export function tierIdFor(scope: SkillScope, kind: SkillTierKind): SkillTierId {
+  return `${scope}-${kind}` as SkillTierId
+}
+
+/** Whether a runtime value names one of the four tiers. The form the boundary checks before it trusts one. */
+export function isSkillTierId(value: unknown): value is SkillTierId {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(TIER_BY_ID, value)
+}
+
+/**
+ * Whether a tier is read-only.
+ *
+ * True for every `compat` tier, and decided from the tier alone: this is the rule that keeps Sam out of
+ * a `.agents` folder, and reading it off a per-skill flag would let a skill grant itself a write. A
+ * later turn's delete or edit affordance asks this question rather than re-spelling the folder names.
+ */
+export function isReadOnlyTier(id: SkillTierId): boolean {
+  return tierById(id).kind === 'compat'
+}
+
+/**
+ * The kind of a tier — `native` or `compat` — which is the badge a card shows beside the scope.
+ *
+ * Spelled as its own function rather than read off `tierById` at each call site so a surface never has to
+ * import the tier table to say which of the two a row is, and so a card cannot decide for itself that a
+ * `.agents` skill is native.
+ */
+export function tierKindOf(id: SkillTierId): SkillTierKind {
+  return tierById(id).kind
+}
+
 /** One skill, as a list row and as the prompt entry need it — without the body, which is read separately. */
 export interface SkillSummary {
   id: string
   scope: SkillScope
+  /** The folder it was read from, which is what decides a collision and what a card badges. */
+  tier: SkillTierId
   title: string
   summary: string
   tags: string[]
+  /**
+   * The `SKILL.md` this row came from.
+   *
+   * Carried so a surface can show where a skill lives rather than only what it is called: with four
+   * tiers in play, "which folder is this?" is the first question a user has about a card, and the answer
+   * is a path main already knows when it reads the file.
+   */
+  sourcePath: string
 }
 
 /**
@@ -110,50 +211,73 @@ export interface SkillSummary {
 export interface SkillLoadError {
   id: string
   scope: SkillScope
+  tier: SkillTierId
   code: SkillErrorCode
   message: string
 }
 
-/** A skill after its file has been read and parsed, body included. */
-export interface ParsedSkill extends SkillSummary {
+/** One tier as a listing carries it: what it is, where it was read from, and what it held. */
+export interface SkillTierListing {
+  tier: SkillTierId
+  scope: SkillScope
+  kind: SkillTierKind
   /**
-   * The manifest's own `schema` field, when it declared one.
+   * The directory this tier was scanned in, or `null` when there is none.
    *
-   * Carried rather than ignored: it is a supported field, so a manifest that writes it wrongly has to be
-   * a load error, and validating it here is what makes that true. Nothing branches on its value yet —
-   * the shape of a skill is the app's, and a skill cannot ask for a different one.
+   * `null` rather than a guess for a project tier with no folder open: there is no `.sam/skills` to name,
+   * and inventing a path under a root that does not exist would be a path a reader could not use. An
+   * empty section says which folder it would have read.
    */
-  schema?: string
-  /** Everything after the manifest, trimmed. What the model is actually given. */
+  sourceDir: string | null
+  skills: SkillSummary[]
+}
+
+/** What a listing adds up to, for the header that states it. */
+export interface SkillCounts {
+  total: number
+  project: number
+  user: number
+  errors: number
+}
+
+/** What a skills scan found: all four tiers, what it could not read, and the totals. */
+export interface SkillListing {
+  tiers: SkillTierListing[]
+  errors: SkillLoadError[]
+  counts: SkillCounts
+}
+
+/** A skill's body, as the expand view reads it: the list row it was reached through, plus the text. */
+export interface SkillBody extends SkillSummary {
   body: string
+}
+
+/** One skill file, read from one named folder: everything a read of a body needs to find it. */
+export interface SkillBodyRequest {
+  tier: SkillTierId
+  skillId: string
+}
+
+/** The four directories the tiers are read from, resolved by main and passed in by every caller. */
+export interface SkillTierPaths {
+  projectNative: string | null
+  projectCompat: string | null
+  userNative: string
+  userCompat: string
 }
 
 /** One active skill, resolved from disk for the turn that is starting. */
 export interface ResolvedSkill {
   id: string
   scope: SkillScope
+  tier: SkillTierId
   title: string
   body: string
 }
 
-/** What a skills scan found: the two scopes, and what it could not read. */
-export interface SkillListing {
-  project: SkillSummary[]
-  user: SkillSummary[]
-  errors: SkillLoadError[]
-}
-
-/** A parsed skill, or the named reason it could not be parsed. */
-export type SkillParseResult = ({ ok: true } & { skill: ParsedSkill }) | ({ ok: false } & SkillLoadError)
-
 /** The outcome of switching one skill on or off. */
 export type SkillToggleResult =
   { ok: true; activeSkillIds: string[] } | { ok: false; code: SkillErrorCode; message: string }
-
-const MANIFEST_DELIMITER = '---'
-
-/** The manifest fields this build reads. Anything else in the object is left alone rather than refused. */
-const MANIFEST_STRING_FIELDS = ['schema', 'title', 'summary'] as const
 
 /**
  * What a folder name may be for it to be a skill id.
@@ -172,162 +296,106 @@ export function isSafeSkillId(value: unknown): value is string {
 }
 
 /**
- * The title a skill with no manifest is shown under.
+ * Skills by id, case-insensitively, with an exact tiebreak.
  *
- * Derived from the id because the id is the only name such a skill has: the folder is what the user
- * created, and a title invented from the body would disagree with the folder they will go and edit.
+ * The tiebreak matters for the same reason it does in the mentions walk: `Alpha` and `alpha` are two
+ * different folders that compare equal case-insensitively, and without it the order of the section
+ * would be whatever the directory listing happened to return — which would make an identical set of
+ * skills produce a different prompt from one run to the next.
+ *
+ * Returns a new array; the caller's is left alone.
  */
-export function skillTitleFromId(id: string): string {
-  const words = id.split(/[-_.\s]+/).filter((word) => word !== '')
-  if (words.length === 0) return id
-  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+export function orderSkillsById<T extends { id: string }>(skills: readonly T[]): T[] {
+  return [...skills].sort((a, b) => {
+    const byId = a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
+    if (byId !== 0) return byId
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
 }
 
 /**
- * Cut a line to a display budget, marking the cut.
+ * Apply tier precedence to a set of scanned tiers.
  *
- * Truncation is display-only and it always says so: a summary that ended mid-word with no marker would
- * read as a complete sentence that happens to stop.
+ * Every tier stays in the result, empty or not, because the screen draws four sections and a section
+ * that disappeared when its last skill was shadowed would read as a folder that had been deleted. What
+ * changes is only *where* a colliding id is offered: the highest tier that has it keeps it, and every
+ * tier below loses it. Within a tier, the order is by id, which is the one order this app gives a set of
+ * skills.
+ *
+ * Input order is not trusted: the tiers are emitted in `SKILL_TIERS` order, and precedence is applied in
+ * that same order, so a caller cannot reorder the folders by handing them over differently.
  */
-export function truncateForDisplay(text: string, max: number = MAX_SKILL_SUMMARY_CHARS): string {
-  const trimmed = text.trim()
-  if (trimmed.length <= max) return trimmed
-  // One character of the budget is spent on the marker, so the result is never longer than the budget.
-  return `${trimmed.slice(0, max - 1).trimEnd()}…`
+export function mergeSkillTiers(tiers: readonly SkillTierListing[]): SkillTierListing[] {
+  const byTier = new Map<SkillTierId, SkillTierListing>()
+  for (const tier of tiers) byTier.set(tier.tier, tier)
+
+  const claimed = new Set<string>()
+  return SKILL_TIERS.map((tier) => {
+    const found = byTier.get(tier.id)
+    if (!found) return { tier: tier.id, scope: tier.scope, kind: tier.kind, sourceDir: null, skills: [] }
+
+    const skills = orderSkillsById(found.skills).filter((skill) => {
+      if (claimed.has(skill.id)) return false
+      claimed.add(skill.id)
+      return true
+    })
+
+    return { ...found, scope: tier.scope, kind: tier.kind, skills }
+  })
 }
 
 /**
- * The summary a skill with no manifest is shown under: its first non-empty body line.
+ * The four numbers a header states, derived from the tiers a listing already holds.
  *
- * Leading heading markers are stripped, because almost every skill body opens with its own title and
- * `# Deploy runbook` as a summary reads as markup rather than as a sentence.
+ * Derived rather than counted during the walk, because the two must agree: a total produced by the scan
+ * and a list produced by the same scan can drift, and the header would then disagree with the cards
+ * under it. A load error is deliberately not a skill: it has no title, no body and cannot be activated,
+ * so it is counted on its own line and leaves the total alone.
  */
-export function skillSummaryFromBody(body: string): string {
-  for (const raw of body.split(/\r?\n/)) {
-    const line = raw.replace(/^#+\s*/, '').trim()
-    if (line !== '') return truncateForDisplay(line)
+export function deriveSkillCounts(tiers: readonly SkillTierListing[], errors: readonly SkillLoadError[]): SkillCounts {
+  let project = 0
+  let user = 0
+  for (const tier of tiers) {
+    const count = tier.skills.length
+    if (tier.scope === 'project') project += count
+    else user += count
   }
-  return ''
-}
-
-/** The failure shape, built in one place so every parse failure names the skill it belongs to. */
-function parseFailure(id: string, scope: SkillScope, code: SkillErrorCode, message: string): SkillParseResult {
-  return { ok: false, id, scope, code, message }
-}
-
-/** Read one manifest field as a trimmed string, or `''` when it is absent. Types are checked before this. */
-function manifestText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
+  return { total: project + user, project, user, errors: errors.length }
 }
 
 /**
- * Which of the known manifest fields is present with the wrong shape, if any.
+ * The skills a filter query keeps, against three fields at once.
  *
- * Only the fields this build reads are checked. An unknown key is left alone: a manifest is a place a
- * newer version of this app may write something, and refusing a whole skill because it carries a field
- * this build does not know would make every such file unusable in both directions.
+ * The id is matched as well as the title and the summary because the id is what a user types when they
+ * know what they are looking for — it is the folder name, and it is the thing a session records. A query
+ * that is empty or only spaces keeps everything, so an untouched box is not a filter that matches
+ * nothing; the match is a plain case-insensitive substring rather than a pattern, because a picker is a
+ * box to narrow a list with and not a place to write a regular expression that can hang.
  */
-function manifestFieldError(manifest: Record<string, unknown>): string | null {
-  for (const field of MANIFEST_STRING_FIELDS) {
-    const value = manifest[field]
-    if (value !== undefined && typeof value !== 'string') {
-      return `The manifest's "${field}" must be a string.`
-    }
-  }
-  const tags = manifest.tags
-  if (tags !== undefined && (!Array.isArray(tags) || tags.some((tag) => typeof tag !== 'string'))) {
-    return 'The manifest\'s "tags" must be an array of strings.'
-  }
-  return null
+export function filterSkillSummaries<T extends { id: string; title: string; summary: string }>(
+  skills: readonly T[],
+  query: string
+): T[] {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return [...skills]
+  return skills.filter(
+    (skill) =>
+      skill.id.toLowerCase().includes(needle) ||
+      skill.title.toLowerCase().includes(needle) ||
+      skill.summary.toLowerCase().includes(needle)
+  )
 }
 
 /**
- * Where the leading manifest ends, or `null` when the file has none.
+ * One scope's skills, in tier order, across every tier that scope has.
  *
- * The delimiter is the first non-empty line only. A `---` that appears later is a horizontal rule in
- * somebody's prose, and treating one as a delimiter would turn an ordinary skill into a file whose
- * manifest happens to be invalid.
+ * What the composer's picker needs, which offers two scopes rather than four folders: a skill offered
+ * there is offered to be activated, and activation is decided by tier order. The flattening therefore
+ * keeps that order — project-native before project-compat — so the row a user clicks is the file the
+ * turn will actually read.
  */
-function manifestBlock(
-  lines: readonly string[]
-): { ok: true; json: string; bodyStart: number } | { ok: false; message: string } | null {
-  const first = lines.findIndex((line) => line.trim() !== '')
-  if (first === -1 || lines[first].trim() !== MANIFEST_DELIMITER) return null
-
-  for (let index = first + 1; index < lines.length; index += 1) {
-    if (lines[index].trim() === MANIFEST_DELIMITER) {
-      return { ok: true, json: lines.slice(first + 1, index).join('\n'), bodyStart: index + 1 }
-    }
-  }
-  return { ok: false, message: `The manifest is not closed by a ${MANIFEST_DELIMITER} line.` }
-}
-
-/**
- * Parse one skill file.
- *
- * Never throws: a malformed file is a fact to report beside the skills that did load, so every failure
- * comes back as a code and a sentence rather than as an exception the caller has to catch per file.
- *
- * The body is trimmed, and the manifest is not part of it: what the model is given is the instructions,
- * not the metadata that describes them.
- */
-export function parseSkillText(id: string, scope: SkillScope, text: string): SkillParseResult {
-  // A leading byte-order mark is what a Windows editor writes. It must not stop the first line from
-  // being the delimiter it looks like.
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
-  const block = manifestBlock(lines)
-
-  if (block !== null && !block.ok) {
-    return parseFailure(id, scope, SKILL_MANIFEST_INVALID, block.message)
-  }
-
-  let manifest: Record<string, unknown> = {}
-  let body: string
-
-  if (block !== null && block.ok) {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(block.json)
-    } catch {
-      return parseFailure(id, scope, SKILL_MANIFEST_INVALID, 'The manifest is not valid JSON.')
-    }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return parseFailure(id, scope, SKILL_MANIFEST_INVALID, 'The manifest must be a JSON object.')
-    }
-    manifest = parsed as Record<string, unknown>
-
-    const fieldError = manifestFieldError(manifest)
-    if (fieldError !== null) return parseFailure(id, scope, SKILL_MANIFEST_INVALID, fieldError)
-
-    body = lines.slice(block.bodyStart).join('\n').trim()
-  } else {
-    body = lines.join('\n').trim()
-  }
-
-  const title = manifestText(manifest.title) || skillTitleFromId(id)
-  const summary = manifestText(manifest.summary) || skillSummaryFromBody(body)
-  const tags = Array.isArray(manifest.tags) ? (manifest.tags as string[]) : []
-  const schema = manifestText(manifest.schema)
-
-  return {
-    ok: true,
-    skill: {
-      id,
-      scope,
-      title,
-      summary,
-      tags,
-      // Absent rather than empty: a manifest that says nothing about its schema has no schema, and an
-      // empty string would read as one that declared a blank one.
-      ...(schema === '' ? {} : { schema }),
-      body,
-    },
-  }
-}
-
-/** Whether another skill can be activated. */
-export function skillLimitReached(activeSkillIds: readonly string[]): boolean {
-  return activeSkillIds.length >= MAX_ACTIVE_SKILLS
+export function scopeSkills(tiers: readonly SkillTierListing[], scope: SkillScope): SkillSummary[] {
+  return tiers.filter((tier) => tier.scope === scope).flatMap((tier) => tier.skills)
 }
 
 /**
@@ -362,41 +430,9 @@ export function applySkillToggle(activeSkillIds: readonly string[], id: string, 
   return { ok: true, activeSkillIds: [...without, id] }
 }
 
-/**
- * Skills by id, case-insensitively, with an exact tiebreak.
- *
- * The tiebreak matters for the same reason it does in the mentions walk: `Alpha` and `alpha` are two
- * different folders that compare equal case-insensitively, and without it the order of the section
- * would be whatever the directory listing happened to return — which would make an identical set of
- * skills produce a different prompt from one run to the next.
- *
- * Returns a new array; the caller's is left alone.
- */
-export function orderSkillsById<T extends { id: string }>(skills: readonly T[]): T[] {
-  return [...skills].sort((a, b) => {
-    const byId = a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
-    if (byId !== 0) return byId
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-  })
-}
-
-/**
- * The two scopes as a picker should offer them, with project precedence applied.
- *
- * A user skill whose id the project also provides is not offered, because activating it would resolve to
- * the project's file: the row would be a switch that turns on something else, and the user would have no
- * way to see that from the label. The project skill is the one that stays, which is the precedence rule
- * stated as a listing rather than as a resolver.
- */
-export function mergeSkillScopes(
-  project: readonly SkillSummary[],
-  user: readonly SkillSummary[]
-): { project: SkillSummary[]; user: SkillSummary[] } {
-  const projectIds = new Set(project.map((skill) => skill.id))
-  return {
-    project: orderSkillsById(project),
-    user: orderSkillsById(user.filter((skill) => !projectIds.has(skill.id))),
-  }
+/** Whether another skill can be activated. */
+export function skillLimitReached(activeSkillIds: readonly string[]): boolean {
+  return activeSkillIds.length >= MAX_ACTIVE_SKILLS
 }
 
 /** The heading the Active Skills section opens with. Exported so a reader can name it without copying it. */
@@ -416,14 +452,22 @@ export const SKILLS_GUIDANCE_NOTE =
  * The Active Skills section, or `null` when nothing is active.
  *
  * Ordered by id so the same set of skills always produces the same prompt, and one entry per skill
- * carrying title, scope, id and body: the id is what the user's record names, the scope says which
- * folder it came from, and the title is what they call it.
+ * carrying title, scope, tier, id and body: the id is what the user's record names, the scope says which
+ * world it came from, the tier says which folder, and the title is what they call it — so a turn that
+ * ran a compatibility copy rather than the project's own says so in the transcript's own terms.
  */
 export function assembleSkillsSection(skills: readonly ResolvedSkill[]): string | null {
   if (skills.length === 0) return null
 
   const entries = orderSkillsById(skills).map((skill) =>
-    [`### ${skill.title}`, `- id: ${skill.id}`, `- scope: ${skill.scope}`, '', skill.body].join('\n')
+    [
+      `### ${skill.title}`,
+      `- id: ${skill.id}`,
+      `- scope: ${skill.scope}`,
+      `- tier: ${skill.tier}`,
+      '',
+      skill.body,
+    ].join('\n')
   )
 
   return [ACTIVE_SKILLS_HEADING, SKILLS_GUIDANCE_NOTE, ...entries].join('\n\n')

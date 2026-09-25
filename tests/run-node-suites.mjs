@@ -61,6 +61,7 @@ const SUITES = [
   { name: 'mention files', src: 'mentions/mentions-files-test.ts' },
   { name: 'skill rules', src: 'skills/skills-rules-test.ts' },
   { name: 'skill files', src: 'skills/skills-files-test.ts' },
+  { name: 'skill tiers', src: 'skills/skills-tiers-test.ts' },
   { name: 'mcp config rules', src: 'mcp/mcp-rules-test.ts' },
   { name: 'mcp servers (files, trust, secrets)', src: 'mcp/mcp-servers-test.ts' },
   { name: 'mcp runtime (spawn, tools, stderr)', src: 'mcp/mcp-runtime-test.ts' },
@@ -120,6 +121,10 @@ for (const suite of SUITES) {
         // measures. Inlining it would test a copy of the spawner rather than the shipped one.
         '--external:@modelcontextprotocol/sdk',
         '--external:@modelcontextprotocol/sdk/*',
+        // Also external, for the same reason again: the manifest parser is a main-process dependency
+        // the app externalizes too, and the renderer never reaches it. Inlining it would bundle a
+        // parser into suites that never call it, and would test a copy rather than the shipped one.
+        '--external:yaml',
         '--log-level=error',
       ],
       { stdio: 'inherit' }

@@ -7,6 +7,10 @@
  * counts as a valid one, what a skill with no manifest is called — and they are asserted against the
  * real parser rather than a copy of it, so a test cannot pass while the shipped code disagrees.
  *
+ * The parser is the one that reads both manifest formats, so the cases below are written in both: a JSON
+ * block and a YAML block are two ways of saying the same thing, and neither is refused for its syntax.
+ * The tiers those skills may be found in are a separate suite's subject.
+ *
  * The last step is about the session record rather than about skills as such, and it is here because
  * `activeSkillIds` is the one additive key this phase adds to it: the boundary's own rule — strip what
  * is not known, never default what is absent — is the thing that keeps every session written before
@@ -18,18 +22,14 @@ import {
   applySkillToggle,
   assembleSkillsSection,
   MAX_ACTIVE_SKILLS,
-  MAX_SKILL_SUMMARY_CHARS,
-  mergeSkillScopes,
-  parseSkillText,
   planSkillsInjection,
   SKILL_LIMIT_EXCEEDED,
   SKILL_MANIFEST_INVALID,
   SKILL_PARSE_INVALID,
   skillLimitReached,
-  skillTitleFromId,
   type ResolvedSkill,
-  type SkillSummary,
 } from '../../conveyor/protocol/skills'
+import { MAX_SKILL_SUMMARY_CHARS, parseSkillText, skillTitleFromId } from '../../conveyor/protocol/skill-manifest'
 import { chatSessionsStore } from '../../conveyor/stores/chat-sessions'
 import { createStoreHarness } from '../sessions/chat-sessions-store-harness'
 
@@ -94,6 +94,16 @@ function aSkillWithAManifestParses() {
   const extra = parseSkillText('later', 'user', ['---', '{"title":"Later","future":true}', '---', 'Body.'].join('\n'))
   assert.ok(extra.ok, 'a manifest field this build does not know is tolerated')
 
+  // The same block without quotes, and a JSON block with a trailing comma. Both are YAML, so both are
+  // read: the parser is one parser, and a manifest is not refused for being written the other way.
+  const bare = parseSkillText('bare', 'user', ['---', 'title: Bare', 'tags: [one]', '---', 'Body.'].join('\n'))
+  assert.ok(bare.ok, 'a frontmatter block with no quotes or braces is a manifest')
+  assert.equal(bare.skill.title, 'Bare')
+  assert.deepEqual(bare.skill.tags, ['one'])
+  const loose = parseSkillText('loose', 'project', ['---', '{"title": "Loose",}', '---', 'Body.'].join('\n'))
+  assert.ok(loose.ok, 'and so is a JSON block this build used to refuse for its trailing comma')
+  assert.equal(loose.skill.title, 'Loose')
+
   results.push('a manifest is parsed for title, summary, tags and schema, and the body follows it')
 }
 
@@ -141,9 +151,11 @@ function aSkillWithoutAManifestIsTitledFromItsId() {
 function anInvalidManifestIsALoadError() {
   const cases: Array<[string, string]> = [
     ['unclosed', ['---', '{"title":"x"}', '# Body'].join('\n')],
-    ['not json', ['---', '{"title": "x",}', '---', 'Body'].join('\n')],
-    ['not an object', ['---', '["a"]', '---', 'Body'].join('\n')],
-    ['not even a value', ['---', 'title: x', '---', 'Body'].join('\n')],
+    ['an unclosed quote', ['---', 'title: "x', '---', 'Body'].join('\n')],
+    ['a nested mapping where a summary belongs', ['---', 'summary: one: two', '---', 'Body'].join('\n')],
+    ['a key stated twice', ['---', 'title: a', 'title: b', '---', 'Body'].join('\n')],
+    ['not a mapping', ['---', '["a"]', '---', 'Body'].join('\n')],
+    ['a bare scalar', ['---', '42', '---', 'Body'].join('\n')],
     ['a title that is not a string', ['---', '{"title": 7}', '---', 'Body'].join('\n')],
     ['tags that are not a list', ['---', '{"tags":"review"}', '---', 'Body'].join('\n')],
     ['a tag that is not a string', ['---', '{"tags":["ok",3]}', '---', 'Body'].join('\n')],
@@ -159,7 +171,7 @@ function anInvalidManifestIsALoadError() {
     assert.ok(parsed.message.length > 0, `${label} must say something to show the user`)
   }
 
-  results.push('a manifest that is not a JSON object of the known field types is a named load error')
+  results.push('frontmatter that is not a mapping of the known field types is a named load error, in either format')
 }
 
 // ---------------------------------------------------------------- activation
@@ -207,9 +219,9 @@ function theActiveCapIsEnforced() {
 
 function theSectionIsOrderedAndStable() {
   const skills: ResolvedSkill[] = [
-    { id: 'zeta', scope: 'user', title: 'Zeta', body: 'A third body.' },
-    { id: 'alpha', scope: 'project', title: 'Alpha', body: 'A first body.' },
-    { id: 'mu', scope: 'user', title: 'Mu', body: 'A second body.' },
+    { id: 'zeta', scope: 'user', tier: 'user-native', title: 'Zeta', body: 'A third body.' },
+    { id: 'alpha', scope: 'project', tier: 'project-native', title: 'Alpha', body: 'A first body.' },
+    { id: 'mu', scope: 'user', tier: 'user-native', title: 'Mu', body: 'A second body.' },
   ]
 
   const section = assembleSkillsSection(skills)
@@ -261,36 +273,6 @@ function theSectionIsOrderedAndStable() {
   )
 
   results.push('the Active Skills section is ordered by id, stable, complete, and injected once')
-}
-
-// ---------------------------------------------------------------- the listing merge
-
-function theProjectScopeWins() {
-  const summary = (id: string, scope: 'project' | 'user'): SkillSummary => ({
-    id,
-    scope,
-    title: `${scope} ${id}`,
-    summary: '',
-    tags: [],
-  })
-
-  const merged = mergeSkillScopes(
-    [summary('shared', 'project'), summary('only-project', 'project')],
-    [summary('shared', 'user'), summary('only-user', 'user')]
-  )
-
-  assert.deepEqual(
-    merged.project.map((s) => s.id),
-    ['only-project', 'shared'],
-    'the project scope is listed by id, the one order this app gives a set of skills'
-  )
-  assert.deepEqual(
-    merged.user.map((s) => s.id),
-    ['only-user'],
-    'and a user skill the project shadows is dropped, so no toggle can point at a skill it would not activate'
-  )
-
-  results.push('a project skill overrides the user skill of the same id')
 }
 
 // ---------------------------------------------------------------- the session record
@@ -395,7 +377,6 @@ function main(): Promise<void> {
     await step('bad manifest', anInvalidManifestIsALoadError)
     await step('cap', theActiveCapIsEnforced)
     await step('section', theSectionIsOrderedAndStable)
-    await step('scopes', theProjectScopeWins)
     await step('session record', theSessionRecordKeepsTheKeyAdditive)
 
     console.log(`skills rules: ${results.length} passed`)

@@ -39,7 +39,7 @@ import {
   type PlanStep,
 } from '../protocol/plan'
 import { readMentions } from './mentions'
-import { resolveActiveSkills, userSkillsDir } from './skills'
+import { resolveActiveSkills, skillTierPathsFor } from './skills'
 import { assembleSkillsSection, MAX_ACTIVE_SKILLS, planSkillsInjection } from '../protocol/skills'
 
 /**
@@ -1023,8 +1023,14 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // finds it already there and adds nothing — which is what keeps a continued turn from carrying two
   // copies of the same instructions.
   const activeSkills = await resolveActiveSkills({
-    rootPath: opts.workspaceRoot,
-    userDir: userSkillsDir(app.getPath('appData')),
+    // The four folders, resolved from the same three sources every other read in this module uses: the
+    // folder the turn is running in, this app's own app-data root, and the user's home. The tier order
+    // therefore decides a collision here exactly as it does in the listing a screen shows.
+    paths: skillTierPathsFor({
+      rootPath: opts.workspaceRoot,
+      appDataPath: app.getPath('appData'),
+      homePath: app.getPath('home'),
+    }),
     activeSkillIds: opts.activeSkillIds ?? [],
   })
   const skillsInjection = planSkillsInjection(history, assembleSkillsSection(activeSkills))
