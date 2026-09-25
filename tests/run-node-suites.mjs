@@ -63,6 +63,7 @@ const SUITES = [
   { name: 'skill files', src: 'skills/skills-files-test.ts' },
   { name: 'skill tiers', src: 'skills/skills-tiers-test.ts' },
   { name: 'skill management', src: 'skills/skills-manage-test.ts' },
+  { name: 'skill panel rules', src: 'skills/skills-panel-test.ts' },
   { name: 'mcp config rules', src: 'mcp/mcp-rules-test.ts' },
   { name: 'mcp servers (files, trust, secrets)', src: 'mcp/mcp-servers-test.ts' },
   { name: 'mcp runtime (spawn, tools, stderr)', src: 'mcp/mcp-runtime-test.ts' },

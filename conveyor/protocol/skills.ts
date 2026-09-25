@@ -443,26 +443,34 @@ export function deriveSkillCounts(
 }
 
 /**
- * The skills a filter query keeps, against three fields at once.
+ * Whether one skill's own three fields answer a query.
  *
  * The id is matched as well as the title and the summary because the id is what a user types when they
  * know what they are looking for — it is the folder name, and it is the thing a session records. A query
- * that is empty or only spaces keeps everything, so an untouched box is not a filter that matches
- * nothing; the match is a plain case-insensitive substring rather than a pattern, because a picker is a
- * box to narrow a list with and not a place to write a regular expression that can hang.
+ * that is empty or only spaces matches everything, so an untouched box is not a filter that matches
+ * nothing; the match is a plain case-insensitive substring rather than a pattern, because a box to narrow
+ * a list with is not a place to write a regular expression that can hang.
+ *
+ * Stated apart from the list filter below, which is its only caller here, because a second surface narrows
+ * by the same rule over a different row shape: most of the panel's rows are skills, and the rest are
+ * failures, which have an id and no title or summary of their own.
  */
+export function matchesSkillQuery(fields: { id: string; title: string; summary: string }, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return true
+  return (
+    fields.id.toLowerCase().includes(needle) ||
+    fields.title.toLowerCase().includes(needle) ||
+    fields.summary.toLowerCase().includes(needle)
+  )
+}
+
+/** The skills a filter query keeps, in the order they arrived in. */
 export function filterSkillSummaries<T extends { id: string; title: string; summary: string }>(
   skills: readonly T[],
   query: string
 ): T[] {
-  const needle = query.trim().toLowerCase()
-  if (needle === '') return [...skills]
-  return skills.filter(
-    (skill) =>
-      skill.id.toLowerCase().includes(needle) ||
-      skill.title.toLowerCase().includes(needle) ||
-      skill.summary.toLowerCase().includes(needle)
-  )
+  return skills.filter((skill) => matchesSkillQuery(skill, query))
 }
 
 /**
