@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ConveyorError } from 'electron-conveyor/react'
@@ -10,9 +10,9 @@ import { useWorkbenchStore } from '@/app/components/workbench/store'
 import {
   HOME_HEADLINE,
   HOME_OPEN_FOLDER,
+  HOME_RECENT_PROJECTS,
   HOME_STARTERS,
   HOME_SUBLINE,
-  projectRowLabel,
 } from '@/app/components/workbench/home'
 import { UNTITLED, titleFromMessage } from '@/app/components/workbench/session-rules'
 import { applyThemeVars, clearThemeVars, themeVarsFor } from '@/app/components/workbench/theme-apply'
@@ -27,11 +27,10 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  *
  * What only a rendered screen can show is whether the pieces are actually connected: that a launch
  * with nothing open lands here instead of on an empty transcript, that the New chat control returns
- * here rather than creating a conversation nobody asked for, that the project row reaches the real
- * folder dialog and the real `openRoot` call, that a starter fills the composer without sending it,
- * that the first send is what creates the conversation — with the folder it is created in and the
- * approval mode the chip was left on — and that a chip opens the conversation it names and moves the
- * window to that conversation's project.
+ * here rather than creating a conversation nobody asked for, that the recent projects row reaches the
+ * real folder dialog, the real `openRoot` call and the drawer's own session-open action, that a
+ * starter fills the composer without sending it, and that the first send is what creates the
+ * conversation — with the folder it is created in and the approval mode the chip was left on.
  *
  * Every assertion is on what crossed the bridge or on what a reader can see, never on a private
  * detail: the failure this guards against is a control that renders correctly and calls nothing.
@@ -47,6 +46,7 @@ const PICKED = 'C:/work/picked'
 
 const FIRST = 'aaaaaaaa-1111-4111-8111-111111111111'
 const SECOND = 'bbbbbbbb-2222-4222-8222-222222222222'
+const THIRD = 'cccccccc-3333-4333-8333-333333333333'
 
 /**
  * A viewport for the virtualized transcript, which jsdom does not have.
@@ -285,7 +285,37 @@ function endStream(stub: BridgeStub): void {
   stub.emit(`conveyor:stream:${started?.method}`, { type: 'end' })
 }
 
-const projectRow = (): HTMLElement => screen.getByRole('button', { name: 'Work in a project' })
+/**
+ * The recent projects row, reached through the affordance every state of it draws.
+ *
+ * The label is not the handle: with no folder on record there is nothing recent, so the row is the
+ * affordance alone and the label is not drawn at all.
+ */
+const recentProjectsRow = (): HTMLElement => {
+  const affordance = screen.getByRole('button', { name: HOME_OPEN_FOLDER })
+  const row = affordance.parentElement
+  if (!row) throw new Error('the open-a-folder affordance has no row')
+  return row
+}
+
+/** One chip, by the root it stands for — the full path it carries as its title. */
+const rootChip = (root: string): HTMLElement => {
+  const chip = within(recentProjectsRow())
+    .getAllByRole('button')
+    .find((button) => button.getAttribute('title') === root)
+  if (!chip) throw new Error(`no chip for ${root}`)
+  return chip
+}
+
+/** The roots the row is offering, in the order it drew them. */
+const chipRoots = (): string[] =>
+  within(recentProjectsRow())
+    .getAllByRole('button')
+    .map((button) => button.getAttribute('title'))
+    .filter((title): title is string => title !== null)
+
+/** A chip's count: the last thing it draws, muted, after the folder's name. */
+const chipCount = (root: string): string => rootChip(root).lastElementChild?.textContent ?? ''
 
 const approvalChip = (): HTMLElement => screen.getByRole('button', { name: 'Approval mode' })
 
@@ -317,12 +347,15 @@ describe('the home screen at launch', () => {
     expect(screen.getByLabelText('Send message')).toBeTruthy()
     expect(screen.getByLabelText('Provider and model')).toBeTruthy()
 
-    // The row beneath the card, named for the folder the work would land in.
-    expect(projectRow().textContent).toContain(projectRowLabel(ROOT))
+    // The row beneath the card: a chip per folder the app remembers, named for the folder and saying
+    // how many conversations were last used in it.
+    expect(screen.getByText(HOME_RECENT_PROJECTS)).toBeTruthy()
+    expect(chipRoots()).toEqual([ROOT, NOTES, ARCHIVE])
+    expect(rootChip(ROOT).textContent).toContain('sam-ai')
+    expect(chipCount(ROOT)).toBe('1')
+    expect(rootChip(NOTES).textContent).toContain('notes')
+    expect(chipCount(ARCHIVE)).toBe('0')
 
-    // The conversations offered back, each naming its project, and the prompts below them.
-    expect(screen.getByRole('button', { name: /Composer card/ }).textContent).toContain('sam-ai')
-    expect(screen.getByRole('button', { name: /Right rail/ }).textContent).toContain('notes')
     for (const prompt of HOME_STARTERS) expect(screen.getByRole('button', { name: prompt })).toBeTruthy()
 
     // Nothing is read for a transcript: home is not a conversation.
@@ -352,36 +385,122 @@ describe('the New chat control', () => {
   })
 })
 
-describe('the project row', () => {
-  it('lists the recent roots and the way to open another folder', async () => {
-    stubHome()
+describe('the recent projects row', () => {
+  it('draws one chip per remembered folder, in the store’s order, named for it and carrying its count', async () => {
+    stubHome({
+      recentRoots: [NOTES, ROOT, ARCHIVE],
+      sessions: [
+        row(FIRST, 'Composer card', { lastRoot: ROOT, updatedAt: 3 }),
+        row(SECOND, 'Right rail', { lastRoot: ROOT, updatedAt: 2 }),
+        row(THIRD, 'a conversation that has not run anywhere yet'),
+      ],
+    })
     renderScreen()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Work in a project' }))
+    expect(await screen.findByText(HOME_RECENT_PROJECTS)).toBeTruthy()
 
-    expect(await screen.findByRole('button', { name: 'notes' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'archive' })).toBeTruthy()
-    // The open folder is the row that is checked, so "what is open" is never read off the trigger alone.
-    expect(screen.getByRole('button', { name: 'sam-ai' }).getAttribute('aria-current')).toBe('true')
-    expect(screen.getByRole('button', { name: HOME_OPEN_FOLDER })).toBeTruthy()
+    // The store's order, and not an order of the row's own: the folder opened most recently is the
+    // first one offered back.
+    expect(chipRoots()).toEqual([NOTES, ROOT, ARCHIVE])
+
+    // Named for the folder rather than by its path, and counted: how many conversations were last used
+    // in it. Muted, because the count is a detail of the folder rather than the folder itself.
+    expect(rootChip(ROOT).textContent).toContain('sam-ai')
+    expect(rootChip(ROOT).textContent).not.toContain('C:/work')
+    expect(chipCount(ROOT)).toBe('2')
+    expect((rootChip(ROOT).lastElementChild as HTMLElement).className).toContain('text-muted-foreground')
+
+    // A folder nothing was ever done in is offered with a zero rather than left out, and a
+    // conversation with no project yet belongs to no folder at all.
+    expect(chipCount(ARCHIVE)).toBe('0')
+    expect(chipCount(NOTES)).toBe('0')
+
+    // Which folder is open is still stated, now by the chip that stands for it.
+    expect(rootChip(ROOT).getAttribute('aria-current')).toBe('true')
+    expect(rootChip(NOTES).getAttribute('aria-current')).toBeNull()
   })
 
-  it('switches the folder through the same openRoot call, and says so on the row', async () => {
-    const { stub } = stubHome()
+  it('resumes the folder’s most recent conversation, and asks main for nothing else', async () => {
+    const { stub, sessionActions } = stubHome({
+      sessions: [
+        row(FIRST, 'the older one', { lastRoot: ROOT, updatedAt: 2 }),
+        row(SECOND, 'the newer one', { lastRoot: ROOT, updatedAt: 3 }),
+      ],
+      rootPath: ROOT,
+      transcripts: { [SECOND]: storedTranscript('what the newer one turned up') },
+    })
     renderScreen()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Work in a project' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'notes' }))
+    await screen.findByText(HOME_RECENT_PROJECTS)
+    await userEvent.click(rootChip(ROOT))
 
+    // The drawer's own action, and the most recently touched conversation of that folder: selected,
+    // then loaded. Nothing else is asked of main, because the folder it belongs to is already open.
+    await waitFor(() =>
+      expect(sessionActions).toContainEqual({ method: 'setActive', payload: { payload: { id: SECOND } } })
+    )
+    expect(stub.callsTo('sessions').find((call) => call.method === 'loadTranscript')?.args[0]).toEqual({ id: SECOND })
+    expect(stub.methodsOn('workspace')).not.toContain('openRoot')
+    expect(stub.methodsOn('workspace')).not.toContain('pickFolder')
+    expect(sessionActions.some((action) => action.method === 'addSession')).toBe(false)
+
+    expect(await screen.findByText('what the newer one turned up')).toBeTruthy()
+    expect(screen.queryByText(HOME_HEADLINE)).toBeNull()
+  })
+
+  it('takes the window to the chip’s folder before the conversation renders', async () => {
+    const { stub } = stubHome({
+      sessions: [
+        row(FIRST, 'the parser work', { lastRoot: ROOT, updatedAt: 2 }),
+        row(SECOND, 'the notes work', { lastRoot: NOTES, updatedAt: 3 }),
+      ],
+      rootPath: ROOT,
+      transcripts: { [SECOND]: storedTranscript('what the notes work turned up') },
+    })
+    renderScreen()
+
+    await screen.findByText(HOME_RECENT_PROJECTS)
+    await userEvent.click(rootChip(NOTES))
+
+    // The same `openRoot` the switcher uses. The folder moves first, because the tree, the git reads
+    // and the agent's own paths are answered against whatever the workspace store holds.
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('openRoot'))
+    const openedRoot = stub.callsTo('workspace').find((call) => call.method === 'openRoot')
+    const loaded = stub.callsTo('sessions').find((call) => call.method === 'loadTranscript')
+    expect(openedRoot?.args[0]).toEqual({ path: NOTES })
+    expect(stub.calls.indexOf(openedRoot!)).toBeLessThan(stub.calls.indexOf(loaded!))
+
+    expect(await screen.findByText('what the notes work turned up')).toBeTruthy()
+    expect(screen.queryByText(HOME_HEADLINE)).toBeNull()
+  })
+
+  it('opens the folder and stays home when the chip has no conversations', async () => {
+    const { stub, sessionActions } = stubHome({
+      sessions: [row(FIRST, 'the parser work', { lastRoot: ROOT, updatedAt: 3 })],
+      rootPath: ROOT,
+    })
+    renderScreen()
+
+    await screen.findByText(HOME_RECENT_PROJECTS)
+    await userEvent.click(rootChip(NOTES))
+
+    // The folder is opened and nothing is opened in it: there is nothing there to resume.
     await waitFor(() => expect(stub.methodsOn('workspace')).toContain('openRoot'))
     expect(stub.callsTo('workspace').find((call) => call.method === 'openRoot')?.args[0]).toEqual({ path: NOTES })
+    expect(stub.methodsOn('sessions')).not.toContain('loadTranscript')
+    expect(sessionActions.some((action) => action.method === 'setActive')).toBe(false)
 
-    // The row is the folder that is open now, which is the whole of what the switch has to be judged by.
-    await waitFor(() => expect(projectRow().textContent).toContain('notes'))
+    // Still home, with the composer ready, and the row now saying which folder is open.
+    expect(screen.getByText(HOME_HEADLINE)).toBeTruthy()
+    await waitFor(() => expect(rootChip(NOTES).getAttribute('aria-current')).toBe('true'))
+    await userEvent.type(composer(), 'what is in here?')
+    expect((screen.getByLabelText('Send message') as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('reports a folder that is gone by its code, and leaves the row where it was', async () => {
-    stubHome({
+  it('reports a folder that is gone by its code, switching and opening nothing', async () => {
+    const { stub, sessionActions } = stubHome({
+      sessions: [row(SECOND, 'the notes work', { lastRoot: NOTES, updatedAt: 3 })],
+      rootPath: ROOT,
       overrides: {
         openRoot: () => {
           throw new ConveyorError(WORKSPACE_MISSING, 'C:/work/notes is not a folder that exists.')
@@ -390,34 +509,75 @@ describe('the project row', () => {
     })
     renderScreen()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Work in a project' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'notes' }))
+    await screen.findByText(HOME_RECENT_PROJECTS)
+    await userEvent.click(rootChip(NOTES))
 
     // The wording is the renderer's, chosen by the code — never main's sentence.
     expect(await screen.findByText(/no longer there/i)).toBeTruthy()
-    expect(projectRow().textContent).toContain('sam-ai')
+
+    // Refused before either could happen: no conversation opens, and the window stays where it was.
+    expect(stub.methodsOn('sessions')).not.toContain('loadTranscript')
+    expect(sessionActions.some((action) => action.method === 'setActive')).toBe(false)
+    expect(screen.getByText(HOME_HEADLINE)).toBeTruthy()
+    expect(rootChip(ROOT).getAttribute('aria-current')).toBe('true')
+    expect(rootChip(NOTES).getAttribute('aria-current')).toBeNull()
   })
 
-  it('offers the picker itself when no folder is on record, and leaves the composer usable', async () => {
+  it('puts the way to a folder that is not listed at the end of the row', async () => {
+    const { stub } = stubHome()
+    renderScreen()
+
+    await screen.findByText(HOME_RECENT_PROJECTS)
+    const drawn = within(recentProjectsRow()).getAllByRole('button')
+    expect(drawn[drawn.length - 1]?.textContent).toContain(HOME_OPEN_FOLDER)
+
+    await userEvent.click(screen.getByRole('button', { name: HOME_OPEN_FOLDER }))
+
+    // The existing picker path, unchanged: the dialog, then the same `openRoot` a chip uses.
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('pickFolder'))
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('openRoot'))
+    expect(stub.callsTo('workspace').find((call) => call.method === 'openRoot')?.args[0]).toEqual({ path: PICKED })
+    // And the folder just opened is now the first folder offered back.
+    await waitFor(() => expect(chipRoots()[0]).toBe(PICKED))
+  })
+
+  it('renders only that way when no folder is on record, and leaves the composer usable', async () => {
     const { stub } = stubHome({ rootPath: null, recentRoots: [] })
     renderScreen()
 
-    // No folder means no project to name, so the row is the action rather than a menu of one.
-    const row = await screen.findByRole('button', { name: HOME_OPEN_FOLDER })
-    expect(screen.queryByRole('button', { name: 'Work in a project' })).toBeNull()
-
-    await userEvent.click(row)
-
-    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('pickFolder'))
-    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('openRoot'))
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Work in a project' }).textContent).toContain('picked')
-    )
+    // Nothing is recent, so there is no list to head: no label, no chips, and the one way to a folder.
+    expect(await screen.findByRole('button', { name: HOME_OPEN_FOLDER })).toBeTruthy()
+    expect(screen.queryByText(HOME_RECENT_PROJECTS)).toBeNull()
+    expect(chipRoots()).toEqual([])
 
     // A conversation about nothing in particular is still a conversation: nothing is disabled by the
     // absence of a folder.
     await userEvent.type(composer(), 'what does this app do?')
     expect((screen.getByLabelText('Send message') as HTMLButtonElement).disabled).toBe(false)
+
+    await userEvent.click(screen.getByRole('button', { name: HOME_OPEN_FOLDER }))
+    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('pickFolder'))
+    await waitFor(() => expect(chipRoots()).toEqual([PICKED]))
+  })
+
+  it('is home’s only list: the Recent work chips and the folder row are gone', async () => {
+    stubHome({
+      sessions: [
+        row(FIRST, 'Composer card', { lastRoot: ROOT, updatedAt: 3 }),
+        row(SECOND, 'Right rail', { lastRoot: NOTES, updatedAt: 2 }),
+      ],
+    })
+    renderScreen()
+
+    expect(await screen.findByText(HOME_RECENT_PROJECTS)).toBeTruthy()
+
+    // No row of conversations named by their titles, and no folder trigger standing beside it: the
+    // drawer is the one place a conversation is resumed by name.
+    expect(screen.queryByText(/Recent work/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Work in a project' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Composer card/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Right rail/ })).toBeNull()
+    expect(chipRoots()).toEqual([ROOT, NOTES, ARCHIVE])
   })
 })
 
@@ -480,30 +640,6 @@ describe('the first message', () => {
 
     await waitFor(() => expect(stub.methodsOn('sessions')).toContain('saveTranscript'), { timeout: 5000 })
     expect(transcripts[created.payload.id]?.autoApprove).toBe(true)
-  })
-})
-
-describe('a conversation offered back', () => {
-  it('opens it, and moves the window to the project it belongs to', async () => {
-    const { stub } = stubHome({
-      sessions: [
-        row(FIRST, 'the notes work', { lastRoot: NOTES, updatedAt: 2 }),
-        row(SECOND, 'the archive work', { lastRoot: ARCHIVE, updatedAt: 3 }),
-      ],
-      rootPath: ROOT,
-      transcripts: { [SECOND]: storedTranscript('what the archive turned up') },
-    })
-    renderScreen()
-
-    await userEvent.click(await screen.findByRole('button', { name: /the archive work/ }))
-
-    // Root first, then the transcript: the folder a conversation belongs to is part of opening it.
-    await waitFor(() => expect(stub.methodsOn('workspace')).toContain('openRoot'))
-    expect(stub.callsTo('workspace').find((call) => call.method === 'openRoot')?.args[0]).toEqual({ path: ARCHIVE })
-    expect(stub.callsTo('sessions').find((call) => call.method === 'loadTranscript')?.args[0]).toEqual({ id: SECOND })
-
-    expect(await screen.findByText('what the archive turned up')).toBeTruthy()
-    expect(screen.queryByText(HOME_HEADLINE)).toBeNull()
   })
 })
 

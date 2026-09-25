@@ -4,9 +4,10 @@ import {
   WORKSPACE_MISSING,
   forgetRoot,
   rememberRoot,
+  rootTail,
   sameRoot,
 } from '@/conveyor/protocol/recent-roots'
-import { rootErrorMessage, rootTail } from '@/app/components/workbench/recent-roots'
+import { rootErrorMessage } from '@/app/components/workbench/recent-roots'
 
 /**
  * The recents list's rules, tested without a DOM, a store, or a disk.
@@ -15,7 +16,9 @@ import { rootErrorMessage, rootTail } from '@/app/components/workbench/recent-ro
  * wrong while looking right, since a stale order or a duplicated row is still a plausible-looking
  * menu. They live in `conveyor/protocol/recent-roots.ts` so they can be asserted here by calling a
  * function, and so main and the renderer cannot disagree about them: the store reduces with these
- * rules and the menu compares roots with them.
+ * rules and the menu compares roots with them. What a root is *called* lives there too, for the same
+ * reason: the home screen's chips name a folder by its last segment, and the rule that reads it out of
+ * a path is one rule rather than one per surface that shows a folder.
  *
  * The comparison is the one worth reading twice. "The same folder" is spelled the same way twice in
  * practice far less often than it is spelled with different case, so the compare ignores case — and

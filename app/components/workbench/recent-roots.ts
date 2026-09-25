@@ -1,26 +1,15 @@
 import { WORKSPACE_MISSING } from '@/conveyor/protocol/recent-roots'
 
 /**
- * How the switcher labels a root, and what it says when one could not be opened.
+ * What a surface says when a switch was refused.
  *
- * Pure and renderer-only, for the reason `editing.ts` and `changes.ts` are: a label and a sentence are
- * decisions a test should make by calling a function rather than by opening a menu and reading it. The
- * component then holds the state and draws the result.
+ * Pure and renderer-only, for the reason `editing.ts` and `changes.ts` are: a sentence is a decision a
+ * test should make by calling a function rather than by opening a menu and reading it.
  *
- * Nothing here touches a disk, a store, or electron. The paths arrive from main.
+ * Nothing here touches a disk, a store, or electron. The paths arrive from main, and what a root is
+ * called — the other half of what a switcher shows — is the shared rule in `protocol/recent-roots`,
+ * since the home screen's chips name a folder the same way.
  */
-
-/**
- * A root's last segment: the menu's label, where the full path would not fit.
- *
- * Split on both separators rather than on whichever one this machine uses, because the path was
- * written by the OS the app was running on and a stored root can outlive a change of platform. A
- * trailing separator is dropped rather than named, so a path stored with one still shows its folder.
- */
-export function rootTail(path: string): string {
-  const segments = path.split(/[\\/]/).filter((segment) => segment !== '')
-  return segments.length > 0 ? segments[segments.length - 1] : path
-}
 
 /**
  * The code a folder dialog is reported under when it could not be opened at all.

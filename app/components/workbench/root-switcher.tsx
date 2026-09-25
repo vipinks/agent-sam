@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { Check, ChevronDown, FolderOpen, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { sameRoot } from '@/conveyor/protocol/recent-roots'
+import { sameRoot, rootTail } from '@/conveyor/protocol/recent-roots'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { rootTail } from './recent-roots'
 
 /**
  * The explorer header's folder switcher: the open root, and the folders it can be switched to.

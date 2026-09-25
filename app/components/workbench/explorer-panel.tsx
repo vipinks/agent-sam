@@ -3,7 +3,7 @@ import { AlertTriangle, FolderTree, Loader2 } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
-import { sameRoot } from '@/conveyor/protocol/recent-roots'
+import { sameRoot, rootTail } from '@/conveyor/protocol/recent-roots'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +19,7 @@ import { PaneHeader } from './pane-header'
 import { activityById, DrawerClose } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
 import { RootSwitcher } from './root-switcher'
-import { rootErrorMessage, rootTail } from './recent-roots'
+import { rootErrorMessage } from './recent-roots'
 import { useRootSwitch } from './use-root-switch'
 import { useWorkbenchStore } from './store'
 

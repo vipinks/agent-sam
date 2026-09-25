@@ -8,9 +8,9 @@ import { useWorkbenchStore } from '@/app/components/workbench/store'
 import {
   HOME_HEADLINE,
   HOME_OPEN_FOLDER,
+  HOME_RECENT_PROJECTS,
   HOME_STARTERS,
   HOME_SUBLINE,
-  projectRowLabel,
 } from '@/app/components/workbench/home'
 import { UNTITLED, titleFromMessage } from '@/app/components/workbench/session-rules'
 import { chatSessionsStore, type ChatSession, type ChatSessionsState } from '@/conveyor/stores/chat-sessions'
@@ -30,8 +30,8 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  *
  * So these are launches, mounted whole: the store through the step main runs before any window exists,
  * and `Workbench` rather than the pane in isolation. A launch asserts the six pieces home is made of —
- * the hero, the real composer as a centred card with the approval chip in its footer, the project row,
- * the conversations offered back, and the starters — and asserts that nothing was read as a transcript.
+ * the hero, the real composer as a centred card with the approval chip in its footer, the recent
+ * projects row, and the starters — and asserts that nothing was read as a transcript.
  * The other three cases are the neighbours of that rule: a conversation that *is* open and has no turns
  * still shows the empty pane, New chat returns here without creating one, and the first message sent
  * from here creates the conversation in the open folder and in the mode the chip was left on.
@@ -114,7 +114,7 @@ function storedTranscript(text: string, autoApprove = false): TranscriptSnapshot
  * The store as persistence left it after a run that ended with a conversation open.
  *
  * Two conversations in two folders, the older one used in the folder that is open now, because that is
- * what makes the chips and the project row say different things.
+ * what makes the chips and the counts say different things.
  */
 function persistedState(): ChatSessionsState {
   return {
@@ -333,17 +333,27 @@ describe('a launch', () => {
     expect(chip.textContent).toContain('Manual')
     expect(chip.getAttribute('aria-pressed')).toBe('false')
 
-    // The project row beneath the card: the folder the work would land in, and the way to change it.
-    const projectRow = within(chat).getByRole('button', { name: 'Work in a project' })
-    expect(projectRow.textContent).toContain(projectRowLabel(ROOT))
-    await userEvent.click(projectRow)
-    // The menu is a layer, so it is queried where it is drawn rather than inside the column.
-    expect(await screen.findByRole('button', { name: 'notes' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: HOME_OPEN_FOLDER })).toBeTruthy()
+    // The recent projects row beneath the card: a chip per folder the app remembers, named for the
+    // folder and saying how many conversations were last used in it, with the way to a folder that is
+    // not listed after them.
+    expect(within(chat).getByText(HOME_RECENT_PROJECTS)).toBeTruthy()
+    const rootChip = (root: string): HTMLElement => {
+      const found = within(chat)
+        .getAllByRole('button')
+        .find((button) => button.getAttribute('title') === root)
+      if (!found) throw new Error(`no chip for ${root}`)
+      return found
+    }
+    expect(rootChip(ROOT).textContent).toContain('sam-ai')
+    expect(rootChip(ROOT).lastElementChild?.textContent).toBe('1')
+    expect(rootChip(NOTES).textContent).toContain('notes')
+    expect(within(chat).getByRole('button', { name: HOME_OPEN_FOLDER })).toBeTruthy()
 
-    // The conversations offered back, each naming the project it belongs to.
-    expect(within(chat).getByRole('button', { name: /the parser work/ }).textContent).toContain('sam-ai')
-    expect(within(chat).getByRole('button', { name: /the notes work/ }).textContent).toContain('notes')
+    // And nothing is left of the two surfaces this row replaced: no row of conversations named by
+    // their titles, and no folder trigger standing beside it.
+    expect(within(chat).queryByText(/Recent work/)).toBeNull()
+    expect(within(chat).queryByRole('button', { name: 'Work in a project' })).toBeNull()
+    expect(within(chat).queryByRole('button', { name: /the parser work/ })).toBeNull()
 
     // The three ways in, and the empty pane is not one of them.
     for (const prompt of HOME_STARTERS) expect(within(chat).getByRole('button', { name: prompt })).toBeTruthy()

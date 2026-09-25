@@ -75,6 +75,7 @@ const SUITES = [
   { name: 'write guard rules', src: 'workspace/write-guard-test.ts' },
   { name: 'open root', src: 'workspace/open-root-test.ts' },
   { name: 'recent roots store', src: 'workspace/recent-roots-store-test.ts' },
+  { name: 'recent project chips', src: 'workspace/recent-project-chips-test.ts' },
   { name: 'write baseline', src: 'workspace/write-baseline-test.ts' },
   { name: 'image read', src: 'workspace/image-read-test.ts' },
   { name: 'spreadsheet read', src: 'workspace/spreadsheet-read-test.ts' },

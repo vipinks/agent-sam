@@ -1,6 +1,5 @@
-import { sameRoot, WORKSPACE_MISSING } from '@/conveyor/protocol/recent-roots'
+import { sameRoot, rootTail, WORKSPACE_MISSING } from '@/conveyor/protocol/recent-roots'
 import type { ChatSession } from '@/conveyor/stores/chat-sessions'
-import { rootTail } from './recent-roots'
 
 /**
  * What a conversation's project means for the window: which folder selecting a session opens, whether
