@@ -20,6 +20,8 @@ import {
 import { exportFileName, renderExport } from '../protocol/export'
 import { recordedInstructions } from '../protocol/context'
 import { exportTitle } from '../protocol/session-title'
+import { IMAGE_ATTACH_NOT_FOUND } from '../protocol/image-attachments'
+import { deleteSessionAttachments } from './image-attachments'
 
 /**
  * Transcript storage — one JSON file per session, under `userData/sessions`.
@@ -269,11 +271,29 @@ export const sessionsModule = defineModule({
     return loadTranscriptFile(input.id)
   }),
 
-  /** Remove one transcript. A session with no file is already in the desired state. */
+  /**
+   * Remove one transcript, and the images its turns referenced. A session with no file is already in the
+   * desired state.
+   *
+   * The attachments go with the conversation, and that is the whole retention rule: a reference in a turn
+   * points at a folder named after the session, so the folder is meaningless the moment the session is.
+   * A conversation that never had an image raises `IMAGE_ATTACH_NOT_FOUND` from the store, which is
+   * swallowed here by *code* — nothing was stored, which is the ordinary case — while any other failure
+   * is reported like the transcript's own, since the startup sweep exists precisely because a delete
+   * that failed halfway leaves bytes nothing will reference again.
+   */
   deleteTranscript: command(z.object({ id: idSchema }), async ({ input }) => {
     try {
       await rm(transcriptPath(input.id), { force: true })
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      throw new ConveyorError('SESSION_DELETE_FAILED', `Could not delete this conversation. ${reason}`)
+    }
+
+    try {
+      await deleteSessionAttachments(app.getPath('userData'), input.id)
+    } catch (err) {
+      if (err instanceof ConveyorError && err.code === IMAGE_ATTACH_NOT_FOUND) return
       const reason = err instanceof Error ? err.message : String(err)
       throw new ConveyorError('SESSION_DELETE_FAILED', `Could not delete this conversation. ${reason}`)
     }

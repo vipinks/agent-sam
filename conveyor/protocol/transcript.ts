@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { planStepSchema } from './plan'
 import { TURN_END_CAUSES } from './turn-end'
+import { imageAttachmentRefSchema } from './image-attachments'
 
 /**
  * The shape of a saved transcript, and its version.
@@ -91,6 +92,26 @@ const turnSchema = z.object({
    * what the export notes; reordering here would quietly disagree with the message the user sent.
    */
   mentionPaths: z.array(z.string()).optional(),
+  /**
+   * The images this turn's message carried, as references rather than bytes.
+   *
+   * References for the reason `mentionPaths` is paths: the bytes live in the attachment store, and a
+   * transcript records the conversation rather than a copy of what it pointed at — an inlined image
+   * would multiply the size of the one file this app rewrites at every turn boundary. The `content`
+   * above stays the string the user typed; the parts the provider is sent are *derived* from these
+   * references when the request is built, which is also why a reader that does not know this key shows
+   * the words and simply loses the pictures rather than showing a turn that cannot be rendered.
+   *
+   * The order is the order the user attached them, for the same reason `mentionPaths` is: a sentence
+   * that says "the second one is the bug" means what it says only if the second image is where the user
+   * put it.
+   *
+   * Optional, and it does not bump the version, by the rule the instructions record, the plan, and the
+   * continuations already follow: a file written before images could be attached simply has no key, an
+   * absent optional key is stripped rather than defaulted, and `null` and `[]` would both be a second
+   * way to say "no images" — which is the absence.
+   */
+  imageRefs: z.array(imageAttachmentRefSchema).optional(),
   /**
    * The plan the model had declared when this turn ended, if it had one.
    *

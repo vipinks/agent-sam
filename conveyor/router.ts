@@ -18,6 +18,7 @@ import {
 } from './modules/terminal-pty'
 import { agentModule } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
+import { imageAttachmentsModule, sweepAttachmentFolders } from './modules/image-attachments'
 import { mentionsModule } from './modules/mentions'
 import { skillsModule, setSkillPruneSink } from './modules/skills'
 import { mcpModule } from './modules/mcp'
@@ -50,6 +51,7 @@ export const router = createRouter(
     terminalPty: terminalPtyModule,
     agent: agentModule,
     sessions: sessionsModule,
+    attachments: imageAttachmentsModule,
     mentions: mentionsModule,
     skills: skillsModule,
     mcp: mcpModule,
@@ -85,6 +87,23 @@ void sweepOrphanedTranscripts(router.stores['chat-sessions'].getState().sessions
   })
   .catch((error: unknown) => {
     console.warn('[sessions] transcript sweep failed', error)
+  })
+
+/**
+ * Clear attachment folders whose session is gone, by the same rule and for the same reason.
+ *
+ * Beside the transcript sweep rather than inside it, because the two clean up different things and fail
+ * independently: a transcript file and an attachment folder are removed by separate steps of a delete,
+ * so either can be left behind without the other. The ids are the same list read at the same moment, so
+ * a folder that survives one sweep cannot survive the other. Not awaited, for the reason neither sweep
+ * is: startup must not wait on housekeeping, and a failure here is housekeeping failing.
+ */
+void sweepAttachmentFolders(router.stores['chat-sessions'].getState().sessions.map((s) => s.id))
+  .then((swept) => {
+    if (swept > 0) console.warn(`[attachments] swept ${swept} orphaned attachment folder(s)`)
+  })
+  .catch((error: unknown) => {
+    console.warn('[attachments] attachment sweep failed', error)
   })
 
 /**
