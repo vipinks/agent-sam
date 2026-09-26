@@ -8,7 +8,13 @@ import { settingsModule, setCustomProviderIds } from './modules/settings'
 import { providerModule } from './modules/provider'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
-import { terminalPtyModule, ptySessions, killOnRootRemoval, setTerminalEventSink } from './modules/terminal-pty'
+import {
+  terminalPtyModule,
+  ptySessions,
+  killOnRootRemoval,
+  setTerminalEventSink,
+  setTerminalScrollbackSource,
+} from './modules/terminal-pty'
 import { agentModule } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
 import { mentionsModule } from './modules/mentions'
@@ -18,6 +24,7 @@ import { gitModule } from './modules/git'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
+import { terminalPreferencesStore } from './stores/terminal-preferences'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -48,7 +55,7 @@ export const router = createRouter(
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
-    stores: [workspaceStore, providerConfigStore, chatSessionsStore], // main holds the state; every window mirrors it live
+    stores: [workspaceStore, providerConfigStore, chatSessionsStore, terminalPreferencesStore], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
 )
@@ -152,6 +159,17 @@ killOnRootRemoval(
   () => router.stores['workspace'].getState().recentRoots,
   (listener) => router.stores['workspace'].subscribe((state) => listener(state.recentRoots))
 )
+
+/**
+ * Give the PTY registry the scrollback preference, so a shell is created with the limit the user set.
+ *
+ * Installed here for the same reason as the four sinks above: the store does not exist until
+ * `createRouter` has returned, and the registry was built while this file was being imported. Read
+ * through a function rather than handed over as a number, because the limit a user changes in Settings
+ * is not the value this file saw at startup — and main reads it once per session, which is what makes a
+ * change govern the next shell rather than resize a running one's transcript.
+ */
+setTerminalScrollbackSource(() => router.stores['terminal-preferences'].getState().scrollbackLines)
 
 /** Wire per-window push events. Call once per created window. */
 export function setupEvents(win: BrowserWindow): void {

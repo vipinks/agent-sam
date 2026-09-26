@@ -46,6 +46,7 @@ const SUITES = [
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
   { name: 'terminal theme mapping', src: 'ui/terminal-theme-test.ts' },
   { name: 'terminal pty sessions', src: 'terminal/terminal-pty-test.ts' },
+  { name: 'terminal preferences (bounds + store)', src: 'terminal/terminal-preferences-test.ts' },
   { name: 'terminal wire (chunk framing)', src: 'terminal/terminal-wire-test.ts' },
   { name: 'workspace change invalidation', src: 'ui/workspace-changes-test.ts' },
   { name: 'dock rules (explorer double-click)', src: 'ui/dock-rules-test.ts' },

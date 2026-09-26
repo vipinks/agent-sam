@@ -242,13 +242,54 @@ async function readReturnsTheBuffer() {
 }
 
 async function retentionIsBounded() {
-  const { registry, spawned } = harness({ bufferLines: 3 })
+  const { registry, spawned } = harness({ bufferLines: () => 3 })
   await registry.create('/work/sam')
 
   spawned[0].out('one\r\ntwo\r\nthree\r\nfour\r\n')
   assert.deepEqual(registry.read('/work/sam').lines, ['two', 'three', 'four'], 'only the last lines are kept')
 
   results.push('a session retains only its last N lines')
+}
+
+async function aScrollbackChangeGovernsTheNextSession() {
+  // The standing scrollback limit, as Settings makes it: read at each session's creation rather
+  // than captured once, so a preference changed while a shell is running governs the next one.
+  let bound = 3
+  const { registry, spawned } = harness({ bufferLines: () => bound })
+
+  await registry.create('/work/sam')
+  spawned[0].out('one\r\ntwo\r\nthree\r\nfour\r\n')
+  assert.deepEqual(
+    registry.read('/work/sam').lines,
+    ['two', 'three', 'four'],
+    'a session retains the bound it was created with'
+  )
+
+  // The user lowers the limit in Settings while this shell is still running.
+  bound = 2
+  assert.deepEqual(
+    registry.read('/work/sam').lines,
+    ['two', 'three', 'four'],
+    'an existing buffer is not resized by the change'
+  )
+
+  spawned[0].out('five\r\n')
+  assert.deepEqual(
+    registry.read('/work/sam').lines,
+    ['three', 'four', 'five'],
+    'and it keeps wrapping at its own bound'
+  )
+
+  // The shell opened afterwards is the one the new limit applies to.
+  await registry.create('/work/notes')
+  spawned[1].out('a\r\nb\r\nc\r\n')
+  assert.deepEqual(
+    registry.read('/work/notes').lines,
+    ['b', 'c'],
+    'a session created after the change takes the new bound'
+  )
+
+  results.push('the scrollback bound is captured when a session is created')
 }
 
 // ---------------------------------------------------------------- kill
@@ -440,6 +481,7 @@ async function main() {
   await step('resize', resizeReachesTheShell)
   await step('read', readReturnsTheBuffer)
   await step('bounded retention', retentionIsBounded)
+  await step('scrollback bound', aScrollbackChangeGovernsTheNextSession)
   await step('kill', killEndsTheSession)
   await step('shell exit', anExitedShellIsForgotten)
   await step('list', listReportsEverySession)

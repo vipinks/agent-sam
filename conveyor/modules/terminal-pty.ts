@@ -74,8 +74,17 @@ export interface TerminalDeps {
   shellExists: (file: string) => boolean
   platform: NodeJS.Platform
   env: ShellEnv
-  /** Lines retained per session. Defaults to `DEFAULT_BUFFER_LINES`. */
-  bufferLines?: number
+  /**
+   * How many lines a session retains, read when that session is created.
+   *
+   * A reader rather than a number because the bound is a *preference*: the user can change it in
+   * Settings while shells are running, and the rule is that the change governs the next shell while a
+   * running one keeps the bound it was created with. Reading it once per `create` is what makes that
+   * true — a value captured at registration would freeze every session at whatever the app started
+   * with, and re-reading it per line would resize buffers under a reader. Defaults to
+   * `DEFAULT_BUFFER_LINES` when the caller has no preference to offer.
+   */
+  bufferLines?: () => number
   /** The size a session starts at, before a pane measures itself and resizes it. */
   initialSize?: { cols: number; rows: number }
   /**
@@ -116,6 +125,13 @@ interface Session {
   pty: PtyProcess
   rootPath: string
   cwd: string
+  /**
+   * The retention bound this session was created with.
+   *
+   * Per session rather than per registry: the preference can change while this shell is running, and
+   * the change must not reach back into a transcript someone may be reading.
+   */
+  bufferLines: number
   /** The last `bufferLines` complete lines, oldest first. */
   buffer: string[]
   /**
@@ -175,7 +191,9 @@ function keyFor(rootPath: string): string {
  */
 export function createTerminalRegistry(deps: TerminalDeps): TerminalRegistry {
   const sessions = new Map<string, Session>()
-  const bufferLines = deps.bufferLines ?? DEFAULT_BUFFER_LINES
+  // Read at each session's creation rather than here, so the preference reaches the next shell and
+  // not the shells already running.
+  const bufferLinesFor = deps.bufferLines ?? (() => DEFAULT_BUFFER_LINES)
   const size = deps.initialSize ?? INITIAL_SIZE
   // Resolved once: the platform and its shells do not change while the app runs, and probing for each
   // `create` would re-`stat` the same paths for an answer that cannot have moved.
@@ -223,7 +241,7 @@ export function createTerminalRegistry(deps: TerminalDeps): TerminalRegistry {
         throw new ConveyorError(TERMINAL_SPAWN_FAILED, err instanceof Error ? err.message : String(err))
       }
 
-      const session: Session = { pty, rootPath, cwd: rootPath, buffer: [], pending: '' }
+      const session: Session = { pty, rootPath, cwd: rootPath, bufferLines: bufferLinesFor(), buffer: [], pending: '' }
       sessions.set(key, session)
 
       pty.onData((chunk) => {
@@ -235,7 +253,7 @@ export function createTerminalRegistry(deps: TerminalDeps): TerminalRegistry {
         // Split on the line breaks and keep the remainder: the shell's next chunk usually continues it.
         const parts = `${session.pending}${chunk}`.split(/\r?\n/)
         session.pending = parts.pop() ?? ''
-        for (const line of parts) session.buffer = appendLine(session.buffer, line, bufferLines)
+        for (const line of parts) session.buffer = appendLine(session.buffer, line, session.bufferLines)
       })
 
       // A shell the user exits with `exit`, or one that crashes, must not be left recorded: a stale
@@ -330,6 +348,25 @@ export function setTerminalEventSink(next: TerminalEventSink | null): void {
 }
 
 /**
+ * The retention bound a new session is created with, as main holds it.
+ *
+ * A binding rather than a value, and module-level for the reason the sink above is: the preference
+ * lives in a cross-window store, which does not exist until `createRouter` has returned, and
+ * `ptySessions` is built while this file is being imported by `router.ts`. Reaching for the router here
+ * would close that cycle, so main installs a reader instead — the same arrangement `killOnRootRemoval`
+ * uses for the recents list.
+ *
+ * Read at each `create` rather than captured, because that is the whole of the preference's rule: it
+ * governs the next shell, and the defaults stand until main has installed anything at all.
+ */
+let scrollbackSource: () => number = () => DEFAULT_BUFFER_LINES
+
+/** Install the reader behind the scrollback preference. Called once from `router.ts`. */
+export function setTerminalScrollbackSource(source: () => number): void {
+  scrollbackSource = source
+}
+
+/**
  * The app's own registry: the real spawner, the real platform, the real disk.
  *
  * `node-pty` is imported here, at the point of a spawn, rather than at the top of the file. It is a
@@ -347,6 +384,10 @@ export const ptySessions = createTerminalRegistry({
   shellExists: shellExistsOnDisk,
   platform: process.platform,
   env: { SHELL: process.env.SHELL },
+  // Read through the module-level binding at call time rather than captured, so the preference main
+  // installed after this object was built governs the next shell — and so a preference changed while
+  // one is running governs the one after it.
+  bufferLines: () => scrollbackSource(),
   // Read through the module-level binding at call time rather than captured: the sink arrives after
   // this object is built, and every chunk this shell has ever produced arrives after that.
   onOutput: (rootPath, chunk) => sink?.data(terminalDataFor(rootPath, chunk)),
