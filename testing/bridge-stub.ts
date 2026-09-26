@@ -103,6 +103,21 @@ const MANIFEST: Record<string, Record<string, string>> = {
     writeSpreadsheet: 'command',
   },
   terminal: { execute: 'stream', shell: 'query' },
+  // The PTY: one shell per folder, owned by main. Its four commands are the pane's whole write side,
+  // its two reads are what a pane coming back catches up from, and its two events are how output and
+  // an exit arrive. All eight are listed by kind for the reason the entries around them are — the client
+  // refuses an unlisted member rather than dispatching it, so a terminal suite cannot reach the pane's
+  // own calls without these lines.
+  terminalPty: {
+    create: 'command',
+    write: 'command',
+    resize: 'command',
+    kill: 'command',
+    read: 'query',
+    list: 'query',
+    data: 'event',
+    exit: 'event',
+  },
   llm: { chat: 'stream' },
   window: { init: 'query', isMaximized: 'query', onFocusChange: 'event', onMaximizeChange: 'event' },
   // The mention picker's only read. Listed so the composer's call is dispatched as the query main

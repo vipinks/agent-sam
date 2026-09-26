@@ -275,7 +275,7 @@ describe('docking a resident', () => {
       { id: 'chat', defaultSize: percentSize(41) },
       { id: 'code', defaultSize: percentSize(59) },
     ])
-    expect(screen.getByLabelText('Command')).toBeTruthy()
+    expect(container.querySelector('[data-slot="terminal"]')).not.toBeNull()
     expect(container.querySelector('[data-slot="markdown-preview"]')).toBeNull()
 
     // And the dock wrote nothing into either layout set: the share it took was already stored.

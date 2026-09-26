@@ -44,7 +44,6 @@ const SUITES = [
   { name: 'custom providers (store slice)', src: 'providers/provider-config-store-test.ts' },
   { name: 'terminal module', src: 'llm/terminal-test.ts' },
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
-  { name: 'terminal session', src: 'ui/terminal-session-test.ts' },
   { name: 'terminal theme mapping', src: 'ui/terminal-theme-test.ts' },
   { name: 'terminal pty sessions', src: 'terminal/terminal-pty-test.ts' },
   { name: 'terminal wire (chunk framing)', src: 'terminal/terminal-wire-test.ts' },

@@ -1,58 +1,61 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Square, SquareTerminal } from 'lucide-react'
+import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { SquareTerminal } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
-import { Button } from '../ui/button'
-import { Input } from '../ui/input'
+import { useThemeStore } from '@/app/shell'
 import { PaneHeader } from './pane-header'
 import { PanelCollapseControl, PanelExpandControl } from './right-rail'
-import { terminalHost } from './terminal-host'
+import { terminalHost, type TerminalStatus } from './terminal-host'
+import { terminalThemeFor } from './terminal-theme'
+import { useWorkbenchStore } from './store'
 import '@xterm/xterm/css/xterm.css'
 
 /**
  * The terminal, as a resident of the right rail.
  *
- * The input row is the Phase 5 contract: you type a command and it runs, rather than driving a
- * persistent shell. That is the safer shape for now — a long-lived pty is a different problem, with its
- * own permissions story — and it keeps the stream one-shot, which is what `execute` models.
+ * The pane is a view and nothing else. The shell is a process in main, keyed by the open folder; the
+ * xterm instance and the element it draws into belong to `terminal-host.ts`, one level up, because the
+ * pane is something a click puts away and the same click brings back, and because a maximize remounts
+ * every pane under the workbench's layout groups. A pane that owned a terminal would take the
+ * scrollback with it and, worse, ask main to open a *second* shell in the same folder on the way back.
  *
- * What this pane does *not* own any more is the terminal itself. The xterm instance, the element it drew
- * into, the run in flight and the command history all live in `terminal-host.ts`, one level up, because
- * Phase 39 made this pane something a click puts away and the same click brings back: a pane that owned
- * the transcript would take the scrollback with it every time it was closed, and would start a second
- * `execute` for a command that was still running. The pane lends the host a parent while it is on screen
- * and hands it back when it goes, and the host draws wherever it is put.
- *
- * xterm still owns the transcript and React still does not re-render it: chunks are written straight to
- * the terminal instance, so nothing here re-renders per token the way the chat transcript does. What
- * this component does re-render for is the status — one boolean and a count, published by the host.
+ * So what this component does is four things, all of them effects: hand the host an element to draw in,
+ * tell it which folder is open, hand it the document's current colours, and give the element back on
+ * the way out. Keystrokes, output and the exit line never pass through React — chunks are written into
+ * xterm by the host — so nothing here re-renders per byte. What it does re-render for is the status:
+ * which folder's shell, and whether it is opening, live, ended or failed.
  */
 export function TerminalPanel() {
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
+  const mode = useThemeStore((state) => state.theme)
+  const themeId = useWorkbenchStore((state) => state.themeId)
+  const brightness = useWorkbenchStore((state) => state.brightness)
 
   const host = terminalHost()
-  const { running, history } = useSyncExternalStore(host.subscribe, host.status)
+  const status = useSyncExternalStore(host.subscribe, host.status)
   const paneRef = useRef<HTMLDivElement>(null)
-  const [command, setCommand] = useState('')
 
-  // The pane's whole relationship with the session: lend it this element while the pane is mounted, take
-  // it back on the way out. Nothing is disposed here, which is the difference between this and the pane
-  // that used to `term.dispose()` — the terminal belongs to the host, and the host is not going anywhere.
-  useEffect(() => {
+  // The colours first, and in a layout effect: the terminal is built on the first attach, and a theme
+  // applied in a passive effect would be a frame of the previous palette on a switch. The three
+  // dependencies are the three `theme-apply.ts` resolves the document's own variables from, so a
+  // theme, a mode flip and a brightness step all reach the terminal by the route they reach the
+  // stylesheet — there is no fourth place for a theme to be decided.
+  useLayoutEffect(() => {
+    host.setTheme(terminalThemeFor(themeId, mode, brightness))
+  }, [host, themeId, mode, brightness])
+
+  // The pane's whole relationship with the session. `rootPath` is a dependency rather than a value read
+  // once, because a folder switch is a *different* shell: the host re-attaches, reads that folder's
+  // transcript and shows it in the same retained terminal. A remount re-runs this too, which is the
+  // reseed that makes maximize and restore lossless.
+  useLayoutEffect(() => {
     const pane = paneRef.current
     if (!pane) return
     host.attach(pane)
+    host.setRoot(rootPath)
+    host.fit()
     return () => host.detach()
-  }, [host])
-
-  const send = () => {
-    const text = command.trim()
-    if (text === '' || running) return
-    host.run(text, rootPath)
-    // The box keeps what was typed when there was no folder to run it in: the host wrote the reason into
-    // the transcript, and clearing the input as well would make the user type it again to act on it.
-    if (rootPath !== null) setCommand('')
-  }
+  }, [host, rootPath])
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -67,47 +70,47 @@ export function TerminalPanel() {
         <PanelCollapseControl />
       </PaneHeader>
 
-      {/* The transcript. The host's own element is moved in here, and out again when the pane goes. */}
-      <div ref={paneRef} className="min-h-0 flex-1 overflow-hidden bg-[#08090a] px-2 py-1.5" />
+      {/*
+        The terminal. The host's own element is moved in here, and out again when the pane goes; the
+        slot holds nothing else, which is why the element is the only child a test can find.
+      */}
+      <div
+        ref={paneRef}
+        // A click anywhere in the box puts the caret in the shell, which is what a terminal does.
+        onMouseDown={() => host.focus()}
+        aria-label="Terminal pane"
+        data-slot="terminal"
+        className="min-h-0 flex-1 overflow-hidden bg-background px-2 py-1.5"
+      />
 
       <div className="shrink-0 border-t border-border p-2.5">
-        <div className="flex items-center gap-2">
-          <Input
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                send()
-              }
-            }}
-            disabled={running}
-            aria-label="Command"
-            placeholder={rootPath ? 'Type a command, e.g. ls -la' : 'Open a folder to run commands'}
-            spellCheck={false}
-            autoComplete="off"
-            className="h-8 font-mono text-[12px]"
-          />
-          {running ? (
-            <Button size="sm" variant="outline" onClick={() => host.stop()} aria-label="Stop command">
-              <Square />
-              Stop
-            </Button>
-          ) : (
-            <Button size="sm" onClick={send} disabled={!command.trim() || !rootPath}>
-              Run
-            </Button>
-          )}
-        </div>
-
-        {/*
-          The count is the session's, not this mount's: it is read from the host rather than kept in
-          state here, so reopening the pane reports the runs that happened before it was closed too.
-        */}
-        <p className="mt-1.5 font-mono text-[10.5px] text-muted-foreground">
-          {history.length > 0 ? `${history.length} run this session` : 'Phase 5: one command per run'}
-        </p>
+        <p className="font-mono text-[10.5px] text-muted-foreground">{describe(status)}</p>
       </div>
     </div>
   )
+}
+
+/**
+ * The session, in one line.
+ *
+ * The shell's own output is the transcript and says what it says; what a reader needs from the pane is
+ * the one fact the transcript cannot state — whether what they are looking at is still a live process,
+ * and why not when it is not. The exit code is named here as well as written into the scrollback,
+ * because the scrollback may have been pushed past it by the time it matters.
+ */
+function describe(status: TerminalStatus): string {
+  if (status.rootPath === null) return 'Open a folder to start a shell in it.'
+
+  switch (status.phase) {
+    case 'opening':
+      return `Opening the shell in ${status.rootPath}…`
+    case 'ready':
+      return `Live shell in ${status.rootPath} — keystrokes go straight to it.`
+    case 'ended':
+      return `The shell ended — exit code ${status.exitCode ?? 0}. Opening the folder again starts a new one.`
+    case 'failed':
+      return status.message ?? 'The terminal could not be opened.'
+    default:
+      return 'Open a folder to start a shell in it.'
+  }
 }

@@ -22,7 +22,7 @@ export interface PendingCall {
  * The agent streams chunks, and the UI has to turn them into turns: prose becomes the assistant's
  * answer, and every tool call becomes a card that shows what was asked for, whether it was allowed,
  * and what came back. That translation is the logic worth testing, so it lives here rather than
- * inside the component — the same split as `terminal-session.ts`.
+ * inside the component — the same split as `terminal-theme.ts`.
  *
  * Anything that is not text or a tool step is only meaningful to the component (the pause carries
  * history, `done` carries a reason), so the reducer deliberately reports only what it understands.
