@@ -121,6 +121,10 @@ const MANIFEST: Record<string, Record<string, string>> = {
   },
   llm: { chat: 'stream' },
   window: { init: 'query', isMaximized: 'query', onFocusChange: 'event', onMaximizeChange: 'event' },
+  // The running app's own version, which `/version` reports. A query, like `sessions.transcriptVersion`
+  // above it, and listed for the same reason: the client refuses an unlisted member rather than
+  // dispatching it, and a command that reached nothing would render an empty notice rather than fail.
+  system: { version: 'query' },
   // The mention picker's only read. Listed so the composer's call is dispatched as the query main
   // registered rather than as an unlisted member, which is what the client's Proxy does with an
   // unknown name.

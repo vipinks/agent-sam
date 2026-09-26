@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageSquare, Paperclip, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
@@ -10,7 +10,7 @@ import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
-import { Popover, PopoverAnchor } from '../ui/popover'
+import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
@@ -20,6 +20,7 @@ import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
+import { CommandNotice, CommandPicker, type CommandNoticeText } from './command-picker'
 import { MentionChipRow } from './mention-chip'
 import { SkillChipRow, SkillPicker } from './skill-picker'
 import { PlanChecklist } from './plan-checklist'
@@ -34,6 +35,13 @@ import {
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
+import {
+  composerCommandAt,
+  filterComposerCommands,
+  parseComposerCommand,
+  type ComposerCommandId,
+  type ComposerCommandToken,
+} from '@/conveyor/protocol/composer-commands'
 import { MAX_ACTIVE_SKILLS, offeredSkills, scopeSkills, type SkillListing } from '@/conveyor/protocol/skills'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
 import {
@@ -52,6 +60,7 @@ import {
 } from './agent-session'
 import { RESUME_MESSAGE } from '@/conveyor/protocol/turn-end'
 import { useWorkbenchStore } from './store'
+import { useThemeStore } from '@/app/shell/theme-store'
 
 /**
  * Why an attach attempt did not add a chip, in the user's terms.
@@ -63,6 +72,22 @@ function mentionRefusalNote(refusal: MentionRefusal): string {
   return refusal === 'duplicate'
     ? 'That file is already attached.'
     : `One message can attach at most ${MAX_MENTION_PATHS} files.`
+}
+
+/**
+ * What `/help` lists: every command available where it was typed, with the line that says what each one
+ * does.
+ *
+ * Built from the registry rather than written out, so a command cannot be added and left out of the
+ * help; and narrowed by the same availability rule the picker uses, because a list offering `/new` on
+ * the screen where it does nothing would be a list that lied at the one place a user goes to find out
+ * what the composer can do.
+ */
+function commandHelp(atHome: boolean): CommandNoticeText {
+  return {
+    title: 'Commands',
+    lines: filterComposerCommands('', { atHome }).map((command) => `/${command.name} — ${command.description}`),
+  }
 }
 
 /**
@@ -190,6 +215,13 @@ export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
   const activeModel = useWorkbenchStore((s) => s.activeModel)
   const setTarget = useWorkbenchStore((s) => s.setTarget)
+  // The two window controls a command stands for, read from the store those controls themselves read:
+  // `/terminal` and the title bar's glyph flip one flag, so the two cannot come to disagree.
+  const toggleBottomPanel = useWorkbenchStore((s) => s.toggleBottomPanel)
+  const openSettingsAt = useWorkbenchStore((s) => s.openSettingsAt)
+  // The light/dark toggle, from the store the title bar's own glyph writes to: one preference, and a
+  // command that flipped a second copy of it would be a command that disagreed with the glyph.
+  const toggleThemeMode = useThemeStore((s) => s.toggle)
   // The file the code viewer has open, which the attach control adds as a mention.
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
 
@@ -303,11 +335,39 @@ export function ChatPanel() {
     dismissed: false,
   })
   const [pickerIndex, setPickerIndex] = useState(0)
+  /**
+   * The `/` token the draft opens with, and whether the picker has been dismissed for it.
+   *
+   * The same shape as the mention state above, and for the same reason: a dismissal belongs to one
+   * token, which is what lets an edited query open the picker again while an Escape keeps it shut.
+   */
+  const [command, setCommand] = useState<{ token: ComposerCommandToken | null; dismissed: boolean }>({
+    token: null,
+    dismissed: false,
+  })
+  const [commandIndex, setCommandIndex] = useState(0)
+  /**
+   * What the last command said, until the user writes again.
+   *
+   * Panel state rather than session state, deliberately: `/help` and `/version` are answers to a
+   * keystroke rather than part of the conversation, so there is nothing here to save, resume or send.
+   */
+  const [commandNotice, setCommandNotice] = useState<CommandNoticeText | null>(null)
   const composerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // The pane itself, for the ceiling on a drag: the limit is a share of how tall the chat column
   // actually is, and only the DOM knows that number.
   const paneRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * A click inside the composer must not dismiss a picker: the user is still typing the sentence the
+   * token belongs to, and a picker that closes when you click your own caret is unusable. Shared by
+   * both pickers, which differ in what they list and not in where a click is allowed to land.
+   */
+  const keepComposerClicks: ComponentProps<typeof PopoverContent>['onInteractOutside'] = (event) => {
+    const target = event.detail?.originalEvent?.target as Node | null | undefined
+    if (target && composerRef.current?.contains(target)) event.preventDefault()
+  }
 
   /**
    * The drag in progress: which session it is measured against, and where the pointer and edge began.
@@ -402,10 +462,21 @@ export function ChatPanel() {
   // client-side because the list is already bounded by the walk's own cap, and a round trip per
   // keystroke would be a query storm for a substring test.
   //
+  // Commands: the `/` picker's rows, from the pure registry rather than from a query — the set is
+  // fixed, and only which of it is available here changes. The index is clamped rather than reset by an
+  // effect, for the reason the mention picker's is: narrowing the query can leave the index past the
+  // end, and deriving the active row keeps the render and the selection in step without a second render.
+  const commandRows = command.token ? filterComposerCommands(command.token.query, { atHome }) : []
+  const commandOpen = command.token !== null && !command.dismissed
+  const activeCommandIndex = commandRows.length === 0 ? 0 : Math.min(commandIndex, commandRows.length - 1)
+
   const mentionFiles = conveyor.mentions.listFilesFlat.useQuery()
   const allMentionFiles = mentionFiles.data ?? []
   const mentionMatches = mention.token ? filterMentionPaths(allMentionFiles, mention.token.query) : []
-  const pickerOpen = mention.token !== null && !mention.dismissed
+  // A draft that opens with `/` is a command line, so the `@` picker stands down while one is showing:
+  // two popovers anchored to one composer would be two answers to one keystroke, and the command line is
+  // the token the user is actually typing.
+  const pickerOpen = mention.token !== null && !mention.dismissed && !commandOpen
   // Clamped rather than reset by an effect: narrowing the query can leave the index past the end, and
   // deriving the active row keeps the render and the selection in step without a second render.
   const activePickerIndex = mentionMatches.length === 0 ? 0 : Math.min(pickerIndex, mentionMatches.length - 1)
@@ -518,6 +589,87 @@ export function ChatPanel() {
   const dismissPicker = useCallback(() => {
     setMention((previous) => (previous.token === null ? previous : { token: previous.token, dismissed: true }))
   }, [])
+
+  /**
+   * The token the draft opens with, if any. Called on every edit, like the `@` sync above it.
+   *
+   * A command has no caret to follow: it is the whole draft, and the picker cannot belong to a word
+   * inside it — so text is the only input this reads.
+   */
+  const syncCommand = useCallback((text: string) => {
+    setCommand((previous) => {
+      const token = parseComposerCommand(text)
+      if (token === null) {
+        return previous.token === null && !previous.dismissed ? previous : { token: null, dismissed: false }
+      }
+      // A dismissal is about one token. Editing the word is a new intent, and the picker speaks again.
+      const dismissed = previous.dismissed && previous.token !== null && previous.token.query === token.query
+      const unchanged =
+        previous.token !== null && previous.token.query === token.query && previous.dismissed === dismissed
+      return unchanged ? previous : { token, dismissed }
+    })
+  }, [])
+
+  const dismissCommandPicker = useCallback(() => {
+    setCommand((previous) => (previous.token === null ? previous : { token: previous.token, dismissed: true }))
+  }, [])
+
+  /** Ask main what version this is, and show the answer where the command was typed. */
+  const showVersion = useCallback(async () => {
+    try {
+      const version = await conveyor.system.version()
+      setCommandNotice({ title: 'Version', lines: [version] })
+    } catch {
+      // A query that could not be answered says so rather than showing a number nobody vouched for.
+      setCommandNotice({ title: 'Version', lines: ['The version could not be read.'] })
+    }
+  }, [])
+
+  /**
+   * Run one command.
+   *
+   * The token is consumed first, by its own bounds, so the draft ends empty: a command is not a
+   * message, and the word it was typed as must not be left behind for the next Enter to send. Then one
+   * switch over the actions the rest of the window already uses — the same store calls the title bar's
+   * glyph and the rail's settings control make, rather than copies of them, so a command cannot come to
+   * mean something slightly different from the control it stands for.
+   */
+  const runCommand = useCallback(
+    (id: ComposerCommandId) => {
+      const token = command.token
+      if (token) setDraft(draftRef.current.slice(0, token.start) + draftRef.current.slice(token.end))
+      setCommand({ token: null, dismissed: false })
+      setCommandNotice(null)
+
+      switch (id) {
+        case 'new':
+          sessionsRef.current.goHome()
+          return
+        case 'terminal':
+          toggleBottomPanel()
+          return
+        case 'settings':
+          openSettingsAt('providers')
+          return
+        case 'mcp':
+          openSettingsAt('mcp-servers')
+          return
+        case 'skills':
+          openSettingsAt('skills')
+          return
+        case 'theme':
+          toggleThemeMode()
+          return
+        case 'help':
+          setCommandNotice(commandHelp(atHome))
+          return
+        case 'version':
+          void showVersion()
+          return
+      }
+    },
+    [atHome, command.token, openSettingsAt, setDraft, showVersion, toggleBottomPanel, toggleThemeMode]
+  )
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -1009,14 +1161,47 @@ export function ChatPanel() {
   )
 
   /**
-   * Composer keys, with the picker taking precedence while it is open.
+   * Composer keys, with a picker taking precedence while one is open.
    *
    * The popover is not focus-managed, so the arrow keys and Enter belong to the textarea: moving a
    * selection into the list would take the caret out of the sentence the token sits in. Escape closes
    * the picker without touching what was typed — the token stays as text, and the user can finish the
    * path by hand — and a second Escape is not intercepted, so it reaches the pane as usual.
+   *
+   * The command picker is asked first of the two, and the two can never both be open: a draft that
+   * opens with `/` is a command line, and `pickerOpen` itself stands the `@` picker down for it.
    */
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (commandOpen && event.key === 'Escape') {
+      event.preventDefault()
+      dismissCommandPicker()
+      return
+    }
+
+    if (commandOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault()
+      const count = commandRows.length
+      if (count > 0) {
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setCommandIndex((activeCommandIndex + step + count) % count)
+      }
+      return
+    }
+
+    if (commandOpen && event.key === 'Enter' && !event.shiftKey) {
+      // Enter runs the highlighted command. With nothing matching there is nothing to run, and sending
+      // here would post the word as a message the user was plainly not writing — so the picker closes
+      // and the draft is left alone, exactly as the `@` picker leaves it.
+      event.preventDefault()
+      const id = composerCommandAt(commandRows, activeCommandIndex)
+      if (id === null) {
+        dismissCommandPicker()
+        return
+      }
+      runCommand(id)
+      return
+    }
+
     if (pickerOpen && event.key === 'Escape') {
       event.preventDefault()
       dismissPicker()
@@ -1285,11 +1470,14 @@ export function ChatPanel() {
           onPointerDown={startComposerDrag}
         />
         <Popover
-          open={pickerOpen}
+          open={pickerOpen || commandOpen}
           onOpenChange={(next) => {
             // The picker can also be dismissed by the layer itself — Escape, or a click outside the
             // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
-            if (!next) dismissPicker()
+            // The command line owns the popover while it is showing, so it is the one that hears this.
+            if (next) return
+            if (commandOpen) dismissCommandPicker()
+            else dismissPicker()
           }}
         >
           {/*
@@ -1321,6 +1509,9 @@ export function ChatPanel() {
                 onChange={(e) => {
                   setDraft(e.target.value)
                   syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+                  syncCommand(e.target.value)
+                  // Typing is the user moving on, which is what puts a command's answer away.
+                  setCommandNotice(null)
                 }}
                 // The caret moving is what ends a token as much as typing is, so following it keeps the
                 // picker attached to the word the user is actually in.
@@ -1384,13 +1575,16 @@ export function ChatPanel() {
               activeIndex={activePickerIndex}
               atCap={mentionPaths.length >= MAX_MENTION_PATHS}
               onSelect={chooseMention}
-              // A click inside the composer — the textarea the caret is in, the chip row, the send
-              // button — must not dismiss the picker: the user is still typing the sentence the token
-              // belongs to, and a picker that closes when you click your own caret is unusable.
-              onInteractOutside={(event) => {
-                const target = event.detail?.originalEvent?.target as Node | null | undefined
-                if (target && composerRef.current?.contains(target)) event.preventDefault()
-              }}
+              onInteractOutside={keepComposerClicks}
+            />
+          )}
+
+          {commandOpen && (
+            <CommandPicker
+              commands={commandRows}
+              activeIndex={activeCommandIndex}
+              onSelect={runCommand}
+              onInteractOutside={keepComposerClicks}
             />
           )}
         </Popover>
@@ -1402,6 +1596,11 @@ export function ChatPanel() {
             {mentionNote}
           </p>
         )}
+
+        {/* A command's answer, under the composer it was typed in and for the reason the refusal above
+            is: it is about the control the user just used. A card rather than a line because `/help`
+            has eight of them to list, and it is kept until the user types again. */}
+        {commandNotice && <CommandNotice notice={commandNotice} />}
 
         {/*
           The approval choice, made before there is a conversation to make it on.

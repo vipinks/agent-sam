@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron'
 import { createRouter, createEmitter, devLogger } from 'electron-conveyor/main'
 import { windows, openAppWindow } from '@/lib/main/app'
 import { windowModule, setupWindowEvents } from './modules/window'
+import { systemModule } from './modules/system'
 import { webModule } from './modules/web'
 import { workspaceModule } from './modules/workspace'
 import { settingsModule, setCustomProviderIds } from './modules/settings'
@@ -39,6 +40,7 @@ const APP_STARTED_AT = Date.now()
 export const router = createRouter(
   {
     window: windowModule,
+    system: systemModule,
     web: webModule,
     workspace: workspaceModule,
     settings: settingsModule,
