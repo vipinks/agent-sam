@@ -8,6 +8,7 @@ import { settingsModule, setCustomProviderIds } from './modules/settings'
 import { providerModule } from './modules/provider'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
+import { terminalPtyModule, ptySessions, killOnRootRemoval } from './modules/terminal-pty'
 import { agentModule } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
 import { mentionsModule } from './modules/mentions'
@@ -37,6 +38,7 @@ export const router = createRouter(
     provider: providerModule,
     llm: llmModule,
     terminal: terminalModule,
+    terminalPty: terminalPtyModule,
     agent: agentModule,
     sessions: sessionsModule,
     mentions: mentionsModule,
@@ -119,6 +121,22 @@ setCustomProviderIds(() => router.stores['provider-config'].getState().customPro
  * is a change to session state and the store is the only thing that owns one.
  */
 setSkillPruneSink((skillId) => router.stores['chat-sessions'].dispatch('dropSkill', { id: skillId }))
+
+/**
+ * End the shell of a folder the user has stopped being offered.
+ *
+ * Installed here for the same reason as the three sinks above: the store does not exist until
+ * `createRouter` has returned, and this module is imported *by* this file, so reaching for the router
+ * from inside it would close the cycle. The roots are read through a function and changes arrive
+ * through the store's own subscription rather than being handed over as a list, because the list a
+ * user changes is not the list this file saw at startup — and the module takes the difference against
+ * the list it last saw, so an open that reorders the recents does not end a shell nobody forgot.
+ */
+killOnRootRemoval(
+  ptySessions,
+  () => router.stores['workspace'].getState().recentRoots,
+  (listener) => router.stores['workspace'].subscribe((state) => listener(state.recentRoots))
+)
 
 /** Wire per-window push events. Call once per created window. */
 export function setupEvents(win: BrowserWindow): void {

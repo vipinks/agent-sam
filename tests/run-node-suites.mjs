@@ -45,6 +45,7 @@ const SUITES = [
   { name: 'terminal module', src: 'llm/terminal-test.ts' },
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
   { name: 'terminal session', src: 'ui/terminal-session-test.ts' },
+  { name: 'terminal pty sessions', src: 'terminal/terminal-pty-test.ts' },
   { name: 'workspace change invalidation', src: 'ui/workspace-changes-test.ts' },
   { name: 'dock rules (explorer double-click)', src: 'ui/dock-rules-test.ts' },
   { name: 'chat sessions', src: 'sessions/chat-sessions-test.ts' },
@@ -129,6 +130,11 @@ for (const suite of SUITES) {
         // the app externalizes too, and the renderer never reaches it. Inlining it would bundle a
         // parser into suites that never call it, and would test a copy rather than the shipped one.
         '--external:yaml',
+        // Also external, for the same reason again: `node-pty` is a native module, whose binary is
+        // built or prebuilt per platform, and no suite loads it — the PTY suites drive a fake process
+        // instead. Bundling it would try to inline a native binding, and would test a spawner the app
+        // never runs.
+        '--external:node-pty',
         '--log-level=error',
       ],
       { stdio: 'inherit' }
