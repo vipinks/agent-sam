@@ -156,6 +156,58 @@ export function attachmentCountRefusal(count: number): AttachmentRefusal | null 
 }
 
 /**
+ * Whether a provider may take images, as its stored preference says.
+ *
+ * `true` only when the record says so, which makes absence and `false` the same answer. That is the
+ * whole of the default: a provider record written before this key existed carries no opinion, and a
+ * gate that read silence as permission would send an image to a model that cannot see it — a failure
+ * the user learns about from a provider error that names nothing about images.
+ *
+ * A boolean rather than a refusal, and pointedly *not* a `ConveyorError` code. Nothing was rejected
+ * here: the bytes are the user's, the draft stays exactly where it is, and what the composer shows is
+ * its own sentence about where to switch the capability on. The provider record is a preference, and
+ * this file owns the rules a *store* enforces; where a preference is read, the wording belongs to the
+ * surface that displays it.
+ *
+ * The parameter is `unknown` rather than a shape with an optional flag on it, and that is deliberate. A
+ * record that predates this key does not *declare* it, and a parameter listing it as optional rejects
+ * exactly those records — an object literal for the excess-property rule, a structural type for the
+ * weak-type rule, and a store's own type for neither only because it happens to declare the key. The one
+ * thing this rule reads is a flag, so the honest parameter is anything, and the honest answer is that only
+ * a literal `true` opens the gate.
+ */
+export function providerAcceptsImages(provider: unknown): boolean {
+  if (typeof provider !== 'object' || provider === null) return false
+  return (provider as { supportsImages?: unknown }).supportsImages === true
+}
+
+/**
+ * Whether one image may be taken into the composer at all, and what to say when it may not. `null`
+ * means it may.
+ *
+ * The composer's question rather than the store's, and the count is what makes it a different one:
+ * `saveAttachment` bounds a single image, while a draft is a growing list and the cap is a property of
+ * the message it will become. Both of the rules above are *asked* rather than restated — the media type
+ * and the size through `attachmentRefusal`, the count through `attachmentCountRefusal` — so the
+ * sentence the composer shows while the user is still choosing is the same sentence a write would be
+ * refused with, and the two cannot drift into promising different numbers.
+ *
+ * The file's own rules come first and the count second, and that order is a decision. An image that is
+ * the wrong type or too large is unusable wherever it would sit, so the sentence worth reading is
+ * about the file; a message past its cap is one the user can act on only after picking something
+ * else. Reporting the count first would tell a user to attach fewer images when the image in hand
+ * could not be attached in any number.
+ */
+export function attachmentCaptureRefusal(input: {
+  mimeType: string
+  bytes: number
+  /** How many images the draft is already holding, every one of them already past these rules. */
+  attached: number
+}): AttachmentRefusal | null {
+  return attachmentRefusal(input) ?? attachmentCountRefusal(input.attached + 1)
+}
+
+/**
  * One attachment as a transcript records it: where the bytes are and what they are, never the bytes.
  *
  * A reference rather than the image, for the same reason `mentionPaths` is paths and not contents: a

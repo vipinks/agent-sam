@@ -1,5 +1,6 @@
 import type { ChatMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
+import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 import {
@@ -100,6 +101,16 @@ export interface AgentTurn {
    * a chip row shows.
    */
   mentionPaths?: string[]
+  /**
+   * The images this turn's message attached, as references: where the bytes are, never the bytes.
+   *
+   * References for the same reason `mentionPaths` is paths — a transcript records the conversation, and
+   * an image inline would multiply the size of the one file this app rewrites at every turn boundary. The
+   * order is the user's, which is what the chip row beside the message shows and what the model reads the
+   * parts in. Written only when the send stored something, so a message with no image is stored exactly
+   * as it was before images existed.
+   */
+  imageRefs?: ImageAttachmentRef[]
   /**
    * Files this turn's message attached that could not be included, in the order they were reported.
    *
@@ -804,7 +815,11 @@ export function startAssistantTurn(): AgentTurn {
   return { id: nextId('assistant'), role: 'assistant', content: '', steps: [] }
 }
 
-export function startUserTurn(text: string, mentionPaths?: readonly string[]): AgentTurn {
+export function startUserTurn(
+  text: string,
+  mentionPaths?: readonly string[],
+  imageRefs?: readonly ImageAttachmentRef[]
+): AgentTurn {
   return {
     id: nextId('user'),
     role: 'user',
@@ -813,6 +828,11 @@ export function startUserTurn(text: string, mentionPaths?: readonly string[]): A
     // Written only when something was attached, so a message with nothing attached is the same turn it
     // was before mentions existed — the same reason `instructionsFile` is conditional.
     ...(mentionPaths && mentionPaths.length > 0 ? { mentionPaths: [...mentionPaths] } : {}),
+    // The same rule for images, and the array is copied rather than referenced so a later edit to the
+    // draft cannot reach back into a turn that has been sent. The order is the caller's: the saves were
+    // dispatched in attach order and came back one per image, so this list's order is the order the user
+    // chose, and nothing here sorts or keys it.
+    ...(imageRefs && imageRefs.length > 0 ? { imageRefs: imageRefs.map((ref) => ({ ...ref })) } : {}),
   }
 }
 

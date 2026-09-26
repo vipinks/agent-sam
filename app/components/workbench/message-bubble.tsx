@@ -17,6 +17,7 @@ import { AgentActionCard } from './agent-action-card'
 import { AutoContinueMark } from './auto-continue-mark'
 import { MarkdownContent } from './markdown'
 import { MentionChipRow } from './mention-chip'
+import { AttachmentRefChipRow } from './attachment-chip'
 import { contextNoticeText } from './mentions'
 import type { AgentTurn } from './agent-session'
 
@@ -279,6 +280,12 @@ export const MessageBubble = memo(function MessageBubble({
                   removable here — the message has been sent, so the chips are a record, not a control. */}
                 {message.mentionPaths && message.mentionPaths.length > 0 && (
                   <MentionChipRow paths={message.mentionPaths} className="mb-2" />
+                )}
+                {/* The images this message carried, above it and beside the files: both are what the
+                  sentence is about. A reference row rather than thumbnails, this turn — the bytes are
+                  main's, and the name and size are what the record actually holds. */}
+                {message.imageRefs && message.imageRefs.length > 0 && (
+                  <AttachmentRefChipRow images={message.imageRefs} className="mb-2" />
                 )}
                 {/* A user's message is literal text: never parsed as markdown, which would eat their
                   angle brackets and asterisks. */}

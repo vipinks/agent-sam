@@ -70,6 +70,12 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // Paths only, written when the user attached something. A turn with no attachments carries no key,
     // so an ordinary conversation is stored exactly as it was before mentions existed.
     ...(turn.mentionPaths !== undefined && turn.mentionPaths.length > 0 ? { mentionPaths: turn.mentionPaths } : {}),
+    // References only, written when the send actually stored an image. Copied rather than referenced for
+    // the same reason the plan is: a later edit to the live turn must not reach back into what was just
+    // written, and the chips a reopened conversation draws must be the chips that were stored.
+    ...(turn.imageRefs !== undefined && turn.imageRefs.length > 0
+      ? { imageRefs: turn.imageRefs.map((image) => ({ ...image })) }
+      : {}),
     // The plan as the turn ended with it. Written only when there is one, so an ordinary conversation
     // carries no key — the same reason the instructions record is conditional — and copied rather than
     // referenced so a later edit to the live turn cannot reach back into what was just written.
@@ -128,6 +134,12 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
     ...(turn.instructionsTruncated !== undefined ? { instructionsTruncated: turn.instructionsTruncated } : {}),
     ...(turn.mentionPaths !== undefined && turn.mentionPaths.length > 0 ? { mentionPaths: turn.mentionPaths } : {}),
+    // Carried back so an opened conversation draws the images its messages carried, from the references
+    // rather than from the bytes — the bytes are in the attachment store, and what a transcript holds is
+    // the pointer. Absent for every turn that attached no image, which is almost all of them.
+    ...(turn.imageRefs !== undefined && turn.imageRefs.length > 0
+      ? { imageRefs: turn.imageRefs.map((image) => ({ ...image })) }
+      : {}),
     // Carried back so a reopened conversation shows the checklist its turn was working from. It was
     // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is
     // a fact about the file rather than something the reader has to work out.

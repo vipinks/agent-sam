@@ -195,7 +195,7 @@ function ProviderCard({
   // memoised because the store slice is absent for an unfetched provider, and a fresh `?? []` each
   // render would invalidate every memo that depends on them.
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[id])
-  const { toggleModel, setFetchedModels } = useConveyorStore(providerConfigStore)
+  const { toggleModel, setFetchedModels, setSupportsImages } = useConveyorStore(providerConfigStore)
 
   const fetched = useMemo(() => config?.fetchedModels ?? [], [config])
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
@@ -250,6 +250,10 @@ function ProviderCard({
       saving={save.isPending}
       onClearKey={() => void onClear()}
       clearing={clear.isPending}
+      // Absence is off: a provider nobody has said anything about is not one the composer may attach an
+      // image for, and the switch shows that as an off position rather than as a third state.
+      imagesSupported={config?.supportsImages === true}
+      onToggleImages={(supported) => setSupportsImages({ providerId: id, supported })}
       enabledModels={enabled}
       models={fetched}
       modelsOpen={justFetched}

@@ -210,6 +210,73 @@ function theTranscriptVersionDidNotMove() {
   results.push('the transcript version is still 3')
 }
 
+// ---------------------------------------------------------------- image support
+
+function imageSupportIsWrittenAsAYesOrNotAtAll() {
+  const store = createHarness()
+
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+  assert.equal(store.state().providers.deepseek.supportsImages, true)
+
+  // Cleared means the key goes, rather than becoming `false`. A record with no key and a record with a
+  // false one are read the same way by the gate, and only the first is honest about a user who has never
+  // been asked — which is what an older build reading this file has to receive.
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: false })
+  assert.equal('supportsImages' in store.state().providers.deepseek, false)
+  results.push('image support is a yes or an absence, per provider')
+}
+
+function oneProvidersImageSupportIsNotAnothers() {
+  const store = createHarness()
+
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+  store.run('setSupportsImages', { providerId: 'openai', supported: false })
+
+  assert.equal(store.state().providers.deepseek.supportsImages, true)
+  assert.equal('supportsImages' in store.state().providers.openai, false)
+  // And the rest of a record is not disturbed by the switch: the models switched on stay switched on.
+  store.run('toggleModel', { providerId: 'deepseek', modelId: 'deepseek-chat' })
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+  assert.deepEqual(store.state().providers.deepseek.enabledModels, ['deepseek-chat'])
+  results.push('turning image support on does not disturb the model choices')
+}
+
+function aCatalogueRefreshDoesNotClearImageSupport() {
+  const store = createHarness()
+
+  store.run('toggleModel', { providerId: 'deepseek', modelId: 'deepseek-chat' })
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+
+  // `setFetchedModels` replaces the record rather than merging into it — it owns the catalogue and the
+  // enabled list it prunes. The flag has to be carried across explicitly, or pressing Fetch in Settings
+  // would switch image support off as a side effect nobody could connect to the button they pressed.
+  store.run('setFetchedModels', { providerId: 'deepseek', models: [{ id: 'deepseek-chat' }] })
+  assert.equal(store.state().providers.deepseek.supportsImages, true)
+  assert.deepEqual(store.state().providers.deepseek.enabledModels, ['deepseek-chat'])
+  results.push('a catalogue refresh leaves image support where it was')
+}
+
+function anOlderFileCarriesNoOpinionAboutImages() {
+  // A file written before this key existed. The record it restores has no key, which is what the gate
+  // reads as "no" — and nothing here invents a decision for the user.
+  const after = rehydrate({ providers: { deepseek: { enabledModels: [], fetchedModels: [] } } })
+
+  assert.equal('supportsImages' in after.providers.deepseek, false)
+  results.push('a file from before this setting still reads, with nothing invented')
+}
+
+/**
+ * The version moves only for a change in what a reader of a transcript must know.
+ *
+ * It is 3 now: a tool step gained `interrupted`, the same kind of widening that took it to 2 for
+ * `queued`. What this suite is about — a provider setting — still changes nothing a transcript reader
+ * has to know, which is the property being held here rather than the number itself.
+ */
+function theTranscriptVersionDidNotMoveOfImages() {
+  assert.equal(TRANSCRIPT_VERSION, 3, 'a provider preference is not a transcript change')
+  results.push('the transcript version is still 3 after the image-support key')
+}
+
 function main() {
   step('adding appends with a derived id', addingAProviderRecordsItWithADerivedId)
   step('normalising and refusing', addingNormalisesTheBaseUrlAndRefusesWhatCannotBeUsed)
@@ -220,6 +287,11 @@ function main() {
   step('older file', aFileWrittenBeforeCustomProvidersExistedStillReads)
   step('no key in the slice', theSliceIsNotWhereAKeyIsKept)
   step('transcript version', theTranscriptVersionDidNotMove)
+  step('image support written', imageSupportIsWrittenAsAYesOrNotAtAll)
+  step('image support per provider', oneProvidersImageSupportIsNotAnothers)
+  step('refresh keeps it', aCatalogueRefreshDoesNotClearImageSupport)
+  step('older file, image support', anOlderFileCarriesNoOpinionAboutImages)
+  step('transcript version, image support', theTranscriptVersionDidNotMoveOfImages)
 
   console.log(`\ncustom providers (provider-config store): ${results.length} checks passed`)
 }

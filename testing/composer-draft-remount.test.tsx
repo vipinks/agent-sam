@@ -108,9 +108,29 @@ function stubWorkbench(windowed = true): BridgeStub {
     defaultModels: () => ({}),
     listConfigured: () => [],
     listFilesFlat: () => [],
+    // The image store's one write, answered with a reference the way main answers: the composer carries
+    // what the store returned, so a stub that answered `undefined` would be a store that stored nothing
+    // and a turn naming a reference that does not exist.
+    save: (input) => {
+      const request = input as { name: string; mimeType: string; bytes: Uint8Array }
+      return {
+        id: `stored-${request.name}`,
+        name: request.name,
+        mimeType: request.mimeType,
+        size: request.bytes.byteLength,
+      }
+    },
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
   stubStore(stub, CHAT_SESSIONS_STORE_ID, SESSION_STATE)
+  // Seeded as image-capable, because the composer refuses images outright for a provider whose record
+  // says nothing and one of the cases below is about an image the user dropped surviving the swap. The
+  // empty `enabledModels` is deliberate: it leaves the model list reading from the seeded catalogue
+  // exactly as it did before this store was seeded at all.
+  stubStore(stub, 'provider-config', {
+    providers: { deepseek: { enabledModels: [], fetchedModels: [], supportsImages: true } },
+    customProviders: [],
+  })
   setActiveStub(stub)
   return stub
 }
@@ -192,6 +212,15 @@ function drag(from: number, to: number, on: HTMLElement): void {
 /** The halfway-typed message every swap test starts from. */
 const HALF_TYPED = 'refactor the lexer, but leave the tokens alone'
 
+/**
+ * One image, as a drop would hand it over.
+ *
+ * A real `File` over real bytes rather than a stand-in object: the composer reads the file's own
+ * `arrayBuffer()`, so a stub would be measuring the stub. jsdom gives the bytes and the name; what it
+ * cannot give is a boundary to clone them across, which is the app's and not this suite's.
+ */
+const droppedImage = (): File => new File([new Uint8Array(48)], 'shot.png', { type: 'image/png' })
+
 beforeEach(() => {
   localStorage.clear()
   useWorkbenchStore.setState({
@@ -267,6 +296,36 @@ describe('the composer across a window-state swap', () => {
     expect((await composer()).value).toBe(HALF_TYPED)
     expect(await screen.findByRole('button', { name: `Remove ${OPEN_FILE}` })).toBeTruthy()
     expect((await composer()).style.height).toBe(`${COMPOSER_MIN_HEIGHT + 60}px`)
+  })
+
+  it('keeps a dropped image across the swap, and still sends it afterwards', async () => {
+    // An image is the fourth thing the composer holds, and the one with the least to fall back on: the
+    // text can be retyped and the height redragged, but a pasted screenshot that the swap threw away is
+    // gone, because the bytes were written nowhere until a send. So it rides the same lift, and this is
+    // the case that says so.
+    const stub = stubWorkbench()
+    const { container } = renderWorkbench()
+    measurablePane(container)
+
+    const before = await composer()
+    await userEvent.click(before)
+    await userEvent.type(before, HALF_TYPED)
+    fireEvent.drop(before, { dataTransfer: { files: [droppedImage()] } })
+    await waitFor(() => expect(screen.queryAllByRole('button', { name: 'Remove shot.png' }).length).toBe(1))
+
+    await swapWindowState(container, stub, true)
+    measurablePane(container)
+
+    // The words and the picture are both still there, and the chip belongs to the pane the swap built
+    // rather than the one it replaced.
+    expect((await composer()).value).toBe(HALF_TYPED)
+    expect(screen.queryAllByRole('button', { name: 'Remove shot.png' }).length).toBe(1)
+
+    // And a send still takes it: the draft that survived the swap is the draft the send reads, which is
+    // the whole point of holding it above the key.
+    await userEvent.type(await composer(), '{Enter}')
+    await waitFor(() => expect(stub.methodsOn('attachments')).toEqual(['save']))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove shot.png' })).toBeNull())
   })
 
   it('still clears the composer when the message is actually sent', async () => {

@@ -10,6 +10,7 @@ import {
   type TranscriptState,
 } from './session-transcript'
 import { resumeTurnNumbering, type AgentTurn, type PendingCall } from './agent-session'
+import type { DraftAttachment } from './attachments'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
@@ -128,6 +129,23 @@ export interface ComposerState {
   /** Why the last attach attempt was refused, or null. Cleared by the next one. */
   mentionNote: string | null
   /**
+   * The images the next send will attach, in the order they were taken.
+   *
+   * Beside the draft text and above the pane, for the same reason the text is: a maximize or a restore
+   * remounts the chat pane, and a screenshot the user had chosen is exactly as much theirs as a sentence
+   * they had half written. Held as bytes in memory and nowhere else — nothing is written until the send,
+   * so an abandoned draft leaves nothing behind, and the array is lost with the window.
+   */
+  images: DraftAttachment[]
+  /**
+   * Why the last image attempt was refused, or null. Cleared by the next one.
+   *
+   * Its own field rather than shared with `mentionNote`, because the two are answers to two different
+   * gestures: attaching a file and pasting a screenshot write different sentences, and a note that both
+   * wrote would be replaced by whichever came second for reasons the user could not see.
+   */
+  attachmentNote: string | null
+  /**
    * The height the user dragged the composer to, per session key.
    *
    * Not persisted, deliberately: the height a user dragged to is a fact about this window's layout
@@ -140,7 +158,7 @@ export interface ComposerState {
 
 /** The composer as it opens: nothing typed, nothing attached, every session at the default height. */
 function emptyComposer(): ComposerState {
-  return { text: '', mentionPaths: [], mentionNote: null, heights: {} }
+  return { text: '', mentionPaths: [], mentionNote: null, images: [], attachmentNote: null, heights: {} }
 }
 
 export interface ChatSessions {

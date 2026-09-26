@@ -6,6 +6,31 @@ coding assistant.
 
 <br>
 
+## 2026-09-27: the composer takes images, as chips nobody has to keep
+
+- The composer takes an image three ways — a paste into the box, a drop on it, or the picker beside the
+  paperclip — and each one puts a chip under the message: a thumbnail from the bytes, the name, the
+  size, and a button that takes it off. The chips and their pictures ride the same lift as the draft
+  text, so a maximize no longer throws away a screenshot.
+- Nothing is written until the message is sent. The chips are bytes in memory, and a draft that is
+  abandoned or an app that is closed leaves no folder behind — which is the point, since a pasted
+  screenshot is often something private.
+- A send stores each image first and then dispatches the turn that names them, in the order they were
+  attached. An image that cannot be stored aborts the send with the store's own sentence, and the draft
+  stays exactly where it was, so nothing has to be retyped or repasted.
+- A provider takes images only if it has been told to. Settings → Providers carries an **Image support**
+  switch per provider, off until it is turned on, and the composer refuses all three capture paths with a
+  sentence saying where to switch it on. A model that cannot see was the failure nobody would have
+  understood from a provider error.
+- The rules the composer refuses by are main's own: the 8 MB limit, the allowed types and the four-image
+  cap come from the store's protocol rather than a second copy, so the sentence shown while choosing an
+  image is the sentence a write would be refused with.
+- What a sent message shows is a reference — the name and the size, no picture — because the bytes live
+  in the attachment store rather than in the transcript. Thumbnails on the sent message are the next
+  step, and so is sending the images on to the model.
+
+<br>
+
 ## 2026-09-26: the composer's skill picker keeps its own scroll
 
 - The picker's rows scroll inside a bounded region, instead of the popover growing to the height of

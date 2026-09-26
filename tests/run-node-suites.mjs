@@ -87,6 +87,10 @@ const SUITES = [
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
   { name: 'image attachment rules (mime, caps, content parts)', src: 'attachments/image-attachments-rules-test.ts' },
   { name: 'image attachment store (save, read, retention, sweep)', src: 'attachments/image-attachments-store-test.ts' },
+  {
+    name: 'image attachment capture (gate, capture rules, order)',
+    src: 'attachments/image-attachments-capture-test.ts',
+  },
   { name: 'composer commands (slash rules)', src: 'ui/composer-commands-test.ts' },
 ]
 

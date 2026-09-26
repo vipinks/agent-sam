@@ -417,3 +417,71 @@ describe('a rehydrated settings store', () => {
     expect(boxFor(container, 'custom', 'Second Server')).toBeTruthy()
   })
 })
+
+describe('the image-support switch', () => {
+  it('is off for a provider nothing has been said about, and says what off means', async () => {
+    stubSettings()
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    const toggle = within(deepseek).getByRole('switch', { name: /Image support/ })
+
+    // Off, without carrying a value: a provider nobody has been asked about has no opinion rather than a
+    // `false`, and the switch shows that as the off position because that is what the composer does with
+    // it. The sentence beside it says which way off falls for the user.
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(within(deepseek).getByText(/refuses them until you do/i)).toBeTruthy()
+  })
+
+  it('records the declaration per provider, and clearing it takes the key back off', async () => {
+    const { stub, main } = stubSettings()
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    const openai = boxFor(container, 'predefined', 'OpenAI')
+
+    await userEvent.click(within(deepseek).getByRole('switch', { name: /Image support/ }))
+
+    // The action is the store's own, addressed to the provider whose box it was: the setting is a
+    // provider preference, so the id has to travel with it or one switch would configure them all.
+    await waitFor(() => expect(storeMethods(stub)).toContain('setSupportsImages'))
+    const asked = stub.calls.find((call) => call.method === 'setSupportsImages')
+    expect((asked?.args[0] as { payload: unknown }).payload).toEqual({ providerId: 'deepseek', supported: true })
+    // And the screen follows main's answer rather than the click: the box is reading the record.
+    await waitFor(() =>
+      expect(
+        within(deepseek)
+          .getByRole('switch', { name: /Image support/ })
+          .getAttribute('aria-checked')
+      ).toBe('true')
+    )
+    expect(
+      within(openai)
+        .getByRole('switch', { name: /Image support/ })
+        .getAttribute('aria-checked')
+    ).toBe('false')
+    expect(main.state().providers.deepseek?.supportsImages).toBe(true)
+
+    await userEvent.click(within(deepseek).getByRole('switch', { name: /Image support/ }))
+
+    // Switched off means the key is gone rather than set to false: that is what the node suite asserts
+    // about the record, and it is what an older build reading this file has to be handed.
+    await waitFor(() => expect(main.state().providers.deepseek?.supportsImages).toBeUndefined())
+    expect('supportsImages' in (main.state().providers.deepseek ?? {})).toBe(false)
+  })
+
+  it('reads as on for a provider that has already declared it', async () => {
+    stubSettings(undefined, {
+      providers: { deepseek: { enabledModels: [], fetchedModels: [], supportsImages: true } },
+      customProviders: [],
+    })
+    const { container } = renderSettings()
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    expect(
+      within(deepseek)
+        .getByRole('switch', { name: /Image support/ })
+        .getAttribute('aria-checked')
+    ).toBe('true')
+    expect(within(deepseek).getByText(/can attach images while this provider is selected/i)).toBeTruthy()
+  })
+})

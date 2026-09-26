@@ -129,6 +129,11 @@ const MANIFEST: Record<string, Record<string, string>> = {
   // registered rather than as an unlisted member, which is what the client's Proxy does with an
   // unknown name.
   mentions: { listFilesFlat: 'query' },
+  // The composer's image store: the write a send performs once per attached image, and the delete a
+  // conversation's cleanup offers. Listed by kind for the reason the entries around it are — the client
+  // refuses an unlisted member rather than dispatching it, so a suite about a send carrying images could
+  // not reach the store without this line.
+  attachments: { save: 'command', deleteSession: 'command' },
   // The skills surface: the two reads the composer and the settings section make, and the four writes
   // phase 43 added. Listed by kind for the same reason as the entries around it — the picker's read runs
   // on mount, and a member missing from this map would be dispatched by the wrong path.

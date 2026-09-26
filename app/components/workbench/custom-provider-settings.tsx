@@ -287,7 +287,8 @@ function CustomProviderCard({
   const listModels = conveyor.provider.listModels.useMutation()
 
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[provider.id])
-  const { toggleModel, setCustomProviderModels, removeCustomProvider } = useConveyorStore(providerConfigStore)
+  const { toggleModel, setSupportsImages, setCustomProviderModels, removeCustomProvider } =
+    useConveyorStore(providerConfigStore)
 
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
   const catalogue = useMemo(() => provider.models.map((id) => ({ id })), [provider.models])
@@ -357,6 +358,10 @@ function CustomProviderCard({
         saving={save.isPending}
         onClearKey={() => void onClearKey()}
         clearing={clear.isPending}
+        // The same switch a predefined provider carries, wired to the same store slice: a provider the user
+        // added is asked the same question, and its answer is read by the same gate in the composer.
+        imagesSupported={config?.supportsImages === true}
+        onToggleImages={(supported) => setSupportsImages({ providerId: provider.id, supported })}
         enabledModels={enabled}
         models={catalogue}
         modelsOpen={justFetched}

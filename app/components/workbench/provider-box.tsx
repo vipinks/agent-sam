@@ -3,6 +3,7 @@ import { Check, KeyRound, Loader2, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Switch } from '../ui/switch'
 import { ModelList, type ModelEntry } from './model-list'
 
 /**
@@ -26,6 +27,7 @@ export const PROVIDER_BOX_CONTROLS = [
   'provider-actions',
   'provider-saved-badge',
   'provider-key-clear',
+  'provider-image-support',
   'provider-enabled-models',
   'provider-model-list',
 ] as const
@@ -52,6 +54,8 @@ export function ProviderBox({
   saving,
   onClearKey,
   clearing = false,
+  imagesSupported,
+  onToggleImages,
   enabledModels,
   models,
   modelsOpen = false,
@@ -72,6 +76,14 @@ export function ProviderBox({
   /** Absent for a kind whose key cannot be forgotten from here. */
   onClearKey?: () => void
   clearing?: boolean
+  /**
+   * Whether this provider takes images, as the store records it.
+   *
+   * Required of both kinds, because both kinds are asked: the box is the same box, and a custom provider
+   * whose models can see a screenshot is exactly as ordinary as a predefined one whose cannot.
+   */
+  imagesSupported: boolean
+  onToggleImages: (supported: boolean) => void
   /** The models switched on, in the order they were switched on. */
   enabledModels: string[]
   /** The catalogue to show, in the order the provider listed it. */
@@ -158,6 +170,37 @@ export function ProviderBox({
           {notice}
         </p>
       )}
+
+      {/*
+        Image support, stated in words and not only as a switch position.
+
+        A declaration rather than something this app discovers, which the helper text says: the person
+        setting it up is the one who knows whether the model they chose can see a picture, and a switch
+        read as "the app checked" would be trusted for something nobody checked. Off is the default, so the
+        sentence says what off means for the composer rather than leaving the user to find out by pasting.
+      */}
+      <div
+        data-slot="provider-image-support"
+        className="mt-2.5 flex items-center justify-between gap-2 border-t border-border pt-2.5"
+      >
+        <div className="min-w-0">
+          <label htmlFor={`${id}-image-support`} className="text-[12px] font-medium">
+            Image support
+          </label>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {imagesSupported
+              ? 'The composer can attach images while this provider is selected.'
+              : 'Declare it if this provider can see images; the composer refuses them until you do.'}
+          </p>
+        </div>
+        <Switch
+          id={`${id}-image-support`}
+          size="sm"
+          checked={imagesSupported}
+          onCheckedChange={onToggleImages}
+          aria-label={`Image support for ${name}`}
+        />
+      </div>
 
       {/* Enabled models, always visible: this is what the chat picker will actually offer. */}
       {enabledModels.length > 0 && (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { MessageSquare, Paperclip, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
+import { MessageSquare, ImagePlus, Paperclip, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
@@ -22,6 +22,22 @@ import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
 import { CommandNotice, CommandPicker, type CommandNoticeText } from './command-picker'
 import { MentionChipRow } from './mention-chip'
+import { AttachmentChipRow } from './attachment-chip'
+import {
+  ATTACHMENT_ACCEPT_ATTRIBUTE,
+  addDraftAttachment,
+  attachmentSaveRequests,
+  composerAcceptsImages,
+  filesIn,
+  imageCapabilityNotice,
+  removeDraftAttachment,
+  type DraftAttachment,
+} from './attachments'
+import {
+  IMAGE_ATTACH_NOT_FOUND,
+  IMAGE_ATTACH_REFUSED,
+  type ImageAttachmentRef,
+} from '@/conveyor/protocol/image-attachments'
 import { SkillChipRow, SkillPicker } from './skill-picker'
 import { PlanChecklist } from './plan-checklist'
 import { TurnEndNotice } from './turn-end-notice'
@@ -130,6 +146,28 @@ function activeSkillTitle(listing: SkillListing, id: string): string {
     if (skill) return skill.title
   }
   return id
+}
+
+/**
+ * Why a send stopped because an image could not be stored, in the user's terms.
+ *
+ * Branched on the code and never on the sentence: main names the failure with a stable string, and the
+ * wording of what to tell the user is this side's to own — the rule every other failure here follows. The
+ * message main wrote is shown beside this app's own sentence only for the refusal, which is the one the
+ * user can act on.
+ */
+function attachmentSaveErrorMessage(error: unknown): string {
+  const lead = 'That image could not be stored, so nothing was sent.'
+  if (!(error instanceof ConveyorError)) return lead
+
+  switch (error.code) {
+    case IMAGE_ATTACH_REFUSED:
+      return `${lead} ${error.message}`
+    case IMAGE_ATTACH_NOT_FOUND:
+      return lead
+    default:
+      return `${lead} (${error.code})`
+  }
 }
 
 /** Stream failures, in the user's terms, branched on the error code rather than the message text. */
@@ -258,7 +296,14 @@ export function ChatPanel() {
    * One destructure rather than four, because they are one thing from the user's side and a remount
    * restores or loses them together.
    */
-  const { text: draft, mentionPaths, mentionNote, heights: composerHeights } = sessions.composer
+  const {
+    text: draft,
+    mentionPaths,
+    mentionNote,
+    images: draftImages,
+    attachmentNote,
+    heights: composerHeights,
+  } = sessions.composer
 
   // The session API is read through a ref so the callbacks built from it keep a stable identity: several
   // of them are dependencies of the stream callbacks, and a new identity per render would restart a run on
@@ -282,6 +327,19 @@ export function ChatPanel() {
   /** The heights a drag writes, mirrored for the same reason `draftRef` is. */
   const composerHeightsRef = useRef(composerHeights)
   composerHeightsRef.current = composerHeights
+
+  /**
+   * The images the next send will attach, mirrored for the same reason the draft is.
+   *
+   * A gesture that takes three files writes three times in one event, and each write has to see what the
+   * one before it left — otherwise two of the three would be appended to the same empty list and one
+   * would be lost.
+   */
+  const draftImagesRef = useRef<DraftAttachment[]>(draftImages)
+  draftImagesRef.current = draftImages
+
+  /** The picker's input, opened by the button rather than rendered as a visible control. */
+  const attachInputRef = useRef<HTMLInputElement>(null)
 
   // Whether a run is in flight, read from the session layer rather than held here: a session click has
   // to be refused against it, and the list that offers the click is not inside this pane. Above the
@@ -565,6 +623,121 @@ export function ChatPanel() {
       sessionsRef.current.setComposer({ mentionNote: null })
     },
     [setChips]
+  )
+
+  /** Replace the image row, keeping the ref this pane's own handlers read in step. */
+  const setImages = useCallback((next: DraftAttachment[]) => {
+    draftImagesRef.current = next
+    sessionsRef.current.setComposer({ images: next })
+  }, [])
+
+  /**
+   * Take files into the draft: the one path every capture gesture goes through.
+   *
+   * Paste, drop and the picker differ in how a file arrives and in nothing else, so they cannot come to
+   * disagree about what is acceptable. The capability gate is asked once for the gesture rather than once
+   * per file — the answer does not vary by file, and a drop of four images should not say the same
+   * sentence four times.
+   *
+   * The bytes are read here, which is the only moment they are available: a `File` is a handle on a file
+   * that may be gone by the time a send happens, so what the draft holds is the bytes themselves. Reading
+   * them is also what makes a later refusal possible to report without having taken anything — nothing is
+   * appended until every read has completed and the rules have passed.
+   */
+  const takeImages = useCallback(
+    (files: readonly File[]) => {
+      if (files.length === 0) return
+
+      if (!composerAcceptsImages(configs[activeProviderId])) {
+        sessionsRef.current.setComposer({ attachmentNote: imageCapabilityNotice(providerName) })
+        return
+      }
+
+      void (async () => {
+        const candidates = await Promise.all(
+          files.map(async (file) => ({
+            // A pasted screenshot arrives under a generated name in some browsers and an empty one in
+            // others, and a chip with no text is a chip nobody can tell from another.
+            name: file.name.trim() === '' ? 'Pasted image' : file.name,
+            mimeType: file.type,
+            bytes: new Uint8Array(await file.arrayBuffer()),
+          }))
+        )
+
+        let next = draftImagesRef.current
+        let notice: string | null = null
+        for (const candidate of candidates) {
+          // One at a time, against the growing list: the cap is the message's, so the fourth file of a
+          // drop may be taken while the fifth is refused, and a batch that passed the list whole would
+          // let twenty through.
+          const applied = addDraftAttachment(next, candidate)
+          next = applied.draft
+          // The *first* refusal is the one kept, because it is the one that names the boundary: a drop of
+          // six images refused on the fifth says which one was too many, while the last refusal would
+          // name the end of the list and leave the user to work out where the cut fell.
+          if (applied.notice && notice === null) notice = applied.notice
+        }
+
+        // The row is written even when nothing was taken, because a refusal replaces the note the last
+        // gesture left and a success clears it — one write, one sentence, either way.
+        setImages(next)
+        sessionsRef.current.setComposer({ attachmentNote: notice })
+      })()
+    },
+    [activeProviderId, configs, providerName, setImages]
+  )
+
+  /**
+   * A paste into the composer.
+   *
+   * A paste carrying no file is left alone entirely — not prevented, not reported — because that is a
+   * user pasting prose, which is the ordinary case and none of this feature's business. An image is not
+   * text, so the default is prevented: pasting an image's *name* into the sentence would be noise the
+   * user did not ask for, and the chip is what they meant instead.
+   */
+  const onComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = filesIn(event.clipboardData)
+    if (files.length === 0) return
+    event.preventDefault()
+    takeImages(files)
+  }
+
+  /**
+   * A drop onto the composer.
+   *
+   * `dragover` is prevented so the drop is allowed at all — a browser refuses a drop on an element that
+   * has not said it will take one, and the textarea would otherwise be treated as an ordinary text drop
+   * target and swallow an image. What is accepted is every file the drop carries rather than only the
+   * images: a dropped type this app cannot send is refused with the rule's own sentence naming the type,
+   * which tells the user more than a drop that silently did nothing.
+   */
+  const onComposerDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer) return
+    event.preventDefault()
+  }
+
+  const onComposerDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const files = filesIn(event.dataTransfer)
+    if (files.length === 0) return
+    event.preventDefault()
+    takeImages(files)
+  }
+
+  /** What the picker was given, cleared so choosing the same file twice is still a change it reports. */
+  const onAttachPicked = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = filesIn(event.currentTarget)
+    event.currentTarget.value = ''
+    takeImages(files)
+  }
+
+  const removeImage = useCallback(
+    (id: string) => {
+      // The chip's own object URL goes with the chip: the row stops rendering it, React unmounts it, and
+      // the effect that made the URL revokes it. Nothing here has to know about URLs at all.
+      setImages(removeDraftAttachment(draftImagesRef.current, id))
+      sessionsRef.current.setComposer({ attachmentNote: null })
+    },
+    [setImages]
   )
 
   /** The token the caret is in, if any. Called on every edit and every caret move, not only on `@`. */
@@ -922,7 +1095,10 @@ export function ChatPanel() {
   )
 
   const sendText = useCallback(
-    async (raw: string, options: { mentionPaths?: readonly string[]; keepComposer?: boolean } = {}) => {
+    async (
+      raw: string,
+      options: { mentionPaths?: readonly string[]; images?: readonly DraftAttachment[]; keepComposer?: boolean } = {}
+    ) => {
       const text = raw.trim()
       if (!text || isStreaming || pending) return
 
@@ -930,6 +1106,9 @@ export function ChatPanel() {
       // sent and what the bubble shows afterwards cannot disagree. An edit passes its own, because the
       // chips it changed belong to the message being sent again rather than to the composer.
       const chips = options.mentionPaths ?? mentionPathsRef.current
+      // The images for the same reason, and an edit passes an empty list: the editor has no image
+      // controls, so a message rewritten through it carries the words the user wrote and nothing else.
+      const images = options.images ?? draftImagesRef.current
       // A resend did not come from the composer, so it must not empty it: the user's half-written next
       // message is still theirs, and the chips in it were never part of the send that just happened.
       const fromComposer = options.keepComposer !== true
@@ -940,21 +1119,43 @@ export function ChatPanel() {
       // question about that conversation, and the pane has to be able to say which one it is holding.
       const sessionId = sessionsRef.current.ensureSession(text)
 
+      // The images are stored before anything is dispatched, and the send is abandoned if one of them
+      // cannot be. Two things rest on that order. The reference a transcript carries is the store's, so
+      // an image has to be written before the turn that names it can be built. And a send that stored
+      // two of three images and then dispatched anyway would put a message in the conversation saying
+      // something the model was never given — so a failure here returns with the draft exactly as the
+      // user left it, chips and all, and nothing partial is dispatched.
+      //
+      // Awaited one at a time and in attach order, which is what makes the references' order the user's
+      // rather than the store's.
+      const imageRefs: ImageAttachmentRef[] = []
+      try {
+        for (const request of attachmentSaveRequests(sessionId, images)) {
+          imageRefs.push(await conveyor.attachments.save(request))
+        }
+      } catch (err) {
+        sessionsRef.current.setComposer({ attachmentNote: attachmentSaveErrorMessage(err) })
+        return
+      }
+
       if (fromComposer) {
         setDraft('')
         // The chips belonged to that message. Main reads the paths from the payload, so clearing here
         // cannot take them away from the send that is starting — only from the next one.
         setChips([])
+        // The images go with them, and so do their object URLs: the chips stop rendering, and the effect
+        // that made each URL revokes it on the way out.
+        setImages([])
         setMention({ token: null, dismissed: false })
-        sessionsRef.current.setComposer({ mentionNote: null })
+        sessionsRef.current.setComposer({ mentionNote: null, attachmentNote: null })
       }
 
       // The message goes on the end of the transcript as it stands — after any truncation an edit made,
       // so a resend continues the conversation that is left rather than the one the removed turns
       // belonged to — and that whole list is what the run is handed.
-      await runAgentTurn([...messagesRef.current, startUserTurn(text, chips)], chips, sessionId)
+      await runAgentTurn([...messagesRef.current, startUserTurn(text, chips, imageRefs)], chips, sessionId)
     },
-    [isStreaming, pending, runAgentTurn, setChips, setDraft]
+    [isStreaming, pending, runAgentTurn, setChips, setDraft, setImages]
   )
 
   /** Send what is in the composer. */
@@ -979,7 +1180,7 @@ export function ChatPanel() {
       void (async () => {
         updateMessages(truncateFromTurn(messagesRef.current, turnId))
         await sessionsRef.current.saveNow()
-        await sendText(text, { mentionPaths: chips, keepComposer: true })
+        await sendText(text, { mentionPaths: chips, images: [], keepComposer: true })
       })()
     },
     [sendText, updateMessages]
@@ -1486,7 +1687,7 @@ export function ChatPanel() {
             all, because nothing opens this popover except the caret being inside an `@` token.
           */}
           <PopoverAnchor asChild>
-            <div className="relative">
+            <div className="relative" onDragOver={onComposerDragOver} onDrop={onComposerDrop}>
               {/*
                 What this conversation is working from, above the sentence being written about it. Chips
                 rather than a line of prose because the point is that they can be taken off again, and
@@ -1502,6 +1703,13 @@ export function ChatPanel() {
               )}
               {mentionPaths.length > 0 && (
                 <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
+              )}
+              {/*
+                The images the next send will carry, beside the files for the same reason the files are
+                there: both are "what goes with this message", and both can be taken off again.
+              */}
+              {draftImages.length > 0 && (
+                <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
               )}
               <Textarea
                 ref={textareaRef}
@@ -1520,17 +1728,48 @@ export function ChatPanel() {
                   syncMention(area.value, area.selectionStart ?? area.value.length)
                 }}
                 onKeyDown={onKeyDown}
+                onPaste={onComposerPaste}
                 placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'}
                 aria-label="Message"
                 // `field-sizing-fixed` is the whole of the behaviour change: the primitive ships
                 // `field-sizing-content`, which grows the box with its content, and the composer wants the
                 // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
                 // the primitive's own floor so the height below is the height, not a suggestion.
-                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-20 text-[13px]"
+                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-28 text-[13px]"
                 // The height is state rather than styling — it is the number the drag produces — so it is the
                 // one thing here that cannot be a class.
                 style={{ height: composerHeight }}
               />
+              {/*
+                The picker, as an input nothing draws and a button that clicks it.
+
+                A separate control from the paperclip above it rather than the same one: the paperclip
+                attaches a file that is *in the workspace and already open*, which is a different question
+                from "which image on this machine", and one control that answered both would have to guess
+                which the user meant. The accept filter is the whitelist itself, so the dialog offers what
+                the rules would take — and a user who overrides it anyway is refused with the rule's own
+                sentence rather than silently ignored.
+              */}
+              <input
+                ref={attachInputRef}
+                data-slot="attachment-input"
+                type="file"
+                accept={ATTACHMENT_ACCEPT_ATTRIBUTE}
+                multiple
+                className="hidden"
+                aria-label="Choose images to attach"
+                onChange={onAttachPicked}
+              />
+              <Button
+                size="icon-sm"
+                variant="outline"
+                className="absolute right-[4.75rem] bottom-2"
+                aria-label="Attach images"
+                title="Attach images (or paste, or drop them)"
+                onClick={() => attachInputRef.current?.click()}
+              >
+                <ImagePlus />
+              </Button>
               <Button
                 size="icon-sm"
                 variant="outline"
@@ -1594,6 +1833,15 @@ export function ChatPanel() {
         {mentionNote && (
           <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
             {mentionNote}
+          </p>
+        )}
+
+        {/* A refused image, said in the same place as a refused file and for the same reason: it is about
+            the control the user just used. Its own line rather than sharing the one above, because the two
+            answer two different gestures and one would otherwise overwrite the other. */}
+        {attachmentNote && (
+          <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
+            {attachmentNote}
           </p>
         )}
 

@@ -18,6 +18,20 @@ export interface ProviderConfig {
   enabledModels: string[]
   /** Last fetched catalogue, cached for display. */
   fetchedModels: Array<{ id: string; name?: string }>
+  /**
+   * Whether this provider's models take images, as the user declared it.
+   *
+   * Additive and optional, and the optionality is the point: a record written before this key existed
+   * carries no opinion rather than a `false` this store would then be claiming the user had chosen. The
+   * gate reads absence as "no" — a provider nobody has said anything about is not one to send an image
+   * to — but the record stays silent, so a build that reads the store without knowing this key strips it
+   * and writes back what it understood rather than inventing a decision.
+   *
+   * A declaration rather than a discovery: this app does not ask a provider what it accepts, because a
+   * wrong answer would be indistinguishable from a right one until an image was refused, and the person
+   * who knows is the one who chose the model.
+   */
+  supportsImages?: boolean
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -49,6 +63,7 @@ export const providerConfigStore = defineStore('provider-config', {
   // either direction, and the schema is the gate rather than a convention.
   schemas: {
     toggleModel: z.object({ providerId: z.string().min(1), modelId: z.string().min(1) }),
+    setSupportsImages: z.object({ providerId: z.string().min(1), supported: z.boolean() }),
     setFetchedModels: z.object({ providerId: z.string().min(1), models: z.array(modelSchema) }),
     setEnabledModels: z.object({ providerId: z.string().min(1), modelIds: z.array(z.string()) }),
     addCustomProvider: z.object({ name: z.string().min(1), baseUrl: z.string().min(1) }),
@@ -70,6 +85,24 @@ export const providerConfigStore = defineStore('provider-config', {
     },
 
     /**
+     * Record whether this provider's models take images.
+     *
+     * Written as `true` or as no key at all, never as `false`: clearing the switch puts the record back
+     * to saying nothing, which is what a record that predates this setting says — so one rule covers
+     * "never chose" and "chose no", and a store read by an older build is not handed a key it would have
+     * to understand.
+     */
+    setSupportsImages: (state, { providerId, supported }) => {
+      const current = state.providers[providerId] ?? { enabledModels: [], fetchedModels: [] }
+      state.providers[providerId] = supported
+        ? { ...current, supportsImages: true }
+        : {
+            enabledModels: current.enabledModels,
+            fetchedModels: current.fetchedModels,
+          }
+    },
+
+    /**
      * Record a fetched catalogue. Enabling is left alone: a refresh must not silently change what
      * the user has switched on, though any enabled id the provider no longer lists is dropped so
      * the chat dropdown cannot offer a model that no longer exists.
@@ -80,6 +113,10 @@ export const providerConfigStore = defineStore('provider-config', {
       state.providers[providerId] = {
         fetchedModels: models,
         enabledModels: current.enabledModels.filter((id) => available.has(id)),
+        // Carried across, because this action *replaces* the record rather than merging into it: a
+        // refresh is about the catalogue, and a refresh that quietly switched image support off would be
+        // a setting the user could watch revert by pressing a button about something else.
+        ...(current.supportsImages === true ? { supportsImages: true } : {}),
       }
     },
 
