@@ -228,15 +228,15 @@ describe('the right rail, at launch', () => {
     await waitFor(() => expect(screen.getByLabelText('Message')).toBeTruthy())
   })
 
-  it('offers its four residents, in order, with none of them pressed', async () => {
+  it('offers its three residents, in order, with none of them pressed', async () => {
     stubWorkbench()
     renderWorkbench()
 
     const labels = [...rightRail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    expect(labels).toEqual(['Code', 'Preview', 'Terminal', 'Tools'])
+    expect(labels).toEqual(['Code', 'Preview', 'Tools'])
     expect(
       labels.map((_, index) => [...rightRail().querySelectorAll('button')][index]?.getAttribute('aria-pressed'))
-    ).toEqual(['false', 'false', 'false', 'false'])
+    ).toEqual(['false', 'false', 'false'])
   })
 })
 
@@ -269,15 +269,6 @@ describe('docking a resident', () => {
     expect(resident('Preview').getAttribute('aria-pressed')).toBe('true')
     expect(resident('Code').getAttribute('aria-pressed')).toBe('false')
 
-    // The terminal is one of them now, rather than a view that took the whole main area.
-    await userEvent.click(resident('Terminal'))
-    expect(innerColumns(container)).toEqual([
-      { id: 'chat', defaultSize: percentSize(41) },
-      { id: 'code', defaultSize: percentSize(59) },
-    ])
-    expect(container.querySelector('[data-slot="terminal"]')).not.toBeNull()
-    expect(container.querySelector('[data-slot="markdown-preview"]')).toBeNull()
-
     // And the dock wrote nothing into either layout set: the share it took was already stored.
     expect(JSON.parse(localStorage.getItem(STORED_KEY) ?? '{}')).toEqual({ layoutWindowed: dragged })
   })
@@ -301,7 +292,7 @@ describe('docking a resident', () => {
     stubWorkbench()
     const { container } = renderWorkbench()
 
-    await userEvent.click(resident('Terminal'))
+    await userEvent.click(resident('Tools'))
     const header = within(docked(container) as HTMLElement).getAllByRole('button', { name: 'Collapse panel' })[0]
     expect(header?.getAttribute('aria-expanded')).toBe('true')
 

@@ -11,7 +11,7 @@ import { queryClient } from '@/conveyor/client'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
- * The terminal resident, as a view of a shell that lives in main.
+ * The terminal, as the bottom panel under the chat column, and as a view of a shell that lives in main.
  *
  * jsdom hosts no terminal. xterm draws into a canvas, measures real fonts and reads real key events, so
  * what is stubbed here is the terminal itself: a `Terminal` whose writes are collected, whose `onData`
@@ -222,7 +222,7 @@ function dock(stub: BridgeStub, rootPath: string): HTMLElement {
       <Workbench />
     </QueryClientProvider>
   )
-  act(() => useWorkbenchStore.setState({ rightPanel: 'terminal' }))
+  act(() => useWorkbenchStore.setState({ bottomPanelOpen: true }))
   return view.container
 }
 
@@ -271,10 +271,11 @@ beforeEach(() => {
     viewerExpanded: false,
     drawerCollapsed: false,
     rightPanel: null,
+    bottomPanelOpen: false,
   })
 })
 
-describe('docking the terminal', () => {
+describe('the bottom panel, as the terminal’s one home', () => {
   it('opens the folder’s shell and fills the terminal from its transcript', async () => {
     const stub = stubWorkbench()
     const root = freshRoot()
@@ -569,8 +570,8 @@ describe('the shell ending', () => {
   })
 })
 
-describe('the rail still docks it', () => {
-  it('is one of the rail’s residents, reached by its own button', async () => {
+describe('the panel’s only home', () => {
+  it('is nested in the chat column, and is nothing the rail offers', async () => {
     const stub = stubWorkbench()
     const root = freshRoot()
     stub.on('create', () => ({ rootPath: root, pid: 4242, cwd: root, lines: [] }))
@@ -583,13 +584,21 @@ describe('the rail still docks it', () => {
     )
     stubStore(stub, 'workspace', { rootPath: root, recentRoots: [root] })
 
+    // The rail is not a way to it any more. The control that opens the panel is the title bar's, which
+    // is `bottom-terminal-panel.test.tsx`'s subject; what this file owns is that the pane still
+    // attaches where the workbench mounts it.
     const rail = screen.getByRole('navigation', { name: 'Right rail' })
-    await userEvent.click(within(rail).getByRole('button', { name: 'Terminal' }))
+    expect(within(rail).queryByRole('button', { name: 'Terminal' })).toBeNull()
 
-    expect(useWorkbenchStore.getState().rightPanel).toBe('terminal')
+    act(() => useWorkbenchStore.setState({ bottomPanelOpen: true }))
+
     await waitFor(() =>
-      expect(view.container.querySelector('[data-slot="terminal"]'), 'the pane is in the slot').not.toBeNull()
+      expect(view.container.querySelector('[data-slot="terminal"]'), 'the pane is mounted').not.toBeNull()
     )
-    expect(within(rail).getByRole('button', { name: 'Terminal' }).getAttribute('aria-pressed')).toBe('true')
+    // Under the chat column rather than beside it: the nested group's own panel is what holds the pane,
+    // and the inner group still has its one column.
+    const column = view.container.querySelector('[data-group]#workbench-chat')
+    expect(column?.querySelector('[data-panel]#terminal [data-slot="terminal"]')).not.toBeNull()
+    expect(useWorkbenchStore.getState().rightPanel).toBeNull()
   })
 })

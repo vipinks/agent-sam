@@ -18,7 +18,7 @@ import { ToolsPanel } from './tools-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
-import { mainGroupLayout, outerGroupLayout, percentSize } from './layout'
+import { chatGroupLayout, mainGroupLayout, outerGroupLayout, percentSize } from './layout'
 import { useWorkbenchLayout } from './use-workbench-layout'
 import { useThemeApplication } from './theme-apply'
 import { useWorkbenchStore } from './store'
@@ -43,7 +43,7 @@ import { useWorkbenchStore } from './store'
  * paid: a maximize or a restore remounts the panes under them.
  *
  * Two views take the whole main area rather than a column: Settings, which is a screen you leave when
- * done, and nothing else now that the terminal is a resident of the right rail.
+ * done, and nothing else.
  *
  * The secondary panel follows the rail: the explorer keeps the file tree, git keeps the working tree's
  * state, and the chat shows the conversation list the panel header has always promised.
@@ -60,11 +60,20 @@ import { useWorkbenchStore } from './store'
  * The right rail is the outer edge's other end, and it is what decides whether the inner group has a
  * second column at all. At launch it has none: the inner group holds the conversation alone, and a
  * resident is docked by clicking its icon — Code for the open file's source and diffs, Preview for the
- * same file rendered, Terminal for the command transcript. The docked panel takes the inner group's
+ * same file rendered, Tools for what the app is working from. The docked panel takes the inner group's
  * right slot at the state's own persisted inner percentage, which is the number a drag of that
  * separator left, so docking writes nothing and a reader who had dragged the split where they wanted
  * it gets it back. One resident is docked at a time: the three are things you look at in the same place
  * rather than three places, and the slot is one column.
+ *
+ * The terminal is not one of them any more. It is a third group nested inside the chat column, so the
+ * panel sits under the conversation and beside nothing: the right rail, the drawer and the docked
+ * resident are all exactly as wide as they were before it existed, because its height comes out of the
+ * column the conversation already owned rather than out of the row. The group is declared from the
+ * panel's height alone — the conversation takes the remainder — and its height is per window state,
+ * while whether it is showing at all is one flag that survives a maximize. It is opened and closed by
+ * the title bar's own glyph and by Ctrl+`, and its separator's drag is remembered by the same path the
+ * other two groups' drags are.
  *
  * Whether one is docked is memory only, and deliberately not the drawer's flag's neighbour in storage:
  * an open panel is a way of looking at the file in front of you rather than a way of working, so a
@@ -120,9 +129,12 @@ function WorkbenchLayout() {
   // Which resident of the right rail is docked into the inner group's right slot, or null while the rail
   // is alone. Read once per render, beside the flag that says whether it has taken the chat's width.
   const rightPanel = useWorkbenchStore((s) => s.rightPanel)
-  // The window state this window is in, and the set both groups open with for it. Read once per
-  // render, so the two levels of the layout can never be given sizes that were resolved apart.
-  const { state, sizes, onOuterLayoutChanged, onInnerLayoutChanged } = useWorkbenchLayout()
+  // The window state this window is in, and the set both groups open with for it — with the bottom
+  // terminal panel's own state beside them: whether it is showing, how tall it is in this state, and
+  // the one place a drag of its separator turns back into a stored height. Read once per render, so the
+  // three levels of the layout can never be given sizes that were resolved apart.
+  const { state, sizes, bottomOpen, bottomHeight, onOuterLayoutChanged, onInnerLayoutChanged, onBottomLayoutChanged } =
+    useWorkbenchLayout()
   const sessions = useChatSessionsContext()
   useWorkspaceChangeInvalidation(selectedFile)
 
@@ -277,7 +289,58 @@ function WorkbenchLayout() {
                     defaultSize={rightPanel === null ? percentSize(100) : percentSize(sizes.main.chat)}
                     minSize={320}
                   >
-                    <ChatPanel />
+                    {/*
+                      The chat column's own split, and the reason the terminal's move is a move: the
+                      panel is nested here rather than in the row, so everything that shares the row
+                      keeps the width it had. The group is declared and keyed exactly as the two above
+                      it are — a vertical split takes percentages of a height, and the height the panel
+                      opens at belongs to the window state, so a new state is a new group.
+                    */}
+                    <ResizablePanelGroup
+                      id="workbench-chat"
+                      key={state}
+                      orientation="vertical"
+                      defaultLayout={chatGroupLayout(bottomHeight)}
+                      onLayoutChanged={onBottomLayoutChanged}
+                    >
+                      {/*
+                        The conversation, and the panel it sits above. The group names both panels
+                        whether or not the second is there, and while it is closed the library sets
+                        that pair aside and falls back to this share — which is why the closed panel
+                        says a hundred rather than leaving the conversation at a share of a group it
+                        now has to itself.
+                      */}
+                      <ResizablePanel
+                        id="conversation"
+                        defaultSize={bottomOpen ? percentSize(100 - bottomHeight) : percentSize(100)}
+                        minSize={160}
+                      >
+                        <ChatPanel />
+                      </ResizablePanel>
+
+                      {/*
+                        The bottom terminal panel, and its handle with it. Removed from the group
+                        rather than narrowed to nothing, exactly as the drawer and the chat column are
+                        whenever they go: a panel that is still in the tree is still a height the
+                        other one is sharing with. Its own declared size is what the library lays it
+                        out at when it arrives, so opening the panel writes no number anywhere and a
+                        reader who had dragged the separator gets the height they chose back.
+
+                        Keyed apart from the conversation for the reason the branches above are: React
+                        reconciles the group's children by position, so an unkeyed panel would be
+                        re-used — and remounted — as the conversation's, which would end the shell
+                        session the transcript replay exists to preserve.
+                      */}
+                      {bottomOpen && (
+                        <Fragment key="bottom">
+                          <ResizableHandle />
+
+                          <ResizablePanel id="terminal" defaultSize={percentSize(bottomHeight)} minSize={120}>
+                            <TerminalPanel />
+                          </ResizablePanel>
+                        </Fragment>
+                      )}
+                    </ResizablePanelGroup>
                   </ResizablePanel>
 
                   {rightPanel !== null && <ResizableHandle />}
@@ -286,7 +349,7 @@ function WorkbenchLayout() {
 
               {/*
                 The right slot, while a resident is docked in it. One panel whatever is in it, because
-                the rail's four residents are four things shown in one column rather than four
+                the rail's three residents are three things shown in one column rather than three
                 columns; the resident's own component is what changes.
 
                 The id is the group's key for the pane beside the chat and is the same for every
@@ -310,8 +373,6 @@ function WorkbenchLayout() {
                     <CodeViewer />
                   ) : rightPanel === 'preview' ? (
                     <PreviewPanel />
-                  ) : rightPanel === 'terminal' ? (
-                    <TerminalPanel />
                   ) : (
                     <ToolsPanel />
                   )}

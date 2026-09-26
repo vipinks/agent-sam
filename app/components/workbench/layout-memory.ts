@@ -1,4 +1,4 @@
-import { sanitizeLayoutSizes, type LayoutSizes, type WindowState } from './layout'
+import { clampBottomHeight, sanitizeLayoutSizes, type LayoutSizes, type WindowState } from './layout'
 
 /**
  * What a separator drag means for the window state's stored set: which state's set to write, and what
@@ -12,9 +12,14 @@ import { sanitizeLayoutSizes, type LayoutSizes, type WindowState } from './layou
  * This is the one place that pairs a group with a state's set, so the drag path and the restore path
  * cannot disagree about what a stored set contains: both go through `LayoutSizes`, and only the source
  * of the numbers differs.
+ *
+ * The bottom terminal panel's separator is the third group and the one that is not read as a set: what
+ * it reports is a height rather than a pair of column shares, so it has a rule of its own below — and
+ * the two rules are here together because they are one decision, "is what the library just reported a
+ * number worth remembering".
  */
 
-/** Which of the workbench's two groups reported the change. */
+/** Which of the workbench's three groups reported the change. */
 export type LayoutGroup = 'outer' | 'main'
 
 /** What the resize library hands back: panel id to that panel's share of its group. */
@@ -70,4 +75,38 @@ export function layoutChangeFor(input: LayoutChangeInput): LayoutChange | null {
   if (!sizes) return null
 
   return { state: input.active, sizes }
+}
+
+/** What the bottom panel's separator drag reports: the two panels of the chat column's group. */
+export interface BottomHeightChangeInput {
+  /** The window state in force, which is the height the drag belongs to. */
+  active: WindowState
+  /** The layout the library reported for the chat column's group, keyed by panel id. */
+  layout: GroupLayout
+}
+
+export interface BottomHeightChange {
+  state: WindowState
+  height: number
+}
+
+/**
+ * "What a drag of the bottom panel's separator was dragged to", or null when it is not one.
+ *
+ * Simpler than the two sets above it in one way and stricter in another. Simpler because the report is
+ * one panel's share of its own group rather than a pair that has to add up — the conversation's share
+ * is the remainder, and it is `chatGroupLayout` that states it. Stricter in that the panel read here is
+ * named: a report that does not name `terminal` at all, or names one of its shares as something that
+ * cannot be a percentage, describes no panel that could be restored, and writing it would replace a
+ * good height with one that resolves to a default.
+ *
+ * A number inside the range is left exactly as it was reported, and one outside it is pulled to the
+ * boundary rather than refused — the same repair `clampBottomHeight` applies to a stored record, so a
+ * height reaches storage by one rule whether it came from a drag or from a file.
+ */
+export function bottomHeightChangeFor(input: BottomHeightChangeInput): BottomHeightChange | null {
+  const height = input.layout.terminal
+  if (typeof height !== 'number' || !Number.isFinite(height) || height <= 0 || height >= 100) return null
+
+  return { state: input.active, height: clampBottomHeight(height) }
 }

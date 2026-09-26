@@ -207,17 +207,18 @@ describe('a double-click on a file row', () => {
     stubWorkbench()
     const { container } = renderWorkbench()
 
-    await userEvent.click(resident('Terminal'))
-    expect(useWorkbenchStore.getState().rightPanel).toBe('terminal')
+    await userEvent.click(resident('Preview'))
+    expect(useWorkbenchStore.getState().rightPanel).toBe('preview')
 
     await userEvent.dblClick(await row('notes.txt'))
 
     expect(useWorkbenchStore.getState().rightPanel).toBe('code')
     expect(useWorkbenchStore.getState().selectedFile).toBe(NOTES)
     await waitFor(() => expect(container.querySelector('[data-slot="code-gutter"]')).not.toBeNull())
-    // Switched rather than added: the transcript's own node is gone from the slot.
-    expect(screen.queryByLabelText('Command')).toBeNull()
-    expect(resident('Terminal').getAttribute('aria-pressed')).toBe('false')
+    // Switched rather than added: the slot holds the viewer's own node, and the resident that was
+    // docked there is no longer pressed.
+    expect(container.querySelector('[data-slot="code-gutter"]')).not.toBeNull()
+    expect(resident('Preview').getAttribute('aria-pressed')).toBe('false')
   })
 })
 

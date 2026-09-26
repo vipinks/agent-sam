@@ -1,19 +1,18 @@
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
-import { RotateCw, SquareTerminal } from 'lucide-react'
+import { PanelBottomClose, RotateCw, SquareTerminal } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { terminalPreferencesStore } from '@/conveyor/stores/terminal-preferences'
 import { useThemeStore } from '@/app/shell'
 import { Button } from '../ui/button'
 import { PaneHeader } from './pane-header'
-import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 import { terminalHost, type TerminalStatus } from './terminal-host'
 import { terminalThemeFor } from './terminal-theme'
 import { useWorkbenchStore } from './store'
 import '@xterm/xterm/css/xterm.css'
 
 /**
- * The terminal, as a resident of the right rail.
+ * The terminal, as the bottom panel under the chat column.
  *
  * The pane is a view and nothing else. The shell is a process in main, keyed by the open folder; the
  * xterm instance and the element it draws into belong to `terminal-host.ts`, one level up, because the
@@ -27,6 +26,12 @@ import '@xterm/xterm/css/xterm.css'
  * through React — chunks are written into xterm by the host — so nothing here re-renders per byte. What
  * it does re-render for is the status: which folder's shell, and whether it is opening, live, ended or
  * failed — which is also when the action out of an ended shell appears.
+ *
+ * Where it is mounted is the layout's business and not this pane's: the workbench nests its column's
+ * group under the chat and renders this into the panel below the conversation, so a move of the panel
+ * is a change in one file's JSX and nothing in this one. What it does own is the way out from where the
+ * reader's pointer already is — its header's close glyph, which is the title bar's own toggle reached
+ * from the other end.
  */
 export function TerminalPanel() {
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
@@ -93,8 +98,7 @@ export function TerminalPanel() {
         >
           {rootPath ?? 'no folder open'}
         </span>
-        <PanelExpandControl />
-        <PanelCollapseControl />
+        <BottomPanelCloseControl />
       </PaneHeader>
 
       {/*
@@ -125,6 +129,35 @@ export function TerminalPanel() {
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Put the bottom panel away from inside it.
+ *
+ * The title bar's glyph is how this panel is opened and closed, and this is that same toggle reached
+ * from the other end of the panel: a reader whose pointer is already in the shell should not have to
+ * travel to the top of the window to put it away. It is not the rail's collapse glyph and neither offers
+ * the other's move — a resident docked *beside* the chat and a panel *under* it are two different
+ * things, and one control meaning both would be a control whose effect depends on which is open.
+ *
+ * There is no expand control beside it, deliberately. The viewer's expansion is about a column taking the
+ * chat's width, and this panel is the chat column's own height; the control that offers that expansion
+ * is still offered by every resident of the rail.
+ */
+function BottomPanelCloseControl() {
+  const closeBottomPanel = useWorkbenchStore((s) => s.closeBottomPanel)
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label="Close terminal panel"
+      title="Hide the terminal panel"
+      onClick={closeBottomPanel}
+    >
+      <PanelBottomClose />
+    </Button>
   )
 }
 

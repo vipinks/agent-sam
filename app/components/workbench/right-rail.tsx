@@ -1,13 +1,4 @@
-import {
-  Eye,
-  FileCode,
-  Maximize2,
-  Minimize2,
-  PanelRightClose,
-  SquareTerminal,
-  Wrench,
-  type LucideIcon,
-} from 'lucide-react'
+import { Eye, FileCode, Maximize2, Minimize2, PanelRightClose, Wrench, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'
@@ -17,9 +8,13 @@ import { useWorkbenchStore } from './store'
  *
  * The rail is the left rail's mirror and its opposite in one way: an icon click here does not switch
  * between columns but *docks* one panel into the inner group, beside the chat. Its residents are docked
- * one at a time, because the slot they share is one column — the file's source, the same file rendered,
- * the shell command transcript and the tools panel are things a reader looks at in the same place rather
- * than four places.
+ * one at a time, because the slot they share is one column — the file's source, the same file rendered
+ * and the tools panel are things a reader looks at in the same place rather than three places.
+ *
+ * The terminal is not one of them any more, and its absence here is the phase's whole point: a shell is
+ * not a second way of looking at the file beside the chat, it is a panel *under* the conversation, and
+ * it is opened from the window's title bar instead. Nothing else about the rail changed to make room for
+ * that — the slot, its persisted share and the three residents' own controls are what they were.
  *
  * At launch nothing is docked. That is the phase's decision rather than a default that fell out of the
  * code: the inner group holds the conversation alone, and the rail is where you go to open the file
@@ -33,7 +28,7 @@ import { useWorkbenchStore } from './store'
  */
 
 /** The ids of the panels the right rail can dock. */
-export type RightPanelId = 'code' | 'preview' | 'terminal' | 'tools'
+export type RightPanelId = 'code' | 'preview' | 'tools'
 
 /** One resident of the rail: what it is called, and the glyph it is drawn as. */
 export interface RightResident {
@@ -44,15 +39,14 @@ export interface RightResident {
 
 /**
  * The residents, in the order they are read: the file's source and its diffs, then that same file
- * rendered, then the shell. The first two are the same open file seen two ways and sit together for that
- * reason; the terminal and the tools are different things entirely and come after them, in that order
- * because the shell is what a reader reaches for while working in a file and the tools are what they
- * reach for while deciding what the app is working *from*.
+ * rendered, then the tools. The first two are the same open file seen two ways and sit together for that
+ * reason; the tools are a different thing entirely and come after them, because the two views are what a
+ * reader reaches for while working in a file and the tools are what they reach for while deciding what
+ * the app is working *from*.
  */
 export const RIGHT_RESIDENTS: RightResident[] = [
   { id: 'code', label: 'Code', icon: FileCode },
   { id: 'preview', label: 'Preview', icon: Eye },
-  { id: 'terminal', label: 'Terminal', icon: SquareTerminal },
   { id: 'tools', label: 'Tools', icon: Wrench },
 ]
 

@@ -162,11 +162,12 @@ function stubWorkbench(initial: TerminalPreferencesState = EMPTY_STATE) {
 }
 
 /**
- * Render the workbench with a folder open, dock the terminal, then open Settings on its Terminal section.
+ * Render the workbench with a folder open, open the bottom terminal panel, then open Settings on its
+ * Terminal section.
  *
- * The terminal is docked first so that a terminal instance exists to be re-painted; leaving the docks in
- * place while the settings screen takes the main area is the app's own behaviour, not a shortcut — the
- * right panel id stays what it was, and the pane simply is not mounted.
+ * The panel is opened first so that a terminal instance exists to be re-painted; leaving it open while
+ * the settings screen takes the main area is the app's own behaviour, not a shortcut — the flag stays
+ * what it was, and the pane simply is not mounted.
  */
 async function openTerminalSettings(stub: BridgeStub, rootPath: string): Promise<HTMLElement> {
   stubStore(stub, CHAT_SESSIONS_STORE_ID, { sessions: [], activeId: null })
@@ -178,8 +179,8 @@ async function openTerminalSettings(stub: BridgeStub, rootPath: string): Promise
     </QueryClientProvider>
   )
 
-  act(() => useWorkbenchStore.setState({ rightPanel: 'terminal' }))
-  await waitFor(() => expect(screen.getByLabelText('Terminal pane'), 'the pane is docked').toBeTruthy())
+  act(() => useWorkbenchStore.setState({ bottomPanelOpen: true }))
+  await waitFor(() => expect(screen.getByLabelText('Terminal pane'), 'the pane is mounted').toBeTruthy())
   await waitFor(() => expect(terminalOptions().fontSize, 'and the terminal is built').toBeTruthy())
   // The dock's own resize is debounced, so waiting for it here is what makes a later count a statement
   // about what the *fields* sent: taken before it lands, the timer's own call would look like one of
@@ -224,6 +225,7 @@ beforeEach(() => {
     settingsSection: 'providers',
     settingsReturnView: null,
     rightPanel: null,
+    bottomPanelOpen: false,
     viewerExpanded: false,
     drawerCollapsed: false,
   })

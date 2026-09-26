@@ -1,9 +1,9 @@
 /**
- * The tools resident: the right rail's fourth dock, and the Skills tab its panel hosts.
+ * The tools resident: the right rail's third dock, and the Skills tab its panel hosts.
  *
  * Some of the rail's own claims are not repeated here, because `right-rail-docking.test.tsx` owns them
- * and now reads four residents: that a docked panel is handed the persisted inner share rather than a
- * default, and that the open state is memory only. What this file adds is what only a fourth resident
+ * and now reads three residents: that a docked panel is handed the persisted inner share rather than a
+ * default, and that the open state is memory only. What this file adds is what only the last resident
  * can show — that Tools joins the rail in the one order the registry states, docks at that same
  * persisted percentage, and that a relaunch hydrates nothing docked.
  *
@@ -352,7 +352,7 @@ beforeEach(() => {
 })
 
 describe('the tools resident', () => {
-  it('is the rail’s fourth, in order and unpressed, and docks at the persisted inner percentage', async () => {
+  it('is the rail’s third, in order and unpressed, and docks at the persisted inner percentage', async () => {
     // A set dragged in this window state, which is what "the persisted inner percentage" means: the dock
     // reads a share that was chosen rather than the default the group would have opened with.
     const dragged: LayoutSizes = { outer: { drawer: 34, main: 66 }, main: { chat: 41, viewer: 59 } }
@@ -362,8 +362,8 @@ describe('the tools resident', () => {
     const { container } = renderWorkbench()
 
     const buttons = [...rightRail().querySelectorAll('button')]
-    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual(['Code', 'Preview', 'Terminal', 'Tools'])
-    expect(buttons.map((button) => button.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'false'])
+    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual(['Code', 'Preview', 'Tools'])
+    expect(buttons.map((button) => button.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false'])
 
     await dockTools()
 

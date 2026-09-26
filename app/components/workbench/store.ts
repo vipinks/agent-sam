@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 import {
+  bottomPanelOpenFrom,
+  mergeSavedBottomHeight,
   mergeSavedLayout,
   sanitizeLayoutSizes,
+  storedBottomHeights,
+  type BottomHeightKey,
   type LayoutSizes,
   type StoredLayoutSets,
   type WindowState,
@@ -145,6 +149,32 @@ interface WorkbenchState {
   /** Put the docked panel back to rail-only, whatever is in it. The header's collapse glyph. */
   closeRightPanel: () => void
   /**
+   * Whether the bottom terminal panel is showing under the chat column.
+   *
+   * A preference rather than a way of looking at something, which is the line that puts it here rather
+   * than beside `rightPanel` above it: a reader who keeps a shell open under their conversation is
+   * describing how they work, so the flag is written to the layout record and a restart opens the way
+   * the last session ended. That is also why it outlives a maximize while the panel's height does not:
+   * how tall the panel is in a maximized window is a fact about that window, and whether the panel is
+   * there at all is not a fact about a window's size.
+   *
+   * It is the only thing the title bar's glyph reads and the toggle below is the only thing that writes
+   * it, so what that glyph reports as pressed cannot disagree with what a restart would restore.
+   */
+  bottomPanelOpen: boolean
+  /** Open the bottom panel, or close it when it is already open. The title bar's glyph, and Ctrl+`. */
+  toggleBottomPanel: () => void
+  /** Close it, whatever it is showing. The terminal's own header offers this. */
+  closeBottomPanel: () => void
+  /**
+   * Record the height the bottom panel's separator was dragged to, for the state the window is in.
+   *
+   * The height travels with the layout sets rather than with this flag, because both are shares of a
+   * group and both are written by a separator drag — which is why it is merged into the record the sets
+   * live in and per window state, exactly as they are.
+   */
+  saveBottomPanelHeight: (state: WindowState, height: number) => void
+  /**
    * Which theme the window wears, and how far its surfaces are shifted from that theme's own values.
    *
    * A preference rather than a fact about anything, which is why it lives here with the chat target
@@ -260,17 +290,19 @@ function saveThemePreference(themeId: ThemeId, brightness: number): void {
 const LAYOUT_KEY = 'sam-ai-layout-preferences'
 
 /**
- * The record stored under `LAYOUT_KEY`: the two layout sets, and whether the drawer is away.
+ * The record stored under `LAYOUT_KEY`: the layout sets and heights, and the three flags beside them.
  *
- * One record rather than a second key, because the two are written by the same two kinds of event — a
- * drag and a collapse — and two keys would mean two writers that could each drop the other's half. It
- * is additive in the sense that matters: a reader of either half reads it on its own, so a record
- * written by a version that had only the sets stays perfectly good, and so does one written by this
- * version read by a version that does not know the flag.
+ * One record rather than a second key, because they are written by the same two kinds of event — a drag
+ * and a click on a control that puts something away — and two keys would mean two writers that could
+ * each drop the other's half. It is additive in the sense that matters: a reader of any one value reads
+ * it on its own, so a record written by a version that had only the sets stays perfectly good, and so
+ * does one written by this version read by a version that does not know the flags.
  */
 interface StoredWorkbenchPreferences extends StoredLayoutSets {
   /** Present only when the drawer was left away; absent means expanded. */
   drawerCollapsed?: boolean
+  /** Present only while the bottom panel was left open; absent means closed. */
+  bottomPanelOpen?: boolean
   /**
    * The groups whose rows were left hidden, by key.
    *
@@ -293,19 +325,38 @@ function collapsedGroupsFrom(value: unknown): string[] {
 }
 
 /**
- * The two layout sets and the collapse flag as they were stored, each read on its own.
+ * The flags the record carries beside the sets, as one write hands them over.
+ *
+ * One object rather than three more parameters, because two of the three are booleans: a call site that
+ * swapped "the drawer is away" for "the panel is open" would type-check and then quietly open a panel
+ * for a reader who never asked for one.
+ */
+interface StoredWorkbenchFlags {
+  drawerCollapsed: boolean
+  collapsedSessionGroups: string[]
+  bottomPanelOpen: boolean
+}
+
+/**
+ * The layout record and its flags as they were stored, each value read on its own.
  *
  * Read the way the theme preference is, and for the same reason: a record written before both sets
  * existed, or one whose windowed half was corrupted, must not cost the user the half that is still
  * meaningful. Each key is sanitised separately, and a value that is not a set at all is simply absent —
- * which `layoutFor` then resolves to that state's defaults. The flag is read the same way, one step
+ * which `layoutFor` then resolves to that state's defaults. A flag is read the same way, one step
  * stricter: only a stored `true` puts the drawer away, because "expanded" is what every other value —
  * absent, `false`, or unreadable — means, and it is the state a first launch opens in.
+ *
+ * The bottom panel is read in the same two ways and in that order. Its heights are read as numbers and
+ * clamped where they are *used* rather than here, so a height no panel can be read at is repaired by
+ * one rule whether it was just dragged or written by another version; and its open flag is read by
+ * `bottomPanelOpenFrom`, with the drawer flag's own strictness.
  */
 function initialLayoutPreferences(): {
   sets: StoredLayoutSets
   drawerCollapsed: boolean
   collapsedSessionGroups: string[]
+  bottomPanelOpen: boolean
 } {
   try {
     const saved = localStorage.getItem(LAYOUT_KEY)
@@ -317,32 +368,51 @@ function initialLayoutPreferences(): {
         sets: {
           ...(windowed ? { layoutWindowed: windowed } : {}),
           ...(maximized ? { layoutMaximized: maximized } : {}),
+          ...numberIfAny(parsed.bottomPanelHeightWindowed, 'bottomPanelHeightWindowed'),
+          ...numberIfAny(parsed.bottomPanelHeightMaximized, 'bottomPanelHeightMaximized'),
         },
         drawerCollapsed: parsed.drawerCollapsed === true,
         collapsedSessionGroups: collapsedGroupsFrom(parsed.collapsedSessionGroups),
+        bottomPanelOpen: bottomPanelOpenFrom(parsed.bottomPanelOpen),
       }
     }
   } catch {
     // Unreadable preference — fall through to no saved sets rather than failing to start.
   }
-  return { sets: {}, drawerCollapsed: false, collapsedSessionGroups: [] }
+  return { sets: {}, drawerCollapsed: false, collapsedSessionGroups: [], bottomPanelOpen: false }
+}
+
+/**
+ * One stored height, as the record's own key, or nothing when the value is not a number at all.
+ *
+ * A partial rather than a number so the caller can spread it into a record: an absent height and a
+ * height that was never written are the same fact, and neither may appear as a key holding
+ * `undefined`. An out-of-range number is carried through as it was stored — `clampBottomHeight` is the
+ * one judge of the range, and it stands on the read path rather than in storage, so the rule is the
+ * same for a record read at launch and a height dragged a moment ago.
+ */
+function numberIfAny(value: unknown, key: BottomHeightKey): Partial<Record<BottomHeightKey, number>> {
+  return typeof value === 'number' ? { [key]: value } : {}
 }
 
 /**
  * Persist the record, tolerating a storage that refuses to write.
  *
- * `mergeSavedLayout`'s output for the sets, so the writer cannot drop one of them, and each of the two
- * flags written only when it is set — the absence of a key is what "expanded" and "nothing put away"
- * are stored as. Every caller hands in the halves it is not changing, which is what makes a drag during
- * a collapse write `layoutWindowed` *and* leave `drawerCollapsed` true, and a group put away leave both
- * sets and the drawer flag exactly as they were.
+ * The caller's own output for everything geometric — `mergeSavedLayout`'s or `mergeSavedBottomHeight`'s,
+ * whichever writer reached here — so the writer cannot drop a set or a height, and every flag written
+ * only when it is set, because the absence of a key is what "expanded", "nothing put away" and
+ * "closed" are stored as. Every caller hands in the halves it is not changing, which is what makes a
+ * drag during a collapse write `layoutWindowed` *and* leave `drawerCollapsed` true, and a panel opened
+ * leave both sets and the drawer flag exactly as they were.
  */
-function saveWorkbenchPreferences(sets: StoredLayoutSets, drawerCollapsed: boolean, collapsedGroups: string[]): void {
+function saveWorkbenchPreferences(sets: StoredLayoutSets, flags: StoredWorkbenchFlags): void {
   const record: StoredWorkbenchPreferences = {
     ...(sets.layoutWindowed ? { layoutWindowed: sets.layoutWindowed } : {}),
     ...(sets.layoutMaximized ? { layoutMaximized: sets.layoutMaximized } : {}),
-    ...(drawerCollapsed ? { drawerCollapsed: true } : {}),
-    ...(collapsedGroups.length > 0 ? { collapsedSessionGroups: collapsedGroups } : {}),
+    ...storedBottomHeights(sets),
+    ...(flags.drawerCollapsed ? { drawerCollapsed: true } : {}),
+    ...(flags.collapsedSessionGroups.length > 0 ? { collapsedSessionGroups: flags.collapsedSessionGroups } : {}),
+    ...(flags.bottomPanelOpen ? { bottomPanelOpen: true } : {}),
   }
   try {
     localStorage.setItem(LAYOUT_KEY, JSON.stringify(record))
@@ -457,7 +527,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
    */
   setDrawerCollapsed: (drawerCollapsed) =>
     set((current) => {
-      saveWorkbenchPreferences(current.layoutPreferences, drawerCollapsed, current.collapsedSessionGroups)
+      saveWorkbenchPreferences(current.layoutPreferences, {
+        drawerCollapsed,
+        collapsedSessionGroups: current.collapsedSessionGroups,
+        bottomPanelOpen: current.bottomPanelOpen,
+      })
       return { drawerCollapsed }
     }),
   collapsedSessionGroups: launchPreferences.collapsedSessionGroups,
@@ -469,7 +543,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
    */
   setCollapsedSessionGroups: (collapsedSessionGroups) =>
     set((current) => {
-      saveWorkbenchPreferences(current.layoutPreferences, current.drawerCollapsed, collapsedSessionGroups)
+      saveWorkbenchPreferences(current.layoutPreferences, {
+        drawerCollapsed: current.drawerCollapsed,
+        collapsedSessionGroups,
+        bottomPanelOpen: current.bottomPanelOpen,
+      })
       return { collapsedSessionGroups }
     }),
   // Present even when nothing was ever saved, so a reader always has a record to resolve against rather
@@ -484,7 +562,58 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   saveLayout: (state, sizes) =>
     set((current) => {
       const layoutPreferences = mergeSavedLayout(current.layoutPreferences, state, sizes)
-      saveWorkbenchPreferences(layoutPreferences, current.drawerCollapsed, current.collapsedSessionGroups)
+      saveWorkbenchPreferences(layoutPreferences, {
+        drawerCollapsed: current.drawerCollapsed,
+        collapsedSessionGroups: current.collapsedSessionGroups,
+        bottomPanelOpen: current.bottomPanelOpen,
+      })
+      return { layoutPreferences }
+    }),
+  bottomPanelOpen: launchPreferences.bottomPanelOpen,
+  /**
+   * The toggle writes the flag through the record's one writer, reading the halves it is not changing
+   * from the store at the moment of the write rather than closing over them: the glyph, a separator
+   * drag and a collapse all reach that record, and none of them may drop another's half of it.
+   */
+  toggleBottomPanel: () =>
+    set((current) => {
+      const bottomPanelOpen = !current.bottomPanelOpen
+      saveWorkbenchPreferences(current.layoutPreferences, {
+        drawerCollapsed: current.drawerCollapsed,
+        collapsedSessionGroups: current.collapsedSessionGroups,
+        bottomPanelOpen,
+      })
+      return { bottomPanelOpen }
+    }),
+  /**
+   * The way out of the panel from inside it, and the same write the toggle makes when the panel is
+   * open. Closing one that is already closed writes nothing: an absent key is what the closed panel is
+   * stored as, and a record is only worth writing when a value in it changed.
+   */
+  closeBottomPanel: () =>
+    set((current) => {
+      if (!current.bottomPanelOpen) return {}
+      saveWorkbenchPreferences(current.layoutPreferences, {
+        drawerCollapsed: current.drawerCollapsed,
+        collapsedSessionGroups: current.collapsedSessionGroups,
+        bottomPanelOpen: false,
+      })
+      return { bottomPanelOpen: false }
+    }),
+  /**
+   * The height is merged by `mergeSavedBottomHeight`, not by this setter: which window state a height
+   * belongs to, and what happens to the other state's, is a rule about layouts rather than about
+   * storage, and the pure suite asserts it directly. The open flag travels with the write, so dragging
+   * the separator of a panel the user just opened cannot close it.
+   */
+  saveBottomPanelHeight: (state, height) =>
+    set((current) => {
+      const layoutPreferences = mergeSavedBottomHeight(current.layoutPreferences, state, height)
+      saveWorkbenchPreferences(layoutPreferences, {
+        drawerCollapsed: current.drawerCollapsed,
+        collapsedSessionGroups: current.collapsedSessionGroups,
+        bottomPanelOpen: current.bottomPanelOpen,
+      })
       return { layoutPreferences }
     }),
 }))

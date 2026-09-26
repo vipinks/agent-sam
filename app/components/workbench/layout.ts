@@ -1,8 +1,14 @@
 /**
- * The sizes the workbench's two resize groups open with, per window state.
+ * The sizes the workbench's resize groups open with, per window state.
  *
  * Pure and renderer-only, for the reason `changes.ts` and `mentions.ts` are: a proportion can be wrong
  * while still looking plausible on screen, so a test should be able to assert on it without a DOM.
+ *
+ * The bottom terminal panel's height is the third of them, and it is the one that is not part of a
+ * `LayoutSizes`: the sets describe the columns of a window and the panel is a share of the chat
+ * column's own height, so it is stored as a bare percentage beside them and clamped on the way in.
+ * Its open flag is the one thing here that is not geometry, and it is read with the same strictness
+ * the two sets are read with — absent means the closed panel a first launch opens with.
  *
  * The reason the numbers are here rather than inline in the JSX is that the workbench is two *nested*
  * groups, and the share a panel has of its own group is not the share it has of the window. Writing
@@ -64,6 +70,91 @@ export function mainGroupLayout(sizes: LayoutSizes): Record<string, number> {
 }
 
 /**
+ * The chat column's own group: the conversation, then the bottom terminal panel under it.
+ *
+ * The third group, and the one that makes the terminal's move a move rather than a rebuild: the panel
+ * is a split inside the column the conversation already owns, so the right panel and its residents
+ * share the row exactly as they did, and a reader who had dragged the column's own separator gets the
+ * width they chose. Declared from the height alone — the conversation takes the remainder — because
+ * the two numbers are one declaration, the way they are in the groups above.
+ *
+ * Declared even while the panel is closed, and set aside by the library then for the reason the other
+ * groups' declarations are: it names two panels and the group has one, which is the fallback the
+ * chat's own `100%` and the drawer's return both rely on.
+ */
+export function chatGroupLayout(height: number): Record<string, number> {
+  return { conversation: 100 - height, terminal: height }
+}
+
+/**
+ * The height the bottom panel opens at before it has ever been dragged, as a share of its column.
+ *
+ * A third of the column: enough for the shell's own line and a few lines of its output, and not so
+ * much that the conversation it is under has to be scrolled after one message.
+ */
+export const DEFAULT_BOTTOM_HEIGHT = 35
+
+/**
+ * The range a height can be read in, in percent of the column.
+ *
+ * The clamp exists for records this version did not write: a percentage left by a hand edit or by an
+ * older shape of the record can be a panel of two pixels or a conversation of one line. The panel's
+ * own pixel minimum and the conversation's are stated at the panels themselves, where the library
+ * enforces them against a measured box; these two are what keeps an unmeasured *number* sane.
+ */
+export const MIN_BOTTOM_HEIGHT = 15
+export const MAX_BOTTOM_HEIGHT = 85
+
+/** The key one window state's bottom-panel height is stored under. */
+export type BottomHeightKey = 'bottomPanelHeightWindowed' | 'bottomPanelHeightMaximized'
+
+/**
+ * The stored key one state's height is written and read under.
+ *
+ * Named by the state, like `layoutSetKey` and for the same reason: the write is one file and the read
+ * is another, so a key spelled out at one of them is a height that silently never applies.
+ */
+export function bottomHeightKey(state: WindowState): BottomHeightKey {
+  return state === 'maximized' ? 'bottomPanelHeightMaximized' : 'bottomPanelHeightWindowed'
+}
+
+/**
+ * A height in the range a panel can be read in, or the default when the value is not a height at all.
+ *
+ * The two outcomes are deliberately different. A number outside the range is a height this panel
+ * cannot be read at, so it is pulled to the boundary it was past; a value that is not a number — a
+ * string, a `NaN`, a record some future version writes — describes no height, so it falls back the way
+ * an absent key does rather than being called a boundary.
+ */
+export function clampBottomHeight(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_BOTTOM_HEIGHT
+  return Math.min(Math.max(value, MIN_BOTTOM_HEIGHT), MAX_BOTTOM_HEIGHT)
+}
+
+/**
+ * The height the bottom panel opens at in one window state: what was dragged in that state, or the
+ * default.
+ *
+ * Per state, like the two sets above it: a height dragged in a windowed window is a fact about that
+ * window, and the maximized one has its own.
+ */
+export function bottomPanelHeightFor(state: WindowState, saved: StoredLayoutSets): number {
+  return clampBottomHeight(saved[bottomHeightKey(state)])
+}
+
+/**
+ * Whether the bottom panel was left open, as the title bar's toggle reads it.
+ *
+ * A `true` that was left behind or nothing: the flag is written only when the panel is open, so the
+ * absence of the key is what "closed" is stored as, and every other value — a `false`, a string, a
+ * record that is not a boolean at all — means the closed panel a first launch opens with. Being
+ * strict rather than truthy is what keeps a corrupted record from opening a panel nobody asked for.
+ */
+export function bottomPanelOpenFrom(value: unknown): boolean {
+  return value === true
+}
+
+/**
  * The stored key one state's set is written and read under.
  *
  * Named by the state rather than left to the call site, because the write and the read are in different
@@ -87,6 +178,17 @@ export type LayoutSetKey = 'layoutWindowed' | 'layoutMaximized'
 export interface StoredLayoutSets {
   layoutWindowed?: LayoutSizes
   layoutMaximized?: LayoutSizes
+  /**
+   * The bottom panel's height in each window state, present only once it has been dragged in it.
+   *
+   * Here rather than beside the open flag in the store's own record because a height *is* a share of a
+   * group, exactly like the sets above it — and because the same drag path writes it: a separator
+   * dragged in either of the other two groups rebuilds this record through `mergeSavedLayout`, and a
+   * record rebuilt without these keys would cost the user the terminal's height on the first drag
+   * anywhere else.
+   */
+  bottomPanelHeightWindowed?: number
+  bottomPanelHeightMaximized?: number
 }
 
 /** A share of a group that could have been measured, or null. */
@@ -155,7 +257,43 @@ export function mergeSavedLayout(saved: StoredLayoutSets, state: WindowState, si
   return {
     ...(saved.layoutWindowed ? { layoutWindowed: saved.layoutWindowed } : {}),
     ...(saved.layoutMaximized ? { layoutMaximized: saved.layoutMaximized } : {}),
+    ...storedBottomHeights(saved),
     [layoutSetKey(state)]: { outer: { ...sizes.outer }, main: { ...sizes.main } },
+  }
+}
+
+/**
+ * The record with one state's bottom-panel height replaced.
+ *
+ * The same rule as the sets' merge, for the same reason: the height a separator drag left belongs to
+ * the state the window was in when the drag ended, and writing it must leave the other state's height
+ * and both sets exactly as they were. Rebuilt rather than edited, so a caller holding the record it
+ * passed in cannot see it change.
+ */
+export function mergeSavedBottomHeight(saved: StoredLayoutSets, state: WindowState, height: number): StoredLayoutSets {
+  return {
+    ...(saved.layoutWindowed ? { layoutWindowed: saved.layoutWindowed } : {}),
+    ...(saved.layoutMaximized ? { layoutMaximized: saved.layoutMaximized } : {}),
+    ...storedBottomHeights(saved),
+    [bottomHeightKey(state)]: clampBottomHeight(height),
+  }
+}
+
+/**
+ * The two heights as the record holds them, either of them absent.
+ *
+ * One reader for both writers above and for the store's serializer, so a record rebuilt by a drag in
+ * one group, a record rebuilt by a drag in another, and a record written when the panel is opened
+ * cannot disagree about how a height is carried across.
+ */
+export function storedBottomHeights(saved: StoredLayoutSets): Partial<Record<BottomHeightKey, number>> {
+  return {
+    ...(saved.bottomPanelHeightWindowed !== undefined
+      ? { bottomPanelHeightWindowed: saved.bottomPanelHeightWindowed }
+      : {}),
+    ...(saved.bottomPanelHeightMaximized !== undefined
+      ? { bottomPanelHeightMaximized: saved.bottomPanelHeightMaximized }
+      : {}),
   }
 }
 

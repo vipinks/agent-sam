@@ -140,9 +140,14 @@ function chatColumn(container: HTMLElement): HTMLElement {
  * Defined on the element the pane actually renders rather than on `HTMLElement.prototype`, so no other
  * element in this file inherits a size it does not have — and redefined after each swap, because a swap
  * replaces the element that carried it.
+ *
+ * The pane is reached through the chat column's own conversation panel rather than as the column's first
+ * child, because the column is no longer a bare pane: its vertical group holds that panel with the
+ * bottom terminal panel's own under it. The element carrying the composer's separator is still the same
+ * one either way, and measuring the group instead would be measuring a box the composer does not read.
  */
 function measurablePane(container: HTMLElement): void {
-  const pane = chatColumn(container).firstElementChild as HTMLElement | null
+  const pane = chatColumn(container).querySelector<HTMLElement>('[data-panel]#conversation')?.firstElementChild
   if (!pane?.querySelector('[role="separator"]')) throw new Error('the rendered panel is not a chat pane')
   Object.defineProperty(pane, 'clientHeight', { value: PANE_HEIGHT, configurable: true })
 }

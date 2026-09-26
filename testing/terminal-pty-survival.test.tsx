@@ -173,14 +173,14 @@ function renderWorkbench(stub: BridgeStub, rootPath: string) {
   return view
 }
 
-/** Dock the resident, which is what makes the pane mount. */
+/** Open the bottom terminal panel, which is what makes the pane mount. */
 function dock(): void {
-  act(() => useWorkbenchStore.setState({ rightPanel: 'terminal' }))
+  act(() => useWorkbenchStore.setState({ bottomPanelOpen: true }))
 }
 
-/** Put it back on the rail without ending anything. */
+/** Put it away again without ending anything. */
 function undock(): void {
-  act(() => useWorkbenchStore.setState({ rightPanel: null }))
+  act(() => useWorkbenchStore.setState({ bottomPanelOpen: false }))
 }
 
 /** The folder main is working in, broadcast the way main broadcasts it. */
@@ -233,6 +233,7 @@ beforeEach(() => {
     viewerExpanded: false,
     drawerCollapsed: false,
     rightPanel: null,
+    bottomPanelOpen: false,
   })
 })
 
@@ -288,7 +289,7 @@ describe('an undock', () => {
     await waitFor(() => expect(shown()).toContain('notes.txt'))
 
     undock()
-    expect(useWorkbenchStore.getState().rightPanel).toBeNull()
+    expect(useWorkbenchStore.getState().bottomPanelOpen).toBe(false)
     expect(screen.queryByLabelText('Terminal pane'), 'the pane is gone').toBeNull()
     expect(calls(stub, 'kill'), 'putting the pane away ends nothing').toBe(0)
 
