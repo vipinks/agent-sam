@@ -10,7 +10,13 @@
  * Nothing here imports `node-pty`, `fs`, or `electron`. The one thing this layer cannot decide alone
  * is whether a shell actually exists, so that question arrives as an injected predicate rather than as
  * a `stat` — which is what keeps the rule a function of its arguments.
+ *
+ * The wire's two payloads live here for the same reason the session rules do. Main builds them, the
+ * renderer reads them, and both need one declaration of what a pushed chunk is — which is not a line,
+ * and not a frame: it is whatever the shell emitted, carried whole.
  */
+
+import { sameRoot } from './recent-roots'
 
 /**
  * A PTY that could not be spawned: no such shell, no permission, no pty device.
@@ -104,4 +110,50 @@ export function appendLine(buffer: readonly string[], line: string, max: number)
   if (max <= 0) return []
   const next = [...buffer, line]
   return next.length > max ? next.slice(next.length - max) : next
+}
+
+/** Output the shell produced, on its way to whichever windows are showing that root. */
+export interface TerminalDataPayload {
+  /** The root the shell belongs to, exactly as it was opened. */
+  rootPath: string
+  /**
+   * The chunk, verbatim.
+   *
+   * Not a line, not trimmed, and not re-encoded: a pty chunk boundary falls wherever the shell's own
+   * writes did, so it can hold half a line, several lines, a bare carriage return redrawing one, an
+   * escape sequence mid-colour, or nothing at all. The renderer hands it to xterm unchanged, which is
+   * the only property this field has to keep.
+   */
+  chunk: string
+}
+
+/** The shell ending — `exit`, a crash, or a kill. */
+export interface TerminalExitPayload {
+  rootPath: string
+  exitCode: number
+}
+
+/** Build the output payload main pushes. Here rather than at the emit site so its shape has one home. */
+export function terminalDataFor(rootPath: string, chunk: string): TerminalDataPayload {
+  return { rootPath, chunk }
+}
+
+/** Build the exit payload main pushes. */
+export function terminalExitFor(rootPath: string, exitCode: number): TerminalExitPayload {
+  return { rootPath, exitCode }
+}
+
+/**
+ * Whether a pushed payload belongs to the root a reader is showing.
+ *
+ * The comparison is `sameRoot`, so it is the same one the registry makes when it decides which shell a
+ * root gets: a folder reached two ways — one window opening `C:\work`, another `c:\Work` — is one root,
+ * and the payload keyed by one spelling must reach the terminal keyed by the other.
+ *
+ * Exact rather than a prefix, deliberately. `/work/notes` and `/work/notes/deeper` are two roots with
+ * two shells, and a containment test would let one root's output into the other's terminal — the one
+ * failure on this wire a renderer has no way to notice.
+ */
+export function isTerminalEventFor(payload: { rootPath: string }, rootPath: string): boolean {
+  return sameRoot(payload.rootPath, rootPath)
 }

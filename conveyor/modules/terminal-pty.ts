@@ -2,7 +2,7 @@ import { existsSync } from 'fs'
 import { delimiter, join } from 'path'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
-import { command, defineModule, query } from '../init'
+import { command, defineModule, event, query } from '../init'
 import { sameRoot } from '../protocol/recent-roots'
 import {
   appendLine,
@@ -10,8 +10,12 @@ import {
   detectShell,
   TERMINAL_NOT_FOUND,
   TERMINAL_SPAWN_FAILED,
+  terminalDataFor,
+  terminalExitFor,
   type ShellEnv,
   type ShellSpec,
+  type TerminalDataPayload,
+  type TerminalExitPayload,
 } from '../protocol/terminal-pty'
 
 /**
@@ -74,6 +78,19 @@ export interface TerminalDeps {
   bufferLines?: number
   /** The size a session starts at, before a pane measures itself and resizes it. */
   initialSize?: { cols: number; rows: number }
+  /**
+   * A chunk the shell produced, as it arrived.
+   *
+   * Injected rather than emitted from the registry because the registry is the bookkeeping and the wire
+   * is main's: the same split that lets a suite drive a fake pty also lets a suite read what the wire
+   * would have carried with no window, no IPC channel and no electron object in the picture.
+   *
+   * Optional, because `ptySessions` is built at module load — before the router that creates the
+   * emitter exists — and because every suite that drives the registry directly has no wire at all.
+   */
+  onOutput?: (rootPath: string, chunk: string) => void
+  /** The shell ending, with the code the pty reported. Fired alongside the session's removal. */
+  onExit?: (rootPath: string, exitCode: number) => void
 }
 
 /** What a caller gets back about one session: enough to draw it, and the transcript to catch up on. */
@@ -210,6 +227,11 @@ export function createTerminalRegistry(deps: TerminalDeps): TerminalRegistry {
       sessions.set(key, session)
 
       pty.onData((chunk) => {
+        // The wire first, and unframed: the renderer hands what it is given straight to xterm, so the
+        // chunk has to arrive as the shell emitted it. The transcript below is a second and separate
+        // rule about what is *retained*, and it must not become a rule about what is *sent*.
+        deps.onOutput?.(rootPath, chunk)
+
         // Split on the line breaks and keep the remainder: the shell's next chunk usually continues it.
         const parts = `${session.pending}${chunk}`.split(/\r?\n/)
         session.pending = parts.pop() ?? ''
@@ -218,8 +240,12 @@ export function createTerminalRegistry(deps: TerminalDeps): TerminalRegistry {
 
       // A shell the user exits with `exit`, or one that crashes, must not be left recorded: a stale
       // entry would make the next `create` for that root answer with a pid that is already dead.
-      pty.onExit(() => {
+      pty.onExit(({ exitCode }) => {
         if (sessions.get(key) === session) sessions.delete(key)
+        // Reported after the removal, so a reader woken by this payload that goes on to read the
+        // transcript finds the session gone rather than half-forgotten — and so this code is the only
+        // thing that says how the shell ended, since a forgotten session has no transcript to read.
+        deps.onExit?.(rootPath, exitCode)
       })
 
       return snapshot(session)
@@ -283,6 +309,27 @@ function shellExistsOnDisk(file: string): boolean {
 }
 
 /**
+ * The wire, installed by the router once the emitter exists.
+ *
+ * `ptySessions` is built at the bottom of this file, during module load, and an emitter cannot be made
+ * before `createRouter` has assigned the module's id — so the registry cannot hold one. It holds a
+ * sink that main fills in instead, exactly as `events.ts` holds the workspace-change sink for the same
+ * reason and with the same consequence: an emit before the router exists is dropped rather than thrown,
+ * because output nobody is listening for must never break the shell that produced it.
+ */
+export interface TerminalEventSink {
+  data: (payload: TerminalDataPayload) => void
+  exit: (payload: TerminalExitPayload) => void
+}
+
+let sink: TerminalEventSink | null = null
+
+/** Install the fan-out main pushes through. Called once from `router.ts`, after `createRouter` returns. */
+export function setTerminalEventSink(next: TerminalEventSink | null): void {
+  sink = next
+}
+
+/**
  * The app's own registry: the real spawner, the real platform, the real disk.
  *
  * `node-pty` is imported here, at the point of a spawn, rather than at the top of the file. It is a
@@ -300,6 +347,10 @@ export const ptySessions = createTerminalRegistry({
   shellExists: shellExistsOnDisk,
   platform: process.platform,
   env: { SHELL: process.env.SHELL },
+  // Read through the module-level binding at call time rather than captured: the sink arrives after
+  // this object is built, and every chunk this shell has ever produced arrives after that.
+  onOutput: (rootPath, chunk) => sink?.data(terminalDataFor(rootPath, chunk)),
+  onExit: (rootPath, exitCode) => sink?.exit(terminalExitFor(rootPath, exitCode)),
 })
 
 /**
@@ -380,4 +431,21 @@ export const terminalPtyModule = defineModule({
 
   /** Every live shell. Roots and pids only: a list must not ship every session's buffer. */
   list: query(() => ptySessions.list()),
+
+  /**
+   * Output a shell produced, pushed to every window.
+   *
+   * Broadcast rather than addressed because a root's shell is *the* terminal for that folder, so two
+   * windows looking at one workspace reconnect to the same shell — and both are entitled to the same
+   * output. Which windows are entitled to which root's output is decided on arrival, by `rootPath`,
+   * rather than here by guessing at what a window is showing.
+   */
+  data: event(z.object({ rootPath: z.string().min(1), chunk: z.string() })),
+
+  /**
+   * The shell ending. Pushed because it cannot be read: an exited session is forgotten, so a `read`
+   * for its root is refused with `TERMINAL_NOT_FOUND` — the same refusal a root that never had a shell
+   * gets — and a pane polling for that could not tell "not yet opened" from "just died".
+   */
+  exit: event(z.object({ rootPath: z.string().min(1), exitCode: z.number().int() })),
 })

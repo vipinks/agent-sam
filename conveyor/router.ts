@@ -8,7 +8,7 @@ import { settingsModule, setCustomProviderIds } from './modules/settings'
 import { providerModule } from './modules/provider'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
-import { terminalPtyModule, ptySessions, killOnRootRemoval } from './modules/terminal-pty'
+import { terminalPtyModule, ptySessions, killOnRootRemoval, setTerminalEventSink } from './modules/terminal-pty'
 import { agentModule } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
 import { mentionsModule } from './modules/mentions'
@@ -102,6 +102,21 @@ router.stores['chat-sessions'].dispatch('landOnHome')
  */
 const emitWorkspaceChanged = createEmitter(workspaceModule, () => windows.broadcast())
 setWorkspaceChangeSink(emitWorkspaceChanged.onChanged)
+
+/**
+ * Fan out a shell's output, and its ending, to every window.
+ *
+ * Broadcast rather than addressed, and declared here for the reason the sink above is: `createEmitter`
+ * needs the module's id, which `createRouter` has only just assigned, and `terminal-pty.ts` is imported
+ * *by* this file — so the registry is built before this moment and reaches its wire through
+ * `setTerminalEventSink` instead of holding one.
+ *
+ * Every window receives every root's chunks, and the renderer drops the ones that are not its own root.
+ * The alternative — main tracking which window is showing which folder — would put a renderer's view
+ * state in main, where it would be stale the moment a pane was undocked.
+ */
+const emitTerminal = createEmitter(terminalPtyModule, () => windows.broadcast())
+setTerminalEventSink({ data: emitTerminal.data, exit: emitTerminal.exit })
 
 /**
  * Tell the settings module which providers the user has added, so a key may be saved for one.
