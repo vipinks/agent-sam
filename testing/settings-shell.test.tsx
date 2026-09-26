@@ -161,7 +161,7 @@ describe('the settings shell', () => {
       within(row as HTMLElement)
         .getAllByRole('tab')
         .map((node) => node.textContent)
-    ).toEqual(['Providers', 'MCP Servers', 'Skills'])
+    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal'])
     // The first section is the one a launch opens, and it is the one showing.
     expect(tab('Providers').getAttribute('aria-selected')).toBe('true')
     expect(tab('MCP Servers').getAttribute('aria-selected')).toBe('false')

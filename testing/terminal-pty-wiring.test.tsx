@@ -519,6 +519,41 @@ describe('the shell ending', () => {
     await waitFor(() => expect(within(container).getByText(/exit code 3/i), 'the pane states it too').toBeTruthy())
   })
 
+  it('offers a new shell after an exit, and starting one opens it and re-seeds', async () => {
+    const stub = stubWorkbench()
+    const root = freshRoot()
+    let pid = 4242
+    // A second create answers with a second pid, so "a new shell" is assertable and not a reply the pane
+    // could have been handed twice.
+    stub.on('create', () => ({ rootPath: root, pid: (pid += 1), cwd: root, lines: [] }))
+    stub.on('read', () => ({ rootPath: root, pid, cwd: root, lines: ['$ echo fresh', 'fresh'] }))
+
+    const container = dock(stub, root)
+    await waitFor(() => expect(ptyMethods(stub)).toContain('read'))
+
+    const creates = () => ptyCalls(stub).filter((call) => call.method === 'create').length
+    expect(creates(), 'the folder’s shell was opened once').toBe(1)
+
+    act(() => stub.emit('conveyor:event:terminalPty:exit', { rootPath: root, exitCode: 0 }))
+    await waitFor(() => expect(shown()).toContain('exit code 0'))
+
+    // An exit on its own reopens nothing: a pane that respawned whenever a shell ended would fight
+    // whoever typed `exit`, and would do it for a shell nothing asked to replace.
+    expect(creates()).toBe(1)
+
+    await userEvent.click(within(container).getByRole('button', { name: /start a new shell/i }))
+
+    // The forced open: this renderer had already asked for this root, and main has forgotten the exited
+    // session — so the request is a new shell rather than the dead one, and the screen is re-seeded from
+    // its (empty) transcript so the exit line does not sit above a live shell.
+    await waitFor(() => expect(creates()).toBe(2))
+    await waitFor(() => expect(shown()).toContain('$ echo fresh'))
+    await waitFor(() => expect(within(container).getByText(/live shell in/i)).toBeTruthy())
+
+    // And the action goes away with the state that offered it.
+    expect(within(container).queryByRole('button', { name: /start a new shell/i })).toBeNull()
+  })
+
   it('ignores an exit that belongs to another folder', async () => {
     const stub = stubWorkbench()
     const root = freshRoot()

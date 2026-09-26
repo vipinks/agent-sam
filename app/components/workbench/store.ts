@@ -15,8 +15,10 @@ import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
  *
  * A launch opens the first, and the choice is the run's rather than the machine's: noting that you are
  * the kind of person who configures MCP servers is not something this app has any business remembering.
+ * The section a *preference* belongs to is the other way round: what lands there is only where the
+ * control is found, and the value itself is persisted by the store that owns it rather than by this one.
  */
-export type SettingsSection = 'providers' | 'mcp-servers' | 'skills'
+export type SettingsSection = 'providers' | 'mcp-servers' | 'skills' | 'terminal'
 
 /**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —

@@ -3,6 +3,7 @@ import type { AppRouter } from '@/conveyor/router'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
+import { terminalPreferencesStore } from '@/conveyor/stores/terminal-preferences'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -269,6 +270,10 @@ const initialStates = new Map<string, unknown>([
   ['conveyor:store:chat-sessions', structuredClone(chatSessionsStore.initialState)],
   ['conveyor:store:workspace', structuredClone(workspaceStore.initialState)],
   ['conveyor:store:provider-config', structuredClone(providerConfigStore.initialState)],
+  // The terminal's two preferences, which the pane reads on every mount and the settings section writes:
+  // without a genuine initial state here the mirror would cache `undefined` for this store and the
+  // terminal pane would throw on the selector that reads a font size out of it.
+  ['conveyor:store:terminal-preferences', structuredClone(terminalPreferencesStore.initialState)],
 ])
 
 /**

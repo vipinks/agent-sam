@@ -9,6 +9,7 @@ import {
   type TerminalDataPayload,
   type TerminalExitPayload,
 } from '@/conveyor/protocol/terminal-pty'
+import { DEFAULT_FONT_SIZE } from '@/conveyor/protocol/terminal-preferences'
 
 /**
  * The terminal, kept above the pane that shows it.
@@ -71,6 +72,24 @@ export interface TerminalHost {
   setRoot(rootPath: string | null): void
   /** Re-paint with the colours the document is currently using. */
   setTheme(theme: ITheme): void
+  /**
+   * Draw at this size, in pixels, from now on.
+   *
+   * Held on the host rather than passed at construction because the terminal outlives the pane that
+   * shows it: the value has to be here before the instance is built, and a change made while the pane
+   * is away — which is every change, since the control lives in Settings — has to reach the retained
+   * instance rather than the next one.
+   */
+  setFontSize(pixels: number): void
+  /**
+   * Start a new shell for the folder this host is bound to, after the previous one ended.
+   *
+   * `setRoot` deliberately does not do this: a pane that mounts a second time wants the shell it left,
+   * not a new one. This is the other case, and it has to ask for a new shell even though this renderer
+   * has asked for this folder before — main has already forgotten the exited session, so the request
+   * starts one rather than returning a dead pid.
+   */
+  restart(): void
   /** Measure the box and tell the shell how large it is. Debounced. */
   fit(): void
   /** Put the keyboard on the terminal, so a click into the pane starts typing. */
@@ -93,6 +112,7 @@ function createHost(): TerminalHost {
   let fitter: FitAddon | null = null
   let element: HTMLDivElement | null = null
   let theme: ITheme | null = null
+  let fontSize = DEFAULT_FONT_SIZE
 
   let rootPath: string | null = null
   let phase: TerminalPhase = 'idle'
@@ -213,11 +233,16 @@ function createHost(): TerminalHost {
    * re-attach rule — a folder opened earlier in this renderer's life already has a shell, and asking
    * again would either answer with it (main is idempotent per root) or, on a root that had been
    * forgotten, start a second one. Reading is safe to repeat and is how a pane that was away catches up.
+   *
+   * `fresh` is the one caller that is not that rule: a shell that has *ended* is forgotten by main, so
+   * the next shell in that folder is the one that was asked for — and the `opened` set, which records
+   * what this renderer has asked for, is deliberately left as it is. It records the same thing either
+   * way, and a reply that arrives after the pane left is still discarded by the generation mark.
    */
-  const open = (root: string): void => {
+  const open = (root: string, fresh = false): void => {
     generation += 1
     const mark = generation
-    const first = !opened.has(root.toLowerCase())
+    const first = fresh || !opened.has(root.toLowerCase())
 
     rootPath = root
     exitCode = null
@@ -333,7 +358,7 @@ function createHost(): TerminalHost {
     const terminal = new XTerm({
       ...(theme ? { theme } : {}),
       fontFamily: "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace",
-      fontSize: 12,
+      fontSize,
       lineHeight: 1.4,
       cursorBlink: true,
       // Off, deliberately. A previous terminal here ran a command per run and translated its line
@@ -408,6 +433,21 @@ function createHost(): TerminalHost {
     setTheme(next) {
       theme = next
       if (term) term.options.theme = next
+    },
+
+    setFontSize(next) {
+      fontSize = next
+      // The retained instance, when there is one: a size changed in Settings is a re-paint of the
+      // terminal that is already on screen rather than a promise about the next one. `fit` is not called
+      // here — the box has not moved, and the pane's own observer reports the change a wider font
+      // causes.
+      if (term) term.options.fontSize = next
+    },
+
+    restart() {
+      const root = rootPath
+      if (root === null) return
+      open(root, true)
     },
 
     fit: measure,
