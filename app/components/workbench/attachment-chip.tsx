@@ -41,6 +41,11 @@ function useThumbnailUrl(image: DraftAttachment): string | null {
     // `createObjectURL` and throws when it is used, so the existence check alone let a test environment
     // reach this line and take the render down with it. A picture is a nicety, and it may never be the
     // reason the composer cannot be typed into.
+    //
+    // What this guard cannot see is the failure the user actually reported: the URL is handed out and then
+    // refused at the *load*, by the renderer's own policy. Nothing throws here, the chip holds a live URL,
+    // and the browser draws a broken-image glyph in its place — which is why the page's `img-src` names
+    // `blob:`, and why the way to check this is to load a URL in a real renderer rather than to call one.
     let next: string
     try {
       next = URL.createObjectURL(new Blob([image.bytes], { type: image.mimeType }))
@@ -76,10 +81,11 @@ function AttachmentChip({ image, onRemove }: { image: DraftAttachment; onRemove?
     >
       {thumbnail ? (
         // Decorative: the file's name is the text beside it, so a screen reader has nothing to gain from
-        // the picture and something to lose from announcing it twice.
-        <img src={thumbnail} alt="" className="size-5 shrink-0 rounded-sm object-cover" />
+        // the picture and something to lose from announcing it twice. 24px and `object-cover`, which is a
+        // preview the user can recognise a screenshot in rather than an icon-sized token.
+        <img src={thumbnail} alt="" className="h-6 w-6 shrink-0 rounded object-cover" />
       ) : (
-        <span className="flex size-5 shrink-0 items-center justify-center rounded-sm bg-muted">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-muted">
           <FileText className="size-3 text-muted-foreground" />
         </span>
       )}
@@ -182,11 +188,16 @@ function useRefThumbnail(sessionId: string | undefined, id: string): RefThumbnai
 /**
  * One image a sent message carried, as the transcript shows it.
  *
- * A thumbnail when the store still has the bytes, and a named chip that says what happened when it does
- * not: the name and size come from the reference, which is the record the transcript actually holds, and
- * the picture is asked for from the conversation the message belongs to. Without that conversation
- * there is nothing to ask, so the chip shows the record alone — which is also what it shows while the
- * read is in flight, so a chip never changes width when its picture arrives.
+ * A 96px tile when the store still has the bytes, and the same tile footprint with a sentence under it
+ * when it does not: the name and size come from the reference, which is the record the transcript
+ * actually holds, and the picture is asked for from the conversation the message belongs to. The picture
+ * is a tile rather than an inline glyph because a screenshot at 16px is a smear — the user is looking at
+ * the image they sent, and the caption under it is what says which file it is and how large.
+ *
+ * The footprint is fixed and the caption sits beneath it, so a row of four images is four aligned squares
+ * with four captions, whether the store answered with bytes, with a miss, or with nothing yet. Without
+ * that conversation there is nothing to ask, so the tile shows the record alone — which is also what it
+ * shows while the read is in flight.
  */
 function AttachmentRefChip({ image, sessionId }: { image: ImageAttachmentRef; sessionId?: string }) {
   const thumbnail = useRefThumbnail(sessionId, image.id)
@@ -196,20 +207,41 @@ function AttachmentRefChip({ image, sessionId }: { image: ImageAttachmentRef; se
     <span
       data-slot="attachment-ref-chip"
       title={notice ?? image.name}
-      className={cn(
-        'inline-flex max-w-56 min-w-0 items-center gap-1.5 rounded-md border border-border bg-background py-0.5 pr-1.5 pl-1.5 text-[11px] text-foreground',
-        notice && 'border-dashed'
-      )}
+      className="flex w-24 min-w-0 flex-col gap-1 text-[11px] text-foreground"
     >
       {thumbnail.status === 'ready' ? (
-        <img src={thumbnail.url} alt="" className="size-4 shrink-0 rounded-sm object-cover" />
-      ) : notice ? (
-        <ImageOff className="size-3 shrink-0 text-muted-foreground" />
+        // `object-cover` fills the tile whatever shape the screenshot is, and the tile is the same 96px
+        // box a placeholder takes, so nothing in the row moves when one image fails.
+        <img src={thumbnail.url} alt="" className="h-24 w-24 shrink-0 rounded-md object-cover" />
       ) : (
-        <FileText className="size-3 shrink-0 text-muted-foreground" />
+        <span
+          className={cn(
+            'flex h-24 w-24 shrink-0 items-center justify-center rounded-md border bg-muted',
+            // Dashed for a read that failed and was worded, solid for one still in flight: the two look
+            // different at a glance, which is the whole job of a placeholder.
+            notice ? 'border-dashed' : 'border-border'
+          )}
+        >
+          {notice ? (
+            <ImageOff className="size-5 text-muted-foreground" />
+          ) : (
+            <FileText className="size-5 text-muted-foreground" />
+          )}
+        </span>
       )}
-      <span className="truncate">{image.name}</span>
-      <span className="shrink-0 text-muted-foreground">{notice ?? attachmentSizeLabel(image.size)}</span>
+      {/*
+       * The caption, beneath the tile and outside it: what a 96px square of pixels cannot say. The name
+       * truncates — a filename at this width is a line, and the tile's own `title` carries the whole one —
+       * while the notice wraps rather than truncating, because a sentence cut in half is not a sentence.
+       */}
+      <span data-slot="attachment-tile-caption" className="flex w-24 min-w-0 flex-col gap-0.5">
+        <span className="truncate">{image.name}</span>
+        {notice ? (
+          <span className="break-words text-muted-foreground">{notice}</span>
+        ) : (
+          <span className="text-muted-foreground">{attachmentSizeLabel(image.size)}</span>
+        )}
+      </span>
     </span>
   )
 }
@@ -226,7 +258,7 @@ export function AttachmentRefChipRow({
   className?: string
 }) {
   return (
-    <div data-slot="attachment-ref-chip-row" className={cn('flex flex-wrap gap-1', className)}>
+    <div data-slot="attachment-ref-chip-row" className={cn('flex flex-wrap gap-2', className)}>
       {images.map((image) => (
         <AttachmentRefChip key={image.id} image={image} sessionId={sessionId} />
       ))}

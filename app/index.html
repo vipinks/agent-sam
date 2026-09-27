@@ -5,9 +5,14 @@
     <!-- The window title is the renderer's to set: BrowserWindow's `title` option is overridden once
          the document declares its own, so branding has to land here as well as in main. -->
     <title>Sam AI</title>
+    <!-- `blob:` is here for the composer's own chips: a draft image has no file behind it yet, so its
+         thumbnail is an object URL over the bytes held in memory. `createObjectURL` succeeds without it —
+         the URL exists — but the policy refuses the *load*, which is a broken-image glyph in the chip
+         rather than an error raised anywhere. `data:` stays for the transcript's chips, which read their
+         bytes back as data URLs. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: res:;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: res:;"
     />
   </head>
 
