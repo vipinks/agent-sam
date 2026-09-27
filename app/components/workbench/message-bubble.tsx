@@ -99,6 +99,7 @@ export const MessageBubble = memo(function MessageBubble({
   laterTurns,
   onResend,
   onRegenerate,
+  sessionId,
 }: {
   message: AgentTurn
   onApprove?: (callId: string) => void
@@ -129,6 +130,14 @@ export const MessageBubble = memo(function MessageBubble({
    * describe what is being replaced.
    */
   onRegenerate?: (turnId: string) => void
+  /**
+   * The conversation this message belongs to, which is where its images are stored.
+   *
+   * What a reference chip needs to draw anything: the transcript records where an image is rather than
+   * what it was, so the chip asks that conversation's folder for the bytes. Absent for a bubble rendered
+   * on its own, as the copy tests do — there is no conversation behind it, so its chips stay records.
+   */
+  sessionId?: string
 }) {
   const isUser = message.role === 'user'
   // The turn's blocks, built once per render: their order is the order the run happened in, and two
@@ -282,10 +291,11 @@ export const MessageBubble = memo(function MessageBubble({
                   <MentionChipRow paths={message.mentionPaths} className="mb-2" />
                 )}
                 {/* The images this message carried, above it and beside the files: both are what the
-                  sentence is about. A reference row rather than thumbnails, this turn — the bytes are
-                  main's, and the name and size are what the record actually holds. */}
+                  sentence is about. Thumbnails read from the conversation's store, one read per chip — so
+                  a reopened conversation shows its pictures again, and a chip whose bytes are gone or
+                  over the cap says so in place of one. */}
                 {message.imageRefs && message.imageRefs.length > 0 && (
-                  <AttachmentRefChipRow images={message.imageRefs} className="mb-2" />
+                  <AttachmentRefChipRow images={message.imageRefs} sessionId={sessionId} className="mb-2" />
                 )}
                 {/* A user's message is literal text: never parsed as markdown, which would eat their
                   angle brackets and asterisks. */}

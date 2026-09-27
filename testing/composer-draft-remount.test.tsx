@@ -97,6 +97,10 @@ function stubWorkbench(windowed = true): BridgeStub {
     resume: () => undefined,
     loadTranscript: () => null,
     saveTranscript: () => undefined,
+    // The read a sent message's chip performs: a turn's chip draws a thumbnail now, so the row reaches the
+    // store once per reference. Answered here so this suite's assertions about the write stay about the
+    // write — and because an unstubbed read would leave the chip saying the image could not be shown.
+    readDataUrl: (input) => `data:image/png;base64,${(input as { id: string }).id}`,
     readFile: () => ({ path: '', content: '', baselineMtime: 0 }),
     listDirectory: () => [],
     status: () => [],
@@ -324,7 +328,9 @@ describe('the composer across a window-state swap', () => {
     // And a send still takes it: the draft that survived the swap is the draft the send reads, which is
     // the whole point of holding it above the key.
     await userEvent.type(await composer(), '{Enter}')
-    await waitFor(() => expect(stub.methodsOn('attachments')).toEqual(['save']))
+    // The writes only: the sent turn's own chip reads the store through the same module, and a read is not
+    // a save.
+    await waitFor(() => expect(stub.methodsOn('attachments').filter((method) => method === 'save')).toEqual(['save']))
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove shot.png' })).toBeNull())
   })
 

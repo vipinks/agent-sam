@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { FileText, X } from 'lucide-react'
+import { ConveyorError } from 'electron-conveyor/react'
+import { FileText, ImageOff, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { conveyor } from '@/conveyor/client'
+import { attachmentReadNotice, type ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import { attachmentSizeLabel, type DraftAttachment } from './attachments'
-import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 
 /**
  * One image the composer is about to send, and one image a sent message carried.
@@ -10,8 +12,9 @@ import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
  * Two components in one file because they are two readings of the same thing, and the difference between
  * them is exactly what each may do. A draft chip is a control: it has a thumbnail, because the bytes are
  * in memory and the user is choosing, and it has a remove affordance, because nothing has been sent yet.
- * A reference chip is a record: the bytes are in the attachment store rather than in this process, so
- * there is nothing here to draw, and the message has been sent, so there is nothing to take off.
+ * A reference chip is a record: the byte are in the attachment store rather than in this process, so it
+ * draws what it is given and asks the store for the rest, and the message has been sent, so there is
+ * nothing to take off.
  *
  * They are separate rather than one component with a mode, because a mode is how a record would quietly
  * acquire a remove control it cannot honour.
@@ -118,23 +121,95 @@ export function AttachmentChipRow({
 }
 
 /**
+ * What one reference chip knows about the bytes behind it.
+ *
+ * Three states rather than two, because "no picture yet" and "no picture ever" are different answers: a
+ * chip that could not say which one it is in would either draw a permanent hole or claim a read it has
+ * not completed. `record` is the fourth reading — a chip that was given no conversation to ask — and it
+ * is what a component rendered outside the pane shows.
+ */
+type RefThumbnail =
+  { status: 'record' | 'loading' } | { status: 'ready'; url: string } | { status: 'unavailable'; notice: string }
+
+/**
+ * The bytes behind one reference, read once per chip and only when the chip is drawn.
+ *
+ * Lazy by construction rather than by a scroll listener: the read is an effect on this component, so it
+ * happens when a chip is mounted and not when a conversation is opened — a reopened conversation draws
+ * its images because their turns are drawn, and a turn the virtualized list has not reached asks for
+ * nothing. Nothing is preloaded, and no read survives the chip: the `live` flag drops an answer that
+ * arrives after unmount rather than setting state on a chip that is gone.
+ *
+ * The failure is read off the code and never the sentence, and what it becomes is a worded placeholder
+ * rather than an empty box: a reference whose file was swept, and one larger than the cap the app sends
+ * under, are different facts with a sentence each, and a read that failed for neither of those reasons
+ * says only that it could not be shown. A chip that drew nothing would be indistinguishable from a chip
+ * still waiting.
+ */
+function useRefThumbnail(sessionId: string | undefined, id: string): RefThumbnail {
+  const [thumbnail, setThumbnail] = useState<RefThumbnail>(() =>
+    sessionId ? { status: 'loading' } : { status: 'record' }
+  )
+
+  useEffect(() => {
+    if (!sessionId) {
+      setThumbnail({ status: 'record' })
+      return
+    }
+
+    let live = true
+    setThumbnail({ status: 'loading' })
+    void conveyor.attachments.readDataUrl({ sessionId, id }).then(
+      (url) => {
+        // The read is capped in main and returns a data URL, so what arrives is what the chip draws.
+        if (live) setThumbnail({ status: 'ready', url })
+      },
+      (err: unknown) => {
+        if (!live) return
+        const code = err instanceof ConveyorError ? err.code : undefined
+        setThumbnail({ status: 'unavailable', notice: attachmentReadNotice(code) })
+      }
+    )
+
+    return () => {
+      live = false
+    }
+  }, [sessionId, id])
+
+  return thumbnail
+}
+
+/**
  * One image a sent message carried, as the transcript shows it.
  *
- * A reference and not a thumbnail, this turn: the bytes are main's, behind a read this app has not been
- * given a command for yet, and a chip that drew an empty frame would be claiming to show something it
- * does not have. The name and the size are what the record actually holds, so they are what it shows —
- * and this is the shape the thumbnail upgrade will replace, not a placeholder for it.
+ * A thumbnail when the store still has the bytes, and a named chip that says what happened when it does
+ * not: the name and size come from the reference, which is the record the transcript actually holds, and
+ * the picture is asked for from the conversation the message belongs to. Without that conversation
+ * there is nothing to ask, so the chip shows the record alone — which is also what it shows while the
+ * read is in flight, so a chip never changes width when its picture arrives.
  */
-function AttachmentRefChip({ image }: { image: ImageAttachmentRef }) {
+function AttachmentRefChip({ image, sessionId }: { image: ImageAttachmentRef; sessionId?: string }) {
+  const thumbnail = useRefThumbnail(sessionId, image.id)
+  const notice = thumbnail.status === 'unavailable' ? thumbnail.notice : null
+
   return (
     <span
       data-slot="attachment-ref-chip"
-      title={image.name}
-      className="inline-flex max-w-56 min-w-0 items-center gap-1.5 rounded-md border border-border bg-background py-0.5 pr-1.5 pl-1.5 text-[11px] text-foreground"
+      title={notice ?? image.name}
+      className={cn(
+        'inline-flex max-w-56 min-w-0 items-center gap-1.5 rounded-md border border-border bg-background py-0.5 pr-1.5 pl-1.5 text-[11px] text-foreground',
+        notice && 'border-dashed'
+      )}
     >
-      <FileText className="size-3 shrink-0 text-muted-foreground" />
+      {thumbnail.status === 'ready' ? (
+        <img src={thumbnail.url} alt="" className="size-4 shrink-0 rounded-sm object-cover" />
+      ) : notice ? (
+        <ImageOff className="size-3 shrink-0 text-muted-foreground" />
+      ) : (
+        <FileText className="size-3 shrink-0 text-muted-foreground" />
+      )}
       <span className="truncate">{image.name}</span>
-      <span className="shrink-0 text-muted-foreground">{attachmentSizeLabel(image.size)}</span>
+      <span className="shrink-0 text-muted-foreground">{notice ?? attachmentSizeLabel(image.size)}</span>
     </span>
   )
 }
@@ -142,15 +217,18 @@ function AttachmentRefChip({ image }: { image: ImageAttachmentRef }) {
 /** The images a sent message carried. Not removable: the message has been sent, so these are a record. */
 export function AttachmentRefChipRow({
   images,
+  sessionId,
   className,
 }: {
   images: readonly ImageAttachmentRef[]
+  /** The conversation the message belongs to, which is where its images are stored. */
+  sessionId?: string
   className?: string
 }) {
   return (
     <div data-slot="attachment-ref-chip-row" className={cn('flex flex-wrap gap-1', className)}>
       {images.map((image) => (
-        <AttachmentRefChip key={image.id} image={image} />
+        <AttachmentRefChip key={image.id} image={image} sessionId={sessionId} />
       ))}
     </div>
   )

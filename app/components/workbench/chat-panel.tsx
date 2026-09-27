@@ -1054,6 +1054,10 @@ export function ChatPanel() {
           messages: toHistory(turns),
           workspaceRoot: rootPath,
           autoApprove,
+          // The conversation this turn belongs to, which is where a stored image's bytes live: a
+          // reference names an id inside that conversation's folder, so this is what lets main resolve
+          // the images in the history above at the request it is about to build.
+          sessionId,
           // Paths only. Main reads the files and appends the context section, so the renderer never
           // carries file contents and a path the user attached is the only thing crossing this boundary.
           // Copied rather than handed over as it stands: the chips are read-only where they came from,
@@ -1097,7 +1101,19 @@ export function ChatPanel() {
   const sendText = useCallback(
     async (
       raw: string,
-      options: { mentionPaths?: readonly string[]; images?: readonly DraftAttachment[]; keepComposer?: boolean } = {}
+      options: {
+        mentionPaths?: readonly string[]
+        images?: readonly DraftAttachment[]
+        /**
+         * References this message already carried, kept in front of the ones being stored now.
+         *
+         * A resend passes the images the message was sent with: an edit rewrites the words, and the
+         * pictures are not the editor's to drop. They are already in the store, so they are not written
+         * again — the message the user sees afterwards shows the same references it did before.
+         */
+        imageRefs?: readonly ImageAttachmentRef[]
+        keepComposer?: boolean
+      } = {}
     ) => {
       const text = raw.trim()
       if (!text || isStreaming || pending) return
@@ -1106,9 +1122,10 @@ export function ChatPanel() {
       // sent and what the bubble shows afterwards cannot disagree. An edit passes its own, because the
       // chips it changed belong to the message being sent again rather than to the composer.
       const chips = options.mentionPaths ?? mentionPathsRef.current
-      // The images for the same reason, and an edit passes an empty list: the editor has no image
-      // controls, so a message rewritten through it carries the words the user wrote and nothing else.
+      // The images for the same reason, and an edit passes references rather than bytes: the draft's own
+      // images come out of the composer, and a message being sent again brings the ones it already had.
       const images = options.images ?? draftImagesRef.current
+      const keptRefs = options.imageRefs ?? []
       // A resend did not come from the composer, so it must not empty it: the user's half-written next
       // message is still theirs, and the chips in it were never part of the send that just happened.
       const fromComposer = options.keepComposer !== true
@@ -1128,15 +1145,19 @@ export function ChatPanel() {
       //
       // Awaited one at a time and in attach order, which is what makes the references' order the user's
       // rather than the store's.
-      const imageRefs: ImageAttachmentRef[] = []
+      const storedRefs: ImageAttachmentRef[] = []
       try {
         for (const request of attachmentSaveRequests(sessionId, images)) {
-          imageRefs.push(await conveyor.attachments.save(request))
+          storedRefs.push(await conveyor.attachments.save(request))
         }
       } catch (err) {
         sessionsRef.current.setComposer({ attachmentNote: attachmentSaveErrorMessage(err) })
         return
       }
+
+      // The message's own images first, then the ones just stored: the order the user would describe it
+      // in, and the order main resolves them in when it builds the parts.
+      const imageRefs: ImageAttachmentRef[] = [...keptRefs, ...storedRefs]
 
       if (fromComposer) {
         setDraft('')
@@ -1172,15 +1193,22 @@ export function ChatPanel() {
    * edited text and the chips the editor was left with, which is what keeps an edited message from
    * being a second kind of message with its own way of being sent.
    *
+   * The message keeps its images. They are read off the turn before the cut removes it, and they go in
+   * front of whatever the composer is holding: the editor has no image controls, so a resend that left
+   * them out would quietly rewrite the message into one that said less than the user's did — and the
+   * draft's images follow because they are what the user is looking at while they edit.
+   *
    * The pane is the only thing that can do this: it holds both the transcript and the send path, and an
    * edit that cut the transcript without knowing how to send would leave the user with a message gone.
    */
   const resendEditedMessage = useCallback(
     (turnId: string, text: string, chips: readonly string[]) => {
       void (async () => {
+        const original = messagesRef.current.find((turn) => turn.id === turnId)
+        const keptRefs = original?.imageRefs ?? []
         updateMessages(truncateFromTurn(messagesRef.current, turnId))
         await sessionsRef.current.saveNow()
-        await sendText(text, { mentionPaths: chips, images: [], keepComposer: true })
+        await sendText(text, { mentionPaths: chips, imageRefs: keptRefs, keepComposer: true })
       })()
     },
     [sendText, updateMessages]
@@ -1602,6 +1630,10 @@ export function ChatPanel() {
                     message={messages[item.index]}
                     canEdit={editAllowed}
                     laterTurns={messages.length - item.index - 1}
+                    // The conversation these turns belong to, which is where a turn's images are stored:
+                    // a chip asks that folder for its bytes, so a message sent in this session and a
+                    // message restored from its file are read the same way.
+                    sessionId={sessions.openId ?? undefined}
                     onResend={resendEditedMessage}
                     onRegenerate={regenerateReply}
                     onApprove={() => void decide(true)}

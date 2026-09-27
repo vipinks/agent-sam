@@ -128,6 +128,10 @@ function stubBridge(overrides: Record<string, (input: unknown) => unknown> = {})
       saved += 1
       return { id: `stored-${saved}`, name: request.name, mimeType: request.mimeType, size: request.bytes.byteLength }
     },
+    // The read a sent message's chip performs, which this suite does not exercise: a send's chips now draw
+    // thumbnails, so the row reaches the store for each one. Answered here so the assertions below are
+    // about what the send wrote and the message it produced rather than about a read failing.
+    readDataUrl: (input) => `data:image/png;base64,${(input as { id: string }).id}`,
     ...overrides,
   })
   stubStore(stub, CHAT_SESSIONS_STORE_ID, SESSION_STATE)
@@ -167,9 +171,17 @@ function pickerInput(): HTMLInputElement {
   return screen.getByLabelText('Choose images to attach') as HTMLInputElement
 }
 
-/** What a save was dispatched with, in the order the saves were dispatched. */
+/**
+ * What a save was dispatched with, in the order the saves were dispatched.
+ *
+ * Filtered to the writes, because a sent message's own chips now read the store through the same module
+ * and those calls carry no name at all.
+ */
 function savedNames(stub: BridgeStub): string[] {
-  return stub.callsTo('attachments').map((call) => (call.args[0] as { name: string }).name)
+  return stub
+    .callsTo('attachments')
+    .filter((call) => call.method === 'save')
+    .map((call) => (call.args[0] as { name: string }).name)
 }
 
 describe('the composer taking an image', () => {
@@ -400,7 +412,7 @@ describe('sending with images', () => {
 
     await waitFor(() => expect(savedNames(stub)).toEqual(['first.png', 'second.png']))
     // Each save carries the session the message belongs to, and the bytes themselves.
-    const saves = stub.callsTo('attachments')
+    const saves = stub.callsTo('attachments').filter((call) => call.method === 'save')
     expect((saves[0].args[0] as { sessionId: string }).sessionId).toBe(SESSION_ID)
     expect((saves[0].args[0] as { bytes: Uint8Array }).bytes.byteLength).toBe(64)
 
@@ -413,9 +425,13 @@ describe('sending with images', () => {
     await waitFor(() => expect(refChips().length).toBe(2))
     expect(refChips()[0]).toContain('first.png')
     expect(refChips()[1]).toContain('second.png')
-    // A reference, not a thumbnail: the name and the size are what the record holds.
-    expect(refChips()[0]).toContain('64 bytes')
-    expect(document.querySelectorAll('[data-slot="attachment-ref-chip"] img').length).toBe(0)
+    // A thumbnail now, not just the record: the chip asks the conversation's store for the bytes and draws
+    // what it is handed, one read per reference.
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="attachment-ref-chip"] img').length).toBe(2))
+    expect((document.querySelector('[data-slot="attachment-ref-chip"] img') as HTMLImageElement).src).toContain(
+      'data:image/png;base64,stored-1'
+    )
+    expect(stub.methodsOn('attachments').filter((method) => method === 'readDataUrl').length).toBe(2)
   })
 
   it('sends nothing and keeps the chips when an image cannot be stored', async () => {
