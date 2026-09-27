@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { app } from 'electron'
@@ -6,14 +6,17 @@ import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, command } from '../init'
 import {
+  IMAGE_ATTACH_MISSING_NOTICE,
   IMAGE_ATTACH_NOT_FOUND,
   IMAGE_ATTACH_REFUSED,
   acceptedAttachmentMime,
   attachmentExtensionFor,
+  attachmentMimeForStoredName,
   attachmentRefusal,
   imageAttachmentRefSchema,
   type AttachmentRefusal,
   type ImageAttachmentRef,
+  type ResolvedAttachment,
 } from '../protocol/image-attachments'
 
 /**
@@ -32,8 +35,9 @@ import {
  * The root is a parameter on every function here rather than a call to `app.getPath` inside each one.
  * That is what lets a suite drive the whole file against a temp directory, including the deleting and
  * the sweeping, which are the halves that are worth testing and the halves a wrong path would ruin.
- * `app.getPath` appears exactly twice, in the two places that are the app's own entry points: the
- * module below, and the startup sweep `router.ts` calls.
+ * `app.getPath` appears exactly three times, in the places that are the app's own entry points: the two
+ * module members below, the startup sweep `router.ts` calls, and `resolveStoredAttachment`, which is
+ * what a run reads the root through at its request.
  */
 
 /** Path segments under `userData`. Never a hardcoded absolute path. */
@@ -133,41 +137,115 @@ export async function saveAttachment(userData: string, input: SaveAttachmentInpu
 }
 
 /**
- * The bytes of one stored image, for the send path that has to turn a reference back into a data URL.
+ * Where one stored image is on disk, or the miss the caller reports.
  *
- * Exported for the send path and for the tests, but deliberately not a conveyor query: the renderer has
- * no business holding an image it did not just paste, and bytes crossing back would be a second source
- * of truth about what a reference points at.
+ * One listing per read, and the listing is what says which file an id names: the extension is stored
+ * nowhere but the name on disk, so the directory is the only record of it. A session holds a handful of
+ * images, so one listing is cheaper than a third copy of the type map kept in step with the whitelist.
  *
  * The id's shape is checked before the file is addressed, for the same reason `sessions.ts` checks its
  * own: a crafted id would otherwise be interpolated into a path. A missing file is its own code
  * (`IMAGE_ATTACH_NOT_FOUND`) rather than a refusal, because the two are different facts — one is a name
  * this app will not build a path from, the other is an image that was there and is not any more.
  */
-export async function readAttachmentBytes(userData: string, sessionId: string, id: string): Promise<Uint8Array> {
+async function locateStoredImage(
+  userData: string,
+  sessionId: string,
+  id: string
+): Promise<{ path: string; name: string }> {
   assertSegment(sessionId, 'session id')
   assertSegment(id, 'image id')
 
   const dir = sessionDir(userData, sessionId)
 
-  // The extension is stored nowhere but the name on disk, so the directory is what says which file an id
-  // names. A session holds a handful of images; one listing is cheaper than a third copy of the type map
-  // kept in step with the whitelist.
   let names: string[]
   try {
     names = await readdir(dir)
   } catch {
-    throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, 'This image is no longer stored.')
+    throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE)
   }
 
   const name = names.find((candidate) => candidate.startsWith(`${id}.`))
-  if (!name) throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, 'This image is no longer stored.')
+  if (!name) throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE)
+
+  return { path: join(dir, name), name }
+}
+
+/**
+ * The bytes of one stored image, for the send path that has to turn a reference back into a data URL.
+ *
+ * Exported for the send path and for the tests, but deliberately not a conveyor query: the renderer has
+ * no business holding an image it did not just paste, and bytes crossing back would be a second source
+ * of truth about what a reference points at. The one read the renderer is offered is the capped
+ * `readDataUrl` below, which is what a transcript's chip draws from.
+ */
+export async function readAttachmentBytes(userData: string, sessionId: string, id: string): Promise<Uint8Array> {
+  const located = await locateStoredImage(userData, sessionId, id)
 
   try {
-    return await readFile(join(dir, name))
+    return await readFile(located.path)
   } catch {
-    throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, 'This image is no longer stored.')
+    throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE)
   }
+}
+
+/** The data URL one image's bytes become: the only form a local image can be sent or drawn in. */
+function dataUrlFor(mimeType: string, bytes: Uint8Array): string {
+  return `data:${mimeType};base64,${Buffer.from(bytes).toString('base64')}`
+}
+
+/**
+ * One stored image as a data URL, for a reader that holds an id and nothing else.
+ *
+ * The capped read, and the cap is applied here rather than at the chip because this is the last place
+ * that knows the size before the bytes become a string a third larger again: the directory entry is
+ * measured first, so an image over the cap is refused without being pulled into memory at all.
+ *
+ * The media type is recovered from the name the store wrote, never from the caller — a reader that had
+ * to say what an image is could say the wrong thing, and the store already recorded it. A file whose
+ * extension this build has no media type for is a miss rather than a guess: its bytes exist, and what
+ * they are is exactly what nothing here can say.
+ */
+export async function readAttachmentDataUrl(userData: string, sessionId: string, id: string): Promise<string> {
+  const located = await locateStoredImage(userData, sessionId, id)
+
+  const mimeType = attachmentMimeForStoredName(located.name)
+  if (!mimeType) throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE)
+
+  let bytes: number
+  try {
+    bytes = (await stat(located.path)).size
+  } catch {
+    throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE)
+  }
+  refuse(attachmentRefusal({ mimeType, bytes }))
+
+  let contents: Uint8Array
+  try {
+    contents = await readFile(located.path)
+  } catch {
+    throw new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE)
+  }
+
+  return dataUrlFor(mimeType, contents)
+}
+
+/**
+ * The bytes behind a reference, as a run resolves them at its request.
+ *
+ * The send path's read, and the one place `app.getPath` is read outside the module members and the
+ * sweep: a run is handed references and a session, and the root they live under is the app's own. The
+ * media type comes from the reference — a record of what was stored when it was stored — while the
+ * bytes come from the disk, and a reference whose file is gone raises `IMAGE_ATTACH_NOT_FOUND` so the
+ * send aborts rather than quietly going out with its text alone.
+ *
+ * Deliberately uncapped, unlike the read above: these are the bytes of an image the store accepted at
+ * a write, and the cap exists to bound what crosses into the renderer rather than to re-judge a
+ * conversation that was legal when it was made.
+ */
+export async function resolveStoredAttachment(sessionId: string, ref: ImageAttachmentRef): Promise<ResolvedAttachment> {
+  const bytes = await readAttachmentBytes(app.getPath('userData'), sessionId, ref.id)
+  return { ref, dataUrl: dataUrlFor(ref.mimeType, bytes) }
 }
 
 /**
@@ -298,5 +376,18 @@ export const imageAttachmentsModule = defineModule({
    */
   deleteSession: command(z.object({ sessionId: segmentSchema }), async ({ input }) => {
     await deleteSessionAttachments(app.getPath('userData'), input.sessionId)
+  }),
+
+  /**
+   * One stored image as a data URL, for a chip in the transcript.
+   *
+   * The one read of the store the renderer is offered, and the capped one: a chip draws a picture the
+   * user already sent, so what crosses back is bounded by the same 8 MB an attachment was accepted
+   * under, and a miss is reported with the same code a delete of a conversation that never had an image
+   * uses. Read per chip rather than per transcript — the renderer asks for the ids it is drawing, and
+   * nothing is preloaded when a conversation is reopened.
+   */
+  readDataUrl: command(z.object({ sessionId: segmentSchema, id: segmentSchema }), async ({ input }) => {
+    return readAttachmentDataUrl(app.getPath('userData'), input.sessionId, input.id)
   }),
 })

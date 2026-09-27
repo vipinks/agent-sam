@@ -1,5 +1,11 @@
 import { ConveyorError } from 'electron-conveyor/main'
 import { chatCompletionsUrl, customProviderSchema, type CustomProvider } from '../protocol/custom-provider'
+import {
+  buildMessageContent,
+  type ImageAttachmentRef,
+  type MessageContentPart,
+  type ResolvedAttachment,
+} from '../protocol/image-attachments'
 
 /**
  * Provider plumbing for the chat stream: where each provider lives, how to shape a request for it,
@@ -12,11 +18,37 @@ import { chatCompletionsUrl, customProviderSchema, type CustomProvider } from '.
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  /**
+   * The message's text, or the dialect's parts when it carries images.
+   *
+   * A union rather than always-parts, and that is the regression rule rather than a convenience: every
+   * message this app has ever sent was a string, and a body that rewrote all of them as a one-element
+   * array would change every existing conversation at once. The text-only case stays a string on the
+   * wire, and only a message with images becomes an array.
+   */
+  content: string | MessageContentPart[]
   /** Present on an assistant turn that asked for tools. */
   tool_calls?: ToolCall[]
   /** Present on a `tool` turn: which call it answers. */
   tool_call_id?: string
+}
+
+/**
+ * A history message as it crosses into main: its text, and references to the images it attached.
+ *
+ * The renderer's own shape for a turn, and deliberately not the wire one. A transcript records where an
+ * image's bytes are — an id, a name, a media type, a size — and this is that record beside the words it
+ * was sent with; the parts array a provider is handed is built from it at the moment a request is made,
+ * by `withResolvedImages`. Keeping the two apart is what makes it impossible to send a reference: the
+ * wire type has no field to carry one, so a message that reached `buildRequest` unresolved is a
+ * compile error rather than a key a provider rejects.
+ */
+export interface HistoryMessage {
+  role: ChatMessage['role']
+  content: string
+  tool_calls?: ToolCall[]
+  tool_call_id?: string
+  images?: ImageAttachmentRef[]
 }
 
 /** A tool invocation the model asked for. */
@@ -52,6 +84,53 @@ export interface ProviderRequest {
   url: string
   headers: Record<string, string>
   body: Record<string, unknown>
+}
+
+/**
+ * A history as the provider must see it: every reference resolved to the bytes it names, once per call.
+ *
+ * The one step between a transcript's references and the dialect's content parts, and it lives here
+ * rather than in the loop because this is the layer that already owns what a wire message is: the loop
+ * holds the conversation, and the engine holds the request. A caller that rebuilt the parts itself
+ * would be a second answer to what a message goes out as, and the two would drift the first time the
+ * dialect changed.
+ *
+ * Resolution is per call rather than cached across calls, because a reference is resolved at a
+ * *request*: the bytes are read when the send happens, which is what makes an image attached ten
+ * minutes ago and a file swept since behave differently from one that is still there. The loop
+ * remembers what it resolved for the length of one run, so a turn that takes several round-trips does
+ * not encode the same images again for each of them.
+ *
+ * The order is the references' own, which is the order the user attached them in: a sentence that says
+ * "the second one is the bug" means what the user meant only if the second image is where they put it.
+ * The resolver is awaited one reference at a time for the same reason — a batch that came back in
+ * completion order would reorder the parts — and a refusal or a miss anywhere aborts the whole call,
+ * because a request that went out without an image it named would put a message in the conversation
+ * the model never saw.
+ */
+export async function withResolvedImages(
+  messages: readonly HistoryMessage[],
+  resolve: (image: ImageAttachmentRef) => Promise<ResolvedAttachment>
+): Promise<ChatMessage[]> {
+  const resolved: ChatMessage[] = []
+
+  for (const message of messages) {
+    // Destructured rather than deleted in place: the loop hands its own history in, and a history that
+    // lost the references it is still holding would resolve them for nothing on the next round-trip.
+    const { images, ...rest } = message
+
+    if (!images || images.length === 0) {
+      resolved.push(rest)
+      continue
+    }
+
+    const attachments: ResolvedAttachment[] = []
+    for (const image of images) attachments.push(await resolve(image))
+
+    resolved.push({ ...rest, content: buildMessageContent(rest.content, attachments) })
+  }
+
+  return resolved
 }
 
 /**

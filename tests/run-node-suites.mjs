@@ -91,6 +91,14 @@ const SUITES = [
     name: 'image attachment capture (gate, capture rules, order)',
     src: 'attachments/image-attachments-capture-test.ts',
   },
+  {
+    name: 'image attachment send (data URL, cap, send resolver)',
+    src: 'attachments/image-attachments-send-test.ts',
+  },
+  {
+    name: 'agent request images (parts on the wire, abort on a miss)',
+    src: 'agent/agent-request-images-test.ts',
+  },
   { name: 'composer commands (slash rules)', src: 'ui/composer-commands-test.ts' },
 ]
 

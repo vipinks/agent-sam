@@ -35,7 +35,7 @@ import {
 import { createMcpToolBridge, type McpServerContext } from '../../conveyor/modules/mcp-tools'
 import type { McpRunningTool } from '../../conveyor/modules/mcp-runtime'
 import { runAgentLoop } from '../../conveyor/modules/agent'
-import type { ChatMessage } from '../../conveyor/modules/llm-engine'
+import type { HistoryMessage } from '../../conveyor/modules/llm-engine'
 import { firstPauseViolation } from '../../conveyor/protocol/approval'
 import { applyAgentChunk, startAssistantTurn, type ToolStep } from '../../app/components/workbench/agent-session'
 
@@ -247,14 +247,14 @@ function loopOptions(options: {
   autoApprove?: boolean
   workspaceRoot?: string | null
   pending?: { calls: Array<AskedCall | PendingCall>; denied: boolean }
-  messages?: ChatMessage[]
+  messages?: HistoryMessage[]
 }) {
   return {
     providerId: 'deepseek',
     apiKey: 'test-key',
     model: 'test-model',
     workspaceRoot: options.workspaceRoot ?? null,
-    messages: options.messages ?? [{ role: 'user', content: 'do the work' } satisfies ChatMessage],
+    messages: options.messages ?? [{ role: 'user', content: 'do the work' } satisfies HistoryMessage],
     autoApprove: options.autoApprove ?? false,
     signal: new AbortController().signal,
     fetchImpl: options.provider.fetchImpl as never,

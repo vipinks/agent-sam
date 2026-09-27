@@ -197,9 +197,14 @@ export function planSystemInjection(
  * must still get this one. The text is the *composed* prompt, because that is the string a send
  * actually wrote: matching the base line instead would fail to recognise this machine's own message
  * on a resume and inject the shell note a second time.
+ *
+ * `content` is `unknown` and not `string`, because a history message may carry the dialect's content
+ * parts rather than text — a user turn with an image attached does. This rule reads one thing from the
+ * array, which is whether a system message already says exactly this, and equality against the prompt
+ * is that whole check: a parts array is never equal to it, which is the answer this wants.
  */
 export function planAgentPrompt(
-  messages: ReadonlyArray<{ role: string; content?: string }>,
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
   platform: NodeJS.Platform
 ): { content: string } | null {
   const prompt = agentSystemPrompt(platform)

@@ -6,7 +6,24 @@ import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, stream } from '../init'
 import { readApiKey } from './settings'
 import { createMcpToolBridge, type McpToolBridge } from './mcp-tools'
-import { streamDeltas, type ChatMessage, type FetchLike, type ToolCall, type ToolDefinition } from './llm-engine'
+import {
+  streamDeltas,
+  withResolvedImages,
+  type ChatMessage,
+  type FetchLike,
+  type HistoryMessage,
+  type ToolCall,
+  type ToolDefinition,
+} from './llm-engine'
+import { resolveStoredAttachment } from './image-attachments'
+import {
+  IMAGE_ATTACH_MISSING_NOTICE,
+  IMAGE_ATTACH_NOT_FOUND,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  imageAttachmentRefSchema,
+  type ImageAttachmentRef,
+  type ResolvedAttachment,
+} from '../protocol/image-attachments'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
 import { nextGateIndex, type FrameCall } from '../protocol/approval'
 import { createMcpToolNames, isMcpToolName, type McpConsent, type McpToolNames } from '../protocol/mcp-tools'
@@ -493,8 +510,12 @@ export type AgentChunk =
        * The conversation so far, including the assistant turn that asked for this call. The renderer
        * hands this back untouched on resume, so the provider-shaped history never has to be
        * reconstructed on the UI side.
+       *
+       * The incoming shape, references and all: a turn's images come back as the references they went
+       * out as, and the request this resume builds resolves them again rather than travelling with the
+       * bytes of a read that happened before the pause.
        */
-      messages: ChatMessage[]
+      messages: HistoryMessage[]
       /**
        * The calls of this frame from the one being asked about, in the model's own order: this one
        * first, then everything it is holding back.
@@ -603,6 +624,9 @@ function wireTools(tools: readonly ToolDefinition[], names: McpToolNames): ToolD
  * because that is the vocabulary it was offered and the one it echoes back. Only the assistant turns that
  * asked for tools need the translation — a tool result is addressed by call id, which is the same on both
  * sides.
+ *
+ * Takes the resolved shape, and is called after the references have been resolved rather than before:
+ * it is the last step before the body, so what it is handed is what goes out.
  */
 function wireHistory(messages: readonly ChatMessage[], names: McpToolNames): ChatMessage[] {
   return messages.map((message) =>
@@ -734,7 +758,7 @@ async function previewWriteDiff(
  */
 async function presentCall(
   queue: ToolCall[],
-  history: ChatMessage[],
+  history: HistoryMessage[],
   steps: number,
   continuations: number,
   workspaceRoot: string | null,
@@ -877,7 +901,14 @@ interface LoopOptions {
    */
   provider?: unknown
   workspaceRoot: string | null
-  messages: ChatMessage[]
+  /**
+   * The conversation as the renderer recorded it: text, and the references to any images it attached.
+   *
+   * The incoming shape rather than the wire one, because that is what a turn is until a request is
+   * built: an image is a reference here and becomes the dialect's parts inside the loop, at the moment
+   * the request that carries it is made.
+   */
+  messages: HistoryMessage[]
   autoApprove: boolean
   /**
    * The bridge to the running MCP servers.
@@ -933,6 +964,22 @@ interface LoopOptions {
   /** Injected so the loop can be driven from a test; the module members leave it unset. */
   fetchImpl?: FetchLike
   spawnImpl?: typeof import('child_process').spawn
+  /**
+   * The conversation this run belongs to, which is where its attachments live.
+   *
+   * A turn's images are stored under the session id, and a reference is an id inside that folder rather
+   * than a path — so this is what a run needs to turn one back into bytes. Absent for a run whose
+   * history carries no references at all, which is every run this app made before images existed.
+   */
+  sessionId?: string
+  /**
+   * How this run resolves a reference to the bytes it names.
+   *
+   * Injected for the same reason `fetchImpl` is: a suite that measures what a request body carries
+   * should not have to write a store to disk first, and a suite that measures the store should not have
+   * to drive a model loop. Unset, the run reads the running app's own attachment folder.
+   */
+  resolveImage?: (image: ImageAttachmentRef) => Promise<ResolvedAttachment>
 }
 
 /**
@@ -944,7 +991,7 @@ interface LoopOptions {
  * through a real one.
  */
 export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChunk, void, undefined> {
-  const history: ChatMessage[] = opts.messages.map((m) => ({ ...m }))
+  const history: HistoryMessage[] = opts.messages.map((m) => ({ ...m }))
   let steps = opts.steps ?? 0
   /**
    * How many times this turn has continued itself, spent against `AUTO_CONTINUE_MAX`.
@@ -976,6 +1023,43 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
    */
   const mcp = opts.mcp ?? createMcpToolBridge({ workspaceRoot: opts.workspaceRoot })
   const mcpNames = createMcpToolNames()
+
+  /**
+   * What each reference resolves to for the length of this run.
+   *
+   * A run's history is turned into wire messages once per round-trip, and a turn that calls a tool
+   * makes several — so without this, four screenshots would be read from the disk and encoded as base64
+   * again for every request the run makes. Keyed by the reference's id because that is what names the
+   * bytes, and remembered only here: the next run reads the store again, which is what "resolved at
+   * request time" means — an image whose file was swept since the last send fails that send rather than
+   * travelling on a copy from an earlier one.
+   */
+  const resolvedImages = new Map<string, ResolvedAttachment>()
+
+  /**
+   * The resolver this run uses: the injected one, or the app's own store read.
+   *
+   * A run told no session cannot look a reference up at all, and that is reported as the miss it is
+   * rather than sent as text: the alternative is a message in the conversation that names an image the
+   * model was never given.
+   */
+  const resolveImage =
+    opts.resolveImage ??
+    ((image: ImageAttachmentRef): Promise<ResolvedAttachment> => {
+      if (!opts.sessionId) {
+        return Promise.reject(new ConveyorError(IMAGE_ATTACH_NOT_FOUND, IMAGE_ATTACH_MISSING_NOTICE))
+      }
+      return resolveStoredAttachment(opts.sessionId, image)
+    })
+
+  async function resolveOnce(image: ImageAttachmentRef): Promise<ResolvedAttachment> {
+    const known = resolvedImages.get(image.id)
+    if (known) return known
+
+    const resolved = await resolveImage(image)
+    resolvedImages.set(image.id, resolved)
+    return resolved
+  }
 
   /**
    * Run one call of a frame.
@@ -1273,12 +1357,19 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     const finishReasons: string[] = []
     let streamErrorCode: string | undefined
 
+    // The turn's images are resolved before the request is built and before the try below, and the
+    // order matters: a reference whose bytes are gone is a failure to report, not a reply that stopped
+    // arriving, and the catch under this would diagnose it as a broken stream. Resolving here is also
+    // what aborts the send — the request is never made, so nothing is said on the user's behalf with an
+    // image missing from it.
+    const requestMessages = await withResolvedImages(history, resolveOnce)
+
     try {
       for await (const delta of streamDeltas({
         providerId: opts.providerId,
         apiKey: opts.apiKey,
         model: opts.model,
-        messages: wireHistory(history, mcpNames),
+        messages: wireHistory(requestMessages, mcpNames),
         tools: wireTools(toolsForRoundTrip(mcp), mcpNames),
         signal: opts.signal,
         fetchImpl: opts.fetchImpl,
@@ -1437,6 +1528,15 @@ const messageSchema = z.object({
     )
     .optional(),
   tool_call_id: z.string().optional(),
+  /**
+   * The images this turn attached, as references.
+   *
+   * Capped here, at the boundary, for the same reason `mentionPaths` is: each reference becomes a disk
+   * read and a base64 encoding at the request, so an uncapped array would be an arbitrary number of
+   * reads per send. The cap is the per-message one the composer already enforces, so a payload claiming
+   * more images than a message can hold is refused rather than resolved and sent.
+   */
+  images: z.array(imageAttachmentRefSchema).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
 })
 
 const callSchema = z.object({
@@ -1457,6 +1557,13 @@ export const agentModule = defineModule({
       messages: z.array(messageSchema).min(1, 'A conversation needs at least one message'),
       workspaceRoot: z.string().nullable(),
       autoApprove: z.boolean().optional(),
+      /**
+       * The conversation this run belongs to, which is where a turn's images are stored.
+       *
+       * An id rather than a path, like everything else that names stored bytes here: the folder is the
+       * app's to place, and a run that was handed a path would be a run that could read outside it.
+       */
+      sessionId: z.string().optional(),
       /**
        * The files the user attached, as workspace-relative paths.
        *
@@ -1493,9 +1600,12 @@ export const agentModule = defineModule({
         model: input.model,
         provider,
         workspaceRoot: input.workspaceRoot,
-        messages: input.messages as ChatMessage[],
+        messages: input.messages as HistoryMessage[],
         autoApprove: input.autoApprove ?? false,
         mentionPaths: input.mentionPaths,
+        // Where this turn's images live, so a history that names them can be resolved at the request
+        // rather than sent as text with the pictures left behind.
+        sessionId: input.sessionId,
         // Straight through: the ids the session holds, which main resolves against the disk at this turn
         // start. A resume does not carry them — it is the turn that paused continuing, and its history
         // already has the section this would rebuild.
@@ -1524,6 +1634,8 @@ export const agentModule = defineModule({
       messages: z.array(messageSchema).min(1),
       workspaceRoot: z.string().nullable(),
       autoApprove: z.boolean().optional(),
+      /** See `chatWithTools`: the same conversation, for the same reason the history comes back whole. */
+      sessionId: z.string().optional(),
       /**
        * The frame's calls from the paused one, in frame order: the decided call first, then everything
        * the pause was holding back. The decision answers the head only; an approval walks the rest.
@@ -1558,10 +1670,13 @@ export const agentModule = defineModule({
         model: input.model,
         provider,
         workspaceRoot: input.workspaceRoot,
-        messages: input.messages as ChatMessage[],
+        messages: input.messages as HistoryMessage[],
         autoApprove: input.autoApprove ?? false,
         signal,
         steps: input.steps ?? 0,
+        // Carried like the history beside it: the turn that paused is the turn that continues, and an
+        // image it attached has to resolve again on the request this resume makes.
+        sessionId: input.sessionId,
         // The count of continuations this turn has already spent, so an approval does not refund it.
         continuations: input.continuations ?? 0,
         // The plan the pause handed back, so the turn that continues is the turn it was. Absent on a

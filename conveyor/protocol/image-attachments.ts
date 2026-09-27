@@ -38,6 +38,16 @@ export const IMAGE_ATTACH_REFUSED = 'IMAGE_ATTACH_REFUSED'
  */
 export const IMAGE_ATTACH_NOT_FOUND = 'IMAGE_ATTACH_NOT_FOUND'
 
+/**
+ * The sentence a miss is reported with, wherever the miss is shown.
+ *
+ * Exported rather than written out at each throw site, because two surfaces now say it: main, when a
+ * read or a delete finds nothing where a reference pointed, and the chip in a transcript, when the
+ * read it asked for came back with that code. One sentence for one fact — and a chip that reworded it
+ * would be telling the user something about their image that the store never said.
+ */
+export const IMAGE_ATTACH_MISSING_NOTICE = 'This image is no longer stored.'
+
 /** The media types the OpenAI dialect's image part accepts. */
 export const IMAGE_ATTACHMENT_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
 
@@ -76,6 +86,41 @@ const EXTENSION_BY_MIME: Record<ImageAttachmentMime, string> = {
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
+}
+
+/**
+ * The media type a stored file's name names, or `null` when this app did not write it.
+ *
+ * The inverse of the table above, derived from it rather than written out a second time, so the two
+ * cannot come to disagree about what a stored extension means. Needed because the bytes on disk are
+ * addressed by an id whose extension is the only record of the media type: `readDataUrl` is asked for
+ * an id and nothing else, and a caller that had to hand over the type as well would be a caller able
+ * to hand over the wrong one.
+ *
+ * `null` for a name this build has no extension for, which is the honest answer for a file in the
+ * attachment folder that the store did not write: its bytes are there, but nothing here can say what
+ * they are.
+ */
+export function attachmentMimeForStoredName(name: string): ImageAttachmentMime | null {
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return null
+
+  const extension = name.slice(dot + 1).toLowerCase()
+  const entry = (Object.entries(EXTENSION_BY_MIME) as Array<[ImageAttachmentMime, string]>).find(
+    ([, stored]) => stored === extension
+  )
+  return entry ? entry[0] : null
+}
+
+/**
+ * The cap's own sentence, for a surface that has to say why bytes were not handed over.
+ *
+ * A function rather than a literal inside `attachmentRefusal`, because two rules now refuse the same
+ * file: the store, at a write, and the renderer's capped read, at a draw. Both say the same thing
+ * with the same number, which is what the interpolation is here to guarantee.
+ */
+export function attachmentTooLargeNotice(): string {
+  return `An image can be at most ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB. This one is larger.`
 }
 
 /**
@@ -132,10 +177,7 @@ export function attachmentRefusal(input: { mimeType: string; bytes: number }): A
   }
 
   if (input.bytes > MAX_ATTACHMENT_BYTES) {
-    return {
-      code: IMAGE_ATTACH_REFUSED,
-      message: `An image can be at most ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB. This one is larger.`,
-    }
+    return { code: IMAGE_ATTACH_REFUSED, message: attachmentTooLargeNotice() }
   }
 
   return null
@@ -205,6 +247,27 @@ export function attachmentCaptureRefusal(input: {
   attached: number
 }): AttachmentRefusal | null {
   return attachmentRefusal(input) ?? attachmentCountRefusal(input.attached + 1)
+}
+
+/**
+ * What a surface says about a stored image it could not be handed, from the code that refused it.
+ *
+ * The read a transcript's chip performs crosses a boundary that can answer three ways — the bytes, a
+ * refusal, a miss — and the chip has nothing to draw in the last two. This is the sentence it draws
+ * instead, taken from the code rather than from the message that travelled with it, for the reason
+ * every other branch in this app is: a code is a fact about what happened, while a sentence is a
+ * string a later build is free to reword. The sentences themselves are the ones the store refuses
+ * with, so main and the chip cannot come to describe one failure two ways.
+ *
+ * The third case is deliberate and is not one of the two codes above it. A read can fail for a reason
+ * neither rule names — the bridge itself, a folder that cannot be listed — and a chip that stayed
+ * empty in that case would look exactly like a chip that had simply not drawn its picture yet. Saying
+ * that it could not be shown is true of every one of those, and it promises nothing about why.
+ */
+export function attachmentReadNotice(code: string | undefined): string {
+  if (code === IMAGE_ATTACH_NOT_FOUND) return IMAGE_ATTACH_MISSING_NOTICE
+  if (code === IMAGE_ATTACH_REFUSED) return attachmentTooLargeNotice()
+  return 'This image could not be shown.'
 }
 
 /**

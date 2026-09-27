@@ -583,9 +583,13 @@ export function assembleSkillsSection(skills: readonly ResolvedSkill[]): string 
  * Matched on the section's exact text rather than on its heading, for the same reason `planAgentPrompt`
  * matches the whole prompt: a workspace whose own instructions happen to mention skills must not be able
  * to make this look already injected.
+ *
+ * `content` is `unknown` for the reason `planAgentPrompt`'s is: a user turn may carry the dialect's
+ * content parts rather than text, and the one thing read here is whether a system message already says
+ * exactly this.
  */
 export function planSkillsInjection(
-  messages: ReadonlyArray<{ role: string; content?: string }>,
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
   section: string | null
 ): { content: string } | null {
   if (section === null) return null

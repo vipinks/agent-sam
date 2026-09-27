@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@/conveyor/modules/llm-engine'
+import type { HistoryMessage } from '@/conveyor/modules/llm-engine'
 import type { FileDiff } from '@/conveyor/protocol/diff'
 import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
@@ -285,7 +285,7 @@ export interface AgentChunkEffect {
     /** The one call this decision is about. The rest of `calls` are queued behind it. */
     callId: string
     tool: string
-    messages: ChatMessage[]
+    messages: HistoryMessage[]
     /**
      * The frame's calls still awaiting a decision, this one first, as the model sent them. Only the
      * head is actioned; the others are carried so the card can show what is coming and so the run
@@ -435,14 +435,27 @@ function callArgs(call: PendingCall): Record<string, unknown> {
 }
 
 /**
- * The conversation history as the provider expects it: text turns only.
+ * The conversation history as main expects it: text turns, with a turn's image references beside them.
  *
  * Tool steps are deliberately excluded. The agent owns the provider-shaped history (with its
  * `tool_calls` and `tool` turns) and hands it back on a pause, so rebuilding it here would be a
  * second source of truth that could disagree with the first.
+ *
+ * A turn's `imageRefs` travel with it, and they are references rather than pictures: main resolves each
+ * one against the attachment store at the moment a request is built, so what crosses this boundary is
+ * an id, a name, a media type and a size — never the bytes, which would multiply the size of everything
+ * a send carries and would be a copy that could disagree with what the store holds. The key is written
+ * only when there is something in it, so a message with no image is the same object it was before
+ * images existed, which is what `tests/ui/agent-session-test.ts` pins by equality.
  */
-export function toHistory(turns: AgentTurn[]): ChatMessage[] {
-  return turns.filter((t) => !t.error).map((t) => ({ role: t.role, content: t.content }))
+export function toHistory(turns: AgentTurn[]): HistoryMessage[] {
+  return turns
+    .filter((t) => !t.error)
+    .map((t) => ({
+      role: t.role,
+      content: t.content,
+      ...(t.imageRefs && t.imageRefs.length > 0 ? { images: t.imageRefs.map((ref) => ({ ...ref })) } : {}),
+    }))
 }
 
 /** Replace one turn, leaving the identity of every other turn untouched so memo can skip them. */
@@ -636,7 +649,7 @@ export function applyAgentChunk(
 
     case 'awaiting_approval': {
       const callId = String(c.callId)
-      const messages = Array.isArray(c.messages) ? (c.messages as ChatMessage[]) : []
+      const messages = Array.isArray(c.messages) ? (c.messages as HistoryMessage[]) : []
       const steps = typeof c.steps === 'number' ? c.steps : 0
       const diff = isFileDiff(c.diff) ? c.diff : undefined
       const mcp = readMcpConsent(c.mcp)
