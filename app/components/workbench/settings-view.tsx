@@ -195,10 +195,16 @@ function ProviderCard({
   // memoised because the store slice is absent for an unfetched provider, and a fresh `?? []` each
   // render would invalidate every memo that depends on them.
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[id])
-  const { toggleModel, setFetchedModels, setSupportsImages } = useConveyorStore(providerConfigStore)
+  const { toggleModel, setFetchedModels, setSupportsImages, setRates } = useConveyorStore(providerConfigStore)
 
   const fetched = useMemo(() => config?.fetchedModels ?? [], [config])
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
+  // Memoised for the same reason the two lists above are: the store slice is absent for a provider that
+  // has never been configured, and a fresh object every render would hand the box a new pair each time.
+  const rates = useMemo(
+    () => ({ input: config?.inputRate, output: config?.outputRate }),
+    [config?.inputRate, config?.outputRate]
+  )
 
   const onSave = async () => {
     if (!value.trim()) return
@@ -254,6 +260,17 @@ function ProviderCard({
       // image for, and the switch shows that as an off position rather than as a third state.
       imagesSupported={config?.supportsImages === true}
       onToggleImages={(supported) => setSupportsImages({ providerId: id, supported })}
+      rates={rates}
+      // Both sides travel in one payload, and the side the user did not touch is re-stated from the
+      // record: the pair is one declaration, so clearing a field must not silently clear its neighbour,
+      // and a blank field has to send no key rather than a zero the Overview would bill at.
+      onRateChange={(side, next) =>
+        setRates({
+          providerId: id,
+          input: side === 'input' ? next : config?.inputRate,
+          output: side === 'output' ? next : config?.outputRate,
+        })
+      }
       enabledModels={enabled}
       models={fetched}
       modelsOpen={justFetched}

@@ -10,6 +10,7 @@ import {
   PROVIDER_BOX_CORE_CONTROLS,
 } from '@/app/components/workbench/provider-box'
 import { providerConfigStore, type ProviderConfigState } from '@/conveyor/stores/provider-config'
+import { declaredRates, resolveRates } from '@/conveyor/protocol/session-usage'
 import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -483,5 +484,89 @@ describe('the image-support switch', () => {
         .getAttribute('aria-checked')
     ).toBe('true')
     expect(within(deepseek).getByText(/can attach images while this provider is selected/i)).toBeTruthy()
+  })
+})
+
+describe('the rate override fields', () => {
+  /** The declared pair the seeded record holds: prices the shipped table does not agree with. */
+  const DECLARED: ProviderConfigState = {
+    providers: { deepseek: { enabledModels: [], fetchedModels: [], inputRate: 0.15, outputRate: 0.6 } },
+    customProviders: [],
+  }
+
+  /** One of a box's two price fields, by the side of the declaration it holds. */
+  function rateField(box: HTMLElement, side: 'Input' | 'Output'): HTMLInputElement {
+    return within(box).getByLabelText(new RegExp(`^${side} price`, 'i')) as HTMLInputElement
+  }
+
+  it('renders one field per side in the unit the number is in, and empty for a provider nobody priced', async () => {
+    stubSettings(undefined, DECLARED)
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    const openai = boxFor(container, 'predefined', 'OpenAI')
+
+    // The declaration reads back the way it was typed, and the unit is on the field rather than only in
+    // the documentation: a bare 0.6 beside a dollars-per-million table is a guess at which one it is.
+    await waitFor(() => expect(rateField(deepseek, 'Input').value).toBe('0.15'))
+    expect(rateField(deepseek, 'Output').value).toBe('0.6')
+    expect(within(deepseek).getByText(/dollars per million tokens/i)).toBeTruthy()
+
+    // Bounded, so the control refuses a negative price and a slipped decimal point at the field.
+    const field = rateField(deepseek, 'Input')
+    expect(field.getAttribute('type')).toBe('number')
+    expect(field.getAttribute('min')).toBe('0')
+    expect(Number(field.getAttribute('max'))).toBeGreaterThan(0)
+
+    // And a provider nobody has priced shows empty fields rather than zeros: a zero is a price, and the
+    // Overview would bill every token of it.
+    expect(rateField(openai, 'Input').value).toBe('')
+    expect(rateField(openai, 'Output').value).toBe('')
+  })
+
+  it('writes both sides to the provider whose box was edited, and clearing a field takes its key off', async () => {
+    const { stub, main } = stubSettings(undefined, DECLARED)
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    const openai = boxFor(container, 'predefined', 'OpenAI')
+
+    await userEvent.clear(rateField(deepseek, 'Input'))
+    await userEvent.type(rateField(deepseek, 'Input'), '1.5')
+    await userEvent.tab()
+
+    // Addressed to one provider and carrying both sides: the pair is one declaration, so the field the
+    // user did not touch travels with the one they did rather than being dropped by an edit next door.
+    //
+    // The settled write — the last one — rather than the first: the field commits as it is typed into, so
+    // the keystrokes before the final one write the states the user passed through. What is asserted is
+    // the declaration the box and the store have agreed on once the typing stopped, which is the state
+    // every reader of the record sees.
+    await waitFor(() => expect(storeMethods(stub)).toContain('setRates'))
+    const asked = stub.calls.filter((call) => call.method === 'setRates').at(-1)
+    expect((asked?.args[0] as { payload: unknown }).payload).toEqual({
+      providerId: 'deepseek',
+      input: 1.5,
+      output: 0.6,
+    })
+    expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
+    expect(main.state().providers.deepseek?.outputRate).toBe(0.6)
+    // The box a click did not touch, and the price it still does not carry.
+    expect(main.state().providers.openai?.inputRate).toBeUndefined()
+    expect(rateField(openai, 'Input').value).toBe('')
+
+    // The record those fields wrote is the one the pricing rule reads, which is the point of the fields:
+    // this provider's sessions are priced in micros at what was typed here, ahead of the shipped table.
+    expect(
+      resolveRates({ model: 'deepseek-chat', override: declaredRates(main.state().providers.deepseek ?? {}) })
+    ).toEqual({ input: 1_500_000, output: 600_000 })
+
+    await userEvent.clear(rateField(deepseek, 'Output'))
+    await userEvent.tab()
+
+    // Blanked means the key goes rather than becoming a zero: no price is declared for that side, so the
+    // Overview draws an em dash for Cost instead of a confident bill priced at nothing.
+    await waitFor(() => expect('outputRate' in (main.state().providers.deepseek ?? {})).toBe(false))
+    expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
   })
 })

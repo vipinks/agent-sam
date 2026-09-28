@@ -386,7 +386,7 @@ describe('the panel’s own place in the layout', () => {
     expect(container.querySelector('[data-group]#workbench-chat > [data-panel]#terminal')).not.toBeNull()
   })
 
-  it('offers the rail its three residents and no Terminal anywhere', async () => {
+  it('offers the rail its four residents and no Terminal anywhere', async () => {
     const stub = stubWorkbench()
     const root = freshRoot()
     stub.on('create', () => ({ rootPath: root, pid: 4242, cwd: root, lines: [] }))
@@ -397,6 +397,7 @@ describe('the panel’s own place in the layout', () => {
     expect([...rail.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
       'Code',
       'Preview',
+      'Overview',
       'Tools',
     ])
     expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull()

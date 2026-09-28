@@ -13,6 +13,7 @@ import { SessionListPanel } from './session-list-panel'
 import { SettingsView } from './settings-view'
 import { TerminalPanel } from './terminal-panel'
 import { PreviewPanel } from './preview-panel'
+import { OverviewPanel } from './overview-panel'
 import { RightRail } from './right-rail'
 import { ToolsPanel } from './tools-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
@@ -373,6 +374,8 @@ function WorkbenchLayout() {
                     <CodeViewer />
                   ) : rightPanel === 'preview' ? (
                     <PreviewPanel />
+                  ) : rightPanel === 'overview' ? (
+                    <OverviewPanel />
                   ) : (
                     <ToolsPanel />
                   )}

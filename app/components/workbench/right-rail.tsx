@@ -1,4 +1,13 @@
-import { Eye, FileCode, Maximize2, Minimize2, PanelRightClose, Wrench, type LucideIcon } from 'lucide-react'
+import {
+  ChartColumn,
+  Eye,
+  FileCode,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'
@@ -8,8 +17,9 @@ import { useWorkbenchStore } from './store'
  *
  * The rail is the left rail's mirror and its opposite in one way: an icon click here does not switch
  * between columns but *docks* one panel into the inner group, beside the chat. Its residents are docked
- * one at a time, because the slot they share is one column — the file's source, the same file rendered
- * and the tools panel are things a reader looks at in the same place rather than three places.
+ * one at a time, because the slot they share is one column — the file's source, the same file rendered,
+ * what the conversation has spent and the tools panel are things a reader looks at in the same place
+ * rather than four places.
  *
  * The terminal is not one of them any more, and its absence here is the phase's whole point: a shell is
  * not a second way of looking at the file beside the chat, it is a panel *under* the conversation, and
@@ -28,7 +38,7 @@ import { useWorkbenchStore } from './store'
  */
 
 /** The ids of the panels the right rail can dock. */
-export type RightPanelId = 'code' | 'preview' | 'tools'
+export type RightPanelId = 'code' | 'preview' | 'overview' | 'tools'
 
 /** One resident of the rail: what it is called, and the glyph it is drawn as. */
 export interface RightResident {
@@ -39,14 +49,18 @@ export interface RightResident {
 
 /**
  * The residents, in the order they are read: the file's source and its diffs, then that same file
- * rendered, then the tools. The first two are the same open file seen two ways and sit together for that
- * reason; the tools are a different thing entirely and come after them, because the two views are what a
- * reader reaches for while working in a file and the tools are what they reach for while deciding what
- * the app is working *from*.
+ * rendered, then what the conversation on screen has spent, then the tools.
+ *
+ * The first two are the same open file seen two ways and sit together for that reason. The Overview
+ * comes next because it is the other thing a reader glances at *while* working — it answers a question
+ * about the conversation rather than about the file, and it is deliberately not a third view of the
+ * file. The tools are last because they are not a view of anything the user is working on at all: they
+ * are what they reach for while deciding what this app is working *from*.
  */
 export const RIGHT_RESIDENTS: RightResident[] = [
   { id: 'code', label: 'Code', icon: FileCode },
   { id: 'preview', label: 'Preview', icon: Eye },
+  { id: 'overview', label: 'Overview', icon: ChartColumn },
   { id: 'tools', label: 'Tools', icon: Wrench },
 ]
 

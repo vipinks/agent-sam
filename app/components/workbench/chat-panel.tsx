@@ -953,6 +953,32 @@ export function ChatPanel() {
             continue
           }
 
+          // What the round-trip cost, handed to the store rather than drawn here.
+          //
+          // The agent yields this once per model call, and only when the provider reported counters — so
+          // a provider that reports nothing sends no frame at all, and the session keeps the absence the
+          // Overview draws an em dash for rather than acquiring a zero. It is recorded against the id
+          // this stream was started for rather than the store's active id, which a user may have moved
+          // on from mid-turn, and it is not prose: the run continues, so this is a `continue` rather than
+          // a card. The counters are read off the frame defensively because what arrived is a decoder's
+          // output, not this app's type.
+          if (chunk.type === 'usage') {
+            // The counters are read one key at a time rather than cast: the frame crossed the bridge,
+            // so what is in hand is a decoded value and not this app's type, and the store's schema —
+            // not this loop — is what bounds a counter. A frame carrying no usable counters is dropped
+            // exactly as the agent would have dropped it, by not sending one.
+            const prompt = chunk.prompt
+            const completion = chunk.completion
+            if (typeof prompt === 'number' && typeof completion === 'number') {
+              sessionsRef.current.recordUsage(sessionId, {
+                prompt,
+                completion,
+                ...(typeof chunk.cached === 'number' ? { cached: chunk.cached } : {}),
+              })
+            }
+            continue
+          }
+
           // Anything else is a card or a pause: a discrete event that ends the current piece of prose
           // and should not wait on a frame. The drain comes first so the piece is complete before the
           // card it refers to is applied.

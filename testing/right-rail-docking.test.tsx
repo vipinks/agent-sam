@@ -228,20 +228,20 @@ describe('the right rail, at launch', () => {
     await waitFor(() => expect(screen.getByLabelText('Message')).toBeTruthy())
   })
 
-  it('offers its three residents, in order, with none of them pressed', async () => {
+  it('offers its four residents, in order, with none of them pressed', async () => {
     stubWorkbench()
     renderWorkbench()
 
     const labels = [...rightRail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    expect(labels).toEqual(['Code', 'Preview', 'Tools'])
+    expect(labels).toEqual(['Code', 'Preview', 'Overview', 'Tools'])
     expect(
       labels.map((_, index) => [...rightRail().querySelectorAll('button')][index]?.getAttribute('aria-pressed'))
-    ).toEqual(['false', 'false', 'false'])
+    ).toEqual(['false', 'false', 'false', 'false'])
   })
 })
 
 describe('docking a resident', () => {
-  it('docks each of the three into the right slot at the persisted inner percentage', async () => {
+  it('docks each of the four into the right slot at the persisted inner percentage', async () => {
     // A set dragged in this window state, which is what "the persisted inner percentage" means: the
     // dock reads a share that was chosen, not the default it would have opened with.
     const dragged: LayoutSizes = { outer: { drawer: 34, main: 66 }, main: { chat: 41, viewer: 59 } }

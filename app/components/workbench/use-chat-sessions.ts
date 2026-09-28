@@ -307,6 +307,15 @@ export interface ChatSessions {
   maybeTitle: (id: string, firstMessage: string) => void
   /** Rename a session to a title the user typed. Blank and unchanged titles are refused. */
   renameSession: (id: string, title: string) => void
+  /**
+   * Record what one reply cost, against the conversation it belongs to.
+   *
+   * Counters rather than a total, because the addition belongs to main's reducer: this layer only
+   * carries the report across, and the id is chosen by the caller because the stream that produced the
+   * numbers knows which conversation it was started for — see `runStream`'s `sessionId`, which is read
+   * when the turn begins rather than when the usage frame arrives.
+   */
+  recordUsage: (id: string, counters: { prompt: number; completion: number; cached?: number }) => void
 }
 
 export function useChatSessions(providerId: string, model: string): ChatSessions {
@@ -533,6 +542,22 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const setActive = useConveyorActions(chatSessionsStore).setActive
   const touchSession = useConveyorActions(chatSessionsStore).touchSession
   const removeSession = useConveyorActions(chatSessionsStore).removeSession
+  const dispatchUsage = useConveyorActions(chatSessionsStore).recordUsage
+
+  /**
+   * Hand one reply's counters to the store that keeps the running total.
+   *
+   * Fire-and-forget, like every other action here: the answer is the broadcast that comes back, and the
+   * Overview reads that mirror rather than a copy of its own. The counters are passed through as they
+   * arrived — the store's schema is what bounds them, and rounding a provider's report here would be
+   * this layer deciding what was measured.
+   */
+  const recordUsage = useCallback(
+    (id: string, counters: { prompt: number; completion: number; cached?: number }) => {
+      void dispatchUsage({ id, ...counters })
+    },
+    [dispatchUsage]
+  )
 
   /**
    * Turn one skill on or off, for whichever of the two places is holding the choice.
@@ -929,5 +954,6 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     scheduleSave,
     maybeTitle,
     renameSession,
+    recordUsage,
   }
 }
