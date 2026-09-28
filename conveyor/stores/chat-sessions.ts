@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { MAX_ACTIVE_SKILLS, MAX_SKILL_ID_CHARS } from '../protocol/skills'
+import { contextSnapshotSchema, type ContextSnapshot } from '../protocol/context-window'
 import { accumulate, type SessionUsage } from '../protocol/session-usage'
 
 /**
@@ -66,6 +67,26 @@ export interface ChatSession {
    * debounced store save like everything else here, so a long turn does not pay a write per reply.
    */
   usage?: SessionUsage
+  /**
+   * What the last request this conversation built was about to carry, by category.
+   *
+   * Additive and optional on the same terms as `usage` above: a conversation nobody has sent in carries
+   * no key at all, and an entry written before this key existed reads as one nobody has measured —
+   * nothing writes zeros to say so, because a stored zero is indistinguishable from a measurement of
+   * zero.
+   *
+   * Replaced rather than accumulated, which is the one thing it does *not* share with `usage`: a
+   * snapshot is a measurement of the request about to go out, where a total is a measurement of every
+   * reply already billed. Its categories add up to `used`, because the card that reads it draws those
+   * parts beside that total: a total that disagreed with the parts it was drawn next to would be the one
+   * number a reader could not check.
+   *
+   * Measured where the request is built and carried to the entry through the debounced store save, like
+   * everything else here, so a turn that takes several round-trips does not pay a write per reply. The
+   * window it is placed against is deliberately not stored: a window belongs to a model the user can
+   * change, and a fresh resolve from the same session's model would then disagree with a frozen copy.
+   */
+  contextSnapshot?: ContextSnapshot
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -151,6 +172,18 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       prompt: z.number().int().nonnegative(),
       completion: z.number().int().nonnegative(),
       cached: z.number().int().nonnegative().optional(),
+    }),
+    /**
+     * One measured request, landing on the conversation it was built for.
+     *
+     * The snapshot is validated rather than trusted, at the same boundary `recordUsage` bounds its
+     * counters at: a window can dispatch this, and a measurement that arrived with a negative category
+     * would otherwise be stored and then drawn. The id carries the same UUID rule as every other action
+     * here, because it is what names the session's own files.
+     */
+    recordContextSnapshot: z.object({
+      id: sessionIdSchema,
+      snapshot: contextSnapshotSchema,
     }),
     /**
      * One skill, out of every conversation that holds it.
@@ -246,6 +279,28 @@ export const chatSessionsStore = defineStore('chat-sessions', {
               usage: accumulate(session.usage, { prompt, completion, ...(cached !== undefined ? { cached } : {}) }, at),
             }
           : session
+      )
+    },
+
+    /**
+     * Record what the request about to be sent is made of.
+     *
+     * The whole snapshot travels in one payload rather than as counters this action would assemble: it is
+     * a measurement with a moment attached, and only the thing that built the request knows either. It is
+     * stored as it was measured, because a snapshot that was added to a previous one would claim the
+     * conversation had spent both requests at once.
+     *
+     * `updatedAt` is deliberately untouched, for the reason `recordUsage` leaves it alone: this is a write
+     * about what a request was made of, not the conversation being used, and stamping it would reorder the
+     * user's list because the app measured itself. A snapshot for an id that is not there changes nothing,
+     * which is the shape a session deleted mid-turn leaves behind.
+     */
+    recordContextSnapshot: (state, { id, snapshot }) => {
+      const index = state.sessions.findIndex((s) => s.id === id)
+      if (index === -1) return
+
+      state.sessions = state.sessions.map((session, i) =>
+        i === index ? { ...session, contextSnapshot: snapshot } : session
       )
     },
 

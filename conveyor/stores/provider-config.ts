@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { appendCustom, newProviderId, validateProviderDraft, type CustomProvider } from '../protocol/custom-provider'
+import type { ModelWindows } from '../protocol/context-window'
 import type { ModelRates } from '../protocol/session-usage'
 
 /**
@@ -51,6 +52,25 @@ export interface ProviderConfig {
    * `declaredRates`, which is also what decides whether an entry is whole enough to price with.
    */
   modelRates?: ModelRates
+  /**
+   * How many tokens each of this provider's models accepts, as the user declared it, by model id.
+   *
+   * Additive and optional beside `modelRates` above, and keyed by the model for the same reason a price
+   * is: one provider serves a small model and a large one, and a single number for the provider would
+   * have to be wrong about at least one of them. A record nobody has declared a window for carries no
+   * such key, which the window rules read as the shipped table deciding every model.
+   *
+   * Each entry is one number and is read all-or-nothing: a declaration short of its window is not a
+   * declaration, and the table's window is used rather than an absent one being read as zero — a model
+   * that accepts no context is not a fact any row can mean. The entry is dropped when the field is
+   * blanked, and the map itself is dropped when nothing is left in it, so "nobody declared" and
+   * "declared as nothing" cannot be confused.
+   *
+   * Tokens rather than a share of anything, because that is what a provider publishes: the compact point
+   * is the preference that turns one of these into a token count, and it is a percent precisely so one
+   * number can govern a 64k model and a 200k one.
+   */
+  modelWindows?: ModelWindows
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -94,6 +114,18 @@ export const providerConfigStore = defineStore('provider-config', {
       cacheHit: z.number().nonnegative().optional(),
       output: z.number().nonnegative().optional(),
     }),
+    /**
+     * A model's window, or the absence of a declaration for it.
+     *
+     * One optional whole number rather than a triple: an entry is one number, and a row whose field was
+     * cleared sends none — which the action writes by taking the key off rather than by storing a zero a
+     * reader would take for a model that accepts nothing.
+     */
+    setModelWindows: z.object({
+      providerId: z.string().min(1),
+      modelId: z.string().min(1),
+      window: z.number().int().positive().optional(),
+    }),
     setFetchedModels: z.object({ providerId: z.string().min(1), models: z.array(modelSchema) }),
     setEnabledModels: z.object({ providerId: z.string().min(1), modelIds: z.array(z.string()) }),
     addCustomProvider: z.object({ name: z.string().min(1), baseUrl: z.string().min(1) }),
@@ -132,6 +164,9 @@ export const providerConfigStore = defineStore('provider-config', {
             // Carried across, because this branch *rebuilds* the record: switching an unrelated setting
             // off must not be the thing that reprices every model at the shipped table.
             ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
+            // And the declared windows travel with them, for the same reason one key over: a switch about
+            // images must not reset what a model's window was said to be.
+            ...(current.modelWindows !== undefined ? { modelWindows: current.modelWindows } : {}),
           }
     },
 
@@ -168,7 +203,32 @@ export const providerConfigStore = defineStore('provider-config', {
         enabledModels: current.enabledModels,
         fetchedModels: current.fetchedModels,
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
+        ...(current.modelWindows !== undefined ? { modelWindows: current.modelWindows } : {}),
         ...(Object.keys(modelRates).length > 0 ? { modelRates } : {}),
+      }
+    },
+
+    /**
+     * Record how many tokens one model accepts, by model id.
+     *
+     * Written only when set, exactly as a price is: a blank field takes that model's entry off, and a map
+     * with nothing left in it loses the key, so "nobody has declared a window" stays distinguishable from
+     * "declared as nothing". The entry is one number, so there is no half-typed entry to keep — the
+     * refusal a partial price needs has no counterpart here, where the only way to be partial is to be
+     * absent.
+     */
+    setModelWindows: (state, { providerId, modelId, window }) => {
+      const current = state.providers[providerId] ?? { enabledModels: [], fetchedModels: [] }
+      const modelWindows: ModelWindows = { ...current.modelWindows }
+      if (window !== undefined) modelWindows[modelId] = { contextWindow: window }
+      else delete modelWindows[modelId]
+
+      state.providers[providerId] = {
+        enabledModels: current.enabledModels,
+        fetchedModels: current.fetchedModels,
+        ...(current.supportsImages === true ? { supportsImages: true } : {}),
+        ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
+        ...(Object.keys(modelWindows).length > 0 ? { modelWindows } : {}),
       }
     },
 
@@ -191,6 +251,9 @@ export const providerConfigStore = defineStore('provider-config', {
         // not silently reprice every model at the shipped table. The map goes across whole, so the
         // half-typed row a user is in the middle of keeps its sides too.
         ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
+        // And the declared windows, for the third time and the same reason: what a provider says it
+        // offers has no bearing on how much one of its models accepts.
+        ...(current.modelWindows !== undefined ? { modelWindows: current.modelWindows } : {}),
       }
     },
 
@@ -217,12 +280,15 @@ export const providerConfigStore = defineStore('provider-config', {
       for (const [providerId, record] of Object.entries(state.providers)) {
         const stale = record as unknown as Record<string, unknown>
         if (!retired.some((key) => key in stale)) continue
-        const { enabledModels, fetchedModels, supportsImages, modelRates } = record
+        const { enabledModels, fetchedModels, supportsImages, modelRates, modelWindows } = record
         state.providers[providerId] = {
           enabledModels,
           fetchedModels,
           ...(supportsImages === true ? { supportsImages: true } : {}),
           ...(modelRates !== undefined ? { modelRates } : {}),
+          // A record being normalised for the retired keys keeps everything else it says, this
+          // included — the pass is about three keys that are gone, not about the ones that are here.
+          ...(modelWindows !== undefined ? { modelWindows } : {}),
         }
       }
     },

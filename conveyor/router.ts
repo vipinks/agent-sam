@@ -16,7 +16,7 @@ import {
   setTerminalEventSink,
   setTerminalScrollbackSource,
 } from './modules/terminal-pty'
-import { agentModule } from './modules/agent'
+import { agentModule, setContextSnapshotSink } from './modules/agent'
 import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
 import { imageAttachmentsModule, sweepAttachmentFolders } from './modules/image-attachments'
 import { mentionsModule } from './modules/mentions'
@@ -27,6 +27,7 @@ import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
 import { terminalPreferencesStore } from './stores/terminal-preferences'
+import { contextPreferencesStore } from './stores/context-preferences'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -59,7 +60,7 @@ export const router = createRouter(
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
-    stores: [workspaceStore, providerConfigStore, chatSessionsStore, terminalPreferencesStore], // main holds the state; every window mirrors it live
+    stores: [workspaceStore, providerConfigStore, chatSessionsStore, terminalPreferencesStore, contextPreferencesStore], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
 )
@@ -178,6 +179,24 @@ setCustomProviderIds(() => router.stores['provider-config'].getState().customPro
  * is a change to session state and the store is the only thing that owns one.
  */
 setSkillPruneSink((skillId) => router.stores['chat-sessions'].dispatch('dropSkill', { id: skillId }))
+
+/**
+ * Give the agent loop the session store, so a request it measures lands on the conversation it was built for.
+ *
+ * Installed here for the same reason as the sinks above: the store does not exist until `createRouter` has
+ * returned, and the module is imported *by* this file, so a loop reaching for the router from its own side
+ * would close the cycle. Dispatched rather than written, because a measured request is a change to session
+ * state and the store is the only thing that owns one — and it is dispatched through the same debounced
+ * save every other write here goes through, so a turn that takes several round-trips does not pay a write
+ * per reply.
+ *
+ * The loop holds no session of its own: it is handed one with each run, and the sink is told which one the
+ * measurement belongs to. A run told no conversation measures nothing and calls nothing, which is what
+ * keeps this from having to invent a record for a turn nobody owns.
+ */
+setContextSnapshotSink(({ sessionId, snapshot }) =>
+  router.stores['chat-sessions'].dispatch('recordContextSnapshot', { id: sessionId, snapshot })
+)
 
 /**
  * End the shell of a folder the user has stopped being offered.

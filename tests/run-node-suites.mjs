@@ -43,6 +43,9 @@ const SUITES = [
   { name: 'custom providers (routing + model list)', src: 'llm/custom-provider-test.ts' },
   { name: 'custom providers (store slice)', src: 'providers/provider-config-store-test.ts' },
   { name: 'session usage (request, capture, pricing rules)', src: 'llm/session-usage-test.ts' },
+  { name: 'context window (estimate, breakdown, window, compact point)', src: 'llm/context-window-test.ts' },
+  { name: 'context snapshot (session metadata key)', src: 'sessions/context-snapshot-store-test.ts' },
+  { name: 'context preferences (compact-point store)', src: 'sessions/context-preferences-store-test.ts' },
   { name: 'terminal module', src: 'llm/terminal-test.ts' },
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
   { name: 'terminal theme mapping', src: 'ui/terminal-theme-test.ts' },
@@ -100,6 +103,10 @@ const SUITES = [
   {
     name: 'agent request images (parts on the wire, abort on a miss)',
     src: 'agent/agent-request-images-test.ts',
+  },
+  {
+    name: 'agent request context snapshot (parts measured, wire unchanged)',
+    src: 'agent/context-snapshot-request-test.ts',
   },
   { name: 'composer commands (slash rules)', src: 'ui/composer-commands-test.ts' },
 ]

@@ -17,6 +17,7 @@ import { strict as assert } from 'node:assert'
 import { providerConfigStore } from '../../conveyor/stores/provider-config'
 import type { ProviderConfigState } from '../../conveyor/stores/provider-config'
 import { declaredRates, RATES, resolveRates } from '../../conveyor/protocol/session-usage'
+import { CONTEXT_WINDOWS, resolveWindow } from '../../conveyor/protocol/context-window'
 import { TRANSCRIPT_VERSION } from '../../conveyor/protocol/transcript'
 
 const results: string[] = []
@@ -490,6 +491,84 @@ function theRetiredProviderRatesAreStrippedOnLoad() {
   results.push('the retired provider-level rates are stripped on load, with no value migrated')
 }
 
+/**
+ * A declared window belongs to the model it was typed for, exactly as a declared price does.
+ *
+ * The map is the mirror of `modelRates` one key over — same `Record` keyed by model id, same
+ * all-or-nothing reading through `resolveWindow` — so the two are asserted side by side rather than
+ * trusted to stay alike.
+ */
+function aModelsWindowIsWrittenUnderItsOwnKey() {
+  const store = createHarness()
+
+  store.run('setModelWindows', { providerId: 'deepseek', modelId: CHAT, window: 64_000 })
+  assert.deepEqual(store.state().providers.deepseek.modelWindows, { 'deepseek-chat': { contextWindow: 64_000 } })
+
+  // Keyed by model, so the window a row was filled in for is the window `resolveWindow` prefers, and the
+  // sibling on the same provider still resolves from the shipped table.
+  const declared = store.state().providers.deepseek.modelWindows
+  assert.equal(resolveWindow({ model: CHAT, modelWindows: declared }), 64_000)
+  assert.equal(
+    resolveWindow({ model: 'deepseek-reasoner', modelWindows: declared }),
+    CONTEXT_WINDOWS['deepseek-reasoner'],
+    'the model beside it keeps the table window'
+  )
+
+  // A second provider writes under its own record and its own model id.
+  store.run('setModelWindows', { providerId: 'openai', modelId: 'gpt-4o-mini', window: 32_000 })
+  assert.deepEqual(store.state().providers.openai.modelWindows, { 'gpt-4o-mini': { contextWindow: 32_000 } })
+  assert.deepEqual(store.state().providers.deepseek.modelWindows, declared)
+
+  results.push('a declared window is written under the model it belongs to')
+}
+
+/**
+ * A model whose field is blanked loses its entry, and a map with nothing left loses the key.
+ *
+ * The distinction the action has to keep: "nobody has declared a window" and "declared as nothing" are
+ * different facts, and only the first is representable — an invented zero would read as a model that
+ * accepts no context at all.
+ */
+function clearingAWindowsEntryTakesItOff() {
+  const store = createHarness()
+
+  store.run('setModelWindows', { providerId: 'deepseek', modelId: CHAT, window: 64_000 })
+  store.run('setModelWindows', { providerId: 'deepseek', modelId: CHAT })
+
+  assert.equal('modelWindows' in store.state().providers.deepseek, false, 'an emptied map is not a declaration')
+  assert.equal(
+    resolveWindow({ model: CHAT, modelWindows: store.state().providers.deepseek.modelWindows }),
+    CONTEXT_WINDOWS[CHAT],
+    'and the model falls back to the table'
+  )
+
+  results.push('blanking a window field takes its entry off, and an empty map takes the key')
+}
+
+/**
+ * Neither a price write, a catalogue refresh, nor an image-support switch may drop a declared window.
+ *
+ * Each of those actions *rebuilds* a provider's record rather than merging into it, so every optional
+ * key has to be carried across by hand — the failure this pins is a window silently reverting to the
+ * table because the user pressed Fetch or filled in a price.
+ */
+function aRebuiltRecordKeepsTheDeclaredWindow() {
+  const store = createHarness()
+  const declared = { 'deepseek-chat': { contextWindow: 32_000 } }
+
+  store.run('setModelWindows', { providerId: 'deepseek', modelId: CHAT, window: 32_000 })
+  store.run('setFetchedModels', { providerId: 'deepseek', models: [{ id: CHAT }] })
+  assert.deepEqual(store.state().providers.deepseek.modelWindows, declared, 'a refresh is about the catalogue')
+
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 1, cacheHit: 0.5, output: 2 })
+  assert.deepEqual(store.state().providers.deepseek.modelWindows, declared, 'a price write is not a window write')
+
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: false })
+  assert.deepEqual(store.state().providers.deepseek.modelWindows, declared, 'an unrelated switch is unrelated')
+
+  results.push('a rebuilt provider record keeps the declared windows')
+}
+
 function main() {
   step('adding appends with a derived id', addingAProviderRecordsItWithADerivedId)
   step('normalising and refusing', addingNormalisesTheBaseUrlAndRefusesWhatCannotBeUsed)
@@ -511,6 +590,9 @@ function main() {
   step('declared price kept on refresh', aCatalogueRefreshKeepsTheDeclaredPrices)
   step('declared price round trip', declaredPricesSurviveARestart)
   step('retired provider rates stripped on load', theRetiredProviderRatesAreStrippedOnLoad)
+  step('declared window written, per model', aModelsWindowIsWrittenUnderItsOwnKey)
+  step('declared window blanked', clearingAWindowsEntryTakesItOff)
+  step('declared window kept on rebuild', aRebuiltRecordKeepsTheDeclaredWindow)
 
   console.log(`\ncustom providers (provider-config store): ${results.length} checks passed`)
 }

@@ -34,7 +34,14 @@ import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
-import { instructionsFileName, planAgentPrompt, planSystemInjection } from '../protocol/context'
+import {
+  instructionsFileName,
+  agentSystemPrompt,
+  assembleSystemContext,
+  planAgentPrompt,
+  planSystemInjection,
+} from '../protocol/context'
+import { snapshotRequest, type ContextSnapshot } from '../protocol/context-window'
 import {
   AUTO_CONTINUE_MAX,
   autoContinueNudge,
@@ -902,6 +909,92 @@ function declaredPlan(argsJson: string): Plan | null {
   }
 }
 
+/**
+ * The one reader main wires, so a measured request reaches the conversation it was built for.
+ *
+ * A sink rather than a store import, and installed from `router.ts` rather than from in here, for the same
+ * reason `setSkillPruneSink` is: the session store is registered in the router, `router.ts` imports this
+ * module, and a module reaching back for the router would close the cycle. Null until main wires it —
+ * which is not a degraded mode but the ordinary one for every other caller of this loop, the suites
+ * among them, where a run that measures itself has nobody to tell.
+ *
+ * Read as one value per round-trip rather than watched: a sink that appeared mid-turn would be measuring
+ * a request already built, and the count would then belong to a request nobody sent.
+ */
+let contextSnapshotSink: ((payload: { sessionId: string; snapshot: ContextSnapshot }) => void) | null = null
+
+/** Install the sink, or clear it with `null`. Called once, by the router, after the stores exist. */
+export function setContextSnapshotSink(
+  next: ((payload: { sessionId: string; snapshot: ContextSnapshot }) => void) | null
+): void {
+  contextSnapshotSink = next
+}
+
+/**
+ * What one request carried, by category, measured from the parts it was built from.
+ *
+ * The three standing messages are recognized by the text this app writes for each of them rather than by
+ * their position, because position does not identify them: a workspace with no instructions file sends
+ * the agent's own line where the project's would have been. A standing message that matches none of the
+ * three is still context — the section a *resumed* run handed back, which this send did not compose and
+ * therefore has no text for — so it is counted as `other` rather than dropped, the honest reading being
+ * "context whose category this send cannot name" rather than "no context".
+ *
+ * The conversation is measured *unresolved*: what a history holds for an image is a reference, and the
+ * bytes behind it are a base64 data URL that no token count describes — so the text is what is measured,
+ * and each reference is charged the flat allowance `estimateBreakdown` folds in. Measuring the resolved
+ * parts instead would report a screenshot as a context of its own, which is exactly the reading a
+ * window-shaped card has to be able to trust.
+ *
+ * No window here. A window belongs to a model the user can change, so the rules that place this against
+ * one are applied by whoever draws it, from this count and the model in hand — a count is a fact, while
+ * a share of a window is a picture of one.
+ */
+function snapshotForRequest(args: {
+  history: readonly HistoryMessage[]
+  tools: readonly ToolDefinition[]
+  standing: { systemPrompt: string | null; projectInstructions: string | null; skills: string | null }
+  at: number
+}): ContextSnapshot {
+  const conversation: HistoryMessage[] = []
+  const standingTexts: string[] = []
+
+  for (const message of args.history) {
+    if (message.role === 'system') {
+      if (typeof message.content === 'string') standingTexts.push(message.content)
+      continue
+    }
+    conversation.push(message)
+  }
+
+  // A text counts as its own category only when the history actually carries it: the send that composed
+  // it may have been an earlier one, which is the resumed case, and either way the history in hand is
+  // what the provider will read.
+  const recognized = (known: string | null): string => (known !== null && standingTexts.includes(known) ? known : '')
+
+  const systemPrompt = recognized(args.standing.systemPrompt)
+  const projectInstructions = recognized(args.standing.projectInstructions)
+  const skills = recognized(args.standing.skills)
+  const named = [systemPrompt, projectInstructions, skills]
+  const residualStanding = standingTexts.filter((text) => !named.includes(text)).join('\n')
+
+  let imageRefs = 0
+  for (const message of args.history) imageRefs += message.images?.length ?? 0
+
+  return snapshotRequest(
+    {
+      tools: JSON.stringify(args.tools),
+      systemPrompt,
+      projectInstructions,
+      skills,
+      messages: JSON.stringify(conversation),
+      other: residualStanding,
+    },
+    imageRefs,
+    args.at
+  )
+}
+
 interface LoopOptions {
   providerId: string
   apiKey: string
@@ -1381,14 +1474,54 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // what aborts the send — the request is never made, so nothing is said on the user's behalf with an
     // image missing from it.
     const requestMessages = await withResolvedImages(history, resolveOnce)
+    // The tools and the wired history are named here rather than inline in the call below, because the
+    // request measures itself from them: the same array is what the body carries, so what the snapshot
+    // counts is what leaves. Hoisting changes nothing about either value — `toolsForRoundTrip` is still
+    // read once per round-trip, which is when "running" is a fact worth asking about.
+    const requestTools = wireTools(toolsForRoundTrip(mcp), mcpNames)
+    const requestHistory = wireHistory(requestMessages, mcpNames)
+
+    // What this request is about to carry, measured as a side effect of building it.
+    //
+    // As a side effect, and that is the load-bearing word: the measurement is taken here because this is
+    // the one point where every assembled part is in hand at once — the standing context already in the
+    // history, the app's own tools plus whatever the running servers offer right now, and the
+    // conversation with its references — and because a count taken after the reply would be a count of
+    // the wrong moment. Nothing about the request itself changes: the body is built from the same values
+    // below whether or not anything is listening.
+    //
+    // Announced to a sink rather than written to a store from in here, for the reason `setSkillPruneSink`
+    // is: the store is registered in `router.ts`, which imports this file, so reaching for it from this
+    // side would close the cycle. Read through the module-level sink so a run the app is not watching —
+    // every suite that drives this loop — measures nothing at all.
+    const snapshotSink = contextSnapshotSink
+    if (snapshotSink && opts.sessionId) {
+      const sessionId = opts.sessionId
+      snapshotSink({
+        sessionId,
+        snapshot: snapshotForRequest({
+          history,
+          tools: requestTools,
+          standing: {
+            // The texts this app writes for the three standing messages, recomputed rather than read off
+            // the injections above: on a resumed run the injections are null because their sections are
+            // already in the history, while the text itself is still exactly this.
+            systemPrompt: agentSystemPrompt(opts.platform ?? process.platform),
+            projectInstructions: assembleSystemContext(instructions?.text ?? null)?.content ?? null,
+            skills: assembleSkillsSection(activeSkills),
+          },
+          at: Date.now(),
+        }),
+      })
+    }
 
     try {
       for await (const delta of streamDeltas({
         providerId: opts.providerId,
         apiKey: opts.apiKey,
         model: opts.model,
-        messages: wireHistory(requestMessages, mcpNames),
-        tools: wireTools(toolsForRoundTrip(mcp), mcpNames),
+        messages: requestHistory,
+        tools: requestTools,
         signal: opts.signal,
         fetchImpl: opts.fetchImpl,
         provider: opts.provider,
