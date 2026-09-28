@@ -37,13 +37,22 @@ export interface ProviderConfig {
    *
    * Additive and optional like `supportsImages` beside it, and written only when a user has typed a
    * number: absent means nobody has priced this provider, which is not the same as a price of zero. The
-   * pricing rules read the pair through `declaredRates`, which refuses half a declaration rather than
-   * reading the missing side as free.
+   * pricing rules read the three through `declaredRates`, which refuses a declaration short of a side
+   * rather than reading the missing side as free.
    *
    * Dollars rather than the micros `RATES` holds, because this is a field a person fills in from a
    * provider's pricing page that quotes `$0.15 / 1M tokens`.
    */
   inputRate?: number
+  /**
+   * What this provider charges for a prompt token it served from its own cache, in dollars per million.
+   *
+   * Its own field because it is its own price: every provider that publishes one publishes it below the
+   * input rate, and a session on a warm cache is mostly hits — so a declaration without it would leave
+   * the Cost tile charging the whole prompt at the miss rate, which is the overstatement the third field
+   * exists to stop rather than to permit.
+   */
+  cacheHitRate?: number
   /** What this provider charges for output, in dollars per million tokens. */
   outputRate?: number
 }
@@ -78,12 +87,13 @@ export const providerConfigStore = defineStore('provider-config', {
   schemas: {
     toggleModel: z.object({ providerId: z.string().min(1), modelId: z.string().min(1) }),
     setSupportsImages: z.object({ providerId: z.string().min(1), supported: z.boolean() }),
-    // Both sides optional and non-negative, because the pair is one declaration a user may be halfway
+    // Every side optional and non-negative, because the three are one declaration a user may be halfway
     // through typing: an omitted side means "not declared", which the action writes by leaving the key
     // off rather than by storing a zero this app would then bill at.
     setRates: z.object({
       providerId: z.string().min(1),
       input: z.number().nonnegative().optional(),
+      cacheHit: z.number().nonnegative().optional(),
       output: z.number().nonnegative().optional(),
     }),
     setFetchedModels: z.object({ providerId: z.string().min(1), models: z.array(modelSchema) }),
@@ -132,16 +142,18 @@ export const providerConfigStore = defineStore('provider-config', {
      * the Overview draws an em dash for the first and a real `$0.0000` for the second, and a store that
      * turned a blank field into a zero would bill every un-priced provider's tokens at nothing.
      *
-     * Both sides travel together in one payload because they are read together: the pair arrives from a
-     * box that knows both fields, and pricing with half of it is exactly what `declaredRates` refuses.
+     * Both sides travel together in one payload because they are read together: all three arrive from a
+     * box that knows every field, and pricing with two of the three is exactly what `declaredRates`
+     * refuses.
      */
-    setRates: (state, { providerId, input, output }) => {
+    setRates: (state, { providerId, input, cacheHit, output }) => {
       const current = state.providers[providerId] ?? { enabledModels: [], fetchedModels: [] }
       state.providers[providerId] = {
         enabledModels: current.enabledModels,
         fetchedModels: current.fetchedModels,
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
         ...(input !== undefined ? { inputRate: input } : {}),
+        ...(cacheHit !== undefined ? { cacheHitRate: cacheHit } : {}),
         ...(output !== undefined ? { outputRate: output } : {}),
       }
     },
@@ -165,6 +177,7 @@ export const providerConfigStore = defineStore('provider-config', {
         // must not silently reprice every session at the shipped table. Copied key by key so an absent
         // side stays absent rather than becoming a zero.
         ...(current.inputRate !== undefined ? { inputRate: current.inputRate } : {}),
+        ...(current.cacheHitRate !== undefined ? { cacheHitRate: current.cacheHitRate } : {}),
         ...(current.outputRate !== undefined ? { outputRate: current.outputRate } : {}),
       }
     },

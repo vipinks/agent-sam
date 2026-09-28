@@ -138,9 +138,17 @@ export function readSessionUsage(record: unknown): SessionUsage | undefined {
 
 // ---------------------------------------------------------------- pricing
 
-/** What the input and output of one model cost, in micros per million tokens. */
+/** What the input, its cached share and the output of one model cost, in micros per million tokens. */
 export interface Rates {
   input: number
+  /**
+   * What a prompt token the provider served from its own cache costs.
+   *
+   * Cheaper than `input` on every provider that publishes such a rate, and that is the whole reason the
+   * shape is a triple: a warm session's prompt is mostly hits, and a pair charging them at the input rate
+   * would overstate the Cost tile by more than half on an ordinary conversation.
+   */
+  cacheHit: number
   output: number
 }
 
@@ -151,17 +159,24 @@ export interface Rates {
  * million *is* 150 000 micros per million, and `formatCost` puts the dollar sign back. Recorded by hand
  * at the time this table was written, which is the whole reason an override exists — a provider changes
  * its prices, and the number in a shipped build cannot change with it.
+ *
+ * Three numbers per model, in the order a bill reads them: a prompt token that missed the cache, a prompt
+ * token that hit it, and a completion token. The DeepSeek entries are that provider's published table,
+ * which is why this phase exists - the Cost tile was reading a pair and pricing a warm session as if
+ * every prompt token had missed.
  */
 export const RATES: Record<string, Rates> = {
-  'gpt-4o-mini': { input: 150_000, output: 600_000 },
-  'gpt-4o': { input: 2_500_000, output: 10_000_000 },
-  'deepseek-chat': { input: 270_000, output: 1_100_000 },
-  'deepseek-reasoner': { input: 550_000, output: 2_190_000 },
-  'claude-3-5-haiku-latest': { input: 800_000, output: 4_000_000 },
-  'claude-3-5-sonnet-latest': { input: 3_000_000, output: 15_000_000 },
+  'gpt-4o-mini': { input: 150_000, cacheHit: 75_000, output: 600_000 },
+  'gpt-4o': { input: 2_500_000, cacheHit: 1_250_000, output: 10_000_000 },
+  'deepseek-flash': { input: 270_000, cacheHit: 70_000, output: 1_100_000 },
+  'deepseek-chat': { input: 270_000, cacheHit: 70_000, output: 1_100_000 },
+  'deepseek-pro': { input: 550_000, cacheHit: 140_000, output: 2_190_000 },
+  'deepseek-reasoner': { input: 550_000, cacheHit: 140_000, output: 2_190_000 },
+  'claude-3-5-haiku-latest': { input: 800_000, cacheHit: 80_000, output: 4_000_000 },
+  'claude-3-5-sonnet-latest': { input: 3_000_000, cacheHit: 300_000, output: 15_000_000 },
 }
 
-/** The model being priced, and the pair the user has declared for it. */
+/** The model being priced, and the triple the user has declared for it. */
 export interface RateRule {
   model: string
   /** A per-provider override, which wins whenever it is there. */
@@ -180,9 +195,22 @@ export function resolveRates(rule: RateRule): Rates | null {
   return RATES[rule.model] ?? null
 }
 
-/** What a session's counters cost, in micros, at the given rates. */
+/**
+ * What a session's counters cost, in micros, at the given rates.
+ *
+ * The cached share of the prompt is billed at `cacheHit` and the rest at `input`, which is how every
+ * provider that publishes a cache rate bills it. A record with no cache detail — or a zero, which says
+ * the same thing — pays the whole prompt at the input rate: the absence of a measurement is not a
+ * discount, and reading it as one would price a session below what it cost.
+ *
+ * No clamp on the subtraction, deliberately. `cached` is a subset of `prompt` by the provider's own
+ * definition, and `accumulate` sums both, so the difference is non-negative on every record this app
+ * writes.
+ */
 export function costMicros(totals: UsageCounters, rates: Rates): number {
-  return Math.round((totals.prompt * rates.input + totals.completion * rates.output) / 1_000_000)
+  const cached = totals.cached !== undefined && totals.cached > 0 ? totals.cached : 0
+  const fresh = totals.prompt - cached
+  return Math.round((fresh * rates.input + cached * rates.cacheHit + totals.completion * rates.output) / 1_000_000)
 }
 
 /** How much of the prompt the provider served from its cache, as a whole percent. */
@@ -225,21 +253,22 @@ export function formatCost(micros: number): string {
 /**
  * What a custom provider's record may declare about its prices.
  *
- * The two fields the settings box writes, in the unit that box labels them in: dollars per million
- * tokens. Optional and additive, exactly like the image-support declaration beside it — a provider
- * nobody has priced carries neither key, and the pair is read as one declaration rather than as two
- * independent numbers.
+ * The three fields the settings box writes, in the unit that box labels them in: dollars per million
+ * tokens. Optional and additive, exactly like the image-support declaration beside it - a provider nobody
+ * has priced carries no key, and the three are read as one declaration rather than as three independent
+ * numbers.
  *
  * Dollars here and micros in `RATES`, deliberately: a price is typed the way the provider publishes it
- * — `0.15`, not `150000` — and the one conversion happens in `declaredRates`, so no tile ever has to
+ * - `0.15`, not `150000` - and the one conversion happens in `declaredRates`, so no tile ever has to
  * know which of the two units it is holding.
  */
 export interface RateDeclaration {
   inputRate?: number
+  cacheHitRate?: number
   outputRate?: number
 }
 
-/** A usable declaration, or null. A number a person typed, and only when both sides are there. */
+/** A usable number, or null. One a person typed, and only when every side is there. */
 function declaredMicros(value: number | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
   return Math.round(value * 1_000_000)
@@ -248,10 +277,16 @@ function declaredMicros(value: number | undefined): number | null {
 /**
  * A provider's declared prices as rates this app can bill with, or null when it has declared none.
  *
- * All or nothing, and that is the load-bearing part: half a declaration is not a cheap model, it is an
- * un-priced one. Reading the missing side as free would bill every completion at nothing and look like a
- * measurement, which is the one thing the em dash exists to prevent. So a user who knows only their input
- * price has still not priced the model, and the Cost tile says so until they know both.
+ * All or nothing, and that is the load-bearing part: a declaration short of a side is not a cheap model,
+ * it is an un-priced one. Reading a missing side as free would bill those tokens at nothing, and reading
+ * a missing cache-hit rate as the input rate would overstate every warm session - either way looking like
+ * a measurement, which is the one thing the em dash exists to prevent. So a user who knows two sides of
+ * three has still not priced the model, and the Cost tile says so until they know all three.
+ *
+ * That is also the migration for a record written before a cached token had a rate of its own: its input
+ * and output survive the read whole, because they are still what the user typed, but the declaration is
+ * not one until the third field is filled in, so the shipped table prices the model meanwhile rather than
+ * that silence being read as a discount.
  *
  * A declared `0` is not the same as no declaration: a model running on the user's own machine costs
  * nothing, and a person who typed that zero has priced the model and is entitled to see `$0.0000` rather
@@ -260,9 +295,10 @@ function declaredMicros(value: number | undefined): number | null {
 export function declaredRates(record: RateDeclaration | undefined): Rates | null {
   if (!record) return null
   const input = declaredMicros(record.inputRate)
+  const cacheHit = declaredMicros(record.cacheHitRate)
   const output = declaredMicros(record.outputRate)
-  if (input === null || output === null) return null
-  return { input, output }
+  if (input === null || cacheHit === null || output === null) return null
+  return { input, cacheHit, output }
 }
 
 /** The four strings the Overview resident draws. */

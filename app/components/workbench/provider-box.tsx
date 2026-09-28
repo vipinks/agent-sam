@@ -29,6 +29,7 @@ export const PROVIDER_BOX_CONTROLS = [
   'provider-key-clear',
   'provider-image-support',
   'provider-rate-input',
+  'provider-rate-cache',
   'provider-rate-output',
   'provider-enabled-models',
   'provider-model-list',
@@ -91,19 +92,19 @@ export function ProviderBox({
   /**
    * The prices this provider was declared at, in dollars per million tokens, as the record holds them.
    *
-   * Optional per side, and absent is the ordinary state: a provider nobody has priced carries neither
-   * number. The fields below show that as an empty box rather than as a zero, because a stored zero
-   * would be a declaration that the model is free, which is a price rather than a missing one.
+   * Optional per side, and absent is the ordinary state: a provider nobody has priced carries no number.
+   * The fields below show that as an empty box rather than as a zero, because a stored zero would be a
+   * declaration that the model is free, which is a price rather than a missing one.
    */
-  rates: { input?: number; output?: number }
+  rates: { input?: number; cacheHit?: number; output?: number }
   /**
    * Declare a price for one side, or take it back with `undefined`.
    *
-   * One side at a time because that is how the fields are typed into: the other side's value is read
-   * from the record by the caller, which is what lets a user fill in the pair across two edits without
-   * either one clearing the other.
+   * One side at a time because that is how the fields are typed into: the other sides' values are read
+   * from the record by the caller, which is what lets a user fill in the three across three edits without
+   * any one of them clearing its neighbours.
    */
-  onRateChange: (side: 'input' | 'output', value: number | undefined) => void
+  onRateChange: (side: 'input' | 'cacheHit' | 'output', value: number | undefined) => void
   /** The models switched on, in the order they were switched on. */
   enabledModels: string[]
   /** The catalogue to show, in the order the provider listed it. */
@@ -233,16 +234,23 @@ export function ProviderBox({
       <div className="mt-2.5 border-t border-border pt-2.5">
         <p className="text-[12px] font-medium">Rates</p>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          What this provider charges, in dollars per million tokens. Leave blank to price its models from the built-in
-          list.
+          What this provider charges, in dollars per million tokens — a prompt token that missed its cache, one that hit
+          it, and a completion. Leave blank to price its models from the built-in list.
         </p>
-        <div className="mt-1.5 grid grid-cols-2 gap-2">
+        <div className="mt-1.5 grid grid-cols-3 gap-2">
           <RateField
             id={`${id}-rate-input`}
             slot="provider-rate-input"
             label="Input price"
             value={rates.input}
             onChange={(next) => onRateChange('input', next)}
+          />
+          <RateField
+            id={`${id}-rate-cache`}
+            slot="provider-rate-cache"
+            label="Cache hit price"
+            value={rates.cacheHit}
+            onChange={(next) => onRateChange('cacheHit', next)}
           />
           <RateField
             id={`${id}-rate-output`}

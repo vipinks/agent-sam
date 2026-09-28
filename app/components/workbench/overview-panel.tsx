@@ -82,7 +82,7 @@ function OverviewTileRow({
   turns,
 }: {
   usage: { prompt: number; completion: number; cached?: number } | undefined
-  rates: { input: number; output: number } | null
+  rates: { input: number; cacheHit: number; output: number } | null
   turns: number
 }) {
   const tiles = overviewTiles({ usage, rates, turns })

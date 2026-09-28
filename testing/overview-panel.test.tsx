@@ -251,10 +251,18 @@ describe('the Overview resident and its tiles', () => {
   it('docks between Preview and Tools and reads the session it is about', async () => {
     // A conversation that has been measured, on a provider whose prices the user has declared: the
     // numbers below are the declaration's, not the shipped table's — the same session prices at
-    // $0.3198 on the table, so the cost asserted here is the override being read at all.
+    // $0.1412 on the table, so the cost asserted here is the override being read at all.
     stubWorkbench({
       sessions: { sessions: [session(MEASURED)], activeSessionId: SESSION_ID },
-      providers: { deepseek: { enabledModels: ['deepseek-chat'], fetchedModels: [], inputRate: 1, outputRate: 2 } },
+      providers: {
+        deepseek: {
+          enabledModels: ['deepseek-chat'],
+          fetchedModels: [],
+          inputRate: 1,
+          cacheHitRate: 0.5,
+          outputRate: 2,
+        },
+      },
       transcript: saved(['user', 'assistant', 'user', 'assistant']),
     })
     const { container } = await mountWorkbench()
@@ -270,9 +278,31 @@ describe('the Overview resident and its tiles', () => {
     expect(labels).toEqual(['Code', 'Preview', 'Overview', 'Tools'])
 
     await waitFor(() => expect(tile(container, 'tokens').textContent).toBe('1M'))
-    expect(tile(container, 'cost').textContent).toBe('$1.0600')
+    // 47 000 tokens at $1, 893 000 cache hits at $0.50 and 60 000 out at $2, which is the declaration
+    // read as a triple: the same session at the input rate throughout would read $0.98 and at the pair's
+    // $1.06, so neither of those is the number above.
+    expect(tile(container, 'cost').textContent).toBe('$0.6135')
     expect(tile(container, 'cache').textContent).toBe('95%')
     expect(tile(container, 'turns').textContent).toBe('2')
+  })
+
+  it('prices the cache hits a measured session reported, from the shipped DeepSeek table', async () => {
+    // No declaration anywhere: `deepseek-chat` prices itself from the table this build ships, at
+    // DeepSeek's published rates of $0.27 in, $0.07 cached and $1.10 out per million. The session is the
+    // one the override test prices, so what differs is only the rates — 47 000 fresh tokens, 893 000
+    // cache hits, 60 000 out — and $0.1412 is that arithmetic rather than the $0.3198 a pair charging
+    // every prompt token at $0.27 would have read.
+    stubWorkbench({
+      sessions: { sessions: [session(MEASURED)], activeSessionId: SESSION_ID },
+      providers: { deepseek: { enabledModels: ['deepseek-chat'], fetchedModels: [] } },
+      transcript: saved(['user', 'assistant']),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    await waitFor(() => expect(tile(container, 'cost').textContent).toBe('$0.1412'))
+    expect(tile(container, 'cache').textContent).toBe('95%')
+    expect(tile(container, 'tokens').textContent).toBe('1M')
   })
 
   it('draws an em dash for what was not measured, and still counts the replies', async () => {
@@ -332,10 +362,11 @@ describe('the Overview resident and its tiles', () => {
       expect(recorded?.payload).toEqual({ id: SESSION_ID, prompt: 5000, completion: 900, cached: 4000 })
     })
 
-    // Priced by the shipped table, since this provider declared nothing: 5 000 prompt and 900
-    // completion on `deepseek-chat` is $0.0023.
+    // Priced by the shipped table, since this provider declared nothing: 5 000 prompt — of which 4 000
+    // came back from the cache — and 900 completion on `deepseek-chat` is $0.0015, not the $0.0023 the
+    // pair would have charged for the cached half at the input rate.
     await waitFor(() => expect(tile(container, 'tokens').textContent).toBe('5.9k'))
-    expect(tile(container, 'cost').textContent).toBe('$0.0023')
+    expect(tile(container, 'cost').textContent).toBe('$0.0015')
     expect(tile(container, 'cache').textContent).toBe('80%')
     // One reply, which is the one this run just made.
     expect(tile(container, 'turns').textContent).toBe('1')

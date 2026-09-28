@@ -488,14 +488,22 @@ describe('the image-support switch', () => {
 })
 
 describe('the rate override fields', () => {
-  /** The declared pair the seeded record holds: prices the shipped table does not agree with. */
+  /** The declared triple the seeded record holds: prices the shipped table does not agree with. */
   const DECLARED: ProviderConfigState = {
-    providers: { deepseek: { enabledModels: [], fetchedModels: [], inputRate: 0.15, outputRate: 0.6 } },
+    providers: {
+      deepseek: {
+        enabledModels: [],
+        fetchedModels: [],
+        inputRate: 0.15,
+        cacheHitRate: 0.075,
+        outputRate: 0.6,
+      },
+    },
     customProviders: [],
   }
 
-  /** One of a box's two price fields, by the side of the declaration it holds. */
-  function rateField(box: HTMLElement, side: 'Input' | 'Output'): HTMLInputElement {
+  /** One of a box's three price fields, by the side of the declaration it holds. */
+  function rateField(box: HTMLElement, side: 'Input' | 'Cache hit' | 'Output'): HTMLInputElement {
     return within(box).getByLabelText(new RegExp(`^${side} price`, 'i')) as HTMLInputElement
   }
 
@@ -506,25 +514,33 @@ describe('the rate override fields', () => {
     const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
     const openai = boxFor(container, 'predefined', 'OpenAI')
 
-    // The declaration reads back the way it was typed, and the unit is on the field rather than only in
-    // the documentation: a bare 0.6 beside a dollars-per-million table is a guess at which one it is.
+    // The declaration reads back the way it was typed — all three sides of it, the cache-hit rate
+    // included — and the unit is on the field rather than only in the documentation: a bare 0.6 beside a
+    // dollars-per-million table is a guess at which one it is.
     await waitFor(() => expect(rateField(deepseek, 'Input').value).toBe('0.15'))
+    expect(rateField(deepseek, 'Cache hit').value).toBe('0.075')
     expect(rateField(deepseek, 'Output').value).toBe('0.6')
     expect(within(deepseek).getByText(/dollars per million tokens/i)).toBeTruthy()
 
-    // Bounded, so the control refuses a negative price and a slipped decimal point at the field.
+    // Bounded, so the control refuses a negative price and a slipped decimal point at the field — the
+    // cache-hit field exactly as its two neighbours.
     const field = rateField(deepseek, 'Input')
     expect(field.getAttribute('type')).toBe('number')
     expect(field.getAttribute('min')).toBe('0')
     expect(Number(field.getAttribute('max'))).toBeGreaterThan(0)
+    const cache = rateField(deepseek, 'Cache hit')
+    expect(cache.getAttribute('type')).toBe('number')
+    expect(cache.getAttribute('min')).toBe('0')
+    expect(Number(cache.getAttribute('max'))).toBeGreaterThan(0)
 
     // And a provider nobody has priced shows empty fields rather than zeros: a zero is a price, and the
     // Overview would bill every token of it.
     expect(rateField(openai, 'Input').value).toBe('')
+    expect(rateField(openai, 'Cache hit').value).toBe('')
     expect(rateField(openai, 'Output').value).toBe('')
   })
 
-  it('writes both sides to the provider whose box was edited, and clearing a field takes its key off', async () => {
+  it('writes all three sides to the provider whose box was edited, and clearing a field takes its key off', async () => {
     const { stub, main } = stubSettings(undefined, DECLARED)
     const { container } = renderSettings()
 
@@ -535,8 +551,9 @@ describe('the rate override fields', () => {
     await userEvent.type(rateField(deepseek, 'Input'), '1.5')
     await userEvent.tab()
 
-    // Addressed to one provider and carrying both sides: the pair is one declaration, so the field the
-    // user did not touch travels with the one they did rather than being dropped by an edit next door.
+    // Addressed to one provider and carrying all three sides: the declaration is read as one, so the two
+    // fields the user did not touch travel with the one they did rather than being dropped by an edit
+    // next door.
     //
     // The settled write — the last one — rather than the first: the field commits as it is typed into, so
     // the keystrokes before the final one write the states the user passed through. What is asserted is
@@ -547,25 +564,37 @@ describe('the rate override fields', () => {
     expect((asked?.args[0] as { payload: unknown }).payload).toEqual({
       providerId: 'deepseek',
       input: 1.5,
+      cacheHit: 0.075,
       output: 0.6,
     })
     expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
+    expect(main.state().providers.deepseek?.cacheHitRate).toBe(0.075)
     expect(main.state().providers.deepseek?.outputRate).toBe(0.6)
     // The box a click did not touch, and the price it still does not carry.
     expect(main.state().providers.openai?.inputRate).toBeUndefined()
     expect(rateField(openai, 'Input').value).toBe('')
 
     // The record those fields wrote is the one the pricing rule reads, which is the point of the fields:
-    // this provider's sessions are priced in micros at what was typed here, ahead of the shipped table.
+    // this provider's sessions are priced in micros at what was typed here, ahead of the shipped table,
+    // and a cached token at its own rate rather than at the input rate beside it.
     expect(
       resolveRates({ model: 'deepseek-chat', override: declaredRates(main.state().providers.deepseek ?? {}) })
-    ).toEqual({ input: 1_500_000, output: 600_000 })
+    ).toEqual({ input: 1_500_000, cacheHit: 75_000, output: 600_000 })
+
+    await userEvent.clear(rateField(deepseek, 'Cache hit'))
+    await userEvent.tab()
+
+    // Blanked means the key goes rather than becoming a zero: with a side missing the declaration is no
+    // longer one, so the Overview falls back to the shipped table rather than billing a cache hit at
+    // whatever rate happened to be next to it.
+    await waitFor(() => expect('cacheHitRate' in (main.state().providers.deepseek ?? {})).toBe(false))
+    expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
+    expect(main.state().providers.deepseek?.outputRate).toBe(0.6)
+    expect(declaredRates(main.state().providers.deepseek ?? {})).toBeNull()
 
     await userEvent.clear(rateField(deepseek, 'Output'))
     await userEvent.tab()
 
-    // Blanked means the key goes rather than becoming a zero: no price is declared for that side, so the
-    // Overview draws an em dash for Cost instead of a confident bill priced at nothing.
     await waitFor(() => expect('outputRate' in (main.state().providers.deepseek ?? {})).toBe(false))
     expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
   })

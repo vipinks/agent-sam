@@ -18,6 +18,7 @@ import {
   formatCost,
   overviewTiles,
   parseUsage,
+  RATES,
   readSessionUsage,
   resolveRates,
   sessionUsageSchema,
@@ -220,17 +221,34 @@ function theCachePercentIsWhole() {
 
 function theCostIsMicros() {
   // Micros per million tokens, so the rates a user will type next turn are the numbers a provider
-  // publishes, four decimal places wider.
-  const gptMini = { input: 150_000, output: 600_000 }
+  // publishes, four decimal places wider. Three of them: a cached token is billed at its own rate, which
+  // is the whole reason the shape is a triple rather than a pair.
+  const gptMini = { input: 150_000, cacheHit: 75_000, output: 600_000 }
   assert.equal(costMicros({ prompt: 1_000_000, completion: 0 }, gptMini), 150_000)
   assert.equal(costMicros({ prompt: 0, completion: 1_000_000 }, gptMini), 600_000)
   assert.equal(costMicros({ prompt: 1_000_000, completion: 1_000_000 }, gptMini), 750_000)
   assert.equal(costMicros({ prompt: 0, completion: 0 }, gptMini), 0)
   // Rounded to the nearest micro, because a token count is not a whole number of micros.
   assert.equal(costMicros({ prompt: 762, completion: 0 }, gptMini), 114)
-  assert.equal(costMicros({ prompt: 0, completion: 1 }, { input: 1, output: 1 }), 0)
+  assert.equal(costMicros({ prompt: 0, completion: 1 }, { input: 1, cacheHit: 1, output: 1 }), 0)
 
-  results.push('cost is computed in micros')
+  // A prompt served half from cache is not billed twice and not billed at the miss rate throughout: the
+  // cached tokens come off the input side and are charged at the cache-hit rate instead, so 400 000 hits
+  // and 600 000 misses cost 30 000 + 90 000 rather than the 150 000 the pair would have charged.
+  assert.equal(costMicros({ prompt: 1_000_000, completion: 0, cached: 400_000 }, gptMini), 120_000)
+  assert.equal(costMicros({ prompt: 1_000_000, completion: 100_000, cached: 400_000 }, gptMini), 180_000)
+  // Every token cached: the whole prompt at the hit rate, and the pair's answer for the same prompt is
+  // 150 000 — which is what makes this a claim about the third rate rather than about the subtraction.
+  assert.equal(costMicros({ prompt: 1_000_000, completion: 0, cached: 1_000_000 }, gptMini), 75_000)
+  assert.notEqual(costMicros({ prompt: 1_000_000, completion: 0, cached: 1_000_000 }, gptMini), 150_000)
+
+  // Zero cached is not a third rate at all: a provider that reported `cached_tokens: 0` has said nothing
+  // was served from cache, and the two-rate arithmetic is the answer. Absent is the same answer, for the
+  // reason the Cache tile draws an em dash for it: nobody measured the cache, and nobody is billed for it.
+  assert.equal(costMicros({ prompt: 1_000_000, completion: 0, cached: 0 }, gptMini), 150_000)
+  assert.equal(costMicros({ prompt: 1_000_000, completion: 0 }, gptMini), 150_000)
+
+  results.push('cost is computed in micros, cache hits at their own rate')
 }
 
 function theRatesResolve() {
@@ -238,10 +256,11 @@ function theRatesResolve() {
   const known = resolveRates({ model: 'gpt-4o-mini' })
   assert.ok(known !== null, 'a known model has rates')
   assert.equal(known.input, 150_000)
+  assert.equal(known.cacheHit, 75_000)
   assert.equal(known.output, 600_000)
 
   // An override wins, on a known model and on an unknown one.
-  const override = { input: 1, output: 2 }
+  const override = { input: 3, cacheHit: 1, output: 6 }
   assert.deepEqual(resolveRates({ model: 'gpt-4o-mini', override }), override)
   assert.deepEqual(resolveRates({ model: 'nobody-knows-this', override }), override)
 
@@ -251,6 +270,27 @@ function theRatesResolve() {
   assert.equal(resolveRates({ model: '' }), null)
 
   results.push('rates resolve, override first')
+}
+
+function theDeepSeekModelsArePricedAtTheirPublishedTriples() {
+  // The four DeepSeek ids this app ships against, at the list prices DeepSeek publishes in dollars per
+  // million — input, cache hit, output — which is 270 000, 70 000 and 1 100 000 micros for the cheap pair
+  // and 550 000, 140 000 and 2 190 000 for the reasoning pair.
+  const chat = { input: 270_000, cacheHit: 70_000, output: 1_100_000 }
+  const reasoner = { input: 550_000, cacheHit: 140_000, output: 2_190_000 }
+  assert.deepEqual(resolveRates({ model: 'deepseek-flash' }), chat)
+  assert.deepEqual(resolveRates({ model: 'deepseek-chat' }), chat)
+  assert.deepEqual(resolveRates({ model: 'deepseek-pro' }), reasoner)
+  assert.deepEqual(resolveRates({ model: 'deepseek-reasoner' }), reasoner)
+
+  // Every entry in the shipped table carries all three, and every one of them bills a cached token below a
+  // fresh one: a table that priced a hit at the input rate would be the pair this shape replaced.
+  for (const [model, rates] of Object.entries(RATES)) {
+    assert.equal(typeof rates.cacheHit, 'number', `${model} is priced as a triple`)
+    assert.ok(rates.cacheHit < rates.input, `${model} bills a cached token below a fresh one`)
+  }
+
+  results.push('the DeepSeek models are priced at their published triples')
 }
 
 function theFormattingIsCompactAndExact() {
@@ -311,13 +351,16 @@ function theOverviewTilesReadWhatASessionUsed() {
   // A measured session on a priced model: the four strings the resident draws, in the formats the
   // display rules above give them. The tile is a read of those rules, not a second formatter, so the
   // cost asserted here is the rule's own answer rather than a number written out twice.
-  const rates = { input: 150_000, output: 600_000 }
+  const rates = { input: 150_000, cacheHit: 75_000, output: 600_000 }
   const usage = { prompt: 940_000, completion: 60_000, cached: 893_000, lastReportedAt: 1_700_000_000_000 }
   const measured = overviewTiles({ usage, rates, turns: 3 })
 
   assert.equal(measured.tokens, '1M')
   assert.equal(measured.cost, formatCost(costMicros(usage, rates)))
-  assert.equal(measured.cost, '$0.1770')
+  // 47 000 tokens at the input rate, 893 000 at the cache-hit rate, 60 000 out — not the 177 000 the same
+  // prompt would read with no cache detail, which is the number below.
+  assert.equal(measured.cost, '$0.1100')
+  assert.equal(overviewTiles({ usage: { prompt: 940_000, completion: 60_000 }, rates, turns: 3 }).cost, '$0.1770')
   assert.equal(measured.cache, '95%')
   assert.equal(measured.turns, '3')
 
@@ -346,30 +389,53 @@ function theOverviewTilesReadWhatASessionUsed() {
 }
 
 function theDeclaredRatesConvertAndWin() {
-  // What the settings fields hold, in the unit their label names: dollars per million tokens. The table
+  // What the settings fields hold, in the unit their labels name: dollars per million tokens. The table
   // prices in micros, so the declaration is converted once, here, rather than at every tile.
-  assert.deepEqual(declaredRates({ inputRate: 0.15, outputRate: 0.6 }), { input: 150_000, output: 600_000 })
-  assert.deepEqual(declaredRates({ inputRate: 1, outputRate: 2 }), { input: 1_000_000, output: 2_000_000 })
+  assert.deepEqual(declaredRates({ inputRate: 0.15, cacheHitRate: 0.075, outputRate: 0.6 }), {
+    input: 150_000,
+    cacheHit: 75_000,
+    output: 600_000,
+  })
+  assert.deepEqual(declaredRates({ inputRate: 1, cacheHitRate: 0.5, outputRate: 2 }), {
+    input: 1_000_000,
+    cacheHit: 500_000,
+    output: 2_000_000,
+  })
   // Free is a price a user can declare — a model running on their own machine — and it is not the same
   // thing as no declaration: the fields hold a zero because somebody typed one.
-  assert.deepEqual(declaredRates({ inputRate: 0, outputRate: 0 }), { input: 0, output: 0 })
+  assert.deepEqual(declaredRates({ inputRate: 0, cacheHitRate: 0, outputRate: 0 }), {
+    input: 0,
+    cacheHit: 0,
+    output: 0,
+  })
 
-  // Half a declaration is not a price: a user who knows one side only has not priced the model, and the
-  // cost tile has to stay an em dash rather than pricing every completion at nothing.
+  // A declaration missing any side is not a price: a user who has filled in two of the three has not
+  // priced the model, and the Cost tile has to stay an em dash rather than billing a cache hit at
+  // whatever rate happened to be next to it.
   assert.equal(declaredRates({}), null)
   assert.equal(declaredRates({ inputRate: 0.15 }), null)
+  assert.equal(declaredRates({ inputRate: 0.15, cacheHitRate: 0.075 }), null)
   assert.equal(declaredRates({ outputRate: 0.6 }), null)
-  assert.equal(declaredRates({ inputRate: 0.15, outputRate: Number.NaN }), null)
-  assert.equal(declaredRates({ inputRate: -1, outputRate: 0.6 }), null)
+  assert.equal(declaredRates({ inputRate: 0.15, cacheHitRate: 0.075, outputRate: Number.NaN }), null)
+  assert.equal(declaredRates({ inputRate: -1, cacheHitRate: 0.075, outputRate: 0.6 }), null)
+  assert.equal(declaredRates({ inputRate: 0.15, cacheHitRate: -0.075, outputRate: 0.6 }), null)
 
-  // And the resolver prefers it to the table, which is the whole reason the fields exist: a provider
-  // whose prices have moved can be priced without waiting for a build.
-  const declared = declaredRates({ inputRate: 0.01, outputRate: 0.02 })
+  // A record written before the cache-hit field existed is the two-field case above: not a declaration,
+  // so the built-in table prices the model until the user fills the third field in.
+  assert.equal(declaredRates({ inputRate: 0.15, outputRate: 0.6 }), null)
+
+  // And the resolver prefers a whole declaration to the table, which is the whole reason the fields
+  // exist: a provider whose prices have moved can be priced without waiting for a build.
+  const declared = declaredRates({ inputRate: 0.01, cacheHitRate: 0.005, outputRate: 0.02 })
   assert.ok(declared !== null, 'a whole declaration is a price')
-  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declared }), { input: 10_000, output: 20_000 })
+  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declared }), {
+    input: 10_000,
+    cacheHit: 5_000,
+    output: 20_000,
+  })
   assert.notDeepEqual(resolveRates({ model: 'deepseek-chat' }), declared)
 
-  results.push('a declared price is micros, and it wins over the table')
+  results.push('a declared price is a triple in micros, and it wins over the table')
 }
 
 async function main() {
@@ -381,6 +447,7 @@ async function main() {
   theCachePercentIsWhole()
   theCostIsMicros()
   theRatesResolve()
+  theDeepSeekModelsArePricedAtTheirPublishedTriples()
   theFormattingIsCompactAndExact()
   theUsageKeyRidesTheMetadataEntry()
   theOverviewTilesReadWhatASessionUsed()
