@@ -195,17 +195,10 @@ function ProviderCard({
   // memoised because the store slice is absent for an unfetched provider, and a fresh `?? []` each
   // render would invalidate every memo that depends on them.
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[id])
-  const { toggleModel, setFetchedModels, setSupportsImages, setRates } = useConveyorStore(providerConfigStore)
+  const { toggleModel, setFetchedModels, setSupportsImages } = useConveyorStore(providerConfigStore)
 
   const fetched = useMemo(() => config?.fetchedModels ?? [], [config])
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
-  // Memoised for the same reason the two lists above are: the store slice is absent for a provider that
-  // has never been configured, and a fresh object every render would hand the box a new declaration each
-  // time.
-  const rates = useMemo(
-    () => ({ input: config?.inputRate, cacheHit: config?.cacheHitRate, output: config?.outputRate }),
-    [config?.inputRate, config?.cacheHitRate, config?.outputRate]
-  )
 
   const onSave = async () => {
     if (!value.trim()) return
@@ -261,18 +254,6 @@ function ProviderCard({
       // image for, and the switch shows that as an off position rather than as a third state.
       imagesSupported={config?.supportsImages === true}
       onToggleImages={(supported) => setSupportsImages({ providerId: id, supported })}
-      rates={rates}
-      // All three sides travel in one payload, and the sides the user did not touch are re-stated from the
-      // record: the three are one declaration, so clearing a field must not silently clear its neighbours,
-      // and a blank field has to send no key rather than a zero the Overview would bill at.
-      onRateChange={(side, next) =>
-        setRates({
-          providerId: id,
-          input: side === 'input' ? next : config?.inputRate,
-          cacheHit: side === 'cacheHit' ? next : config?.cacheHitRate,
-          output: side === 'output' ? next : config?.outputRate,
-        })
-      }
       enabledModels={enabled}
       models={fetched}
       modelsOpen={justFetched}

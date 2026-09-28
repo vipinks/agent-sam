@@ -176,22 +176,33 @@ export const RATES: Record<string, Rates> = {
   'claude-3-5-sonnet-latest': { input: 3_000_000, cacheHit: 300_000, output: 15_000_000 },
 }
 
-/** The model being priced, and the triple the user has declared for it. */
+/** The model being priced, and the prices the provider serving it holds for its models. */
 export interface RateRule {
   model: string
-  /** A per-provider override, which wins whenever it is there. */
-  override?: Rates | null
+  /**
+   * What the provider has declared, by model id. The entry for `model` wins whenever it is whole.
+   *
+   * The map rather than the one triple, because a record holds a price per model and the rule is what
+   * says which of them the model being priced gets. Absent is the ordinary state: a provider nobody has
+   * priced carries no map, and an older file has no such key.
+   */
+  modelRates?: ModelRates | null
 }
 
 /**
  * The rates to price a model with, or null when nothing knows the model.
  *
- * A declared override wins over the table, so a user who knows what their gateway charges is not argued
- * with. There is deliberately no default rate: a model nothing has priced is priced as *unknown*, which
- * is what turns into an em dash rather than into a confident zero.
+ * Three layers, and the order is the whole rule: what was declared for this model, then the table this
+ * build ships, then nothing. A declaration wins because a user who typed a price is not argued with, and
+ * it wins for *its* model only - the row beside it in the same provider is priced as it was, which is
+ * the reason a price belongs to a model rather than to the provider that happens to serve it.
+ *
+ * There is deliberately no fourth layer and no default rate: a model nothing has priced is priced as
+ * *unknown*, which is what turns into an em dash rather than into a confident zero.
  */
 export function resolveRates(rule: RateRule): Rates | null {
-  if (rule.override) return rule.override
+  const declared = declaredRates(rule.modelRates?.[rule.model])
+  if (declared) return declared
   return RATES[rule.model] ?? null
 }
 
@@ -248,15 +259,29 @@ export function formatCost(micros: number): string {
   return `$${(value / 1_000_000).toFixed(4)}`
 }
 
+/**
+ * A rate in micros as the dollars per million a price field holds: `70 000` is `0.07`.
+ *
+ * The inverse of `declaredMicros`, and the pair is what lets a model row show the table's own number in
+ * the unit its field accepts: the placeholder and the override a user would type are the same string, so
+ * what the row says before anyone has typed is exactly what the shipped table prices that model with.
+ *
+ * Micros divided by a million, with no rounding: every rate this app ships or stores came from that same
+ * multiplication, so the division puts back the digits a person typed rather than a rounded-off number
+ * that would read as a slightly different price.
+ */
+export function rateText(micros: number): string {
+  return String(micros / 1_000_000)
+}
+
 // ---------------------------------------------------------------- the Overview tiles
 
 /**
- * What a custom provider's record may declare about its prices.
+ * What a record may declare about one model's prices.
  *
- * The three fields the settings box writes, in the unit that box labels them in: dollars per million
- * tokens. Optional and additive, exactly like the image-support declaration beside it - a provider nobody
- * has priced carries no key, and the three are read as one declaration rather than as three independent
- * numbers.
+ * The three fields a model row writes, in the unit that row labels them in: dollars per million tokens.
+ * Optional and additive, exactly like the image-support declaration beside it - a model nobody has priced
+ * carries no keys, and the three are read as one declaration rather than as three independent numbers.
  *
  * Dollars here and micros in `RATES`, deliberately: a price is typed the way the provider publishes it
  * - `0.15`, not `150000` - and the one conversion happens in `declaredRates`, so no tile ever has to
@@ -268,6 +293,17 @@ export interface RateDeclaration {
   outputRate?: number
 }
 
+/**
+ * A provider's declared prices, keyed by the model each belongs to.
+ *
+ * Additive and optional on the provider's record, so a file written before price overrides existed reads
+ * as a provider nobody has priced, and `modelRates?.[model]` is undefined for every model rather than a
+ * map of invented zeros. Keyed by the model id the catalogue lists, because that is the name both the
+ * session and the pricing rule carry: two models of one provider do not share a price, and a price is
+ * about the model that was billed rather than the gateway it was reached through.
+ */
+export type ModelRates = Record<string, RateDeclaration>
+
 /** A usable number, or null. One a person typed, and only when every side is there. */
 function declaredMicros(value: number | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
@@ -275,7 +311,7 @@ function declaredMicros(value: number | undefined): number | null {
 }
 
 /**
- * A provider's declared prices as rates this app can bill with, or null when it has declared none.
+ * A model's declared prices as rates this app can bill with, or null when it has declared none.
  *
  * All or nothing, and that is the load-bearing part: a declaration short of a side is not a cheap model,
  * it is an un-priced one. Reading a missing side as free would bill those tokens at nothing, and reading

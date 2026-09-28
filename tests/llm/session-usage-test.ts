@@ -19,6 +19,7 @@ import {
   overviewTiles,
   parseUsage,
   RATES,
+  rateText,
   readSessionUsage,
   resolveRates,
   sessionUsageSchema,
@@ -252,24 +253,94 @@ function theCostIsMicros() {
 }
 
 function theRatesResolve() {
-  // A model in the table prices itself.
+  // A model in the table prices itself, with no declarations anywhere: the map a host with nothing to
+  // say about its prices hands this rule is absent, which is how a record written before the key
+  // existed reads.
   const known = resolveRates({ model: 'gpt-4o-mini' })
   assert.ok(known !== null, 'a known model has rates')
   assert.equal(known.input, 150_000)
   assert.equal(known.cacheHit, 75_000)
   assert.equal(known.output, 600_000)
-
-  // An override wins, on a known model and on an unknown one.
-  const override = { input: 3, cacheHit: 1, output: 6 }
-  assert.deepEqual(resolveRates({ model: 'gpt-4o-mini', override }), override)
-  assert.deepEqual(resolveRates({ model: 'nobody-knows-this', override }), override)
+  assert.deepEqual(resolveRates({ model: 'gpt-4o-mini', modelRates: undefined }), known)
+  assert.deepEqual(resolveRates({ model: 'gpt-4o-mini', modelRates: {} }), known)
 
   // No default rate and no guessing: an unknown model with nothing declared is priced as unknown, and
   // that absence is what the panel draws as an em dash rather than as a zero cost.
   assert.equal(resolveRates({ model: 'nobody-knows-this' }), null)
   assert.equal(resolveRates({ model: '' }), null)
+  // A declaration for some other model prices neither of those: the map is keyed by model, and the one
+  // that is not there is not declared.
+  assert.equal(resolveRates({ model: 'nobody-knows-this', modelRates: { 'gpt-4o-mini': DECLARED_TRIPLE } }), null)
 
-  results.push('rates resolve, override first')
+  results.push('rates resolve from the table when nothing has declared them')
+}
+
+/** A whole declaration, in the dollars per million the settings fields hold. */
+const DECLARED_TRIPLE = { inputRate: 0.01, cacheHitRate: 0.005, outputRate: 0.02 }
+
+/** The same declaration as micros, which is what a rule prices with. */
+const DECLARED_MICROS = { input: 10_000, cacheHit: 5_000, output: 20_000 }
+
+function aDeclarationWinsForItsOwnModelOnly() {
+  const modelRates = { 'deepseek-chat': DECLARED_TRIPLE }
+
+  // The model that was declared prices at what was declared, ahead of the shipped table...
+  assert.deepEqual(resolveRates({ model: 'deepseek-chat', modelRates }), DECLARED_MICROS)
+  assert.notDeepEqual(resolveRates({ model: 'deepseek-chat', modelRates }), RATES['deepseek-chat'])
+
+  // ...and the model beside it stays on the table, which is the whole reason the declaration moved off
+  // the provider: two models of one provider do not share a price.
+  assert.deepEqual(resolveRates({ model: 'deepseek-reasoner', modelRates }), RATES['deepseek-reasoner'])
+  assert.deepEqual(resolveRates({ model: 'deepseek-flash', modelRates }), RATES['deepseek-flash'])
+
+  // A model the table has never heard of is priced by its declaration alone: this is the case the
+  // override exists for, since a gateway's model id is not in any list this build ships.
+  const local = { inputRate: 0, cacheHitRate: 0, outputRate: 0 }
+  assert.deepEqual(
+    resolveRates({ model: 'llama-3.1-8b', modelRates: { 'llama-3.1-8b': local } }),
+    { input: 0, cacheHit: 0, output: 0 },
+    'a declared zero is a price on a model nothing else prices'
+  )
+
+  results.push('a declared triple prices its own model and leaves its siblings on the table')
+}
+
+function aPartialTripleIsNotADeclaration() {
+  // One side short of the three, on a model the table knows: the table prices it, rather than the two
+  // sides being read as a cheap pair — a missing cache-hit rate is not the input rate beside it.
+  assert.deepEqual(
+    resolveRates({ model: 'deepseek-chat', modelRates: { 'deepseek-chat': { inputRate: 0.01, cacheHitRate: 0.005 } } }),
+    RATES['deepseek-chat']
+  )
+  assert.deepEqual(
+    resolveRates({ model: 'deepseek-chat', modelRates: { 'deepseek-chat': { outputRate: 0.02 } } }),
+    RATES['deepseek-chat']
+  )
+  assert.deepEqual(
+    resolveRates({ model: 'deepseek-chat', modelRates: { 'deepseek-chat': {} } }),
+    RATES['deepseek-chat']
+  )
+
+  // And on a model nothing else prices it is still unpriced: a half-typed declaration is silence, and
+  // silence is not free.
+  assert.equal(resolveRates({ model: 'llama-3.1-8b', modelRates: { 'llama-3.1-8b': { inputRate: 0.5 } } }), null)
+  // A side that is not a usable price at all — negative, or not a number — is the same as a missing one.
+  assert.equal(
+    resolveRates({
+      model: 'llama-3.1-8b',
+      modelRates: { 'llama-3.1-8b': { inputRate: -1, cacheHitRate: 0, outputRate: 0 } },
+    }),
+    null
+  )
+  assert.equal(
+    resolveRates({
+      model: 'llama-3.1-8b',
+      modelRates: { 'llama-3.1-8b': { inputRate: Number.NaN, cacheHitRate: 0, outputRate: 0 } },
+    }),
+    null
+  )
+
+  results.push('a partial triple is not a declaration, and the table prices the model')
 }
 
 function theDeepSeekModelsArePricedAtTheirPublishedTriples() {
@@ -308,6 +379,15 @@ function theFormattingIsCompactAndExact() {
   assert.equal(formatCost(0), '$0.0000')
   assert.equal(formatCost(2_500_000), '$2.5000')
   assert.equal(formatCost(1), '$0.0000')
+
+  // A rate in micros as the dollars per million a field holds: the table's own numbers, written the way
+  // its provider publishes them.
+  assert.equal(rateText(270_000), '0.27')
+  assert.equal(rateText(70_000), '0.07')
+  assert.equal(rateText(75_000), '0.075')
+  assert.equal(rateText(1_100_000), '1.1')
+  assert.equal(rateText(2_190_000), '2.19')
+  assert.equal(rateText(0), '0')
 
   results.push('tokens and cost format exactly')
 }
@@ -425,15 +505,24 @@ function theDeclaredRatesConvertAndWin() {
   assert.equal(declaredRates({ inputRate: 0.15, outputRate: 0.6 }), null)
 
   // And the resolver prefers a whole declaration to the table, which is the whole reason the fields
-  // exist: a provider whose prices have moved can be priced without waiting for a build.
-  const declared = declaredRates({ inputRate: 0.01, cacheHitRate: 0.005, outputRate: 0.02 })
+  // exist: a model whose prices have moved can be priced without waiting for a build.
+  const declared = declaredRates(DECLARED_TRIPLE)
   assert.ok(declared !== null, 'a whole declaration is a price')
-  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declared }), {
-    input: 10_000,
-    cacheHit: 5_000,
-    output: 20_000,
-  })
+  assert.deepEqual(declared, DECLARED_MICROS)
+  assert.deepEqual(resolveRates({ model: 'deepseek-chat', modelRates: { 'deepseek-chat': DECLARED_TRIPLE } }), declared)
   assert.notDeepEqual(resolveRates({ model: 'deepseek-chat' }), declared)
+
+  // The conversion is its own inverse for every entry the table ships, which is what lets a model row
+  // show the built-in triple as placeholder text in the very unit its field accepts: what a reader sees
+  // is the number they would have typed as the override.
+  for (const [model, rates] of Object.entries(RATES)) {
+    const asTyped = {
+      inputRate: Number(rateText(rates.input)),
+      cacheHitRate: Number(rateText(rates.cacheHit)),
+      outputRate: Number(rateText(rates.output)),
+    }
+    assert.deepEqual(declaredRates(asTyped), rates, `${model}'s built-in triple survives the round trip`)
+  }
 
   results.push('a declared price is a triple in micros, and it wins over the table')
 }
@@ -447,6 +536,8 @@ async function main() {
   theCachePercentIsWhole()
   theCostIsMicros()
   theRatesResolve()
+  aDeclarationWinsForItsOwnModelOnly()
+  aPartialTripleIsNotADeclaration()
   theDeepSeekModelsArePricedAtTheirPublishedTriples()
   theFormattingIsCompactAndExact()
   theUsageKeyRidesTheMetadataEntry()

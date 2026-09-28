@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { appendCustom, newProviderId, validateProviderDraft, type CustomProvider } from '../protocol/custom-provider'
+import type { ModelRates } from '../protocol/session-usage'
 
 /**
  * Per-provider model choices: which models a provider offers, and which of those the user has
@@ -33,28 +34,23 @@ export interface ProviderConfig {
    */
   supportsImages?: boolean
   /**
-   * What this provider charges for input, in dollars per million tokens, as the user declared it.
+   * What this provider charges for each of its models, as the user declared it, by model id.
    *
-   * Additive and optional like `supportsImages` beside it, and written only when a user has typed a
-   * number: absent means nobody has priced this provider, which is not the same as a price of zero. The
-   * pricing rules read the three through `declaredRates`, which refuses a declaration short of a side
-   * rather than reading the missing side as free.
+   * Additive and optional like `supportsImages` above, and keyed by the model because a price is about
+   * the model that was billed: one provider serves a cheap model and a dear one, and a single triple for
+   * the provider would have to be wrong about at least one of them. A record that nobody has priced
+   * carries no such key, which the pricing rules read as the shipped table pricing every model.
    *
-   * Dollars rather than the micros `RATES` holds, because this is a field a person fills in from a
-   * provider's pricing page that quotes `$0.15 / 1M tokens`.
+   * Each entry is all-or-nothing at the point it is read — a triple short of a side is not a declaration,
+   * and the table prices that model rather than the missing side being read as free — though a row being
+   * typed into stores the sides it has, so a person filling three fields in one at a time keeps what they
+   * have already typed.
+   *
+   * Dollars rather than the micros `RATES` holds, because these are fields a person fills in from a
+   * provider's pricing page that quotes `$0.15 / 1M tokens`: the one conversion happens in
+   * `declaredRates`, which is also what decides whether an entry is whole enough to price with.
    */
-  inputRate?: number
-  /**
-   * What this provider charges for a prompt token it served from its own cache, in dollars per million.
-   *
-   * Its own field because it is its own price: every provider that publishes one publishes it below the
-   * input rate, and a session on a warm cache is mostly hits — so a declaration without it would leave
-   * the Cost tile charging the whole prompt at the miss rate, which is the overstatement the third field
-   * exists to stop rather than to permit.
-   */
-  cacheHitRate?: number
-  /** What this provider charges for output, in dollars per million tokens. */
-  outputRate?: number
+  modelRates?: ModelRates
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -89,9 +85,11 @@ export const providerConfigStore = defineStore('provider-config', {
     setSupportsImages: z.object({ providerId: z.string().min(1), supported: z.boolean() }),
     // Every side optional and non-negative, because the three are one declaration a user may be halfway
     // through typing: an omitted side means "not declared", which the action writes by leaving the key
-    // off rather than by storing a zero this app would then bill at.
-    setRates: z.object({
+    // off rather than by storing a zero this app would then bill at. The model id travels with them
+    // because the price belongs to the model the row was drawn for.
+    setModelRates: z.object({
       providerId: z.string().min(1),
+      modelId: z.string().min(1),
       input: z.number().nonnegative().optional(),
       cacheHit: z.number().nonnegative().optional(),
       output: z.number().nonnegative().optional(),
@@ -131,30 +129,46 @@ export const providerConfigStore = defineStore('provider-config', {
         : {
             enabledModels: current.enabledModels,
             fetchedModels: current.fetchedModels,
+            // Carried across, because this branch *rebuilds* the record: switching an unrelated setting
+            // off must not be the thing that reprices every model at the shipped table.
+            ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
           }
     },
 
     /**
-     * Record what this provider charges, in dollars per million tokens.
+     * Record what one model charges, in dollars per million tokens.
      *
-     * Written only when set: a side the user left blank takes its key off the record, so "not priced"
-     * and "priced at nothing" stay different states. That distinction is the whole point of the action —
-     * the Overview draws an em dash for the first and a real `$0.0000` for the second, and a store that
-     * turned a blank field into a zero would bill every un-priced provider's tokens at nothing.
+     * Written only when set: a side the user left blank takes its key off that model's entry, so "not
+     * priced" and "priced at nothing" stay different states. That distinction is the whole point of the
+     * action — the Overview draws an em dash for the first and a real `$0.0000` for the second, and a
+     * store that turned a blank field into a zero would bill every un-priced model's tokens at nothing.
      *
-     * Both sides travel together in one payload because they are read together: all three arrive from a
-     * box that knows every field, and pricing with two of the three is exactly what `declaredRates`
-     * refuses.
+     * All three sides travel together in one payload because they are read together: they arrive from a
+     * row that knows its own declaration, and pricing with two of the three is exactly what
+     * `declaredRates` refuses. What is stored is what was typed, side by side, so a user filling the
+     * three fields in one at a time keeps the sides they have already entered — the refusal happens when
+     * the declaration is read, not when a half-typed one is saved.
+     *
+     * A model with nothing left declared loses its entry, and a map with no entries left loses the key:
+     * an empty map would be this record claiming a price it does not have, and an absent map is what a
+     * provider nobody has priced carries.
      */
-    setRates: (state, { providerId, input, cacheHit, output }) => {
+    setModelRates: (state, { providerId, modelId, input, cacheHit, output }) => {
       const current = state.providers[providerId] ?? { enabledModels: [], fetchedModels: [] }
+      const declared = {
+        ...(input !== undefined ? { inputRate: input } : {}),
+        ...(cacheHit !== undefined ? { cacheHitRate: cacheHit } : {}),
+        ...(output !== undefined ? { outputRate: output } : {}),
+      }
+      const modelRates: ModelRates = { ...current.modelRates }
+      if (Object.keys(declared).length > 0) modelRates[modelId] = declared
+      else delete modelRates[modelId]
+
       state.providers[providerId] = {
         enabledModels: current.enabledModels,
         fetchedModels: current.fetchedModels,
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
-        ...(input !== undefined ? { inputRate: input } : {}),
-        ...(cacheHit !== undefined ? { cacheHitRate: cacheHit } : {}),
-        ...(output !== undefined ? { outputRate: output } : {}),
+        ...(Object.keys(modelRates).length > 0 ? { modelRates } : {}),
       }
     },
 
@@ -173,12 +187,43 @@ export const providerConfigStore = defineStore('provider-config', {
         // refresh is about the catalogue, and a refresh that quietly switched image support off would be
         // a setting the user could watch revert by pressing a button about something else.
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
-        // And the declared prices travel with it, for the same reason one field over: pressing Fetch
-        // must not silently reprice every session at the shipped table. Copied key by key so an absent
-        // side stays absent rather than becoming a zero.
-        ...(current.inputRate !== undefined ? { inputRate: current.inputRate } : {}),
-        ...(current.cacheHitRate !== undefined ? { cacheHitRate: current.cacheHitRate } : {}),
-        ...(current.outputRate !== undefined ? { outputRate: current.outputRate } : {}),
+        // And the declared prices travel with it, for the same reason one key over: pressing Fetch must
+        // not silently reprice every model at the shipped table. The map goes across whole, so the
+        // half-typed row a user is in the middle of keeps its sides too.
+        ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
+      }
+    },
+
+    /**
+     * Take the retired provider-level rate keys off every record, once, at startup.
+     *
+     * A key this build no longer knows still arrives in the record, because main's load is one level
+     * deep: the persisted state is spread over the initial state, so a `providers` map from the file
+     * replaces the empty one wholesale and everything inside a record survives with it. Nothing reads
+     * those keys any more, but leaving them would mean the file this app rewrites every time it saves
+     * still carried a price for a provider — and the design that moved the price onto the model removed
+     * it without migrating a value, so there is nothing to move and the honest end state is a record
+     * that never mentioned it.
+     *
+     * No migration, deliberately: a triple declared for a provider names no model, and guessing which
+     * one it meant would bill some model at a price nobody entered for it. The models price from the
+     * shipped table until their own rows are filled in.
+     *
+     * Idempotent, and called once at registration: a record that never had those keys is left exactly
+     * as it was, down to the identity of the record it holds.
+     */
+    dropRetiredRates: (state) => {
+      const retired = ['inputRate', 'cacheHitRate', 'outputRate'] as const
+      for (const [providerId, record] of Object.entries(state.providers)) {
+        const stale = record as unknown as Record<string, unknown>
+        if (!retired.some((key) => key in stale)) continue
+        const { enabledModels, fetchedModels, supportsImages, modelRates } = record
+        state.providers[providerId] = {
+          enabledModels,
+          fetchedModels,
+          ...(supportsImages === true ? { supportsImages: true } : {}),
+          ...(modelRates !== undefined ? { modelRates } : {}),
+        }
       }
     },
 

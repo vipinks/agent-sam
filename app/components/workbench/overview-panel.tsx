@@ -2,7 +2,7 @@ import { ChartColumn } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
-import { declaredRates, overviewTiles, resolveRates } from '@/conveyor/protocol/session-usage'
+import { overviewTiles, resolveRates } from '@/conveyor/protocol/session-usage'
 import { useChatSessionsContext } from './chat-sessions-context'
 import { PaneHeader } from './pane-header'
 import { PanelCollapseControl, PanelExpandControl } from './right-rail'
@@ -12,9 +12,9 @@ import { PanelCollapseControl, PanelExpandControl } from './right-rail'
  *
  * A reader's surface rather than a settings one, which is why it is docked beside the chat and why it
  * is deliberately four numbers: the question "what has this cost me" is asked while reading an answer,
- * and a surface that answered it with a table would be a second thing to interpret. The rate overrides
- * that decide the Cost tile's arithmetic are a provider preference and live in Settings, where the
- * provider they belong to is configured.
+ * and a surface that answered it with a table would be a second thing to interpret. The declared prices
+ * that decide the Cost tile's arithmetic are a preference about a model and live in Settings, in the
+ * model's own row — beside the switch that puts that model in the chat picker.
  *
  * The panel owns no numbers. Everything drawn here is read: the running total off the session store
  * main keeps, the prices off the provider-config store, the reply count off the transcript on screen.
@@ -32,18 +32,17 @@ export function OverviewPanel() {
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
 
   const session = sessions.find((s) => s.id === activeSessionId)
-  // The declared prices, by the provider the conversation is running against. Read as the record rather
-  // than as a pair of numbers, so the selector's answer is the store's own object: a fresh object on
-  // every render would re-render this panel on every unrelated broadcast.
+  // The declared prices, by the model the conversation is running on. Read as the store's own map rather
+  // than as a triple, so the selector's answer is the store's own object: a fresh object on every render
+  // would re-render this panel on every unrelated broadcast.
   const declaration = useConveyorStore(providerConfigStore, (s) =>
-    session === undefined ? undefined : s.providers[session.providerId]
+    session === undefined ? undefined : s.providers[session.providerId]?.modelRates
   )
   // Main's mirror is the source of truth for the numbers; this is only reading it. A session the store
   // has not broadcast yet — the round trip after a send creates one — reads as nothing measured yet,
   // which is exactly what it is.
   const usage = session?.usage
-  const rates =
-    session === undefined ? null : resolveRates({ model: session.model, override: declaredRates(declaration) })
+  const rates = session === undefined ? null : resolveRates({ model: session.model, modelRates: declaration })
 
   // The replies the transcript holds. Not the number of turns in the running stream: this is "how much
   // conversation is here", so it counts what is on screen, whether it arrived from disk or from the

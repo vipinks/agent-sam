@@ -10,7 +10,6 @@ import {
   PROVIDER_BOX_CORE_CONTROLS,
 } from '@/app/components/workbench/provider-box'
 import { providerConfigStore, type ProviderConfigState } from '@/conveyor/stores/provider-config'
-import { declaredRates, resolveRates } from '@/conveyor/protocol/session-usage'
 import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -487,9 +486,15 @@ describe('the image-support switch', () => {
   })
 })
 
-describe('the rate override fields', () => {
-  /** The declared triple the seeded record holds: prices the shipped table does not agree with. */
-  const DECLARED: ProviderConfigState = {
+describe('the retired provider-level rate fields', () => {
+  /**
+   * The prices this phase moved: a triple on the provider record, which no version of this build writes
+   * any more.
+   *
+   * Seeded anyway, because a record on disk still carries it until the startup pass strips it: what the
+   * section draws for such a record is the one thing a reader of this screen could get wrong.
+   */
+  const RETIRED = {
     providers: {
       deepseek: {
         enabledModels: [],
@@ -499,103 +504,32 @@ describe('the rate override fields', () => {
         outputRate: 0.6,
       },
     },
-    customProviders: [],
-  }
+    customProviders: [{ ...LLAMA, models: LLAMA.models }],
+    // Cast, because this build's `ProviderConfig` no longer names those three keys: the seed is a record
+    // written before the removal, which is exactly what a file on disk still holds.
+  } as unknown as ProviderConfigState
 
-  /** One of a box's three price fields, by the side of the declaration it holds. */
-  function rateField(box: HTMLElement, side: 'Input' | 'Cache hit' | 'Output'): HTMLInputElement {
-    return within(box).getByLabelText(new RegExp(`^${side} price`, 'i')) as HTMLInputElement
-  }
-
-  it('renders one field per side in the unit the number is in, and empty for a provider nobody priced', async () => {
-    stubSettings(undefined, DECLARED)
+  it('are gone from every box: no trio, no heading, no copy', async () => {
+    stubSettings({ listConfigured: () => [LLAMA.id] }, RETIRED)
     const { container } = renderSettings()
 
-    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
-    const openai = boxFor(container, 'predefined', 'OpenAI')
+    await waitFor(() => expect(boxes(container)).toHaveLength(3))
 
-    // The declaration reads back the way it was typed — all three sides of it, the cache-hit rate
-    // included — and the unit is on the field rather than only in the documentation: a bare 0.6 beside a
-    // dollars-per-million table is a guess at which one it is.
-    await waitFor(() => expect(rateField(deepseek, 'Input').value).toBe('0.15'))
-    expect(rateField(deepseek, 'Cache hit').value).toBe('0.075')
-    expect(rateField(deepseek, 'Output').value).toBe('0.6')
-    expect(within(deepseek).getByText(/dollars per million tokens/i)).toBeTruthy()
+    for (const box of boxes(container)) {
+      // The controls, by the slots the shared box used to render them under: this is the claim a reader of
+      // the DOM can check without knowing any sentence, and it holds for both kinds of provider because
+      // both are drawn by the same sub-component.
+      expect(box.querySelectorAll('[data-slot^="provider-rate"]')).toHaveLength(0)
+      for (const slot of ['provider-rate-input', 'provider-rate-cache', 'provider-rate-output']) {
+        expect(hasControl(box, slot), `${slot} is not rendered`).toBe(false)
+      }
 
-    // Bounded, so the control refuses a negative price and a slipped decimal point at the field — the
-    // cache-hit field exactly as its two neighbours.
-    const field = rateField(deepseek, 'Input')
-    expect(field.getAttribute('type')).toBe('number')
-    expect(field.getAttribute('min')).toBe('0')
-    expect(Number(field.getAttribute('max'))).toBeGreaterThan(0)
-    const cache = rateField(deepseek, 'Cache hit')
-    expect(cache.getAttribute('type')).toBe('number')
-    expect(cache.getAttribute('min')).toBe('0')
-    expect(Number(cache.getAttribute('max'))).toBeGreaterThan(0)
-
-    // And a provider nobody has priced shows empty fields rather than zeros: a zero is a price, and the
-    // Overview would bill every token of it.
-    expect(rateField(openai, 'Input').value).toBe('')
-    expect(rateField(openai, 'Cache hit').value).toBe('')
-    expect(rateField(openai, 'Output').value).toBe('')
-  })
-
-  it('writes all three sides to the provider whose box was edited, and clearing a field takes its key off', async () => {
-    const { stub, main } = stubSettings(undefined, DECLARED)
-    const { container } = renderSettings()
-
-    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
-    const openai = boxFor(container, 'predefined', 'OpenAI')
-
-    await userEvent.clear(rateField(deepseek, 'Input'))
-    await userEvent.type(rateField(deepseek, 'Input'), '1.5')
-    await userEvent.tab()
-
-    // Addressed to one provider and carrying all three sides: the declaration is read as one, so the two
-    // fields the user did not touch travel with the one they did rather than being dropped by an edit
-    // next door.
-    //
-    // The settled write — the last one — rather than the first: the field commits as it is typed into, so
-    // the keystrokes before the final one write the states the user passed through. What is asserted is
-    // the declaration the box and the store have agreed on once the typing stopped, which is the state
-    // every reader of the record sees.
-    await waitFor(() => expect(storeMethods(stub)).toContain('setRates'))
-    const asked = stub.calls.filter((call) => call.method === 'setRates').at(-1)
-    expect((asked?.args[0] as { payload: unknown }).payload).toEqual({
-      providerId: 'deepseek',
-      input: 1.5,
-      cacheHit: 0.075,
-      output: 0.6,
-    })
-    expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
-    expect(main.state().providers.deepseek?.cacheHitRate).toBe(0.075)
-    expect(main.state().providers.deepseek?.outputRate).toBe(0.6)
-    // The box a click did not touch, and the price it still does not carry.
-    expect(main.state().providers.openai?.inputRate).toBeUndefined()
-    expect(rateField(openai, 'Input').value).toBe('')
-
-    // The record those fields wrote is the one the pricing rule reads, which is the point of the fields:
-    // this provider's sessions are priced in micros at what was typed here, ahead of the shipped table,
-    // and a cached token at its own rate rather than at the input rate beside it.
-    expect(
-      resolveRates({ model: 'deepseek-chat', override: declaredRates(main.state().providers.deepseek ?? {}) })
-    ).toEqual({ input: 1_500_000, cacheHit: 75_000, output: 600_000 })
-
-    await userEvent.clear(rateField(deepseek, 'Cache hit'))
-    await userEvent.tab()
-
-    // Blanked means the key goes rather than becoming a zero: with a side missing the declaration is no
-    // longer one, so the Overview falls back to the shipped table rather than billing a cache hit at
-    // whatever rate happened to be next to it.
-    await waitFor(() => expect('cacheHitRate' in (main.state().providers.deepseek ?? {})).toBe(false))
-    expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
-    expect(main.state().providers.deepseek?.outputRate).toBe(0.6)
-    expect(declaredRates(main.state().providers.deepseek ?? {})).toBeNull()
-
-    await userEvent.clear(rateField(deepseek, 'Output'))
-    await userEvent.tab()
-
-    await waitFor(() => expect('outputRate' in (main.state().providers.deepseek ?? {})).toBe(false))
-    expect(main.state().providers.deepseek?.inputRate).toBe(1.5)
+      // And the words that went with them: the heading that grouped them, and the two sentences that
+      // stated the unit and what a blank field did. A price is a model's now, and it is declared in the
+      // model's own row.
+      expect(within(box).queryByText('Rates')).toBeNull()
+      expect(within(box).queryByText(/What this provider charges/)).toBeNull()
+      expect(within(box).queryByText(/Leave blank to price its models from the built-in list/)).toBeNull()
+    }
   })
 })

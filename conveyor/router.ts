@@ -67,6 +67,20 @@ export const router = createRouter(
 export type AppRouter = typeof router
 
 /**
+ * Take the retired provider-level rate keys off the loaded records.
+ *
+ * Runs once, here, immediately after the router exists and synchronously — before any window is opened
+ * and before the store's next save — because the load itself cannot do it: conveyor spreads the persisted
+ * state over the initial state one level deep, so a `providers` map read from the file arrives with
+ * whatever keys the file carried, a record's own retired keys included.
+ *
+ * Through the store's own action rather than by editing the handle's state, so the normalisation is the
+ * definition's and cannot drift from a second copy here: main dispatches it like any other action, and
+ * the debounced write that follows persists the stripped slice.
+ */
+router.stores['provider-config'].dispatch('dropRetiredRates')
+
+/**
  * Clear transcript files left behind by a delete that removed the metadata but not the file.
  *
  * Runs once, here, immediately after the router exists — because that is the first moment the store

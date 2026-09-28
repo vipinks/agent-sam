@@ -249,18 +249,17 @@ beforeEach(() => {
 
 describe('the Overview resident and its tiles', () => {
   it('docks between Preview and Tools and reads the session it is about', async () => {
-    // A conversation that has been measured, on a provider whose prices the user has declared: the
-    // numbers below are the declaration's, not the shipped table's — the same session prices at
-    // $0.1412 on the table, so the cost asserted here is the override being read at all.
+    // A conversation that has been measured, on a model whose prices the user has declared: the numbers
+    // below are the declaration's, not the shipped table's — the same session prices at $0.1412 on the
+    // table, so the cost asserted here is the override being read at all. Declared for `deepseek-chat`,
+    // the model the session runs on, because a price belongs to the model it was entered for.
     stubWorkbench({
       sessions: { sessions: [session(MEASURED)], activeSessionId: SESSION_ID },
       providers: {
         deepseek: {
           enabledModels: ['deepseek-chat'],
           fetchedModels: [],
-          inputRate: 1,
-          cacheHitRate: 0.5,
-          outputRate: 2,
+          modelRates: { 'deepseek-chat': { inputRate: 1, cacheHitRate: 0.5, outputRate: 2 } },
         },
       },
       transcript: saved(['user', 'assistant', 'user', 'assistant']),

@@ -287,17 +287,11 @@ function CustomProviderCard({
   const listModels = conveyor.provider.listModels.useMutation()
 
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[provider.id])
-  const { toggleModel, setSupportsImages, setCustomProviderModels, removeCustomProvider, setRates } =
+  const { toggleModel, setSupportsImages, setCustomProviderModels, removeCustomProvider } =
     useConveyorStore(providerConfigStore)
 
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
   const catalogue = useMemo(() => provider.models.map((id) => ({ id })), [provider.models])
-  // Memoised like the two above, and for the same reason: absent is the ordinary state of a price, and a
-  // fresh object each render would hand the box a new declaration on every store broadcast.
-  const rates = useMemo(
-    () => ({ input: config?.inputRate, cacheHit: config?.cacheHitRate, output: config?.outputRate }),
-    [config?.inputRate, config?.cacheHitRate, config?.outputRate]
-  )
 
   const onSaveKey = async () => {
     if (!keyValue.trim()) return
@@ -368,17 +362,6 @@ function CustomProviderCard({
         // added is asked the same question, and its answer is read by the same gate in the composer.
         imagesSupported={config?.supportsImages === true}
         onToggleImages={(supported) => setSupportsImages({ providerId: provider.id, supported })}
-        // The same three fields, wired to the same slice: a gateway someone added is priced exactly as a
-        // provider that ships with the app, which is the case the overrides exist for.
-        rates={rates}
-        onRateChange={(side, next) =>
-          setRates({
-            providerId: provider.id,
-            input: side === 'input' ? next : config?.inputRate,
-            cacheHit: side === 'cacheHit' ? next : config?.cacheHitRate,
-            output: side === 'output' ? next : config?.outputRate,
-          })
-        }
         enabledModels={enabled}
         models={catalogue}
         modelsOpen={justFetched}

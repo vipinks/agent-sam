@@ -16,7 +16,7 @@
 import { strict as assert } from 'node:assert'
 import { providerConfigStore } from '../../conveyor/stores/provider-config'
 import type { ProviderConfigState } from '../../conveyor/stores/provider-config'
-import { declaredRates, resolveRates } from '../../conveyor/protocol/session-usage'
+import { declaredRates, RATES, resolveRates } from '../../conveyor/protocol/session-usage'
 import { TRANSCRIPT_VERSION } from '../../conveyor/protocol/transcript'
 
 const results: string[] = []
@@ -41,8 +41,8 @@ interface Harness {
 
 type DropFirst<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never
 
-function createHarness(): Harness {
-  const state: ProviderConfigState = structuredClone(INITIAL_STATE)
+function createHarness(from: ProviderConfigState = INITIAL_STATE): Harness {
+  const state: ProviderConfigState = structuredClone(from)
 
   return {
     state: () => state,
@@ -278,115 +278,216 @@ function theTranscriptVersionDidNotMoveOfImages() {
   results.push('the transcript version is still 3 after the image-support key')
 }
 
-// ---------------------------------------------------------------- rate overrides
+// ---------------------------------------------------------------- declared prices, by model
 
-function rateOverridesAreWrittenAsNumbersOrNotAtAll() {
+/** One catalogue id, so the model a price belongs to is named once. */
+const CHAT = 'deepseek-chat'
+
+function aModelsPricesAreWrittenUnderItsOwnKey() {
   const store = createHarness()
 
-  store.run('setRates', { providerId: 'deepseek', input: 0.27, cacheHit: 0.07, output: 1.1 })
-  assert.equal(store.state().providers.deepseek.inputRate, 0.27)
-  assert.equal(store.state().providers.deepseek.cacheHitRate, 0.07)
-  assert.equal(store.state().providers.deepseek.outputRate, 1.1)
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 0.27, cacheHit: 0.07, output: 1.1 })
+  assert.deepEqual(store.state().providers.deepseek.modelRates, {
+    'deepseek-chat': { inputRate: 0.27, cacheHitRate: 0.07, outputRate: 1.1 },
+  })
 
-  // Cleared means the keys go, rather than becoming zeros: the fields hold a declaration, and a
-  // declaration of nothing is the absence of one. A stored zero would be the app claiming the model
-  // is free, which is a price rather than a missing one.
-  store.run('setRates', { providerId: 'deepseek' })
-  assert.equal('inputRate' in store.state().providers.deepseek, false)
-  assert.equal('cacheHitRate' in store.state().providers.deepseek, false)
-  assert.equal('outputRate' in store.state().providers.deepseek, false)
-
-  // One side named and the other two not: the named side is stored and the others are not invented. The
-  // three are one declaration, and a declaration that is short of a side prices nothing — which is the
-  // difference the Cost tile reads as an em dash rather than as a cheap completion.
-  store.run('setRates', { providerId: 'deepseek', input: 1.5 })
-  assert.equal(store.state().providers.deepseek.inputRate, 1.5)
-  assert.equal('cacheHitRate' in store.state().providers.deepseek, false)
-  assert.equal('outputRate' in store.state().providers.deepseek, false)
-
-  results.push('a rate override is written as a number or not at all')
-}
-
-function oneProvidersRatesAreNotAnothers() {
-  const store = createHarness()
-
-  store.run('toggleModel', { providerId: 'deepseek', modelId: 'deepseek-chat' })
-  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
-  store.run('setRates', { providerId: 'deepseek', input: 0.27, cacheHit: 0.07, output: 1.1 })
-  store.run('setRates', { providerId: 'openai', input: 1, cacheHit: 0.5, output: 2 })
-
-  assert.equal(store.state().providers.openai.inputRate, 1)
-  assert.equal(store.state().providers.deepseek.outputRate, 1.1)
-  assert.equal(store.state().providers.deepseek.cacheHitRate, 0.07)
-
-  // A catalogue refresh replaces the record rather than merging into it, so the prices have to be
-  // carried across explicitly — the trap image support is carried across for, one field over: pressing
-  // Fetch must not silently reprice every session at the shipped table.
-  store.run('setFetchedModels', { providerId: 'deepseek', models: [{ id: 'deepseek-chat' }] })
-  assert.equal(store.state().providers.deepseek.inputRate, 0.27)
-  assert.equal(store.state().providers.deepseek.cacheHitRate, 0.07)
-  assert.equal(store.state().providers.deepseek.outputRate, 1.1)
-  // And the rest of the record is left alone by a write about prices.
-  assert.deepEqual(store.state().providers.deepseek.enabledModels, ['deepseek-chat'])
-  assert.equal(store.state().providers.deepseek.supportsImages, true)
-
-  results.push('rate overrides are per provider, and a refresh leaves them where they were')
-}
-
-function declaredRatesSurviveARestart() {
-  const before = createHarness()
-  before.run('setRates', { providerId: 'deepseek', input: 0.27, cacheHit: 0.07, output: 1.1 })
-
-  const after = rehydrate(JSON.parse(JSON.stringify(before.state())) as Record<string, unknown>)
-  assert.equal(after.providers.deepseek.inputRate, 0.27)
-  assert.equal(after.providers.deepseek.cacheHitRate, 0.07)
-  assert.equal(after.providers.deepseek.outputRate, 1.1)
-
-  // A file written before these fields existed reads as a provider nobody has priced — which is what
-  // the resolver answers null for, and what the Cost tile draws an em dash for.
-  const older = rehydrate({ providers: { deepseek: { enabledModels: [], fetchedModels: [] } } })
-  assert.equal('inputRate' in older.providers.deepseek, false)
-  assert.equal('cacheHitRate' in older.providers.deepseek, false)
-  assert.equal('outputRate' in older.providers.deepseek, false)
-
-  // And the persisted declaration is what the resolver prices with, ahead of the shipped table: three
-  // fields in dollars per million as micros per million, cache hit included.
-  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declaredRates(after.providers.deepseek) }), {
+  // Keyed by model, so a declaration is about one model rather than about everything a provider serves:
+  // the sibling on the same record keeps the shipped table, which is the whole reason the price moved.
+  const declared = store.state().providers.deepseek.modelRates
+  assert.deepEqual(resolveRates({ model: CHAT, modelRates: declared }), {
     input: 270_000,
     cacheHit: 70_000,
     output: 1_100_000,
   })
+  assert.deepEqual(
+    resolveRates({ model: 'deepseek-reasoner', modelRates: declared }),
+    RATES['deepseek-reasoner'],
+    'the model beside it is priced by the table'
+  )
 
-  results.push('declared rates are written, read back, and priced with')
+  // And a second provider's box writes under its own record and its own model id.
+  store.run('setModelRates', { providerId: 'openai', modelId: 'gpt-4o-mini', input: 1, cacheHit: 0.5, output: 2 })
+  assert.deepEqual(store.state().providers.openai.modelRates, {
+    'gpt-4o-mini': { inputRate: 1, cacheHitRate: 0.5, outputRate: 2 },
+  })
+  assert.deepEqual(store.state().providers.deepseek.modelRates, declared)
+
+  results.push('a declared price is written under the model it belongs to')
 }
 
-function anOldTwoFieldDeclarationIsNotAPrice() {
-  // A record an earlier build wrote: the input and output a user typed when a cached token had no rate
-  // of its own. The keys survive the read whole, because they are still what the user typed, but the
-  // declaration is short of a side and so prices nothing — the resolver falls through to the shipped
-  // table rather than billing every cache hit at the input rate beside it.
-  const older = rehydrate({
-    providers: { deepseek: { enabledModels: [], fetchedModels: [], inputRate: 0.15, outputRate: 0.6 } },
-  })
-  assert.equal(older.providers.deepseek.inputRate, 0.15)
-  assert.equal(older.providers.deepseek.outputRate, 0.6)
-  assert.equal(declaredRates(older.providers.deepseek), null)
-  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declaredRates(older.providers.deepseek) }), {
+function aPartialTripleIsStoredAsTypedAndPricesNothing() {
+  const store = createHarness()
+
+  // One side named and the other two not: the named side is stored as typed and the others are not
+  // invented, because the three are one declaration a user fills in a field at a time.
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 1.5 })
+  assert.deepEqual(store.state().providers.deepseek.modelRates, { 'deepseek-chat': { inputRate: 1.5 } })
+
+  // Not a declaration while it is short of a side, so the built-in table prices the model — rather than a
+  // missing cache-hit rate being read as the input rate beside it, or as free.
+  const partial = store.state().providers.deepseek.modelRates
+  assert.ok(partial, 'the named side is stored')
+  assert.equal(declaredRates(partial[CHAT]), null)
+  assert.deepEqual(resolveRates({ model: CHAT, modelRates: partial }), {
     input: 270_000,
     cacheHit: 70_000,
     output: 1_100_000,
   })
+  // The model beside it is untouched by the half-typed declaration: a partial triple adds no sibling.
+  assert.deepEqual(resolveRates({ model: 'deepseek-reasoner', modelRates: partial }), RATES['deepseek-reasoner'])
 
-  // Filling the third field in is what prices it again, which is the whole migration: nothing rewrites
-  // the old record behind the user's back, and one edit to the box completes the declaration.
-  older.providers.deepseek.cacheHitRate = 0.07
-  assert.deepEqual(declaredRates(older.providers.deepseek), {
-    input: 150_000,
-    cacheHit: 70_000,
+  // The third side is what completes it, and the rule above has already said what that means.
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 1.5, cacheHit: 0.075, output: 0.6 })
+  const whole = store.state().providers.deepseek.modelRates
+  assert.ok(whole, 'the completed triple is stored')
+  assert.deepEqual(declaredRates(whole[CHAT]), { input: 1_500_000, cacheHit: 75_000, output: 600_000 })
+  assert.deepEqual(resolveRates({ model: CHAT, modelRates: whole }), {
+    input: 1_500_000,
+    cacheHit: 75_000,
     output: 600_000,
   })
 
-  results.push('a two-field record from before the cache-hit rate is not a declaration')
+  results.push('a partial triple is stored as typed, and prices nothing until it is whole')
+}
+
+function clearingAModelsFieldsTakesItsEntryOff() {
+  const store = createHarness()
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 0.27, cacheHit: 0.07, output: 1.1 })
+  store.run('setModelRates', {
+    providerId: 'deepseek',
+    modelId: 'deepseek-reasoner',
+    input: 0.55,
+    cacheHit: 0.14,
+    output: 2.19,
+  })
+
+  // Blanked means the entry goes, rather than becoming zeros: the fields hold a declaration, and a
+  // declaration of nothing is the absence of one. A stored zero would be the app claiming the model is
+  // free, which is a price rather than a missing one.
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT })
+  assert.deepEqual(
+    store.state().providers.deepseek.modelRates,
+    { 'deepseek-reasoner': { inputRate: 0.55, cacheHitRate: 0.14, outputRate: 2.19 } },
+    'the model beside it is exactly where it was'
+  )
+
+  // The last entry going takes the map with it: an empty map is this app claiming somebody declared
+  // something, and absent is what a record that never held a declaration looks like.
+  store.run('setModelRates', { providerId: 'deepseek', modelId: 'deepseek-reasoner' })
+  assert.equal('modelRates' in store.state().providers.deepseek, false)
+
+  results.push("a model's blanked fields take its declaration off, and the empty map with it")
+}
+
+function aCatalogueRefreshKeepsTheDeclaredPrices() {
+  const store = createHarness()
+
+  store.run('toggleModel', { providerId: 'deepseek', modelId: CHAT })
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+  store.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 0.27, cacheHit: 0.07, output: 1.1 })
+
+  // A catalogue refresh replaces the record rather than merging into it, so the declarations have to be
+  // carried across explicitly — the trap image support is carried across for, one key over: pressing
+  // Fetch must not silently reprice every model at the shipped table.
+  store.run('setFetchedModels', { providerId: 'deepseek', models: [{ id: CHAT }] })
+  assert.deepEqual(store.state().providers.deepseek.modelRates, {
+    'deepseek-chat': { inputRate: 0.27, cacheHitRate: 0.07, outputRate: 1.1 },
+  })
+  // And the rest of the record is left alone by a write about prices.
+  assert.deepEqual(store.state().providers.deepseek.enabledModels, [CHAT])
+  assert.equal(store.state().providers.deepseek.supportsImages, true)
+
+  // Switching image support off rebuilds the record too, and it carries the prices for the same reason.
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: false })
+  assert.equal('supportsImages' in store.state().providers.deepseek, false)
+  assert.deepEqual(store.state().providers.deepseek.modelRates, {
+    'deepseek-chat': { inputRate: 0.27, cacheHitRate: 0.07, outputRate: 1.1 },
+  })
+
+  results.push('a declared price survives a catalogue refresh and an image-support switch')
+}
+
+function declaredPricesSurviveARestart() {
+  const before = createHarness()
+  before.run('setModelRates', { providerId: 'deepseek', modelId: CHAT, input: 0.27, cacheHit: 0.07, output: 1.1 })
+
+  const after = rehydrate(JSON.parse(JSON.stringify(before.state())) as Record<string, unknown>)
+  assert.deepEqual(after.providers.deepseek.modelRates, {
+    'deepseek-chat': { inputRate: 0.27, cacheHitRate: 0.07, outputRate: 1.1 },
+  })
+
+  // A file written before this key existed reads as a provider nobody has priced — which the resolver
+  // answers from the shipped table, and which an unpriced model's tile draws an em dash for.
+  const older = rehydrate({ providers: { deepseek: { enabledModels: [], fetchedModels: [] } } })
+  assert.equal('modelRates' in older.providers.deepseek, false)
+  assert.deepEqual(resolveRates({ model: CHAT, modelRates: older.providers.deepseek.modelRates }), {
+    input: 270_000,
+    cacheHit: 70_000,
+    output: 1_100_000,
+  })
+
+  // And the persisted declaration is what the resolver prices with, ahead of the shipped table: three
+  // fields in dollars per million as micros per million, cache hit included.
+  assert.deepEqual(resolveRates({ model: CHAT, modelRates: after.providers.deepseek.modelRates }), {
+    input: 270_000,
+    cacheHit: 70_000,
+    output: 1_100_000,
+  })
+
+  results.push('declared prices are written, read back, and priced with')
+}
+
+function theRetiredProviderRatesAreStrippedOnLoad() {
+  // A file this build's predecessor wrote: the provider-level triple, which was then the only place a
+  // price could be declared. Main's load is a one-level merge, so those keys arrive in the record whole.
+  const loaded = rehydrate({
+    providers: {
+      deepseek: {
+        enabledModels: [CHAT],
+        fetchedModels: [{ id: CHAT }],
+        inputRate: 0.15,
+        cacheHitRate: 0.075,
+        outputRate: 0.6,
+        supportsImages: true,
+      },
+    },
+  })
+  // Read back as raw JSON, because this build's type no longer names them: the point of the assertion is
+  // that the file still holds them when the record arrives.
+  const raw = loaded.providers.deepseek as unknown as Record<string, unknown>
+  assert.equal(raw.inputRate, 0.15, 'the merge alone leaves the retired keys')
+  assert.equal(raw.cacheHitRate, 0.075)
+  assert.equal(raw.outputRate, 0.6)
+
+  // The pass startup runs over the loaded slice, which is what makes the removal real rather than a key
+  // the type no longer mentions while the file still carries it.
+  const store = createHarness(loaded)
+  // `undefined` because the action takes no payload: the harness mirrors the store's own dispatch, which
+  // passes nothing for an action that declares nothing.
+  store.run('dropRetiredRates', undefined)
+
+  const record = store.state().providers.deepseek
+  assert.equal('inputRate' in record, false)
+  assert.equal('cacheHitRate' in record, false)
+  assert.equal('outputRate' in record, false)
+  // No migration, and this is the assertion that says so: a price declared for a provider is not moved
+  // onto a model nobody named. The model prices from the shipped table until its own row is filled in.
+  assert.equal('modelRates' in record, false)
+  assert.deepEqual(resolveRates({ model: CHAT, modelRates: record.modelRates }), {
+    input: 270_000,
+    cacheHit: 70_000,
+    output: 1_100_000,
+  })
+  // And everything the record did say is still there: the pass is about the retired keys, nothing else.
+  assert.deepEqual(record.enabledModels, [CHAT])
+  assert.equal(record.supportsImages, true)
+
+  // Idempotent, so a startup with nothing of the sort to strip changes nothing at all.
+  const clean = createHarness()
+  clean.run('dropRetiredRates', undefined)
+  assert.deepEqual(clean.state().providers, {})
+
+  results.push('the retired provider-level rates are stripped on load, with no value migrated')
 }
 
 function main() {
@@ -404,10 +505,12 @@ function main() {
   step('refresh keeps it', aCatalogueRefreshDoesNotClearImageSupport)
   step('older file, image support', anOlderFileCarriesNoOpinionAboutImages)
   step('transcript version, image support', theTranscriptVersionDidNotMoveOfImages)
-  step('rate override written', rateOverridesAreWrittenAsNumbersOrNotAtAll)
-  step('rate override per provider', oneProvidersRatesAreNotAnothers)
-  step('rate override round trip', declaredRatesSurviveARestart)
-  step('rate override, old two-field record', anOldTwoFieldDeclarationIsNotAPrice)
+  step('declared price written, per model', aModelsPricesAreWrittenUnderItsOwnKey)
+  step('declared price, partial triple', aPartialTripleIsStoredAsTypedAndPricesNothing)
+  step('declared price, blanked fields', clearingAModelsFieldsTakesItsEntryOff)
+  step('declared price kept on refresh', aCatalogueRefreshKeepsTheDeclaredPrices)
+  step('declared price round trip', declaredPricesSurviveARestart)
+  step('retired provider rates stripped on load', theRetiredProviderRatesAreStrippedOnLoad)
 
   console.log(`\ncustom providers (provider-config store): ${results.length} checks passed`)
 }

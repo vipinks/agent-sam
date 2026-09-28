@@ -28,9 +28,6 @@ export const PROVIDER_BOX_CONTROLS = [
   'provider-saved-badge',
   'provider-key-clear',
   'provider-image-support',
-  'provider-rate-input',
-  'provider-rate-cache',
-  'provider-rate-output',
   'provider-enabled-models',
   'provider-model-list',
 ] as const
@@ -59,8 +56,6 @@ export function ProviderBox({
   clearing = false,
   imagesSupported,
   onToggleImages,
-  rates,
-  onRateChange,
   enabledModels,
   models,
   modelsOpen = false,
@@ -89,22 +84,6 @@ export function ProviderBox({
    */
   imagesSupported: boolean
   onToggleImages: (supported: boolean) => void
-  /**
-   * The prices this provider was declared at, in dollars per million tokens, as the record holds them.
-   *
-   * Optional per side, and absent is the ordinary state: a provider nobody has priced carries no number.
-   * The fields below show that as an empty box rather than as a zero, because a stored zero would be a
-   * declaration that the model is free, which is a price rather than a missing one.
-   */
-  rates: { input?: number; cacheHit?: number; output?: number }
-  /**
-   * Declare a price for one side, or take it back with `undefined`.
-   *
-   * One side at a time because that is how the fields are typed into: the other sides' values are read
-   * from the record by the caller, which is what lets a user fill in the three across three edits without
-   * any one of them clearing its neighbours.
-   */
-  onRateChange: (side: 'input' | 'cacheHit' | 'output', value: number | undefined) => void
   /** The models switched on, in the order they were switched on. */
   enabledModels: string[]
   /** The catalogue to show, in the order the provider listed it. */
@@ -223,45 +202,6 @@ export function ProviderBox({
         />
       </div>
 
-      {/*
-        What this provider charges, stated in the unit the number is in.
-
-        A declaration, like the image switch above it: this app cannot discover a price, and a build that
-        guessed would show a confident number for a provider that had changed what it charges. Blank is
-        the ordinary state and it is not zero — it means the built-in list prices this provider's models,
-        and for a model that list does not know, the Overview draws an em dash rather than a free session.
-      */}
-      <div className="mt-2.5 border-t border-border pt-2.5">
-        <p className="text-[12px] font-medium">Rates</p>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          What this provider charges, in dollars per million tokens — a prompt token that missed its cache, one that hit
-          it, and a completion. Leave blank to price its models from the built-in list.
-        </p>
-        <div className="mt-1.5 grid grid-cols-3 gap-2">
-          <RateField
-            id={`${id}-rate-input`}
-            slot="provider-rate-input"
-            label="Input price"
-            value={rates.input}
-            onChange={(next) => onRateChange('input', next)}
-          />
-          <RateField
-            id={`${id}-rate-cache`}
-            slot="provider-rate-cache"
-            label="Cache hit price"
-            value={rates.cacheHit}
-            onChange={(next) => onRateChange('cacheHit', next)}
-          />
-          <RateField
-            id={`${id}-rate-output`}
-            slot="provider-rate-output"
-            label="Output price"
-            value={rates.output}
-            onChange={(next) => onRateChange('output', next)}
-          />
-        </div>
-      </div>
-
       {/* Enabled models, always visible: this is what the chat picker will actually offer. */}
       {enabledModels.length > 0 && (
         <div
@@ -291,59 +231,6 @@ export function ProviderBox({
           />
         </div>
       )}
-    </div>
-  )
-}
-
-/**
- * One side of a provider's declared price.
- *
- * Bounded at the field rather than checked afterwards: a negative price and a slipped decimal point are
- * both refusals the browser can make before a store write is attempted, and the upper bound is high
- * enough to be a typo-catcher rather than a policy — no published list rate is anywhere near it.
- *
- * `type=number` in a box about a human-typed price, because the spinners and the keyboard are what a
- * person entering a rate actually uses. Blank is passed up as `undefined` rather than as a zero, which is
- * the difference between "nobody priced this" and "this is free" — the same distinction the whole
- * feature is built around.
- */
-function RateField({
-  id,
-  slot,
-  label,
-  value,
-  onChange,
-}: {
-  id: string
-  slot: string
-  label: string
-  value: number | undefined
-  onChange: (value: number | undefined) => void
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-[11px] text-muted-foreground">
-        {label}
-      </label>
-      <Input
-        id={id}
-        data-slot={slot}
-        type="number"
-        min={0}
-        max={10_000}
-        step={0.01}
-        inputMode="decimal"
-        aria-label={label}
-        placeholder="not declared"
-        value={value === undefined ? '' : String(value)}
-        onChange={(event) => {
-          const typed = event.target.value
-          if (typed.trim() === '') return onChange(undefined)
-          const next = Number(typed)
-          onChange(Number.isFinite(next) && next >= 0 ? next : undefined)
-        }}
-        className="h-8 font-mono text-[12px]"
-      />
     </div>
   )
 }
