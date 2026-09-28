@@ -32,6 +32,20 @@ export interface ProviderConfig {
    * who knows is the one who chose the model.
    */
   supportsImages?: boolean
+  /**
+   * What this provider charges for input, in dollars per million tokens, as the user declared it.
+   *
+   * Additive and optional like `supportsImages` beside it, and written only when a user has typed a
+   * number: absent means nobody has priced this provider, which is not the same as a price of zero. The
+   * pricing rules read the pair through `declaredRates`, which refuses half a declaration rather than
+   * reading the missing side as free.
+   *
+   * Dollars rather than the micros `RATES` holds, because this is a field a person fills in from a
+   * provider's pricing page that quotes `$0.15 / 1M tokens`.
+   */
+  inputRate?: number
+  /** What this provider charges for output, in dollars per million tokens. */
+  outputRate?: number
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -64,6 +78,14 @@ export const providerConfigStore = defineStore('provider-config', {
   schemas: {
     toggleModel: z.object({ providerId: z.string().min(1), modelId: z.string().min(1) }),
     setSupportsImages: z.object({ providerId: z.string().min(1), supported: z.boolean() }),
+    // Both sides optional and non-negative, because the pair is one declaration a user may be halfway
+    // through typing: an omitted side means "not declared", which the action writes by leaving the key
+    // off rather than by storing a zero this app would then bill at.
+    setRates: z.object({
+      providerId: z.string().min(1),
+      input: z.number().nonnegative().optional(),
+      output: z.number().nonnegative().optional(),
+    }),
     setFetchedModels: z.object({ providerId: z.string().min(1), models: z.array(modelSchema) }),
     setEnabledModels: z.object({ providerId: z.string().min(1), modelIds: z.array(z.string()) }),
     addCustomProvider: z.object({ name: z.string().min(1), baseUrl: z.string().min(1) }),
@@ -103,6 +125,28 @@ export const providerConfigStore = defineStore('provider-config', {
     },
 
     /**
+     * Record what this provider charges, in dollars per million tokens.
+     *
+     * Written only when set: a side the user left blank takes its key off the record, so "not priced"
+     * and "priced at nothing" stay different states. That distinction is the whole point of the action —
+     * the Overview draws an em dash for the first and a real `$0.0000` for the second, and a store that
+     * turned a blank field into a zero would bill every un-priced provider's tokens at nothing.
+     *
+     * Both sides travel together in one payload because they are read together: the pair arrives from a
+     * box that knows both fields, and pricing with half of it is exactly what `declaredRates` refuses.
+     */
+    setRates: (state, { providerId, input, output }) => {
+      const current = state.providers[providerId] ?? { enabledModels: [], fetchedModels: [] }
+      state.providers[providerId] = {
+        enabledModels: current.enabledModels,
+        fetchedModels: current.fetchedModels,
+        ...(current.supportsImages === true ? { supportsImages: true } : {}),
+        ...(input !== undefined ? { inputRate: input } : {}),
+        ...(output !== undefined ? { outputRate: output } : {}),
+      }
+    },
+
+    /**
      * Record a fetched catalogue. Enabling is left alone: a refresh must not silently change what
      * the user has switched on, though any enabled id the provider no longer lists is dropped so
      * the chat dropdown cannot offer a model that no longer exists.
@@ -117,6 +161,11 @@ export const providerConfigStore = defineStore('provider-config', {
         // refresh is about the catalogue, and a refresh that quietly switched image support off would be
         // a setting the user could watch revert by pressing a button about something else.
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
+        // And the declared prices travel with it, for the same reason one field over: pressing Fetch
+        // must not silently reprice every session at the shipped table. Copied key by key so an absent
+        // side stays absent rather than becoming a zero.
+        ...(current.inputRate !== undefined ? { inputRate: current.inputRate } : {}),
+        ...(current.outputRate !== undefined ? { outputRate: current.outputRate } : {}),
       }
     },
 

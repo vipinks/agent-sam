@@ -16,6 +16,7 @@
 import { strict as assert } from 'node:assert'
 import { providerConfigStore } from '../../conveyor/stores/provider-config'
 import type { ProviderConfigState } from '../../conveyor/stores/provider-config'
+import { declaredRates, resolveRates } from '../../conveyor/protocol/session-usage'
 import { TRANSCRIPT_VERSION } from '../../conveyor/protocol/transcript'
 
 const results: string[] = []
@@ -277,6 +278,79 @@ function theTranscriptVersionDidNotMoveOfImages() {
   results.push('the transcript version is still 3 after the image-support key')
 }
 
+// ---------------------------------------------------------------- rate overrides
+
+function rateOverridesAreWrittenAsNumbersOrNotAtAll() {
+  const store = createHarness()
+
+  store.run('setRates', { providerId: 'deepseek', input: 0.15, output: 0.6 })
+  assert.equal(store.state().providers.deepseek.inputRate, 0.15)
+  assert.equal(store.state().providers.deepseek.outputRate, 0.6)
+
+  // Cleared means the keys go, rather than becoming zeros: the fields hold a declaration, and a
+  // declaration of nothing is the absence of one. A stored zero would be the app claiming the model
+  // is free, which is a price rather than a missing one.
+  store.run('setRates', { providerId: 'deepseek' })
+  assert.equal('inputRate' in store.state().providers.deepseek, false)
+  assert.equal('outputRate' in store.state().providers.deepseek, false)
+
+  // One side named and the other not: the named side is stored and the other is not invented. The
+  // pair is one declaration, and half of it prices nothing — which is the difference the Cost tile
+  // reads as an em dash rather than as a cheap completion.
+  store.run('setRates', { providerId: 'deepseek', input: 1.5 })
+  assert.equal(store.state().providers.deepseek.inputRate, 1.5)
+  assert.equal('outputRate' in store.state().providers.deepseek, false)
+
+  results.push('a rate override is written as a number or not at all')
+}
+
+function oneProvidersRatesAreNotAnothers() {
+  const store = createHarness()
+
+  store.run('toggleModel', { providerId: 'deepseek', modelId: 'deepseek-chat' })
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+  store.run('setRates', { providerId: 'deepseek', input: 0.15, output: 0.6 })
+  store.run('setRates', { providerId: 'openai', input: 1, output: 2 })
+
+  assert.equal(store.state().providers.openai.inputRate, 1)
+  assert.equal(store.state().providers.deepseek.outputRate, 0.6)
+
+  // A catalogue refresh replaces the record rather than merging into it, so the prices have to be
+  // carried across explicitly — the trap image support is carried across for, one field over: pressing
+  // Fetch must not silently reprice every session at the shipped table.
+  store.run('setFetchedModels', { providerId: 'deepseek', models: [{ id: 'deepseek-chat' }] })
+  assert.equal(store.state().providers.deepseek.inputRate, 0.15)
+  assert.equal(store.state().providers.deepseek.outputRate, 0.6)
+  // And the rest of the record is left alone by a write about prices.
+  assert.deepEqual(store.state().providers.deepseek.enabledModels, ['deepseek-chat'])
+  assert.equal(store.state().providers.deepseek.supportsImages, true)
+
+  results.push('rate overrides are per provider, and a refresh leaves them where they were')
+}
+
+function declaredRatesSurviveARestart() {
+  const before = createHarness()
+  before.run('setRates', { providerId: 'deepseek', input: 0.15, output: 0.6 })
+
+  const after = rehydrate(JSON.parse(JSON.stringify(before.state())) as Record<string, unknown>)
+  assert.equal(after.providers.deepseek.inputRate, 0.15)
+  assert.equal(after.providers.deepseek.outputRate, 0.6)
+
+  // A file written before these fields existed reads as a provider nobody has priced — which is what
+  // the resolver answers null for, and what the Cost tile draws an em dash for.
+  const older = rehydrate({ providers: { deepseek: { enabledModels: [], fetchedModels: [] } } })
+  assert.equal('inputRate' in older.providers.deepseek, false)
+  assert.equal('outputRate' in older.providers.deepseek, false)
+
+  // And the persisted pair is what the resolver prices with, ahead of the shipped table.
+  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declaredRates(after.providers.deepseek) }), {
+    input: 150_000,
+    output: 600_000,
+  })
+
+  results.push('declared rates are written, read back, and priced with')
+}
+
 function main() {
   step('adding appends with a derived id', addingAProviderRecordsItWithADerivedId)
   step('normalising and refusing', addingNormalisesTheBaseUrlAndRefusesWhatCannotBeUsed)
@@ -292,6 +366,9 @@ function main() {
   step('refresh keeps it', aCatalogueRefreshDoesNotClearImageSupport)
   step('older file, image support', anOlderFileCarriesNoOpinionAboutImages)
   step('transcript version, image support', theTranscriptVersionDidNotMoveOfImages)
+  step('rate override written', rateOverridesAreWrittenAsNumbersOrNotAtAll)
+  step('rate override per provider', oneProvidersRatesAreNotAnothers)
+  step('rate override round trip', declaredRatesSurviveARestart)
 
   console.log(`\ncustom providers (provider-config store): ${results.length} checks passed`)
 }

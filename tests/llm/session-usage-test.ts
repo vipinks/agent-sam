@@ -14,7 +14,9 @@ import {
   cachePercent,
   compactTokens,
   costMicros,
+  declaredRates,
   formatCost,
+  overviewTiles,
   parseUsage,
   readSessionUsage,
   resolveRates,
@@ -303,6 +305,73 @@ function theUsageKeyRidesTheMetadataEntry() {
   results.push('the usage key rides the metadata entry')
 }
 
+// ----------------------------------------------------------------- the Overview tiles
+
+function theOverviewTilesReadWhatASessionUsed() {
+  // A measured session on a priced model: the four strings the resident draws, in the formats the
+  // display rules above give them. The tile is a read of those rules, not a second formatter, so the
+  // cost asserted here is the rule's own answer rather than a number written out twice.
+  const rates = { input: 150_000, output: 600_000 }
+  const usage = { prompt: 940_000, completion: 60_000, cached: 893_000, lastReportedAt: 1_700_000_000_000 }
+  const measured = overviewTiles({ usage, rates, turns: 3 })
+
+  assert.equal(measured.tokens, '1M')
+  assert.equal(measured.cost, formatCost(costMicros(usage, rates)))
+  assert.equal(measured.cost, '$0.1770')
+  assert.equal(measured.cache, '95%')
+  assert.equal(measured.turns, '3')
+
+  // Nothing measured yet — every conversation before its first measured turn, and every conversation
+  // whose providers report nothing at all. Three em dashes, and the count beside them: the count is
+  // not a measurement of what was spent, it is how many replies the transcript holds.
+  const unmeasured = overviewTiles({ usage: undefined, rates, turns: 2 })
+  assert.deepEqual(unmeasured, { tokens: '—', cost: '—', cache: '—', turns: '2' })
+
+  // Measured, but nobody has priced the model: what was used is known and what it cost is not, and the
+  // one tile that cannot be priced says so rather than showing a confident zero.
+  const unpriced = overviewTiles({ usage, rates: null, turns: 1 })
+  assert.equal(unpriced.tokens, '1M')
+  assert.equal(unpriced.cost, '—')
+  assert.equal(unpriced.cache, '95%')
+  assert.equal(unpriced.turns, '1')
+
+  // Measured on a provider that never mentions caching: the cache tile is an em dash while its
+  // neighbours are numbers, because "nobody measured the cache" is not "nothing was cached".
+  const noCache = overviewTiles({ usage: { prompt: 10, completion: 2 }, rates, turns: 0 })
+  assert.equal(noCache.cache, '—')
+  assert.equal(noCache.tokens, '12')
+  assert.equal(noCache.turns, '0')
+
+  results.push('the overview tiles read what a session used')
+}
+
+function theDeclaredRatesConvertAndWin() {
+  // What the settings fields hold, in the unit their label names: dollars per million tokens. The table
+  // prices in micros, so the declaration is converted once, here, rather than at every tile.
+  assert.deepEqual(declaredRates({ inputRate: 0.15, outputRate: 0.6 }), { input: 150_000, output: 600_000 })
+  assert.deepEqual(declaredRates({ inputRate: 1, outputRate: 2 }), { input: 1_000_000, output: 2_000_000 })
+  // Free is a price a user can declare — a model running on their own machine — and it is not the same
+  // thing as no declaration: the fields hold a zero because somebody typed one.
+  assert.deepEqual(declaredRates({ inputRate: 0, outputRate: 0 }), { input: 0, output: 0 })
+
+  // Half a declaration is not a price: a user who knows one side only has not priced the model, and the
+  // cost tile has to stay an em dash rather than pricing every completion at nothing.
+  assert.equal(declaredRates({}), null)
+  assert.equal(declaredRates({ inputRate: 0.15 }), null)
+  assert.equal(declaredRates({ outputRate: 0.6 }), null)
+  assert.equal(declaredRates({ inputRate: 0.15, outputRate: Number.NaN }), null)
+  assert.equal(declaredRates({ inputRate: -1, outputRate: 0.6 }), null)
+
+  // And the resolver prefers it to the table, which is the whole reason the fields exist: a provider
+  // whose prices have moved can be priced without waiting for a build.
+  const declared = declaredRates({ inputRate: 0.01, outputRate: 0.02 })
+  assert.ok(declared !== null, 'a whole declaration is a price')
+  assert.deepEqual(resolveRates({ model: 'deepseek-chat', override: declared }), { input: 10_000, output: 20_000 })
+  assert.notDeepEqual(resolveRates({ model: 'deepseek-chat' }), declared)
+
+  results.push('a declared price is micros, and it wins over the table')
+}
+
 async function main() {
   theRequestAsksForUsage()
   theUsageFrameIsUnderstood()
@@ -314,6 +383,8 @@ async function main() {
   theRatesResolve()
   theFormattingIsCompactAndExact()
   theUsageKeyRidesTheMetadataEntry()
+  theOverviewTilesReadWhatASessionUsed()
+  theDeclaredRatesConvertAndWin()
   console.log('session usage tests: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)
 }

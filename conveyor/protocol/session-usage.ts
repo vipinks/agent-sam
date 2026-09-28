@@ -219,3 +219,87 @@ export function formatCost(micros: number): string {
   const value = Number.isFinite(micros) && micros > 0 ? micros : 0
   return `$${(value / 1_000_000).toFixed(4)}`
 }
+
+// ---------------------------------------------------------------- the Overview tiles
+
+/**
+ * What a custom provider's record may declare about its prices.
+ *
+ * The two fields the settings box writes, in the unit that box labels them in: dollars per million
+ * tokens. Optional and additive, exactly like the image-support declaration beside it — a provider
+ * nobody has priced carries neither key, and the pair is read as one declaration rather than as two
+ * independent numbers.
+ *
+ * Dollars here and micros in `RATES`, deliberately: a price is typed the way the provider publishes it
+ * — `0.15`, not `150000` — and the one conversion happens in `declaredRates`, so no tile ever has to
+ * know which of the two units it is holding.
+ */
+export interface RateDeclaration {
+  inputRate?: number
+  outputRate?: number
+}
+
+/** A usable declaration, or null. A number a person typed, and only when both sides are there. */
+function declaredMicros(value: number | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.round(value * 1_000_000)
+}
+
+/**
+ * A provider's declared prices as rates this app can bill with, or null when it has declared none.
+ *
+ * All or nothing, and that is the load-bearing part: half a declaration is not a cheap model, it is an
+ * un-priced one. Reading the missing side as free would bill every completion at nothing and look like a
+ * measurement, which is the one thing the em dash exists to prevent. So a user who knows only their input
+ * price has still not priced the model, and the Cost tile says so until they know both.
+ *
+ * A declared `0` is not the same as no declaration: a model running on the user's own machine costs
+ * nothing, and a person who typed that zero has priced the model and is entitled to see `$0.0000` rather
+ * than an em dash.
+ */
+export function declaredRates(record: RateDeclaration | undefined): Rates | null {
+  if (!record) return null
+  const input = declaredMicros(record.inputRate)
+  const output = declaredMicros(record.outputRate)
+  if (input === null || output === null) return null
+  return { input, output }
+}
+
+/** The four strings the Overview resident draws. */
+export interface OverviewTiles {
+  tokens: string
+  cost: string
+  cache: string
+  turns: string
+}
+
+/**
+ * The Overview's four tiles, derived from what the session spent and what the transcript holds.
+ *
+ * The whole display rule, in one pure function, so the resident itself is layout and the em dashes have
+ * exactly one definition. Three of the four tiles are measurements and say so by withholding a number
+ * they do not have:
+ *
+ * - **Tokens** and **Cache** are em dashes until a usage record exists at all, because before the first
+ *   measured turn there is no zero to report — there is nothing measured, and `0` would be a claim.
+ * - **Cost** is an em dash whenever the rates resolve to nothing, which includes every model missing from
+ *   the shipped table and every provider the user has not priced. That is the honest reading of "this
+ *   session used 940k tokens": the usage is known and the price of it is not.
+ * - **Cache** is separately an em dash on a provider that never mentions caching, where tokens and cost
+ *   are numbers: "none were cached" and "nobody looked" are different answers.
+ * - **Turns** always renders its count. It is not a measurement of what was spent but of how much
+ *   conversation there is, and a session with no measured usage still has the replies it had.
+ */
+export function overviewTiles(input: { usage?: UsageCounters; rates: Rates | null; turns: number }): OverviewTiles {
+  const { usage, rates } = input
+  const turns = Number.isFinite(input.turns) && input.turns > 0 ? Math.trunc(input.turns) : 0
+
+  const percent = usage ? cachePercent(usage) : null
+
+  return {
+    tokens: usage ? compactTokens(usage.prompt + usage.completion) : '—',
+    cost: usage && rates ? formatCost(costMicros(usage, rates)) : '—',
+    cache: percent === null ? '—' : `${percent}%`,
+    turns: String(turns),
+  }
+}
