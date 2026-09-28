@@ -1363,6 +1363,72 @@ async function aResumeDoesNotReReadTheMentions() {
   }
 }
 
+/**
+ * A provider that reports what the reply cost, on the frame before its terminator.
+ *
+ * The ordering is the part that matters: the usage frame arrives after the text and after the frame
+ * carrying the finish reason, and it carries no delta of its own — exactly the shape a parser that
+ * only looks for deltas would skip as an empty frame.
+ */
+function usageReportingFetch(log: unknown[]): (url: string, init: RequestInit) => Promise<Response> {
+  return async (_url: string, init: RequestInit) => {
+    log.push({ body: JSON.parse(String(init.body)) })
+    return sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'Done.' } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      JSON.stringify({
+        choices: [],
+        usage: { prompt_tokens: 1200, completion_tokens: 340, prompt_tokens_details: { cached_tokens: 900 } },
+      }),
+      '[DONE]',
+    ])
+  }
+}
+
+async function usageIsReportedToTheSession() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    const log: unknown[] = []
+    const chunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: usageReportingFetch(log) as never,
+      })
+    )
+
+    const types = chunks.map((c) => c.type)
+    assert.deepEqual(
+      types,
+      ['text_delta', 'usage', 'turn_end', 'done'],
+      `unexpected chunk sequence: ${JSON.stringify(types)}`
+    )
+
+    const usage = chunks.find((c) => c.type === 'usage')
+    assert.deepEqual(
+      { prompt: usage?.prompt, completion: usage?.completion, cached: usage?.cached },
+      { prompt: 1200, completion: 340, cached: 900 },
+      'the reply reports what it cost, counted the way the provider counted it'
+    )
+
+    // The request asked for the count in the first place: a provider reports usage on a stream only
+    // when the body says to, so a loop that forgot this would report nothing and never look wrong.
+    const body = (log[0] as { body: { stream_options?: unknown } }).body
+    assert.deepEqual(body.stream_options, { include_usage: true })
+
+    // A reply whose provider reported nothing yields no usage chunk at all: every other scenario in
+    // this suite pins its chunk sequence exactly, so a chunk that appeared for one of them fails there.
+    results.push('a reply reports its usage once, and only when the provider measured it')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -1393,6 +1459,7 @@ async function main() {
   await step('mentions reach the provider', mentionsReachTheProvider)
   await step('no mentions, unchanged send', aSendWithNoMentionsIsUnchanged)
   await step('resume does not re-read mentions', aResumeDoesNotReReadTheMentions)
+  await step('usage reaches the session', usageIsReportedToTheSession)
 
   console.log('agent loop: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)

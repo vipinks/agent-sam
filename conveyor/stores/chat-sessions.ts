@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { MAX_ACTIVE_SKILLS, MAX_SKILL_ID_CHARS } from '../protocol/skills'
+import { accumulate, type SessionUsage } from '../protocol/session-usage'
 
 /**
  * The chat session list: what conversations exist, and which one is open.
@@ -51,6 +52,20 @@ export interface ChatSession {
    * uses them, so a session never carries a stale copy of a skill someone has since edited.
    */
   activeSkillIds?: string[]
+  /**
+   * What this conversation has spent, as its providers reported it.
+   *
+   * Additive and optional on the same terms as `lastRoot` and the skills above: an entry written before
+   * this field existed simply has no key, and absence means nothing has been measured — never a zero,
+   * because a stored zero is indistinguishable from a measurement of zero. The counters inside follow the
+   * same rule one level down: a provider that never mentions caching leaves `cached` unset rather than
+   * claiming the prompt was all misses.
+   *
+   * A running total rather than a per-turn record, because the conversation is what the Overview panel
+   * is about, and a list of every reply's cost would be a transcript in the wrong file. Written by the
+   * debounced store save like everything else here, so a long turn does not pay a write per reply.
+   */
+  usage?: SessionUsage
 }
 
 // Exported, not just local: the router's inferred type references this store, and a declaration
@@ -124,6 +139,20 @@ export const chatSessionsStore = defineStore('chat-sessions', {
     removeSession: z.object({ id: sessionIdSchema }),
     setActive: z.object({ id: sessionIdSchema.nullable() }),
     /**
+     * A report of what one reply cost.
+     *
+     * Counters only: the addition and the stamp are this store's own, so a caller cannot send a total,
+     * cannot send a time, and cannot replace what earlier turns reported. Bounded the way the persisted
+     * key is — whole and non-negative — because this is the boundary the renderer's payload actually
+     * crosses, and a negative count read from one would move a total backwards.
+     */
+    recordUsage: z.object({
+      id: sessionIdSchema,
+      prompt: z.number().int().nonnegative(),
+      completion: z.number().int().nonnegative(),
+      cached: z.number().int().nonnegative().optional(),
+    }),
+    /**
      * One skill, out of every conversation that holds it.
      *
      * No payload for a whole record, because there is nothing else to say: the id is what a conversation
@@ -191,6 +220,32 @@ export const chatSessionsStore = defineStore('chat-sessions', {
               }
             : s
         )
+      )
+    },
+
+    /**
+     * Add one measured reply to a session's running total.
+     *
+     * The addition is `accumulate`'s rather than this action's, so the rule that a report of nothing
+     * leaves the total alone is stated once, where it is tested, instead of being re-derived per caller.
+     *
+     * `updatedAt` is deliberately untouched, for the reason `dropSkill` leaves it alone: this is a write
+     * about what a reply cost, not the conversation being used, and stamping it would reorder the user's
+     * list because a model was billed. A report against an id that is not there changes nothing, which is
+     * the shape a session deleted mid-turn leaves behind.
+     */
+    recordUsage: (state, { id, prompt, completion, cached }) => {
+      const index = state.sessions.findIndex((s) => s.id === id)
+      if (index === -1) return
+
+      const at = Date.now()
+      state.sessions = state.sessions.map((session, i) =>
+        i === index
+          ? {
+              ...session,
+              usage: accumulate(session.usage, { prompt, completion, ...(cached !== undefined ? { cached } : {}) }, at),
+            }
+          : session
       )
     },
 

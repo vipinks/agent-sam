@@ -24,6 +24,7 @@ import {
   type ImageAttachmentRef,
   type ResolvedAttachment,
 } from '../protocol/image-attachments'
+import type { UsageCounters } from '../protocol/session-usage'
 import { EXIT_MARKER, STDERR_MARKER } from '../protocol/terminal'
 import { nextGateIndex, type FrameCall } from '../protocol/approval'
 import { createMcpToolNames, isMcpToolName, type McpConsent, type McpToolNames } from '../protocol/mcp-tools'
@@ -539,6 +540,19 @@ export type AgentChunk =
        */
       continuations: number
     }
+  /**
+   * What this reply cost, as the provider counted it.
+   *
+   * Yielded once per model round-trip, when the provider reported a usage frame and not otherwise — so
+   * the absence of this chunk is itself the fact that nothing was measured. Announced rather than added
+   * up here because the sum belongs to the conversation, and this loop only knows the run: the session a
+   * total lands on is the renderer's business, and a turn that takes several round-trips reports several
+   * of these, which accumulate the same way two turns do.
+   *
+   * `cached` travels only when the provider named it, for the reason the protocol module states at
+   * length: an absent cache detail and a measured zero are different claims about the same prompt.
+   */
+  | { type: 'usage'; prompt: number; completion: number; cached?: number }
   /**
    * How the assistant's reply ended, for every turn that ends by the model's own answering rather
    * than by a pause or the step budget.
@@ -1356,6 +1370,10 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // round-trip, because each reply is diagnosed on its own facts.
     const finishReasons: string[] = []
     let streamErrorCode: string | undefined
+    // What this round-trip cost, if the provider said. One per reply rather than one per turn, because a
+    // round-trip is what a provider bills: the prompt it counts is the history it was handed, so summing
+    // the replies is the honest total and no single one of them is.
+    let reportedUsage: UsageCounters | undefined
 
     // The turn's images are resolved before the request is built and before the try below, and the
     // order matters: a reference whose bytes are gone is a failure to report, not a reply that stopped
@@ -1378,6 +1396,11 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         if (opts.signal.aborted) return
 
         if (delta.finishReason) finishReasons.push(delta.finishReason)
+
+        // Kept rather than yielded here: the accounting frame is the last thing a reply says, and the
+        // pane has already been handed the prose — so it is announced once the round-trip is over, where
+        // it reads as the closer it is.
+        if (delta.usage) reportedUsage = delta.usage
 
         if (delta.text) {
           text.push(delta.text)
@@ -1403,6 +1426,12 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       if (!(err instanceof ConveyorError) || err.code !== 'STREAM_ERROR') throw err
       streamErrorCode = err.code
     }
+
+    // A round-trip that measured itself says so, once, before anything is done with the reply: the
+    // session's total is the sum of these, and a turn whose provider reports nothing yields none of them
+    // rather than a zero that would read as a measurement. Yielded after the stream rather than inside
+    // it so a turn cut off mid-reply still reports what the frames before the break cost.
+    if (reportedUsage) yield { type: 'usage', ...reportedUsage }
 
     const assistantText = text.join('')
 

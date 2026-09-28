@@ -6,6 +6,7 @@ import {
   type MessageContentPart,
   type ResolvedAttachment,
 } from '../protocol/image-attachments'
+import { parseUsage, type UsageCounters } from '../protocol/session-usage'
 
 /**
  * Provider plumbing for the chat stream: where each provider lives, how to shape a request for it,
@@ -233,11 +234,17 @@ function openAiHeaders(apiKey: string): Record<string, string> {
  *
  * Tools are sent only when there are some: some gateways reject an empty array, and omitting the keys
  * entirely is what keeps an ordinary chat request shaped exactly as it was before tools.
+ *
+ * `stream_options` asks the provider to close the reply with what it cost. Only this dialect takes it —
+ * Anthropic reports usage on events of its own and refuses a parameter it does not document — and it is
+ * the whole reason a session can be priced at all, so it is sent on every request rather than only when
+ * someone is watching.
  */
 function openAiBody(model: string, messages: ChatMessage[], tools?: ToolDefinition[]): Record<string, unknown> {
   return {
     model,
     stream: true,
+    stream_options: { include_usage: true },
     messages,
     ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
   }
@@ -270,6 +277,17 @@ export interface StreamDelta {
    * provider, and the one place that knows what a value means is `protocol/turn-end.ts`.
    */
   finishReason?: string
+  /**
+   * What this reply cost, as the provider counted it.
+   *
+   * The only place a provider reports its own accounting, and it arrives on the frame that closes the
+   * reply — after the text, usually after the frame carrying the finish reason, and with no delta at all
+   * beside it. The parser therefore has to be able to report a frame whose whole content is this.
+   *
+   * Absent on every other frame, and absent on a provider that reports nothing: a turn that says nothing
+   * about cost has to arrive here as nothing, so the total it feeds is not moved by it.
+   */
+  usage?: UsageCounters
 }
 
 /** One call's fragment within a frame. */
@@ -317,9 +335,14 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
   const choices = e.choices as Array<Record<string, unknown>> | undefined
   const choice = choices?.[0]
   const delta = choice?.delta as Record<string, unknown> | undefined
-  if (!delta && !choice) return null
 
-  const result: StreamDelta = {}
+  // Read before the emptiness check below, which would otherwise swallow it: the accounting frame that
+  // closes an OpenAI-dialect reply carries no choice and no delta at all, so a parser that returned
+  // early here would drop the only frame that knows what the reply cost.
+  const usage = parseUsage(e)
+  if (!delta && !choice) return usage ? { usage } : null
+
+  const result: StreamDelta = usage ? { usage } : {}
   // The finish reason sits on the choice rather than in the delta, and the frame that closes the
   // reply usually carries an empty delta beside it — so it is read before the delta is, and a frame
   // with one and no delta at all is still a frame worth reporting.
@@ -342,7 +365,10 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
     })
   }
 
-  return result.text !== undefined || result.toolCalls !== undefined || result.finishReason !== undefined
+  return result.text !== undefined ||
+    result.toolCalls !== undefined ||
+    result.finishReason !== undefined ||
+    result.usage !== undefined
     ? result
     : null
 }
