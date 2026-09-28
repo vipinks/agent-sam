@@ -586,7 +586,7 @@ describe('the declared prices, per model', () => {
     return within(row).getByLabelText(`${side} price for ${modelId}`) as HTMLInputElement
   }
 
-  it('gives every model row three bounded fields, with the built-in triple as their placeholders', async () => {
+  it('gives every model row its bounded price fields, with the built-in triple as their placeholders', async () => {
     stubSettings({ listConfigured: () => [LLAMA.id] }, PRICED)
     const { container } = renderSettings()
 

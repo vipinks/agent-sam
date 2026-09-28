@@ -22,7 +22,7 @@ import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
  * The section a *preference* belongs to is the other way round: what lands there is only where the
  * control is found, and the value itself is persisted by the store that owns it rather than by this one.
  */
-export type SettingsSection = 'providers' | 'mcp-servers' | 'skills' | 'terminal'
+export type SettingsSection = 'providers' | 'mcp-servers' | 'skills' | 'terminal' | 'context'
 
 /**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —

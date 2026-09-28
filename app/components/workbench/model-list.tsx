@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { rateText, resolveRates, type ModelRates } from '@/conveyor/protocol/session-usage'
+import { resolveWindow, type ModelWindows } from '@/conveyor/protocol/context-window'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
 
@@ -31,9 +32,11 @@ export function ModelList({
   models,
   enabled,
   modelRates,
+  modelWindows,
   defaultOpen = false,
   onToggle,
   onRateChange,
+  onWindowChange,
 }: {
   providerName: string
   models: ModelEntry[]
@@ -46,6 +49,14 @@ export function ModelList({
    * bills with until someone overrides it.
    */
   modelRates?: ModelRates
+  /**
+   * The windows these models were declared at, by model id, as the record holds them.
+   *
+   * The same shape as the prices above, and read the same way: a row draws what the record says and asks
+   * `resolveWindow` for what the model is measured against meanwhile, so the placeholder it shows is the
+   * very number the Overview card places that conversation against until someone overrides it.
+   */
+  modelWindows?: ModelWindows
   /** Opened automatically right after a fetch, so the thing you just asked for is visible. */
   defaultOpen?: boolean
   /** Called with the model id the user flipped. The parent owns which provider that belongs to. */
@@ -58,6 +69,14 @@ export function ModelList({
    * any one of them clearing its neighbours.
    */
   onRateChange: (modelId: string, side: 'input' | 'cacheHit' | 'output', value: number | undefined) => void
+  /**
+   * Declare how many tokens one model accepts, or take the declaration back with `undefined`.
+   *
+   * One number for one model rather than a triple, because a window is one number: there is no
+   * half-typed entry to keep, and blanking the field is the only way to be partial — which the caller
+   * passes up as the absence of a declaration rather than as a nought.
+   */
+  onWindowChange: (modelId: string, value: number | undefined) => void
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [filter, setFilter] = useState('')
@@ -114,6 +133,11 @@ export function ModelList({
                 // nothing at all for an id the table has never heard of — a gateway's own name for a
                 // model, which is the case the fields exist for.
                 const builtIn = resolveRates({ model: model.id })
+                // And the window this model is placed against until someone declares one: the shipped
+                // table's entry for it, or nothing at all for an id the table has never heard of, which
+                // is the case a gateway's own names for models make.
+                const builtInWindow = resolveWindow({ model: model.id })
+                const declaredWindow = modelWindows?.[model.id]?.contextWindow
 
                 return (
                   <li
@@ -137,7 +161,7 @@ export function ModelList({
                       />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-1.5">
+                    <div className="grid grid-cols-4 gap-1.5">
                       <RateField
                         slot="model-rate-input"
                         caption="in"
@@ -161,6 +185,14 @@ export function ModelList({
                         placeholder={builtIn === null ? '' : rateText(builtIn.output)}
                         value={declared?.outputRate}
                         onChange={(next) => onRateChange(model.id, 'output', next)}
+                      />
+                      <WindowField
+                        slot="model-window"
+                        caption="window"
+                        ariaLabel={`Context window for ${model.id}`}
+                        placeholder={builtInWindow === null ? '' : String(builtInWindow)}
+                        value={declaredWindow}
+                        onChange={(next) => onWindowChange(model.id, next)}
                       />
                     </div>
                   </li>
@@ -225,6 +257,66 @@ function RateField({
           if (typed.trim() === '') return onChange(undefined)
           const next = Number(typed)
           onChange(Number.isFinite(next) && next >= 0 ? next : undefined)
+        }}
+        className="h-8 font-mono text-[11.5px]"
+      />
+    </div>
+  )
+}
+
+/**
+ * One model's declared context window, in tokens.
+ *
+ * A field of its own rather than the price field with different bounds, because the two refuse
+ * different things: a price is a decimal that may be zero, and a window is a whole number of tokens that
+ * may not be — a model that accepts nothing is not a model this app can send to, and a nought stored
+ * where a window belongs would place every request over it.
+ *
+ * `type=number`, like the price fields beside it, because the spinners and the keyboard are what a
+ * person entering a token count uses. They move in thousands because a window is a round number of
+ * tokens in practice; the field is not inside a form, so a typed 4096 is stored rather than refused.
+ *
+ * Blank travels up as `undefined` rather than as a zero, and that is the same distinction the prices are
+ * built around: "nobody declared a window for this model" falls through to the shipped table, and
+ * "declared as nothing" would be a window every conversation is already over. `min` is one for the
+ * reason the declaration schema's bound is positive.
+ */
+function WindowField({
+  slot,
+  caption,
+  ariaLabel,
+  placeholder,
+  value,
+  onChange,
+}: {
+  slot: string
+  caption: string
+  ariaLabel: string
+  /** The shipped table's window for this model, in tokens, or empty for a model nothing knows. */
+  placeholder: string
+  value: number | undefined
+  onChange: (value: number | undefined) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] text-muted-foreground">{caption}</span>
+      <Input
+        data-slot={slot}
+        type="number"
+        min={1}
+        max={10_000_000}
+        step={1000}
+        inputMode="numeric"
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        value={value === undefined ? '' : String(value)}
+        onChange={(event) => {
+          const typed = event.target.value
+          if (typed.trim() === '') return onChange(undefined)
+          const next = Number(typed)
+          // Whole and positive, or no declaration at all: the store's schema is what main would validate
+          // this against, and a decimal that reached it would be refused with nothing said on screen.
+          onChange(Number.isFinite(next) && Number.isInteger(next) && next >= 1 ? next : undefined)
         }}
         className="h-8 font-mono text-[11.5px]"
       />

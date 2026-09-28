@@ -12,6 +12,7 @@ import { CustomProviders } from './custom-provider-settings'
 import { McpServersSection } from './mcp-settings'
 import { SkillsSection } from './skills-settings'
 import { TerminalSection } from './terminal-settings'
+import { ContextSection } from './context-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -81,6 +82,7 @@ export function SettingsView() {
             <TabsTrigger value="mcp-servers">MCP Servers</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="terminal">Terminal</TabsTrigger>
+            <TabsTrigger value="context">Context</TabsTrigger>
           </TabsList>
         </div>
 
@@ -142,6 +144,10 @@ export function SettingsView() {
           <TabsContent value="terminal" data-slot="settings-section-terminal" className="mx-auto max-w-2xl px-8 py-7">
             <TerminalSection />
           </TabsContent>
+
+          <TabsContent value="context" data-slot="settings-section-context" className="mx-auto max-w-2xl px-8 py-7">
+            <ContextSection />
+          </TabsContent>
         </div>
       </Tabs>
     </div>
@@ -195,7 +201,8 @@ function ProviderCard({
   // memoised because the store slice is absent for an unfetched provider, and a fresh `?? []` each
   // render would invalidate every memo that depends on them.
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[id])
-  const { toggleModel, setFetchedModels, setSupportsImages, setModelRates } = useConveyorStore(providerConfigStore)
+  const { toggleModel, setFetchedModels, setSupportsImages, setModelRates, setModelWindows } =
+    useConveyorStore(providerConfigStore)
 
   const fetched = useMemo(() => config?.fetchedModels ?? [], [config])
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
@@ -261,6 +268,9 @@ function ProviderCard({
       // The map straight off the record, by model id: a row reads the entry for its own model, so nothing
       // here has to pick which price the box is about.
       modelRates={config?.modelRates}
+      // The windows off the same record, by the same route the prices travel: a row reads the entry for
+      // its own model, so nothing here has to pick which window the box is about.
+      modelWindows={config?.modelWindows}
       // All three sides travel in one payload, and the sides the user did not touch are re-stated from
       // that model's entry: the three are one declaration, so clearing a field must not silently clear
       // its neighbours, and a blanked field has to send no key rather than a zero the Overview bills at.
@@ -274,6 +284,10 @@ function ProviderCard({
           output: side === 'output' ? next : declared?.outputRate,
         })
       }}
+      // One model at a time, and a cleared field travels as `undefined` rather than as a zero: the action
+      // takes that model's entry off, so "nobody declared a window" stays distinguishable from "declared
+      // as nothing" and the shipped table answers for that model again.
+      onWindowChange={(modelId, window) => setModelWindows({ providerId: id, modelId, window })}
       actions={
         <Button
           data-slot="provider-refresh"

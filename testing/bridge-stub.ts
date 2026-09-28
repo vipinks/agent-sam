@@ -4,6 +4,7 @@ import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { terminalPreferencesStore } from '@/conveyor/stores/terminal-preferences'
+import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -283,6 +284,10 @@ const initialStates = new Map<string, unknown>([
   // without a genuine initial state here the mirror would cache `undefined` for this store and the
   // terminal pane would throw on the selector that reads a font size out of it.
   ['conveyor:store:terminal-preferences', structuredClone(terminalPreferencesStore.initialState)],
+  // The compact-point preference, which the Context settings section reads on every mount and writes
+  // when the percent changes: without a genuine initial state here the mirror would cache `undefined`
+  // for this store, and the section would throw on the selector that reads a percent out of it.
+  ['conveyor:store:context-preferences', structuredClone(contextPreferencesStore.initialState)],
 ])
 
 /**

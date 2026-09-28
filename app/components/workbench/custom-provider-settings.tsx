@@ -287,8 +287,14 @@ function CustomProviderCard({
   const listModels = conveyor.provider.listModels.useMutation()
 
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[provider.id])
-  const { toggleModel, setSupportsImages, setCustomProviderModels, removeCustomProvider, setModelRates } =
-    useConveyorStore(providerConfigStore)
+  const {
+    toggleModel,
+    setSupportsImages,
+    setCustomProviderModels,
+    removeCustomProvider,
+    setModelRates,
+    setModelWindows,
+  } = useConveyorStore(providerConfigStore)
 
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
   const catalogue = useMemo(() => provider.models.map((id) => ({ id })), [provider.models])
@@ -369,6 +375,9 @@ function CustomProviderCard({
         // The same two props as a predefined box, off the same slice: a gateway someone added is priced
         // exactly as a provider that ships with the app, model by model.
         modelRates={config?.modelRates}
+        // And the same route for the window, for the third time and the same reason: a model reached
+        // through a gateway someone added is measured against a window exactly as a shipped one is.
+        modelWindows={config?.modelWindows}
         onRateChange={(modelId, side, next) => {
           const declared = config?.modelRates?.[modelId]
           setModelRates({
@@ -379,6 +388,7 @@ function CustomProviderCard({
             output: side === 'output' ? next : declared?.outputRate,
           })
         }}
+        onWindowChange={(modelId, window) => setModelWindows({ providerId: provider.id, modelId, window })}
         notice={notice}
         actions={
           <>

@@ -6,6 +6,7 @@ import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
 import { ModelList, type ModelEntry } from './model-list'
 import type { ModelRates } from '@/conveyor/protocol/session-usage'
+import type { ModelWindows } from '@/conveyor/protocol/context-window'
 
 /**
  * One provider's box, in Settings: the controls every provider has, whether it ships with the app or
@@ -58,7 +59,9 @@ export function ProviderBox({
   imagesSupported,
   onToggleImages,
   modelRates,
+  modelWindows,
   onRateChange,
+  onWindowChange,
   enabledModels,
   models,
   modelsOpen = false,
@@ -97,6 +100,14 @@ export function ProviderBox({
    */
   modelRates?: ModelRates
   /**
+   * The windows this provider's models were declared at, by model id, as the record holds them.
+   *
+   * Passed through for the reason the prices above are: a row draws what the record says and asks
+   * `resolveWindow` for what the model is measured against meanwhile, so the placeholder behind an empty
+   * field is the shipped table's own number for that model.
+   */
+  modelWindows?: ModelWindows
+  /**
    * Declare a price for one side of one model, or take it back with `undefined`.
    *
    * The model id travels with the side because the price belongs to the model the row was drawn for; one
@@ -104,6 +115,13 @@ export function ProviderBox({
    * a user fill in three fields across three edits without any one of them clearing its neighbours.
    */
   onRateChange: (modelId: string, side: 'input' | 'cacheHit' | 'output', value: number | undefined) => void
+  /**
+   * Declare how many tokens one model accepts, or take the declaration back with `undefined`.
+   *
+   * One number for one model, and the model id travels with it because a window belongs to the model that
+   * enforces it: one gateway serves a model with a small window and one with a large one.
+   */
+  onWindowChange: (modelId: string, value: number | undefined) => void
   /** The models switched on, in the order they were switched on. */
   enabledModels: string[]
   /** The catalogue to show, in the order the provider listed it. */
@@ -247,9 +265,11 @@ export function ProviderBox({
             models={models}
             enabled={enabledModels}
             modelRates={modelRates}
+            modelWindows={modelWindows}
             defaultOpen={modelsOpen}
             onToggle={onToggleModel}
             onRateChange={onRateChange}
+            onWindowChange={onWindowChange}
           />
         </div>
       )}

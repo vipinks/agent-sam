@@ -2,10 +2,11 @@
  * What a request is about to spend: the estimate, the breakdown, the window it is placed against, and
  * the point at which this app considers a conversation ready to compact.
  *
- * Pure, and free of module imports, for the reason the usage protocol beside it is: the loop computes a
- * snapshot in main, the card that draws it next turn lives in the renderer, and the settings field that
- * bounds the compact point is a rule a suite has to be able to reach without a form. All three have to
- * agree on one arithmetic, so the arithmetic is stated once, here.
+ * Pure, and its only import is the sibling usage protocol's own number formatting, for the reason the
+ * usage protocol beside it is free of module imports itself: the loop computes a snapshot in main, the
+ * card that draws it in the renderer, and the settings field that bounds the compact point is a rule a
+ * suite has to be able to reach without a form. All four have to agree on one arithmetic, so the
+ * arithmetic is stated once, here.
  *
  * The estimate is deliberately an estimate. A real token count belongs to the provider's tokenizer,
  * which this app does not ship and cannot call without paying for a round-trip to ask; what it can do
@@ -17,6 +18,7 @@
  * and the session record stores the answer.
  */
 import { z } from 'zod'
+import { compactTokens } from './session-usage'
 
 // ---------------------------------------------------------------- the estimate
 
@@ -328,4 +330,221 @@ export function contextStatus(used: number, window: number, percent: number): Co
   if (used >= window) return 'overWindow'
   if (used >= compactPoint(window, percent)) return 'pastCompact'
   return 'healthy'
+}
+
+// ---------------------------------------------------------------- the card
+
+/**
+ * The dash the card draws where a number would be a claim it cannot support.
+ *
+ * The same statement the Overview's tiles make with it, and made here for the same reason: an unknown
+ * window has no share to state, and a nought would read as a measurement rather than as an absence.
+ */
+export const CONTEXT_EM_DASH = '\u2014'
+
+/**
+ * The one line under the pill.
+ *
+ * It exists because the pill is a *preference* rather than a promise, and nothing this build does acts
+ * on it: a card that drew an amber pill and said nothing else would read as a feature that is about to
+ * do something on its own. No verb about compacting appears anywhere in it, because no such behaviour
+ * exists to describe.
+ */
+export const CONTEXT_PILL_CAPTION = 'Sam AI does not compact yet. Past the point, consider a new session.'
+
+/**
+ * The footnote under the card: the estimate stated as the rule it is, rather than as a measurement.
+ *
+ * All three clauses are load-bearing. The four characters are the heuristic this build counts with, the
+ * per-image allowance is the one number that is not a count of characters, and the exclusion of the
+ * running total is what keeps a reader from adding the Tiles' spend to this card and believing the sum.
+ */
+export const CONTEXT_ESTIMATOR_FOOTNOTE =
+  'Estimated at four characters per token, plus 1,500 tokens per image. Cumulative session usage is not counted.'
+
+/** The one sentence a card with nothing measured draws, in place of every figure it could invent. */
+const CONTEXT_EMPTY_SENTENCE = 'Send a message to see what this conversation is about to spend.'
+
+/**
+ * The sentence an unknown window draws beside its dashes.
+ *
+ * A dash with no way out of it is a dead end, so the card names the surface the window is declared on:
+ * the field is the model's own row, which is where a model the shipped table has never heard of is
+ * given a window.
+ */
+const CONTEXT_WINDOW_POINTER =
+  "Declare this model's window on its model row in Settings to read this card against a window."
+
+/** The parts a request is assembled from, in the order it is assembled from them. */
+const CATEGORY_KEYS = ['tools', 'systemPrompt', 'projectInstructions', 'skills', 'messages', 'other'] as const
+
+export type ContextCategoryKey = (typeof CATEGORY_KEYS)[number]
+
+/** What each part is called on the card, which is what a reader compares against the report they know. */
+const CATEGORY_LABELS: Record<ContextCategoryKey, string> = {
+  tools: 'Tool schemas',
+  systemPrompt: 'System prompt',
+  projectInstructions: 'Project instructions',
+  skills: 'Skills',
+  messages: 'Conversation',
+  other: 'Other and images',
+}
+
+/** One category as the card draws it: what it costs, and what share of the window that is. */
+export interface ContextCardRow {
+  key: ContextCategoryKey
+  label: string
+  tokensText: string
+  /** A whole percent of the window, or the dash when there is no window to take a share of. */
+  percentText: string
+}
+
+/**
+ * The card's four pills: the three statuses, and the window nobody has declared.
+ *
+ * The fourth is not a status — nothing about the conversation is known to be wrong — but it is what the
+ * card shows where a status would go, because a pill-shaped gap would leave the reader wondering which
+ * of the other three the truth is.
+ */
+export type ContextPill = ContextStatus | 'unknown'
+
+/** What each pill says when it is stated rather than only coloured. */
+const PILL_LABELS: Record<ContextPill, string> = {
+  healthy: 'Healthy',
+  pastCompact: 'Past compact point',
+  overWindow: 'Over window estimate',
+  unknown: 'Window unknown',
+}
+
+/**
+ * Everything the context card draws, as strings — one value per thing a reader can point at.
+ *
+ * A view model rather than a component's own arithmetic, for the reason the tiles' rule is: the strings
+ * are the answer, and the em dashes, the past-point flip and the badge's whole percent are all claims
+ * that have to hold in a suite rather than only in a screenshot.
+ */
+export interface ContextCardView {
+  /** `empty` before anything has been measured, which is the one state that draws no figures at all. */
+  state: 'empty' | 'measured'
+  /** The one sentence an empty card draws, or null on a measured one. */
+  sentence: string | null
+  pill: ContextPill | null
+  pillLabel: string
+  pillCaption: string
+  /** The used tokens alone, compactly: the one figure that survives an unknown window. */
+  usedText: string
+  /** The used-over-window pair, as one string. */
+  figure: string
+  /** The badge riding the filled segment. */
+  usedPercentText: string
+  /** How far the filled segment reaches, as a whole percent of the bar, clamped to the bar's own end. */
+  fillPercent: number
+  /** Where the compact-point tick stands, or null when the window is unknown. */
+  tickPercent: number | null
+  remainderLabel: string
+  remainderText: string
+  categories: ContextCardRow[]
+  freeLabel: string
+  freeText: string
+  freeCaption: string
+  footnote: string
+  /** The sentence pointing at the model row, or null when a window was resolved. */
+  pointed: string | null
+}
+
+/** A whole percent, rounded: the reader adds percents up, so a fraction of one is not a reading. */
+function wholePercent(part: number, total: number): number {
+  return Math.round((part / total) * 100)
+}
+
+/**
+ * The card with nothing measured.
+ *
+ * No pills, no rows, and no figures: the strings are empty rather than nought, so a component that drew
+ * one of them anyway would draw nothing instead of drawing a claim.
+ */
+const EMPTY_CARD: ContextCardView = {
+  state: 'empty',
+  sentence: CONTEXT_EMPTY_SENTENCE,
+  pill: null,
+  pillLabel: '',
+  pillCaption: '',
+  usedText: '',
+  figure: '',
+  usedPercentText: '',
+  fillPercent: 0,
+  tickPercent: null,
+  remainderLabel: '',
+  remainderText: '',
+  categories: [],
+  freeLabel: '',
+  freeText: '',
+  freeCaption: '',
+  footnote: '',
+  pointed: null,
+}
+
+/**
+ * The whole card, derived from one snapshot, the window it is placed against, and the compact point.
+ *
+ * The window arrives resolved, or as null: the caller has already fallen through the declaration and the
+ * shipped table to get here, and this rule does not fall through again — a second resolution would be a
+ * second answer to the same question, and the two could disagree about the one model the user typed a
+ * window for.
+ *
+ * A window of nothing is treated as no window rather than as a window everything is over. Nothing this
+ * build can declare is zero — a declaration below one is rejected by the store's own schema — so the
+ * only way to arrive at a nought is for a caller to have made one up, and the honest reading of a
+ * window nobody supplied is the unknown case.
+ */
+export function contextCard(input: {
+  snapshot: ContextSnapshot | null | undefined
+  window: number | null
+  compactPercent: number
+}): ContextCardView {
+  const { snapshot, window, compactPercent } = input
+  if (!snapshot) return EMPTY_CARD
+
+  const used = snapshot.used
+  const usedText = compactTokens(used)
+  const known = window !== null && Number.isFinite(window) && window > 0
+
+  const status: ContextPill = known ? contextStatus(used, window, compactPercent) : 'unknown'
+  const remaining = known ? compactRemaining(used, window, compactPercent) : 0
+  const free = known ? Math.max(0, window - used) : 0
+
+  return {
+    state: 'measured',
+    sentence: null,
+    pill: status,
+    pillLabel: PILL_LABELS[status],
+    pillCaption: CONTEXT_PILL_CAPTION,
+    usedText,
+    figure: known ? `${usedText} / ${compactTokens(window)}` : `${usedText} / ${CONTEXT_EM_DASH}`,
+    usedPercentText: known ? `${wholePercent(used, window)}%` : CONTEXT_EM_DASH,
+    // Clamped, and only the bar: a badge that read `100%` for a conversation over its window would state
+    // the one thing the red pill exists to deny, so the figure keeps the whole truth and the fill stops
+    // at the bar's end.
+    fillPercent: known ? Math.min(100, wholePercent(used, window)) : 0,
+    tickPercent: known ? Math.min(100, Math.max(0, compactPercent)) : null,
+    // At the point exactly, the wording has already flipped: the setting is a share that is *reached*,
+    // and one token over is not the first moment a reader needs the sentence.
+    remainderLabel: known && remaining <= 0 ? 'Past compact point' : 'To compact point',
+    remainderText: !known
+      ? CONTEXT_EM_DASH
+      : remaining > 0
+        ? `${compactTokens(remaining)} tokens`
+        : `${compactTokens(-remaining)} tokens over ${CONTEXT_EM_DASH} consider a new session`,
+    categories: CATEGORY_KEYS.map((key) => ({
+      key,
+      label: CATEGORY_LABELS[key],
+      tokensText: compactTokens(snapshot[key]),
+      percentText: known ? `${wholePercent(snapshot[key], window)}%` : CONTEXT_EM_DASH,
+    })),
+    freeLabel: 'Free space',
+    freeText: known ? compactTokens(free) : CONTEXT_EM_DASH,
+    freeCaption: known ? `${wholePercent(free, window)}% of the window` : CONTEXT_EM_DASH,
+    footnote: CONTEXT_ESTIMATOR_FOOTNOTE,
+    pointed: known ? null : CONTEXT_WINDOW_POINTER,
+  }
 }
