@@ -5,6 +5,7 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
 import { ModelList, type ModelEntry } from './model-list'
+import type { ModelRates } from '@/conveyor/protocol/session-usage'
 
 /**
  * One provider's box, in Settings: the controls every provider has, whether it ships with the app or
@@ -56,6 +57,8 @@ export function ProviderBox({
   clearing = false,
   imagesSupported,
   onToggleImages,
+  modelRates,
+  onRateChange,
   enabledModels,
   models,
   modelsOpen = false,
@@ -84,6 +87,23 @@ export function ProviderBox({
    */
   imagesSupported: boolean
   onToggleImages: (supported: boolean) => void
+  /**
+   * The prices this provider's models were declared at, by model id, as the record holds them.
+   *
+   * Optional, and absent is the ordinary state: a provider nobody has priced carries no map. Each entry's
+   * three sides are optional too — a record short of a side prices nothing and the built-in table prices
+   * the model meanwhile — and the rows draw that as an empty field rather than as a zero, because a
+   * stored zero would be a declaration that the model is free, which is a price rather than a missing one.
+   */
+  modelRates?: ModelRates
+  /**
+   * Declare a price for one side of one model, or take it back with `undefined`.
+   *
+   * The model id travels with the side because the price belongs to the model the row was drawn for; one
+   * side at a time because the other two are re-stated from the record by the caller, which is what lets
+   * a user fill in three fields across three edits without any one of them clearing its neighbours.
+   */
+  onRateChange: (modelId: string, side: 'input' | 'cacheHit' | 'output', value: number | undefined) => void
   /** The models switched on, in the order they were switched on. */
   enabledModels: string[]
   /** The catalogue to show, in the order the provider listed it. */
@@ -226,8 +246,10 @@ export function ProviderBox({
             providerName={name}
             models={models}
             enabled={enabledModels}
+            modelRates={modelRates}
             defaultOpen={modelsOpen}
             onToggle={onToggleModel}
+            onRateChange={onRateChange}
           />
         </div>
       )}

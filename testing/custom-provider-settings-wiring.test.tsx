@@ -10,6 +10,7 @@ import {
   PROVIDER_BOX_CORE_CONTROLS,
 } from '@/app/components/workbench/provider-box'
 import { providerConfigStore, type ProviderConfigState } from '@/conveyor/stores/provider-config'
+import { RATES, resolveRates } from '@/conveyor/protocol/session-usage'
 import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -531,5 +532,208 @@ describe('the retired provider-level rate fields', () => {
       expect(within(box).queryByText(/What this provider charges/)).toBeNull()
       expect(within(box).queryByText(/Leave blank to price its models from the built-in list/)).toBeNull()
     }
+  })
+})
+
+const DEEPSEEK_MODELS = [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }]
+
+/**
+ * Two models on one provider, one of them already declared.
+ *
+ * The declaration is the row beside the one a test types into, which is the control that shows a price
+ * staying with the model it was entered for. `deepseek-flash` is in neither the catalogue nor the map:
+ * it is the model the table still prices, asserted through `RATES` rather than as a literal so the suite
+ * does not restate a number the protocol owns.
+ */
+const PRICED: ProviderConfigState = {
+  providers: {
+    deepseek: {
+      enabledModels: ['deepseek-chat'],
+      fetchedModels: DEEPSEEK_MODELS,
+      modelRates: { 'deepseek-chat': { inputRate: 0.15, cacheHitRate: 0.075, outputRate: 0.6 } },
+    },
+  },
+  customProviders: [LLAMA],
+}
+
+/** The same catalogue with nothing declared, which is the ordinary state of a provider nobody priced. */
+const UNDECLARED: ProviderConfigState = {
+  providers: { deepseek: { enabledModels: ['deepseek-chat'], fetchedModels: DEEPSEEK_MODELS } },
+  customProviders: [LLAMA],
+}
+
+describe('the declared prices, per model', () => {
+  /** Open a box's model list, which is where the three fields live. */
+  async function openModels(box: HTMLElement, providerName: string): Promise<void> {
+    await userEvent.click(within(box).getByRole('button', { name: `Show ${providerName} models` }))
+  }
+
+  /** One model's row, by the list it is in and the id it states. */
+  function modelRow(box: HTMLElement, providerName: string, modelId: string): HTMLElement {
+    const list = within(box).getByRole('list', { name: `${providerName} models` })
+    const row = [...list.querySelectorAll<HTMLElement>('li')].find((li) => within(li).queryByText(modelId) !== null)
+    if (!row) throw new Error(`no row for ${modelId}`)
+    return row
+  }
+
+  /**
+   * One side of one model's price, by the accessible name the field states.
+   *
+   * The name carries the model id because the fields repeat in every row: a suite that looked them up by
+   * "Input price" alone would be reading whichever row came first in the document.
+   */
+  function rateField(row: HTMLElement, side: 'Input' | 'Cache hit' | 'Output', modelId: string): HTMLInputElement {
+    return within(row).getByLabelText(`${side} price for ${modelId}`) as HTMLInputElement
+  }
+
+  it('gives every model row three bounded fields, with the built-in triple as their placeholders', async () => {
+    stubSettings({ listConfigured: () => [LLAMA.id] }, PRICED)
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    await openModels(deepseek, 'DeepSeek')
+
+    // The declared model: the table's numbers are the placeholders and what the user typed is the value,
+    // which is what makes an override read as a departure from a number still on screen.
+    const chat = modelRow(deepseek, 'DeepSeek', 'deepseek-chat')
+    const chatInput = rateField(chat, 'Input', 'deepseek-chat')
+    expect(chatInput.placeholder).toBe('0.27')
+    expect(rateField(chat, 'Cache hit', 'deepseek-chat').placeholder).toBe('0.07')
+    expect(rateField(chat, 'Output', 'deepseek-chat').placeholder).toBe('1.1')
+    expect(chatInput.value).toBe('0.15')
+    expect(rateField(chat, 'Cache hit', 'deepseek-chat').value).toBe('0.075')
+    expect(rateField(chat, 'Output', 'deepseek-chat').value).toBe('0.6')
+
+    // The model beside it: empty fields, the table's triple stated behind them.
+    const reasoner = modelRow(deepseek, 'DeepSeek', 'deepseek-reasoner')
+    expect(rateField(reasoner, 'Input', 'deepseek-reasoner').value).toBe('')
+    expect(rateField(reasoner, 'Input', 'deepseek-reasoner').placeholder).toBe('0.55')
+    expect(rateField(reasoner, 'Cache hit', 'deepseek-reasoner').placeholder).toBe('0.14')
+    expect(rateField(reasoner, 'Output', 'deepseek-reasoner').placeholder).toBe('2.19')
+
+    // Bounded, so the control refuses a negative price and a slipped decimal point at the field — the
+    // cache-hit field exactly as its two neighbours, in this row as in the declared one.
+    for (const [modelId, row] of [
+      ['deepseek-chat', chat],
+      ['deepseek-reasoner', reasoner],
+    ] as const) {
+      for (const side of ['Input', 'Cache hit', 'Output'] as const) {
+        const field = rateField(row, side, modelId)
+        expect(field.getAttribute('type')).toBe('number')
+        expect(field.getAttribute('min')).toBe('0')
+        expect(Number(field.getAttribute('max'))).toBeGreaterThan(0)
+      }
+    }
+
+    // And the case the feature was asked for: a model the built-in table has never heard of, on a
+    // gateway whose ids it could not know, so there is no number to show behind the field.
+    const llama = await waitFor(() => boxFor(container, 'custom', 'Local Llama'))
+    await openModels(llama, 'Local Llama')
+    const local = modelRow(llama, 'Local Llama', 'llama-3.1-8b')
+    expect(rateField(local, 'Input', 'llama-3.1-8b').placeholder).toBe('')
+    expect(rateField(local, 'Input', 'llama-3.1-8b').value).toBe('')
+  })
+
+  it('declares the triple for the model whose row was edited, and prices that model alone', async () => {
+    const { stub, main } = stubSettings({ listConfigured: () => [LLAMA.id] }, PRICED)
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    await openModels(deepseek, 'DeepSeek')
+
+    // Whole dollars, so the assertion is about the wiring rather than about a controlled `type=number`
+    // field's handling of a half-typed decimal: three keystrokes, three sides, one settled write.
+    const row = modelRow(deepseek, 'DeepSeek', 'deepseek-reasoner')
+    await userEvent.type(rateField(row, 'Input', 'deepseek-reasoner'), '3')
+    await userEvent.type(rateField(row, 'Cache hit', 'deepseek-reasoner'), '1')
+    await userEvent.type(rateField(row, 'Output', 'deepseek-reasoner'), '6')
+
+    // Addressed to one model and carrying all three sides: the declaration is read as one, so the two
+    // fields the user did not touch travel with the one they did rather than being dropped by an edit
+    // next door. The settled write is the last one — the field commits as it is typed into, so the
+    // keystrokes before it wrote the states the user passed through.
+    await waitFor(() => expect(storeMethods(stub)).toContain('setModelRates'))
+    const asked = stub.calls.filter((call) => call.method === 'setModelRates').at(-1)
+    expect((asked?.args[0] as { payload: unknown }).payload).toEqual({
+      providerId: 'deepseek',
+      modelId: 'deepseek-reasoner',
+      input: 3,
+      cacheHit: 1,
+      output: 6,
+    })
+
+    // The record those fields wrote is the one the pricing rule reads, keyed by the model: the row that
+    // was edited prices at what was typed for it...
+    const modelRates = main.state().providers.deepseek?.modelRates
+    expect(modelRates?.['deepseek-reasoner']).toEqual({ inputRate: 3, cacheHitRate: 1, outputRate: 6 })
+    expect(resolveRates({ model: 'deepseek-reasoner', modelRates })).toEqual({
+      input: 3_000_000,
+      cacheHit: 1_000_000,
+      output: 6_000_000,
+    })
+    // ...the row beside it keeps the declaration it already held, which is the relocation itself...
+    expect(modelRates?.['deepseek-chat']).toEqual({ inputRate: 0.15, cacheHitRate: 0.075, outputRate: 0.6 })
+    expect(resolveRates({ model: 'deepseek-chat', modelRates })).toEqual({
+      input: 150_000,
+      cacheHit: 75_000,
+      output: 600_000,
+    })
+    // ...and a model nobody touched is not in the map at all, so the shipped table still prices it.
+    expect(modelRates?.['deepseek-flash']).toBeUndefined()
+    expect(resolveRates({ model: 'deepseek-flash', modelRates })).toEqual(RATES['deepseek-flash'])
+  })
+
+  it('leaves the built-in pricing in effect while the fields are blank', async () => {
+    const { stub, main } = stubSettings({ listConfigured: () => [LLAMA.id] }, UNDECLARED)
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    await openModels(deepseek, 'DeepSeek')
+
+    const row = modelRow(deepseek, 'DeepSeek', 'deepseek-chat')
+    // Empty fields rather than zeros: a zero is a price, and this model is not priced at zero...
+    expect(rateField(row, 'Input', 'deepseek-chat').value).toBe('')
+    expect(rateField(row, 'Cache hit', 'deepseek-chat').value).toBe('')
+    expect(rateField(row, 'Output', 'deepseek-chat').value).toBe('')
+    // ...the table's own triple is what the placeholders say, so a reader can see what a blank field is
+    // worth before deciding to override it...
+    expect(rateField(row, 'Input', 'deepseek-chat').placeholder).toBe('0.27')
+    expect(rateField(row, 'Cache hit', 'deepseek-chat').placeholder).toBe('0.07')
+    expect(rateField(row, 'Output', 'deepseek-chat').placeholder).toBe('1.1')
+
+    // ...and merely looking wrote nothing, which is what "blank means the built-in table applies" has to
+    // mean on the record as well as on the screen.
+    expect(storeMethods(stub)).not.toContain('setModelRates')
+    expect(main.state().providers.deepseek?.modelRates).toBeUndefined()
+    expect(resolveRates({ model: 'deepseek-chat', modelRates: main.state().providers.deepseek?.modelRates })).toEqual(
+      RATES['deepseek-chat']
+    )
+  })
+
+  it('takes a side off the declaration when its field is cleared', async () => {
+    const { main } = stubSettings({ listConfigured: () => [LLAMA.id] }, PRICED)
+    const { container } = renderSettings()
+
+    const deepseek = await waitFor(() => boxFor(container, 'predefined', 'DeepSeek'))
+    await openModels(deepseek, 'DeepSeek')
+
+    const row = modelRow(deepseek, 'DeepSeek', 'deepseek-chat')
+    await userEvent.clear(rateField(row, 'Cache hit', 'deepseek-chat'))
+    await userEvent.tab()
+
+    // Blanked means the side goes rather than becoming a zero: with a side missing the declaration is no
+    // longer one, so the Overview falls back to the shipped table rather than billing a cache hit at
+    // whatever rate happened to be next to it — and the row says the same thing, an empty field with the
+    // table's number behind it.
+    await waitFor(() =>
+      expect(main.state().providers.deepseek?.modelRates).toEqual({
+        'deepseek-chat': { inputRate: 0.15, outputRate: 0.6 },
+      })
+    )
+    expect(rateField(row, 'Cache hit', 'deepseek-chat').value).toBe('')
+    expect(rateField(row, 'Cache hit', 'deepseek-chat').placeholder).toBe('0.07')
+    expect(resolveRates({ model: 'deepseek-chat', modelRates: main.state().providers.deepseek?.modelRates })).toEqual(
+      RATES['deepseek-chat']
+    )
   })
 })

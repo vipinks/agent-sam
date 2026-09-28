@@ -195,7 +195,7 @@ function ProviderCard({
   // memoised because the store slice is absent for an unfetched provider, and a fresh `?? []` each
   // render would invalidate every memo that depends on them.
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[id])
-  const { toggleModel, setFetchedModels, setSupportsImages } = useConveyorStore(providerConfigStore)
+  const { toggleModel, setFetchedModels, setSupportsImages, setModelRates } = useConveyorStore(providerConfigStore)
 
   const fetched = useMemo(() => config?.fetchedModels ?? [], [config])
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
@@ -258,6 +258,22 @@ function ProviderCard({
       models={fetched}
       modelsOpen={justFetched}
       onToggleModel={(modelId) => toggleModel({ providerId: id, modelId })}
+      // The map straight off the record, by model id: a row reads the entry for its own model, so nothing
+      // here has to pick which price the box is about.
+      modelRates={config?.modelRates}
+      // All three sides travel in one payload, and the sides the user did not touch are re-stated from
+      // that model's entry: the three are one declaration, so clearing a field must not silently clear
+      // its neighbours, and a blanked field has to send no key rather than a zero the Overview bills at.
+      onRateChange={(modelId, side, next) => {
+        const declared = config?.modelRates?.[modelId]
+        setModelRates({
+          providerId: id,
+          modelId,
+          input: side === 'input' ? next : declared?.inputRate,
+          cacheHit: side === 'cacheHit' ? next : declared?.cacheHitRate,
+          output: side === 'output' ? next : declared?.outputRate,
+        })
+      }}
       actions={
         <Button
           data-slot="provider-refresh"

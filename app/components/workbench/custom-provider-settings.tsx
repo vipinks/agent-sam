@@ -287,7 +287,7 @@ function CustomProviderCard({
   const listModels = conveyor.provider.listModels.useMutation()
 
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[provider.id])
-  const { toggleModel, setSupportsImages, setCustomProviderModels, removeCustomProvider } =
+  const { toggleModel, setSupportsImages, setCustomProviderModels, removeCustomProvider, setModelRates } =
     useConveyorStore(providerConfigStore)
 
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
@@ -366,6 +366,19 @@ function CustomProviderCard({
         models={catalogue}
         modelsOpen={justFetched}
         onToggleModel={(modelId) => toggleModel({ providerId: provider.id, modelId })}
+        // The same two props as a predefined box, off the same slice: a gateway someone added is priced
+        // exactly as a provider that ships with the app, model by model.
+        modelRates={config?.modelRates}
+        onRateChange={(modelId, side, next) => {
+          const declared = config?.modelRates?.[modelId]
+          setModelRates({
+            providerId: provider.id,
+            modelId,
+            input: side === 'input' ? next : declared?.inputRate,
+            cacheHit: side === 'cacheHit' ? next : declared?.cacheHitRate,
+            output: side === 'output' ? next : declared?.outputRate,
+          })
+        }}
         notice={notice}
         actions={
           <>

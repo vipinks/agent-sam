@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { rateText, resolveRates, type ModelRates } from '@/conveyor/protocol/session-usage'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
 
@@ -11,29 +12,52 @@ export interface ModelEntry {
 }
 
 /**
- * The fetched-model list for one provider: a filter box, then a row per model with a switch.
+ * The fetched-model list for one provider: a filter box, then a row per model with its switch and its
+ * three price fields.
  *
  * Extracted from the provider card because it is the one part of Settings with real internal state
  * (the filter, and whether the list is expanded) — keeping it separate means that state is scoped
  * here rather than re-rendered with the card, and the list can be exercised on its own.
  *
- * There is no save button by design: flipping a switch calls `onToggle`, which writes straight to
- * the persisted store.
+ * A model's price is declared on the model's own row rather than once for the provider, because a price
+ * belongs to the model that was billed: one provider serves a cheap model and a dear one, and a triple
+ * shared between them would have to be wrong about at least one.
+ *
+ * There is no save button by design: flipping a switch calls `onToggle`, and a price field calls
+ * `onRateChange`, which write straight to the persisted store.
  */
 export function ModelList({
   providerName,
   models,
   enabled,
+  modelRates,
   defaultOpen = false,
   onToggle,
+  onRateChange,
 }: {
   providerName: string
   models: ModelEntry[]
   enabled: string[]
+  /**
+   * The prices this provider's models were declared at, by model id, as the record holds them.
+   *
+   * Passed through rather than resolved here: a row draws what the record says and asks `resolveRates`
+   * for what the model costs meanwhile, so the placeholder it shows is the very number the Overview
+   * bills with until someone overrides it.
+   */
+  modelRates?: ModelRates
   /** Opened automatically right after a fetch, so the thing you just asked for is visible. */
   defaultOpen?: boolean
   /** Called with the model id the user flipped. The parent owns which provider that belongs to. */
   onToggle: (modelId: string) => void
+  /**
+   * Called with the model id, the side, and what was typed — or `undefined` when the field was blanked.
+   *
+   * One side at a time because that is how the fields are typed into: the other two are re-stated from
+   * the record by the caller, which is what lets a user fill in three fields across three edits without
+   * any one of them clearing its neighbours.
+   */
+  onRateChange: (modelId: string, side: 'input' | 'cacheHit' | 'output', value: number | undefined) => void
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [filter, setFilter] = useState('')
@@ -85,25 +109,60 @@ export function ModelList({
             ) : (
               visible.map((model) => {
                 const isOn = enabledSet.has(model.id)
+                const declared = modelRates?.[model.id]
+                // What this model costs until someone says otherwise: the shipped table's entry for it, or
+                // nothing at all for an id the table has never heard of — a gateway's own name for a
+                // model, which is the case the fields exist for.
+                const builtIn = resolveRates({ model: model.id })
+
                 return (
                   <li
                     key={model.id}
-                    className="flex items-center gap-2 border-b border-border px-2.5 py-1.5 last:border-b-0"
+                    className="flex flex-col gap-1.5 border-b border-border px-2.5 py-1.5 last:border-b-0"
                   >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-mono text-[11.5px]" title={model.id}>
-                        {model.id}
-                      </p>
-                      {model.name && model.name !== model.id && (
-                        <p className="truncate text-[11px] text-muted-foreground">{model.name}</p>
-                      )}
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-mono text-[11.5px]" title={model.id}>
+                          {model.id}
+                        </p>
+                        {model.name && model.name !== model.id && (
+                          <p className="truncate text-[11px] text-muted-foreground">{model.name}</p>
+                        )}
+                      </div>
+                      <Switch
+                        size="sm"
+                        checked={isOn}
+                        aria-label={`${isOn ? 'Disable' : 'Enable'} ${model.id}`}
+                        onCheckedChange={() => onToggle(model.id)}
+                      />
                     </div>
-                    <Switch
-                      size="sm"
-                      checked={isOn}
-                      aria-label={`${isOn ? 'Disable' : 'Enable'} ${model.id}`}
-                      onCheckedChange={() => onToggle(model.id)}
-                    />
+
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <RateField
+                        slot="model-rate-input"
+                        caption="in"
+                        ariaLabel={`Input price for ${model.id}`}
+                        placeholder={builtIn === null ? '' : rateText(builtIn.input)}
+                        value={declared?.inputRate}
+                        onChange={(next) => onRateChange(model.id, 'input', next)}
+                      />
+                      <RateField
+                        slot="model-rate-cache"
+                        caption="cache"
+                        ariaLabel={`Cache hit price for ${model.id}`}
+                        placeholder={builtIn === null ? '' : rateText(builtIn.cacheHit)}
+                        value={declared?.cacheHitRate}
+                        onChange={(next) => onRateChange(model.id, 'cacheHit', next)}
+                      />
+                      <RateField
+                        slot="model-rate-output"
+                        caption="out"
+                        ariaLabel={`Output price for ${model.id}`}
+                        placeholder={builtIn === null ? '' : rateText(builtIn.output)}
+                        value={declared?.outputRate}
+                        onChange={(next) => onRateChange(model.id, 'output', next)}
+                      />
+                    </div>
                   </li>
                 )
               })
@@ -111,6 +170,64 @@ export function ModelList({
           </ul>
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * One side of one model's declared price.
+ *
+ * Bounded at the field rather than checked afterwards: a negative price and a slipped decimal point are
+ * both refusals the browser can make before a store write is attempted, and the upper bound is high
+ * enough to be a typo-catcher rather than a policy — no published list rate is anywhere near it.
+ *
+ * `type=number` in a form about a human-typed price, because the spinners and the keyboard are what a
+ * person entering a rate actually uses. Blank is passed up as `undefined` rather than as a zero, which is
+ * the difference between "nobody priced this" and "this is free" — the same distinction the fields are
+ * built around.
+ *
+ * The caption is a `<span>` rather than a `<label for=…>`: the same three captions repeat in every row,
+ * so a label would need an id built out of a provider and a model id to stay unique, and the accessible
+ * name says more than the caption anyway — a screen reader hears which price of which model it is, and
+ * a sighted reader has the row the caption sits in.
+ */
+function RateField({
+  slot,
+  caption,
+  ariaLabel,
+  placeholder,
+  value,
+  onChange,
+}: {
+  slot: string
+  caption: string
+  ariaLabel: string
+  /** The built-in table's number, in dollars per million, or empty for a model nothing has priced. */
+  placeholder: string
+  value: number | undefined
+  onChange: (value: number | undefined) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] text-muted-foreground">{caption}</span>
+      <Input
+        data-slot={slot}
+        type="number"
+        min={0}
+        max={10_000}
+        step={0.01}
+        inputMode="decimal"
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        value={value === undefined ? '' : String(value)}
+        onChange={(event) => {
+          const typed = event.target.value
+          if (typed.trim() === '') return onChange(undefined)
+          const next = Number(typed)
+          onChange(Number.isFinite(next) && next >= 0 ? next : undefined)
+        }}
+        className="h-8 font-mono text-[11.5px]"
+      />
     </div>
   )
 }
