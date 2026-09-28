@@ -4,11 +4,13 @@ import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { overviewTiles, resolveRates } from '@/conveyor/protocol/session-usage'
 import { useChatSessionsContext } from './chat-sessions-context'
+import { ContextWindowCard } from './context-window-card'
 import { PaneHeader } from './pane-header'
 import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 
 /**
- * The Overview resident: what the conversation on screen has spent, in four tiles.
+ * The Overview resident: what the conversation on screen has spent, in four tiles, and what its next
+ * request is about to spend, in the context card beneath them.
  *
  * A reader's surface rather than a settings one, which is why it is docked beside the chat and why it
  * is deliberately four numbers: the question "what has this cost me" is asked while reading an answer,
@@ -67,7 +69,13 @@ export function OverviewPanel() {
             Open a conversation to see what it has spent.
           </p>
         ) : (
-          <OverviewTileRow usage={usage} rates={rates} turns={turns} />
+          <>
+            <OverviewTileRow usage={usage} rates={rates} turns={turns} />
+            {/* Beneath the tiles rather than in Settings: the quick surface answers "what is this
+                conversation about to cost me", and the card is the elaboration of the same question.
+                The percent it is measured against is the preference, and that one is in Settings. */}
+            <ContextWindowCard />
+          </>
         )}
       </div>
     </div>
