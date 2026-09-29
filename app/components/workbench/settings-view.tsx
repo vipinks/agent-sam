@@ -13,6 +13,7 @@ import { McpServersSection } from './mcp-settings'
 import { SkillsSection } from './skills-settings'
 import { TerminalSection } from './terminal-settings'
 import { ContextSection } from './context-settings'
+import { BuddiesSection } from './buddies-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -83,6 +84,7 @@ export function SettingsView() {
             <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="terminal">Terminal</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
+            <TabsTrigger value="buddies">Buddies</TabsTrigger>
           </TabsList>
         </div>
 
@@ -147,6 +149,13 @@ export function SettingsView() {
 
           <TabsContent value="context" data-slot="settings-section-context" className="mx-auto max-w-2xl px-8 py-7">
             <ContextSection />
+          </TabsContent>
+
+          {/* Last in the row, and that placement is the policy: a Buddy is chosen from the header for the
+              conversation in front of you, and everything about one beyond picking it — the editor, the
+              switches, the deletions — is the advanced screen's business. */}
+          <TabsContent value="buddies" data-slot="settings-section-buddies" className="mx-auto max-w-2xl px-8 py-7">
+            <BuddiesSection />
           </TabsContent>
         </div>
       </Tabs>
