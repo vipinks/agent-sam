@@ -1,6 +1,6 @@
 {
   "name": "sam-ai",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Sam AI — a local-first desktop coding assistant",
   "main": "./out/main/main.js",
   "license": "MIT",

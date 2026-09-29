@@ -6,6 +6,34 @@ coding assistant.
 
 <br>
 
+## 2026-09-29: v1.1.0 — Buddies
+
+- A **Buddy** is a way of working rather than a preset: a record with a name, a role section, a starter
+  set and the MCP servers it may use, held in main's own store and mirrored to the renderer, because a
+  fact main acts on cannot live in a window's memory. The built-ins are pure data in the protocol, which
+  is why no file can edit, delete or corrupt one, and the SamAi default is not a record at all — it is
+  what every conversation that named nobody runs as.
+- A Buddy's role section is injected into its turn, and its server list is read as an intersection with
+  what the user has trusted and left switched on. A ceiling and never a grant: a record cannot hand
+  itself a server the user never enabled.
+- Settings gains a **Buddies** section, with the editor behind the records and a switch on every row. The
+  built-ins are listed and can be switched off but carry no pencil and no bin; the user's own records
+  carry both, and a draft is checked by the protocol's own rule before it is written, so a refusal is a
+  sentence beside the field rather than a failure to interpret. What a switch writes is an id in the
+  store's disabled set, which is how a built-in — having no record to carry a flag — is switched back on.
+- The header's left carries a **Buddy Select**: the SamAi default first, then every Buddy that is switched
+  on, in the order the list rule returns them. The choice is per conversation and locks at the first send,
+  because the two are different facts — before it, a choice that can still change; after it, a record
+  that cannot. A conversation whose Buddy was deleted since runs on under the role it was created with.
+- Home's starters swap with the choice, and the record's fields are seeded into the session at that same
+  first send rather than at the click that picked it: a Buddy that declares a way in is what home offers,
+  and the app's own three are what is left for SamAi or for a Buddy that offers none.
+- The v1.0.0 baseline is everything before this entry: Phases 1 through 57, which shipped under the
+  standing versioning rule that a release names the work since the last one. This entry is v1.1.0 —
+  Phase 58's three turns, which are the Buddies work described above.
+
+<br>
+
 ## 2026-09-27: the composer takes images, as chips nobody has to keep
 
 - The composer takes an image three ways — a paste into the box, a drop on it, or the picker beside the
