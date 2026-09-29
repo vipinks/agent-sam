@@ -224,6 +224,33 @@ export interface ChatSessions {
    */
   buddyMcpSubset: string[] | null
   /**
+   * The Buddy the conversation on screen was created as, or null for the SamAi default and at home.
+   *
+   * The id rather than a name, because the one rule that knows what an id is *called* is `buddyLabel`:
+   * an id that resolves to nothing is a removed Buddy there, and a name spelled here would be a second
+   * answer to that. Read off the record rather than resolved again, for the reason the two snapshots
+   * above are — a Buddy edited since must not change what this conversation already runs as.
+   */
+  buddyId: string | null
+  /**
+   * The Buddy chosen on the home screen, or null while the default is what the next conversation runs as.
+   *
+   * Held here, above the pane, for the same reason the composer's draft and the pending skill chips are:
+   * the workbench keys its resize groups on the window state, and a choice held in the pane would be
+   * dropped by a maximize. It is not a second copy of a conversation's Buddy — the record is the source
+   * of truth once one exists — only the answer to which Buddy the first message creates, which is why
+   * the create is the one thing that reads it.
+   */
+  pendingBuddyId: string | null
+  /**
+   * Choose the Buddy the next conversation is created as.
+   *
+   * `null` is the SamAi default rather than a third state: a conversation that names nobody runs as the
+   * app does, so there is no difference to draw between "SamAi" and "nothing chosen", and storing one
+   * would make the create below carry a key that says what its own absence already says.
+   */
+  setPendingBuddyId: (buddyId: string | null) => void
+  /**
    * Turn one skill on or off for the conversation in front of the user.
    *
    * A toggle rather than a setter, because the control is a list of switches and the number that
@@ -519,6 +546,17 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const [pendingSkillIds, setPendingSkillIds] = useState<string[]>([])
   const pendingSkillsRef = useRef<string[]>(pendingSkillIds)
   pendingSkillsRef.current = pendingSkillIds
+
+  /**
+   * The Buddy chosen before there is a conversation to create as one.
+   *
+   * The same lift as the skill chips beside it, and the same mirror: the create reads the ref, because a
+   * send built before this render would otherwise close over the choice that was there then. `null` is
+   * the default, and it is what the create turns into an absent key.
+   */
+  const [pendingBuddyId, setPendingBuddyId] = useState<string | null>(null)
+  const pendingBuddyRef = useRef<string | null>(pendingBuddyId)
+  pendingBuddyRef.current = pendingBuddyId
 
   // The user's own Buddies, mirrored from main, and read at the moment a conversation is created rather
   // than at the moment this callback was: the record a Buddy is resolved from is the one main holds now,
@@ -919,7 +957,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
    * session restored from a previous run has an id from the moment the app starts.
    */
   const ensureSession = useCallback(
-    (firstMessage: string, buddyId: string | null = null) => {
+    (firstMessage: string, buddyId: string | null = pendingBuddyRef.current) => {
       const activeId = activeIdRef.current
       const activeTitle = sessionsRef.current.find((s) => s.id === activeId)?.title ?? null
       // Read before the create, which replaces the transcript a session is about to be built from.
@@ -998,6 +1036,12 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     // conversation that existed before Buddies, and which asks for exactly the request it always sent.
     buddyRolePrompt: buddySession.rolePrompt,
     buddyMcpSubset: buddySession.mcpSubset,
+    // The conversation's own Buddy for the header to name, and the choice that Buddy is made from while
+    // there is no conversation yet. Null in both places is the SamAi default, which is not a Buddy to
+    // render but a state of the select: the app's own behavior, offered first and offered again.
+    buddyId: buddySession.buddyId,
+    pendingBuddyId,
+    setPendingBuddyId,
     toggleSkill,
     streaming,
     setStreaming,

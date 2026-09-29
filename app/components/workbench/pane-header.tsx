@@ -15,17 +15,25 @@ import type { LucideIcon } from 'lucide-react'
  * `leading` is the slot before the glyph, and it exists for the one control that belongs to the *view*
  * rather than to the pane's own contents: the way back out of a screen that took the whole main area
  * over. Optional, so every other pane renders exactly the row it rendered before.
+ *
+ * `afterTitle` is the matching slot on the other side of the name: a control that belongs to the title
+ * itself, in the left cluster with it. It carries a heavier shrink factor than the name does, for the
+ * reason the trailing row does — the label a control shows is worth a character less than the pane's own
+ * name is — while the name keeps the `truncate` it always had. Also optional, and for the same reason.
  */
 export function PaneHeader({
   icon: Icon,
   title,
   leading,
+  afterTitle,
   children,
 }: {
   icon: LucideIcon
   title: string
   /** Optional control before the glyph — the way back into the view this pane took over. */
   leading?: ReactNode
+  /** Optional control after the title, in the left cluster with it — the pane's own subject. */
+  afterTitle?: ReactNode
   /** Optional trailing controls, pinned to the right edge. */
   children?: ReactNode
 }) {
@@ -36,6 +44,7 @@ export function PaneHeader({
       <span className="min-w-0 truncate text-[13px] font-medium" title={title}>
         {title}
       </span>
+      {afterTitle}
       {children && <div className="ml-auto flex min-w-0 shrink-6 items-center gap-1">{children}</div>}
     </header>
   )

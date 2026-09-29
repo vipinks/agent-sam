@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { MessageSquare, ImagePlus, Paperclip, SendHorizontal, ShieldCheck, Square, TriangleAlert } from 'lucide-react'
+import {
+  MessageSquare,
+  ImagePlus,
+  Lock,
+  Paperclip,
+  SendHorizontal,
+  ShieldCheck,
+  Square,
+  TriangleAlert,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
+import { buddiesStore } from '@/conveyor/stores/buddies'
+import { buddyLabel, listBuddies, resolveBuddy, SAMAI_BUDDY_ID, SAMAI_BUDDY_NAME } from '@/conveyor/protocol/buddies'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -16,6 +27,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { COMPOSER_MIN_HEIGHT, clampComposerHeight, composerBounds } from './composer-resize'
+import { HOME_STARTERS } from './home'
 import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
 import { MessageBubble } from './message-bubble'
@@ -224,6 +236,20 @@ export function autoApproveHelperText(on: boolean): string {
 }
 
 /**
+ * What the header says when the Buddy is fixed for the conversation on screen.
+ *
+ * One sentence, and both halves of it are load-bearing. The first says the disabled control is a rule
+ * rather than a fault — a control that simply refuses reads as broken — and it names the way out, which is
+ * a new chat, because switching inside a conversation is never offered: the role and the server subset were
+ * snapshotted onto the record when the conversation started, so a switch would leave the turns already run
+ * and the turns still to come answering as two identities. The second half scopes the word *fixed* to the
+ * one thing it covers: the model and the consent control beside it stay live, and a caption that did not
+ * say so would read as though the whole row had gone dead.
+ */
+export const BUDDY_LOCK_CAPTION =
+  'Fixed for this conversation — a new chat can pick another; the model and auto-approve stay yours to change.'
+
+/**
  * The chat pane: a virtualized transcript, a composer, and the agent's consent gate.
  *
  * The agent run is a sequence of streamed chunks that each either extend the assistant's prose or
@@ -358,6 +384,46 @@ export function ChatPanel() {
   const atHome = sessions.atHome
   /** The pause of the conversation on screen, which is the only one the pane may act on. */
   const pending = (sessions.openId ? sessions.pauses[sessions.openId] : undefined) ?? null
+
+  /**
+   * The Buddy the header names: the conversation's own once one is open, the pending choice while home.
+   *
+   * Two sources rather than one, because they are two different facts and the lock between them is the
+   * difference: before a send there is a choice that can still change, and after it there is a record
+   * that cannot. Null is the SamAi default in both places, which is a state of the control rather than a
+   * Buddy that has no label.
+   */
+  const buddyId = atHome ? sessions.pendingBuddyId : sessions.buddyId
+  /**
+   * The user's own Buddies, and the ones switched off.
+   *
+   * Defaulted while the mirror is quiet: the store's state arrives a tick after this pane mounts, and
+   * until it does the list is the app's own three with nothing switched off — which is what a user who has
+   * never made a Buddy sees anyway, rather than a blank control or a crash.
+   */
+  const customBuddies = useConveyorStore(buddiesStore, (s) => s.custom) ?? []
+  const disabledBuddies = useConveyorStore(buddiesStore, (s) => s.disabledIds) ?? []
+  /**
+   * The rows the Select offers: the SamAi default first, then every Buddy that is switched on.
+   *
+   * Built-ins before custom records, in the order `listBuddies` returns them, because that rule is what
+   * says what a list's order is and a picker that sorted again would be a second answer to it. A
+   * switched-off Buddy is absent rather than disabled here: this is the one list that offers a choice and
+   * not a switch, so a row nobody may pick would be a row that does nothing.
+   */
+  const buddyRows = listBuddies({ custom: customBuddies, disabledIds: disabledBuddies }).filter((row) => row.enabled)
+  /** What the Select draws, and what the starters below are read from: which of the three labels an id gets. */
+  const buddyName = buddyLabel(buddyId, customBuddies)
+  /**
+   * What home offers as a way in: the chosen Buddy's own starters when it declares any, and the app's
+   * three when it is SamAi or a Buddy that offers none.
+   *
+   * Resolved rather than read off a record the header already found, because the two questions differ: a
+   * Buddy deleted since is a conversation that runs under the role it was created with, and a home choice
+   * that resolves to nothing offers exactly what the default offers.
+   */
+  const chosenBuddy = resolveBuddy(buddyId, customBuddies)
+  const starters = chosenBuddy !== null && chosenBuddy.starters.length > 0 ? chosenBuddy.starters : HOME_STARTERS
 
   /**
    * Whether the controls that act on a message are available: the edit, and the regenerate.
@@ -1501,7 +1567,61 @@ export function ChatPanel() {
 
   return (
     <div ref={paneRef} className="flex h-full flex-col bg-background">
-      <PaneHeader icon={MessageSquare} title="Chat">
+      {/*
+        The Buddy the conversation runs as, immediately after the title it belongs to: the same primitive
+        as the model picker at the other end of this row, the same keyboard and pointer behavior, and the
+        same discipline — a value that truncates rather than pushing the row wider, and a width bound so a
+        long name cannot displace the model list.
+
+        Enabled only while the pane is on the home screen. A conversation's Buddy is fixed the moment it
+        starts, because the role and the server subset were snapshotted onto its record then, so a switch
+        inside one would leave the turns already run and the turns still to come answering as two
+        identities. It is drawn rather than hidden, though: what a conversation runs as is the first thing
+        a reader wants to know, and the caption says why the control will not move rather than leaving a
+        refusal to be read as a fault.
+      */}
+      <PaneHeader
+        icon={MessageSquare}
+        title="Chat"
+        afterTitle={
+          <Select
+            value={buddyId ?? SAMAI_BUDDY_ID}
+            // SamAi is stored as the absent id rather than as itself: the default is what a conversation
+            // that names nobody runs as, so picking it clears the choice instead of recording one.
+            onValueChange={(picked) => sessions.setPendingBuddyId(picked === SAMAI_BUDDY_ID ? null : picked)}
+            disabled={!atHome}
+          >
+            <SelectTrigger
+              aria-label="Buddy"
+              // The value while home, and the reason the value cannot change once a conversation exists.
+              // A native title rather than the tooltip the shield beside it uses, because a disabled
+              // control is not a pointer target: a tooltip would mount on a hover it never receives.
+              title={atHome ? buddyName : BUDDY_LOCK_CAPTION}
+              className="max-w-40 min-w-0 shrink-6"
+            >
+              {/* Drawn rather than only explained: a control that refuses without saying why reads as
+                  broken, and the caption carried above says the rest. */}
+              {!atHome && <Lock aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />}
+              {/*
+                The label is drawn here rather than through `SelectValue`, and this is the one place the
+                control differs from the model picker beside it: a conversation whose Buddy was deleted has
+                no item to be read from, and the label rule already answers for that id — which is what lets
+                a conversation outlive the Buddy it was created as.
+              */}
+              <span className="min-w-0 flex-1 truncate">{buddyName}</span>
+            </SelectTrigger>
+            <SelectContent>
+              {/* The default first, always: it is what a conversation that names nobody runs as. */}
+              <SelectItem value={SAMAI_BUDDY_ID}>{SAMAI_BUDDY_NAME}</SelectItem>
+              {buddyRows.map((row) => (
+                <SelectItem key={row.id} value={row.id}>
+                  {row.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      >
         {/*
           Auto-approve sits beside the model picker because it is the other thing that decides what a
           send does: whether the agent acts on its own or asks first.
@@ -1966,7 +2086,7 @@ export function ChatPanel() {
         conversations already there, and three ways to start one. Nothing above it is repeated here — the
         headline said what the screen is for, and these are the things to do about it.
       */}
-      {atHome && <HomePanel onStarter={prefillComposer} />}
+      {atHome && <HomePanel onStarter={prefillComposer} starters={starters} />}
     </div>
   )
 }

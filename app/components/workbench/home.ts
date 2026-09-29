@@ -21,7 +21,13 @@ export const HOME_HEADLINE = 'What are we working on?'
  */
 export const HOME_SUBLINE = 'Describe what you want to change, ask about a file, or pick up where you left off.'
 
-/** The prompts offered as a way in. Static, and deliberately not derived from anything. */
+/**
+ * The prompts offered as a way in when no Buddy offers its own.
+ *
+ * Static, and the fallback rather than the whole offer: a Buddy carries starters of its own, and one that
+ * declares any is what home shows — the same rule the record is read by. These three are what is left when
+ * the choice is the SamAi default, or a Buddy that offers none.
+ */
 export const HOME_STARTERS: readonly string[] = [
   'Explain how this project is put together.',
   'What are the riskiest parts of this codebase?',

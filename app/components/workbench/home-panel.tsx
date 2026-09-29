@@ -5,7 +5,7 @@ import { workspaceStore } from '@/conveyor/stores/workspace'
 import { projectChips, sameRoot, type ProjectChip } from '@/conveyor/protocol/recent-roots'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
-import { HOME_HEADLINE, HOME_OPEN_FOLDER, HOME_RECENT_PROJECTS, HOME_STARTERS, HOME_SUBLINE } from './home'
+import { HOME_HEADLINE, HOME_OPEN_FOLDER, HOME_RECENT_PROJECTS, HOME_SUBLINE } from './home'
 import { rootErrorMessage } from './recent-roots'
 import { useRootSwitch } from './use-root-switch'
 import { useChatSessionsContext } from './chat-sessions-context'
@@ -51,8 +51,19 @@ export function HomeHero() {
  *
  * One width, the composer's, so the row and the chips read as belonging to the box above them rather
  * than floating in the column.
+ *
+ * The prompts are handed in rather than read here, because which ones are offered is not this screen's
+ * decision: a chosen Buddy offers its own, the app offers its three when nobody did, and the rule that
+ * picks between them lives with the choice. This draws the row it is given.
  */
-export function HomePanel({ onStarter }: { onStarter: (prompt: string) => void }) {
+export function HomePanel({
+  onStarter,
+  starters,
+}: {
+  onStarter: (prompt: string) => void
+  /** The prompts to offer, in the order to offer them. Never empty: a starterless Buddy keeps the three. */
+  starters: readonly string[]
+}) {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 pt-3 pb-6">
       <RecentProjects />
@@ -63,7 +74,7 @@ export function HomePanel({ onStarter }: { onStarter: (prompt: string) => void }
         screen whose whole point is to get out of the way. Each one fills the composer; none sends.
       */}
       <div className="flex flex-wrap gap-2">
-        {HOME_STARTERS.map((prompt) => (
+        {starters.map((prompt) => (
           <Button key={prompt} variant="outline" size="sm" className="text-[12.5px]" onClick={() => onStarter(prompt)}>
             {prompt}
           </Button>
