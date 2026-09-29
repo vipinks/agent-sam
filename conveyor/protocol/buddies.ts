@@ -32,6 +32,23 @@ import { MAX_ACTIVE_SKILLS, MAX_SKILL_ID_CHARS } from './skills'
  */
 export const SAMAI_BUDDY_ID = 'samai'
 
+/**
+ * What the default is called wherever a name is drawn.
+ *
+ * Named beside the id above for the same reason: a conversation that named nobody still has to be *called*
+ * something on a row, and a label spelled at each surface is a label that drifts.
+ */
+export const SAMAI_BUDDY_NAME = 'SamAi'
+
+/**
+ * What a Buddy is called when the record behind it is gone.
+ *
+ * A conversation keeps the id it was created as, and a custom record can be deleted a month later, so an
+ * id that no longer resolves is an ordinary state rather than a failure. A name rather than the id, because
+ * the id is not what the user called it: a raw slug on a row reads as a bug beside the labels next to it.
+ */
+export const REMOVED_BUDDY_LABEL = 'Removed Buddy'
+
 /** How long a Buddy id may be. The same budget a skill id and a server id get: it is a key, not prose. */
 export const MAX_BUDDY_ID_CHARS = 64
 
@@ -204,6 +221,98 @@ export function resolveBuddy(id: string | null | undefined, custom: readonly Bud
   if (builtin) return builtin
 
   return custom.find((buddy) => buddy.id === id) ?? null
+}
+
+/**
+ * One row of the Buddies list: what a settings row and a picker entry are drawn from, and nothing else.
+ *
+ * The record itself is deliberately absent. A row is a label, a mark, and two facts — which kind of record
+ * it is, and whether it is switched on — while a record carries a role prompt and a server list that no
+ * list draws and that nothing outside the record's own editor has any business holding.
+ */
+export interface BuddyListRow {
+  id: string
+  name: string
+  glyph: string
+  /** Whether the row is one of the app's own three. A built-in row is editable only in being switched. */
+  builtin: boolean
+  /**
+   * Whether the Buddy is offered at all.
+   *
+   * The switches are a set of *ids*, so this is that set read as a flag: a picker offers the rows that are
+   * enabled, while the settings list draws every row and shows this as the switch's position — which is
+   * what lets a Buddy be switched back on after it was switched off.
+   */
+  enabled: boolean
+}
+
+/**
+ * The slice of store state this rule reads.
+ *
+ * Structural rather than imported: the store of custom records imports *this* module, so a rule that named
+ * the store's own state type would close a cycle, and a caller that holds the same two fields — a store
+ * mirror, or a suite — has everything the rule needs.
+ */
+export interface BuddyListState {
+  /** The user's own records, in the order they were created. */
+  custom: readonly BuddyRecord[]
+  /** The ids switched off, whether they name a built-in or a custom record. */
+  disabledIds: readonly string[]
+}
+
+/** One record as a row, with the switch already applied. */
+function listRowFor(buddy: BuddyRecord, switchedOff: ReadonlySet<string>): BuddyListRow {
+  return {
+    id: buddy.id,
+    name: buddy.name,
+    glyph: buddy.glyph,
+    builtin: buddy.builtin,
+    enabled: !switchedOff.has(buddy.id),
+  }
+}
+
+/**
+ * The rows a Buddy list shows, in the order it shows them.
+ *
+ * The three built-ins first, in this module's own fixed order, and then the custom records in the order
+ * they were created — never re-sorted by name or id, because "where did the one I just made go" is the row
+ * a user looks for. A custom record cannot displace a built-in: the two are separate lists concatenated,
+ * not one list sorted, so an id claimed twice still draws the app's record first.
+ *
+ * The default is not a row at all, and that is the design rather than an omission: SamAi is what a
+ * conversation that named nobody runs as, so it is the app's own behavior rather than one Buddy among
+ * several to be listed, edited or switched off.
+ *
+ * Switched-off records are *included*, carrying `enabled: false`. A list that hid them could never offer the
+ * switch that turns one back on, which is why the filtering a picker does belongs to the picker: it reads
+ * `enabled` off these rows rather than keeping a second copy of what is switched off.
+ */
+export function listBuddies(state: BuddyListState): BuddyListRow[] {
+  const switchedOff = new Set(state.disabledIds)
+
+  return [
+    ...BUILTIN_BUDDIES.map((buddy) => listRowFor(buddy, switchedOff)),
+    ...state.custom.map((buddy) => listRowFor(buddy, switchedOff)),
+  ]
+}
+
+/**
+ * What a Buddy is called on a surface that has only the id.
+ *
+ * Three answers, and the distinction between the last two is the whole reason this is a rule rather than a
+ * lookup: an absent id — none named, the default itself, or a field that is nonsense — is SamAi, because
+ * that is what such a conversation actually runs as; an id that resolves is the record's own name; and an
+ * id that resolves to nothing is a Buddy that was *removed*, which is not the default and must not be
+ * shown as one, because the conversation still carries the role that Buddy seeded it with.
+ *
+ * The custom list is passed in rather than imported, exactly as `resolveBuddy` takes it: this module is
+ * shared with the renderer, and a label rule that reached for the store itself could not be tested without
+ * one.
+ */
+export function buddyLabel(buddyId: string | null | undefined, custom: readonly BuddyRecord[] = []): string {
+  if (typeof buddyId !== 'string' || buddyId === '' || buddyId === SAMAI_BUDDY_ID) return SAMAI_BUDDY_NAME
+
+  return resolveBuddy(buddyId, custom)?.name ?? REMOVED_BUDDY_LABEL
 }
 
 /**
