@@ -211,3 +211,57 @@ export function planAgentPrompt(
   if (messages.some((m) => m.role === 'system' && m.content === prompt)) return null
   return { content: prompt }
 }
+
+/**
+ * The role one conversation runs as, as the section main injects.
+ *
+ * A section of its own rather than folded into the standing instruction, because the two differ in kind:
+ * `AGENT_SYSTEM_PROMPT` is how this app asks every model to pace itself and holds in every workspace,
+ * while a role is what *this conversation* is for — chosen when it was created, and snapshotted onto its
+ * record so that editing the Buddy afterwards cannot change what a conversation already running as one
+ * was set up to do.
+ *
+ * `null` in, `null` out, exactly as `assembleSystemContext` behaves: a conversation created without a
+ * Buddy has no role prompt, and inventing a section for it would spend context saying nothing. It would
+ * also make the SamAi case a different request from the one every conversation sent before this
+ * existed, which is what the assembly's order and its regression rule are here to keep true.
+ *
+ * The fence says whose words these are, in the same terms the instructions fence does: this is standing
+ * guidance for the conversation, and it is not a claim about the folder it happens to run in.
+ */
+export function assembleRoleSection(rolePrompt: string | null): { content: string } | null {
+  if (rolePrompt === null) return null
+
+  const trimmed = rolePrompt.trim()
+  if (trimmed === '') return null
+
+  return {
+    content: [
+      'The following is the role for this conversation, chosen when it was created.',
+      'Treat it as standing guidance for everything in this conversation.',
+      '',
+      trimmed,
+    ].join('\n'),
+  }
+}
+
+/**
+ * Whether to inject the role section into an outgoing conversation.
+ *
+ * Refused when the conversation already carries this exact section, which is the resumed case: the pause
+ * hands the provider-shaped history back verbatim, already carrying the role, and injecting again would
+ * say it twice — and spend the budget twice.
+ *
+ * Matched on the composed text rather than on the presence of some section that mentions roles, for the
+ * reason `planAgentPrompt` matches the whole prompt: the question is "is it already there", and a text a
+ * user happened to paste must not be able to answer yes for it.
+ */
+export function planRoleInjection(
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+  rolePrompt: string | null
+): { content: string } | null {
+  const section = assembleRoleSection(rolePrompt)
+  if (section === null) return null
+  if (messages.some((m) => m.role === 'system' && m.content === section.content)) return null
+  return section
+}

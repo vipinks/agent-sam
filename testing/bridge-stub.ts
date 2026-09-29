@@ -5,6 +5,7 @@ import { workspaceStore } from '@/conveyor/stores/workspace'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { terminalPreferencesStore } from '@/conveyor/stores/terminal-preferences'
 import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
+import { buddiesStore } from '@/conveyor/stores/buddies'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -288,6 +289,10 @@ const initialStates = new Map<string, unknown>([
   // when the percent changes: without a genuine initial state here the mirror would cache `undefined`
   // for this store, and the section would throw on the selector that reads a percent out of it.
   ['conveyor:store:context-preferences', structuredClone(contextPreferencesStore.initialState)],
+  // The user's own Buddies, which the session hook reads on every render to resolve one at creation:
+  // without a genuine initial state here the mirror would cache `undefined` for this store and the read
+  // of the custom list would throw before a single conversation could be created.
+  ['conveyor:store:buddies', structuredClone(buddiesStore.initialState)],
 ])
 
 /**

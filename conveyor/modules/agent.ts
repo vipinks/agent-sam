@@ -39,6 +39,7 @@ import {
   agentSystemPrompt,
   assembleSystemContext,
   planAgentPrompt,
+  planRoleInjection,
   planSystemInjection,
 } from '../protocol/context'
 import { snapshotRequest, type ContextSnapshot } from '../protocol/context-window'
@@ -67,6 +68,8 @@ import {
 import { readMentions } from './mentions'
 import { readDisabledSkills, resolveActiveSkills, skillTierPathsFor } from './skills'
 import { assembleSkillsSection, MAX_ACTIVE_SKILLS, planSkillsInjection, planTurnSkillIds } from '../protocol/skills'
+import { MAX_BUDDY_MCP_IDS, MAX_BUDDY_ROLE_PROMPT_CHARS } from '../protocol/buddies'
+import { MAX_MCP_SERVER_ID_CHARS } from '../protocol/mcp-ids'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -1043,6 +1046,28 @@ interface LoopOptions {
    * run — which is the same turn continuing, with the section already in the history it handed back.
    */
   activeSkillIds?: readonly string[]
+  /**
+   * The role this conversation was created as, as its record snapshotted it.
+   *
+   * Handed over the same way the skills above are, and for the same reason: what the conversation runs
+   * as belongs to the conversation rather than to the turn, so the caller that holds the record is the
+   * one that knows it. Main injects it as a section of its own, between the platform's instruction and
+   * the project's — see `planRoleInjection` for why that is the order.
+   *
+   * The *snapshot* rather than the Buddy's id, deliberately: editing the record must not rewrite what a
+   * conversation already running as it was set up to do, and a run that resolved the id again would do
+   * exactly that. Absent for every conversation that named no Buddy, which is the SamAi case.
+   */
+  rolePrompt?: string
+  /**
+   * The MCP servers this conversation was created restricted to, by id.
+   *
+   * A ceiling and never a grant: `createMcpToolBridge` intersects it with the servers that are actually
+   * running — which is what being trusted and enabled means here — so a snapshot naming a server the
+   * user never gave this app cannot bring it in. Handed to the bridge rather than applied here, because
+   * the bridge is the one place that knows which servers are running.
+   */
+  mcpSubset?: readonly string[]
   steps?: number
   pending?: PendingDecision
   /**
@@ -1128,7 +1153,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
    * to the server that offered it, so the user is told that server is not running rather than that the
    * tool never existed.
    */
-  const mcp = opts.mcp ?? createMcpToolBridge({ workspaceRoot: opts.workspaceRoot })
+  const mcp = opts.mcp ?? createMcpToolBridge({ workspaceRoot: opts.workspaceRoot, mcpSubset: opts.mcpSubset })
   const mcpNames = createMcpToolNames()
 
   /**
@@ -1201,6 +1226,13 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // answer for the second.
   const agentPrompt = planAgentPrompt(history, opts.platform ?? process.platform)
 
+  // The role this conversation was created as, snapshotted on its record at that moment and handed to
+  // every turn since. Read from the same untouched history as the three above, for the same reason: all
+  // four rules answer "is this already in the conversation", and the first unshift would answer for the
+  // rest. A conversation created without a Buddy has none, and this plans nothing — which is what keeps
+  // the SamAi case the request it has always been.
+  const roleInjection = planRoleInjection(history, opts.rolePrompt ?? null)
+
   // The skills this session has activated, resolved here, at the turn start, from the same folder the
   // run is in and the user's own skills folder beside it.
   //
@@ -1250,6 +1282,12 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     const file = instructionsFileName(instructions?.path ?? null)
     if (file) yield { type: 'project_instructions', file, truncated: instructions?.truncated ?? false }
   }
+
+  // And ahead of the project's, the role this conversation runs as: standing context for the
+  // conversation rather than for the folder, so it reads below the instruction that holds everywhere and
+  // above the folder's own word — which is the more specific of the two and belongs closest to the
+  // turns it governs.
+  if (roleInjection) history.unshift({ role: 'system', content: roleInjection.content })
 
   // And ahead of it, the instruction that holds in every workspace: how to pace itself between tool
   // calls. Unshifted after the project's so it reads first, which is where standing context for the
@@ -1745,6 +1783,24 @@ export const agentModule = defineModule({
        */
       activeSkillIds: z.array(z.string().min(1)).max(MAX_ACTIVE_SKILLS).optional(),
       /**
+       * The role this conversation was created as, snapshotted on its record.
+       *
+       * Bounded at this boundary as well as in the record it was snapshotted from, because the role
+       * becomes standing context in every turn of the conversation: a payload claiming a role past the
+       * cap is refused here rather than sent to a provider on every request. Absent for a conversation
+       * that named no Buddy — the SamAi default — and injecting nothing is then the correct behavior.
+       */
+      rolePrompt: z.string().min(1).max(MAX_BUDDY_ROLE_PROMPT_CHARS).optional(),
+      /**
+       * The MCP servers this conversation was created restricted to, by id.
+       *
+       * Bounded for the same reason and with the same ids rule the tool names use, but with no
+       * validation of *trust* here: what a subset may actually reach is decided where the running
+       * servers are known, in the bridge. This is the ceiling, and the intersection with trust is what
+       * makes it one.
+       */
+      mcpSubset: z.array(z.string().min(1).max(MAX_MCP_SERVER_ID_CHARS)).max(MAX_BUDDY_MCP_IDS).optional(),
+      /**
        * The descriptor of a provider the user added, when this run's provider is one.
        *
        * `unknown` on purpose: the loop is handed whatever a caller has, and what makes a descriptor
@@ -1772,6 +1828,11 @@ export const agentModule = defineModule({
         // start. A resume does not carry them — it is the turn that paused continuing, and its history
         // already has the section this would rebuild.
         activeSkillIds: input.activeSkillIds,
+        // Straight through as well: what the conversation was created as. The role is a section of the
+        // standing context, and the subset narrows the tool list to the servers this conversation may
+        // use *and* that are running — the bridge is where those two sets meet.
+        rolePrompt: input.rolePrompt,
+        mcpSubset: input.mcpSubset,
         signal,
       })
     }

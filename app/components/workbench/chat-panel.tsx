@@ -1096,6 +1096,12 @@ export function ChatPanel() {
           // changes the next turn, and this is the next turn.
           activeSkillIds:
             sessionsRef.current.activeSkillIds.length > 0 ? [...sessionsRef.current.activeSkillIds] : undefined,
+          // And what this conversation runs as, read off the record through the ref for the same reason:
+          // a conversation created as a Buddy runs as it for every turn, not only its first. Both are
+          // left out rather than sent as null when there is nothing to say — a conversation created
+          // without a Buddy sends the request it always sent, key for key.
+          rolePrompt: sessionsRef.current.buddyRolePrompt ?? undefined,
+          mcpSubset: sessionsRef.current.buddyMcpSubset ?? undefined,
         }),
         assistantTurn.id,
         sessionId

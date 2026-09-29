@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorActions, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
+import { buddiesStore } from '@/conveyor/stores/buddies'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import {
   rehydrateTranscript,
@@ -18,6 +19,7 @@ import { planRootStamp, planSelectRoot, planSessionSwitch, selectNotice } from '
 import { useWorkbenchStore } from './store'
 import type { PlanStep } from '@/conveyor/protocol/plan'
 import { applySkillToggle } from '@/conveyor/protocol/skills'
+import { buddySessionSeed, readBuddySession, resolveBuddy } from '@/conveyor/protocol/buddies'
 
 /**
  * The coordination between the session list, the transcript on screen, and the file it is saved to.
@@ -204,6 +206,24 @@ export interface ChatSessions {
    */
   activeSkillIds: string[]
   /**
+   * The role the conversation on screen was created as, snapshotted on its record then, or null.
+   *
+   * Read off the record rather than resolved again from the Buddy's id, because the snapshot is what the
+   * conversation runs as: a Buddy edited after the fact must not change what a conversation already
+   * running as it was set up to do. Null on the home screen, where there is no conversation to run as
+   * anything, and null for every conversation created before Buddies existed — which is the case that
+   * must keep sending exactly what it always sent.
+   */
+  buddyRolePrompt: string | null
+  /**
+   * The MCP servers the conversation on screen was created limited to, or null for no limit.
+   *
+   * Handed to the send as it stands, and intersected with the running servers there: this is what the
+   * conversation was restricted to, not what it may reach, and the difference is the whole safety
+   * property of the feature. Null is the SamAi case and means the full trusted set, exactly as before.
+   */
+  buddyMcpSubset: string[] | null
+  /**
    * Turn one skill on or off for the conversation in front of the user.
    *
    * A toggle rather than a setter, because the control is a list of switches and the number that
@@ -294,11 +314,11 @@ export interface ChatSessions {
    * has not been made means.
    */
   goHome: () => void
-  createSession: () => string
+  createSession: (buddyId?: string | null) => string
   openSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
   /** Create-on-first-message. Returns the id the message belongs to. */
-  ensureSession: (firstMessage: string) => string
+  ensureSession: (firstMessage: string, buddyId?: string | null) => string
   /** Save now if there is anything to save. Used at turn boundaries and on blur. */
   saveNow: () => Promise<void>
   /** Queue the debounced post-turn save. */
@@ -500,8 +520,20 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const pendingSkillsRef = useRef<string[]>(pendingSkillIds)
   pendingSkillsRef.current = pendingSkillIds
 
+  // The user's own Buddies, mirrored from main, and read at the moment a conversation is created rather
+  // than at the moment this callback was: the record a Buddy is resolved from is the one main holds now,
+  // which is why the ref is here and why the create below does not depend on the list's identity.
+  const customBuddies = useConveyorStore(buddiesStore).custom
+  const customBuddiesRef = useRef(customBuddies)
+  customBuddiesRef.current = customBuddies
+
   const sessionRecord = sessions.find((s) => s.id === activeSessionId)
   const activeSkillIds = atHome ? pendingSkillIds : (sessionRecord?.activeSkillIds ?? [])
+  // What this conversation was created as, read off the record in front of the user — the same read the
+  // skills above are, and stripped rather than trusted, because these two keys reach a provider as
+  // standing context and a malformed one must inject nothing rather than inject something. At home there
+  // is no conversation, so there is nothing to run as and both are null.
+  const buddySession = readBuddySession(atHome ? null : sessionRecord)
   // Read by the toggle and by the send, both of which run outside a render: the list they must agree
   // with is the one on screen, not the one from whenever the callback was created.
   const activeSkillsRef = useRef<string[]>(activeSkillIds)
@@ -613,48 +645,72 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     [touchSession]
   )
 
-  const createSession = useCallback(() => {
-    // `crypto.randomUUID` in the renderer is fine for an id: it only has to be unique and safe as a
-    // filename, and the module validates the shape again before it touches the disk.
-    const id = crypto.randomUUID()
-    // The folder the conversation is created in, decided by the rule a turn start uses rather than by a
-    // second one: a session's project is where its work happened, and a conversation started while a
-    // folder is open has happened in that folder. With nothing open there is no project to record —
-    // which is the same absent field a conversation with no turns has, and the reason a brand-new row
-    // is not silently pinned to the last folder anyone opened.
-    const lastRoot = planRootStamp({ sessionLastRoot: undefined, windowRoot: rootPathRef.current })
-    // The skills the user turned on while there was no conversation to hold them. Written onto the row
-    // rather than kept beside it: from here on the record is the only place the choice lives, which is
-    // what makes it the conversation's choice and not the window's. An empty pending list adds no key
-    // at all, so a conversation started without skills says nothing rather than saying "none".
-    const chosenSkills = pendingSkillsRef.current
-    addSession({
-      id,
-      title: UNTITLED,
-      providerId,
-      model,
-      ...(lastRoot === null ? {} : { lastRoot }),
-      ...(chosenSkills.length > 0 ? { activeSkillIds: [...chosenSkills] } : {}),
-    })
-    setActive({ id })
-    // The startup restore is decided here as much as by the effect that reads the store's active id: a
-    // conversation created by this window is one this window is already showing, and the store naming
-    // it a moment later must not be read as "restore the one from last time" — reading it back from a
-    // file that does not exist yet would empty the transcript the first message is filling. That is
-    // the home screen's ordinary path: nothing is open, so nothing was restored, and the send that
-    // creates the conversation is the first thing that touches the store.
-    hydratedOnceRef.current = true
-    activeIdRef.current = id
-    savedRef.current = null
-    setError(null)
-    setNotice(null)
-    // A new session is hydrated by definition: it starts empty and that empty transcript belongs to
-    // it. Leaving this unset would let a click on the new row try to load a file that cannot exist.
-    hydratedIdRef.current = id
-    setOpenId(id)
-    setTranscript({ turns: [], interrupted: false })
-    return id
-  }, [addSession, model, providerId, setActive, setTranscript])
+  const createSession = useCallback(
+    (buddyId: string | null = null) => {
+      // `crypto.randomUUID` in the renderer is fine for an id: it only has to be unique and safe as a
+      // filename, and the module validates the shape again before it touches the disk.
+      const id = crypto.randomUUID()
+      // The folder the conversation is created in, decided by the rule a turn start uses rather than by a
+      // second one: a session's project is where its work happened, and a conversation started while a
+      // folder is open has happened in that folder. With nothing open there is no project to record —
+      // which is the same absent field a conversation with no turns has, and the reason a brand-new row
+      // is not silently pinned to the last folder anyone opened.
+      const lastRoot = planRootStamp({ sessionLastRoot: undefined, windowRoot: rootPathRef.current })
+      // The Buddy this conversation is created as, resolved once here and snapshotted onto the row. The
+      // resolution is against the store's records as well as the built-ins, because a user's own Buddy is
+      // as real as one the app ships. An id that resolves to nothing — the SamAi default, or an id whose
+      // record was deleted between the choice and the send — seeds nothing, which is the same conversation
+      // a send without a Buddy creates rather than an error on the way to one.
+      const buddy = resolveBuddy(buddyId, customBuddiesRef.current)
+      const seed = buddy === null ? null : buddySessionSeed(buddy)
+      // The skills the user turned on while there was no conversation to hold them. Written onto the row
+      // rather than kept beside it: from here on the record is the only place the choice lives, which is
+      // what makes it the conversation's choice and not the window's. An empty pending list adds no key
+      // at all, so a conversation started without skills says nothing rather than saying "none". A Buddy
+      // that declares skills starts the conversation on them — the chips the user set before there was a
+      // conversation are the fallback, not the other way round, because a Buddy is what was chosen.
+      const chosenSkills = seed?.activeSkillIds ?? pendingSkillsRef.current
+      addSession({
+        id,
+        title: UNTITLED,
+        // A Buddy that pins a provider and a model runs as it was meant to. Both travel together, so
+        // there is no case here of a pinned model on whichever provider the window happened to be on.
+        providerId: seed?.providerId ?? providerId,
+        model: seed?.model ?? model,
+        ...(lastRoot === null ? {} : { lastRoot }),
+        ...(chosenSkills.length > 0 ? { activeSkillIds: [...chosenSkills] } : {}),
+        // The snapshots, taken now and never rewritten: the role this conversation runs in, and the
+        // servers it may use. Written as separate keys only when the Buddy declares them, so a
+        // conversation created without one carries no key at all — which is what the SamAi default is.
+        ...(seed === null ? {} : { buddyId: seed.buddyId, rolePrompt: seed.rolePrompt }),
+        ...(seed?.mcpSubset === undefined ? {} : { mcpSubset: [...seed.mcpSubset] }),
+      })
+      setActive({ id })
+      // The startup restore is decided here as much as by the effect that reads the store's active id: a
+      // conversation created by this window is one this window is already showing, and the store naming
+      // it a moment later must not be read as "restore the one from last time" — reading it back from a
+      // file that does not exist yet would empty the transcript the first message is filling. That is
+      // the home screen's ordinary path: nothing is open, so nothing was restored, and the send that
+      // creates the conversation is the first thing that touches the store.
+      hydratedOnceRef.current = true
+      activeIdRef.current = id
+      savedRef.current = null
+      setError(null)
+      setNotice(null)
+      // A new session is hydrated by definition: it starts empty and that empty transcript belongs to
+      // it. Leaving this unset would let a click on the new row try to load a file that cannot exist.
+      hydratedIdRef.current = id
+      setOpenId(id)
+      setTranscript({ turns: [], interrupted: false })
+      // And the last thing a Buddy decides, after the empty transcript above has replaced whatever was
+      // there: a Buddy that runs without asking is a conversation that starts already answered, and the
+      // write has to come after the reset for that reason. Only ever written on — a Buddy declaring false
+      // is asking for the default, which is the absent key this transcript is already carrying.
+      if (seed?.autoApprove === true) setTranscript({ ...transcriptRef.current, autoApprove: true })
+      return id
+    },
+    [addSession, model, providerId, setActive, setTranscript]
+  )
 
   /**
    * Leave whatever is open and go home, creating nothing.
@@ -863,7 +919,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
    * session restored from a previous run has an id from the moment the app starts.
    */
   const ensureSession = useCallback(
-    (firstMessage: string) => {
+    (firstMessage: string, buddyId: string | null = null) => {
       const activeId = activeIdRef.current
       const activeTitle = sessionsRef.current.find((s) => s.id === activeId)?.title ?? null
       // Read before the create, which replaces the transcript a session is about to be built from.
@@ -882,7 +938,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         return activeId as string
       }
 
-      const id = createSession()
+      // The Buddy travels with the create and with nothing else: a conversation is created once, so the
+      // role and the snapshot are written once, and a message in a conversation that already exists runs
+      // as that conversation was created to run.
+      const id = createSession(buddyId)
       if (plan.title) touchSession({ id, title: plan.title })
       // And the choice the user made before there was a conversation to make it on: with the chip set,
       // the record has to answer that the conversation on screen is already running that way — the
@@ -934,6 +993,11 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     autoApprove,
     setAutoApprove,
     activeSkillIds,
+    // What this conversation runs as, for the send: the role its record was created with, and the servers
+    // it was created to be limited to. Null for a conversation that named no Buddy — which is every
+    // conversation that existed before Buddies, and which asks for exactly the request it always sent.
+    buddyRolePrompt: buddySession.rolePrompt,
+    buddyMcpSubset: buddySession.mcpSubset,
     toggleSkill,
     streaming,
     setStreaming,

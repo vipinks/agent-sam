@@ -178,6 +178,11 @@ function running(serverId: string, ...names: string[]): McpRunningTool[] {
   return names.map((name) => ({ serverId, tool: serverTool(name) }))
 }
 
+/** A second running server, for the cases where a narrowing has something to exclude. */
+function serverBeta(): McpRunningTool[] {
+  return running('beta', 'query')
+}
+
 interface FakeServers {
   /** What the registry reports as running. Empty is what a stopped server leaves behind. */
   tools: McpRunningTool[]
@@ -202,9 +207,12 @@ function fakeServers(
 }
 
 /** The bridge over one fake registry. Injected wholesale: no runtime, no disk, no Electron. */
-function bridgeOver(servers: FakeServers, workspaceRoot: string | null = null) {
+function bridgeOver(servers: FakeServers, workspaceRoot: string | null = null, mcpSubset?: readonly string[]) {
   return createMcpToolBridge({
     workspaceRoot,
+    // The conversation's snapshot, when it has one: the bridge is where the running set and the
+    // subset meet, so it is the thing a case about narrowing has to hand one to.
+    ...(mcpSubset ? { mcpSubset } : {}),
     listRunningTools: () => servers.tools,
     callTool: async (serverId, toolName, args) => {
       servers.calls.push({ serverId, toolName, args })
@@ -321,6 +329,70 @@ async function aStoppedServerContributesNothing() {
   )
 
   results.push('a stopped server contributes nothing to the tool list')
+}
+
+/**
+ * A conversation created as a Buddy advertises only the servers that Buddy named — and only those it
+ * named *of the ones already running*.
+ *
+ * The direction is the whole law: a subset is read against the trusted-and-enabled set rather than
+ * added to it, so a Buddy can narrow what a turn is offered and can never widen it. A server the user
+ * has not trusted, or has switched off, is not running — so being named by the Buddy does not bring it
+ * back, which is the failure this case exists to rule out.
+ *
+ * The narrow list is asserted on the request body, through the real loop: the tool list is rebuilt per
+ * round-trip from the registry, and what the model is offered is exactly what crosses there.
+ */
+async function aSubsetNarrowsTheToolListAndNothingElse() {
+  const both = [...ALPHA, ...serverBeta()]
+  const BETA_WIRE = 'mcp_beta_query'
+
+  // Two servers running, and no subset: exactly what a conversation that named no Buddy sends. This is
+  // the unchanged case the subset has to leave alone.
+  const wide = scriptedProvider([proseFrame()])
+  await collect(runAgentLoop(loopOptions({ mcp: bridgeOver(fakeServers({ tools: both })), provider: wide })))
+  const wideNames = toolNames(wide.log[0])
+  assert.deepEqual(wideNames, ['read_file', 'write_file', 'run_command', 'set_plan', ALPHA_WIRE, BETA_WIRE])
+
+  // With the snapshot, the servers it does not name are gone — not hidden behind a disabled tool, but
+  // absent from the request.
+  const narrow = scriptedProvider([proseFrame()])
+  await collect(
+    runAgentLoop(loopOptions({ mcp: bridgeOver(fakeServers({ tools: both }), null, ['alpha']), provider: narrow }))
+  )
+  const narrowNames = toolNames(narrow.log[0])
+  assert.deepEqual(
+    narrowNames,
+    ['read_file', 'write_file', 'run_command', 'set_plan', ALPHA_WIRE],
+    'only the named server is advertised, and the built-ins are untouched'
+  )
+  assert.equal(narrowNames.includes(BETA_WIRE), false, 'the server the conversation did not name is gone')
+
+  // A named server that is not running is simply not there, and naming more servers than are running
+  // cannot add one: the subset is an intersection, never a wish list.
+  const ghost = scriptedProvider([proseFrame()])
+  await collect(
+    runAgentLoop(
+      loopOptions({
+        mcp: bridgeOver(fakeServers({ tools: both }), null, ['alpha', 'ghost']),
+        provider: ghost,
+      })
+    )
+  )
+  const ghostNames = toolNames(ghost.log[0])
+  assert.deepEqual(ghostNames, narrowNames, 'a server nobody trusted is not enabled by being named')
+
+  const nothing = scriptedProvider([proseFrame()])
+  await collect(
+    runAgentLoop(loopOptions({ mcp: bridgeOver(fakeServers({ tools: both }), null, ['ghost']), provider: nothing }))
+  )
+  assert.deepEqual(
+    toolNames(nothing.log[0]),
+    ['read_file', 'write_file', 'run_command', 'set_plan'],
+    'and a conversation naming only untrusted servers is offered no MCP tool at all'
+  )
+
+  results.push('a subset narrows the tool list to the intersection, and an absent one leaves it unchanged')
 }
 
 // ---------------------------------------------------------------- the names
@@ -781,6 +853,7 @@ async function aCallIsRefusedByCodeNotByWording() {
 async function main() {
   await step('the tool list carries a running server’s tools', theToolListCarriesARunningServersTools)
   await step('a stopped server contributes nothing', aStoppedServerContributesNothing)
+  await step('a Buddy subset only narrows', aSubsetNarrowsTheToolListAndNothingElse)
   await step('sanitization is a bijection', sanitizationIsABijection)
   await step('a collision is suffixed', aCollisionIsSuffixed)
   await step('a preview is redacted and cut', thePreviewIsRedactedThenCut)

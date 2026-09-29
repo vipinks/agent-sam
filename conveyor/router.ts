@@ -28,6 +28,7 @@ import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
 import { terminalPreferencesStore } from './stores/terminal-preferences'
 import { contextPreferencesStore } from './stores/context-preferences'
+import { buddiesStore } from './stores/buddies'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -60,7 +61,14 @@ export const router = createRouter(
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
-    stores: [workspaceStore, providerConfigStore, chatSessionsStore, terminalPreferencesStore, contextPreferencesStore], // main holds the state; every window mirrors it live
+    stores: [
+      workspaceStore,
+      providerConfigStore,
+      chatSessionsStore,
+      terminalPreferencesStore,
+      contextPreferencesStore,
+      buddiesStore,
+    ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
 )

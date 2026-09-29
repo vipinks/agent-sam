@@ -17,6 +17,8 @@ import { applyAgentChunk, startAssistantTurn, type ToolStep } from '../../app/co
 import {
   AGENT_SYSTEM_PROMPT,
   agentSystemPrompt,
+  assembleRoleSection,
+  assembleSystemContext,
   PLAN_DISCIPLINE_NOTE,
   POWERSHELL_SHELL_NOTE,
 } from '../../conveyor/protocol/context'
@@ -1215,6 +1217,130 @@ async function windowsIsToldItsShell() {
   }
 }
 
+// ---------------------------------------------------------------- the role a conversation runs as
+
+/**
+ * A conversation created as a Buddy sends that Buddy's role as a section of its own, in the one place
+ * it belongs: after the instruction that holds in every workspace, and before the project's own.
+ *
+ * The order is the whole claim. The role is standing context for the conversation rather than for the
+ * folder, so it sits below the platform's line; the project's instructions are the folder's own word
+ * and are the more specific of the two, so they sit closest to the conversation they govern — which is
+ * the same reason they already follow the base prompt.
+ *
+ * Asserted on the request body, because that is the only place the answer exists: the standing context
+ * is deliberately kept out of the transcript, so nothing on the UI side could be inspected for this.
+ */
+async function theRoleSectionJoinsAfterTheBasePrompt() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    writeFileSync(join(root, 'AGENTS.md'), '# House rules\nAlways run the tests.', 'utf8')
+
+    const log: unknown[] = []
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'ship it' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        rolePrompt: 'You are the release captain. Cut the smallest release that is honest.',
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    const sent = systemMessages(log)
+    assert.equal(sent.length, 3, 'the role is a section of its own rather than folded into another')
+    assert.equal(sent[0], HOST_AGENT_PROMPT, "the agent's own instruction still leads")
+    assert.equal(
+      sent[1],
+      assembleRoleSection('You are the release captain. Cut the smallest release that is honest.')?.content,
+      'the role follows it, composing the section the pure rule writes'
+    )
+    assert.ok(/role/i.test(sent[1]), 'and says which section it is')
+    assert.ok(/project instructions/i.test(sent[2]), "with the project's own instructions after it")
+
+    // A resumed run re-enters with the history the pause handed back, which already carries the
+    // section: the injection is refused on that fact, so the role is not sent a second time.
+    const resumed: unknown[] = []
+    const calls = [
+      { id: 'c1', type: 'function' as const, function: { name: 'read_file', arguments: '{"path":"a.txt"}' } },
+    ]
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [
+          { role: 'system', content: HOST_AGENT_PROMPT },
+          { role: 'system', content: assembleRoleSection('You are the release captain.')?.content ?? '' },
+          { role: 'system', content: assembleSystemContext('# House rules')?.content ?? '' },
+          { role: 'user', content: 'go' },
+          { role: 'assistant', content: '', tool_calls: calls },
+        ],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        steps: 1,
+        pending: { calls, denied: false },
+        rolePrompt: 'You are the release captain.',
+        fetchImpl: oneRoundFetch(resumed) as never,
+      })
+    )
+
+    const systems = systemMessages(resumed)
+    assert.equal(
+      systems.filter((text) => text.includes('You are the release captain')).length,
+      1,
+      'a resumed run does not inject the role a second time'
+    )
+    results.push('the role section is injected after the base prompt and before the project instructions')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * A conversation that named no Buddy sends exactly what it sent before Buddies existed.
+ *
+ * Byte-for-byte rather than "still contains": the SamAi default is the case every existing
+ * conversation is in, so it is the one a change to this assembly could quietly alter. The file text is
+ * passed through the same pure rule the loop uses, so the comparison is against the composed message
+ * rather than against a copy of its fence written out here.
+ */
+async function aConversationWithNoRoleIsUnchanged() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    const instructions = '# House rules\nAlways run the tests.'
+    writeFileSync(join(root, 'AGENTS.md'), instructions, 'utf8')
+
+    const log: unknown[] = []
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    assert.deepEqual(
+      systemMessages(log),
+      [HOST_AGENT_PROMPT, assembleSystemContext(instructions)?.content],
+      'no role means the standing context is what it always was, in the same order'
+    )
+    results.push('a conversation with no role is byte-identical to the assembly before Buddies')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 /** The system messages of the first request in a log, in order. */
 function systemMessages(log: unknown[]): string[] {
   const body = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body
@@ -1442,6 +1568,8 @@ async function main() {
   await step('no instructions, no system message', noInstructionsMeansNoSystemMessage)
   await step('resume does not re-inject', aResumeDoesNotInjectTheInstructionsTwice)
   await step('win32 is told its shell', windowsIsToldItsShell)
+  await step('the role section joins after the base prompt', theRoleSectionJoinsAfterTheBasePrompt)
+  await step('no role, unchanged assembly', aConversationWithNoRoleIsUnchanged)
   await step('consent rules', approvalRules)
   await step('ReAct loop with a mocked provider', reactLoop)
   await step('write_file tool', writeThenRead)

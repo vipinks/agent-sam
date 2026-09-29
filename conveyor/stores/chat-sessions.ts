@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { MAX_ACTIVE_SKILLS, MAX_SKILL_ID_CHARS } from '../protocol/skills'
+import { MAX_BUDDY_ID_CHARS, MAX_BUDDY_MCP_IDS, MAX_BUDDY_ROLE_PROMPT_CHARS } from '../protocol/buddies'
+import { MAX_MCP_SERVER_ID_CHARS } from '../protocol/mcp-ids'
 import { contextSnapshotSchema, type ContextSnapshot } from '../protocol/context-window'
 import { accumulate, type SessionUsage } from '../protocol/session-usage'
 
@@ -53,6 +55,37 @@ export interface ChatSession {
    * uses them, so a session never carries a stale copy of a skill someone has since edited.
    */
   activeSkillIds?: string[]
+  /**
+   * The Buddy this conversation was created as, by id, or absent for the SamAi default.
+   *
+   * Additive and optional like `lastRoot` and the skills above: an entry written before Buddies existed
+   * simply has no key. And the *absence* is the default rather than a missing record — SamAi is what the
+   * app is when nobody said otherwise, so a conversation that named no Buddy stores nothing, exactly the
+   * way it stored nothing before there was anything to name.
+   *
+   * An id, not the record. What a Buddy is — its name, its mark, the role it speaks in — is the store's
+   * answer and the protocol's, read fresh by whoever shows or resolves it; the session keeps only the id
+   * it was created under, so a record edited afterwards cannot rewrite what this conversation holds.
+   */
+  buddyId?: string
+  /**
+   * The role this conversation was created with, snapshotted at creation.
+   *
+   * The snapshot rather than a lookup, and that is the whole point of storing it: a Buddy is a way of
+   * working, so what this conversation runs as must not change under it because the record was edited a
+   * month later. It reaches every turn of this conversation as a section of its own, ahead of the
+   * project's own instructions — which is also why it is bounded, and why an absent key injects nothing.
+   */
+  rolePrompt?: string
+  /**
+   * The MCP servers this conversation was created restricted to, snapshotted at creation.
+   *
+   * A restriction and never a grant: what the turn may actually use is this list *intersected with* the
+   * servers the user has trusted and left enabled, so a record naming a server nobody trusted gets no
+   * access to it. Absent means the Buddy limited nothing, which is the same request the SamAi default
+   * sends — the full trusted set.
+   */
+  mcpSubset?: string[]
   /**
    * What this conversation has spent, as its providers reported it.
    *
@@ -124,6 +157,18 @@ function sortByRecency(sessions: ChatSession[]): ChatSession[] {
  */
 const activeSkillIdsSchema = z.array(z.string().min(1).max(MAX_SKILL_ID_CHARS)).max(MAX_ACTIVE_SKILLS)
 
+/**
+ * The three keys a conversation may carry about the Buddy it was created as.
+ *
+ * Bounded here as well as in the Buddy record they are snapshotted from, because this is the boundary
+ * the renderer's payload actually crosses: the role reaches every turn of the conversation, so a
+ * payload claiming a role past the cap is refused rather than stored and then sent. The ids carry the
+ * same budget every other id in this app gets, for the same reason — they are keys, not prose.
+ */
+const buddyIdKeySchema = z.string().min(1).max(MAX_BUDDY_ID_CHARS)
+const buddyRolePromptKeySchema = z.string().min(1).max(MAX_BUDDY_ROLE_PROMPT_CHARS)
+const buddyMcpSubsetKeySchema = z.array(z.string().min(1).max(MAX_MCP_SERVER_ID_CHARS)).max(MAX_BUDDY_MCP_IDS)
+
 export const chatSessionsStore = defineStore('chat-sessions', {
   state: { sessions: [], activeSessionId: null } as ChatSessionsState,
 
@@ -143,6 +188,14 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       // nowhere and written nowhere — `addSession` drops it below, so a new record says "none" the way
       // every record written before this field existed says it: by having no key at all.
       activeSkillIds: activeSkillIdsSchema.optional(),
+      // The Buddy the conversation is created as, and the two things snapshotted from its record at that
+      // moment. All three optional, and all three absent for a conversation created without a Buddy —
+      // which is the SamAi default, and which is why nothing is written to say "the app's own behavior":
+      // the absent key already says it. Only `addSession` accepts these. A snapshot is taken once, at
+      // creation, and a key that could be overwritten later would not be a snapshot.
+      buddyId: buddyIdKeySchema.optional(),
+      rolePrompt: buddyRolePromptKeySchema.optional(),
+      mcpSubset: buddyMcpSubsetKeySchema.optional(),
     }),
     touchSession: z.object({
       id: sessionIdSchema,
@@ -196,7 +249,7 @@ export const chatSessionsStore = defineStore('chat-sessions', {
   },
 
   actions: {
-    addSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds }) => {
+    addSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds, buddyId, rolePrompt, mcpSubset }) => {
       const now = Date.now()
       // Idempotent: a re-add of an id that already exists would otherwise give the list two rows
       // with one transcript between them.
@@ -219,6 +272,13 @@ export const chatSessionsStore = defineStore('chat-sessions', {
           // the key would be a second spelling of it. A conversation the user chose skills for carries
           // them from its first row.
           ...(activeSkillIds !== undefined && activeSkillIds.length > 0 ? { activeSkillIds: [...activeSkillIds] } : {}),
+          // The Buddy keys, on the same terms as the skills above and for the same reason: the absent
+          // key is the default, so a conversation created without a Buddy carries nothing. An empty
+          // subset is dropped rather than written, because an empty list and an absent one mean the
+          // same thing here — no limit on which servers this turn may be offered.
+          ...(buddyId !== undefined ? { buddyId } : {}),
+          ...(rolePrompt !== undefined ? { rolePrompt } : {}),
+          ...(mcpSubset !== undefined && mcpSubset.length > 0 ? { mcpSubset: [...mcpSubset] } : {}),
         },
       ])
     },

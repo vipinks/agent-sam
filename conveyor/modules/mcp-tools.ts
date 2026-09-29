@@ -21,6 +21,7 @@
 import { ConveyorError } from 'electron-conveyor/main'
 import { MCP_TOOL_ERROR, redactSecrets } from '../protocol/mcp'
 import { mcpToolIdentity, parseMcpToolIdentity, truncateMcpPreview, type McpConsent } from '../protocol/mcp-tools'
+import { mcpSubsetFor } from '../protocol/buddies'
 import type { McpRunningTool } from './mcp-runtime'
 import { getMcpRuntime } from './mcp-runtime'
 import { readMcpServerCallContext, type McpServerCallContext } from './mcp'
@@ -67,6 +68,16 @@ export interface McpToolBridge {
 export interface McpToolBridgeOptions {
   /** The folder the turn is running in: what decides a project server's trust, and nothing else. */
   workspaceRoot?: string | null
+  /**
+   * The servers this turn is restricted to, by id, or absent when nothing restricts it.
+   *
+   * The conversation's snapshot, when it has one. Read here because this is the only place that knows
+   * which servers are running, and so the only place where "the trusted and enabled set" is a fact
+   * rather than an assumption. Absent, empty, or naming servers nothing runs all mean the same thing —
+   * no restriction — which is what `mcpSubsetFor` states once, for this and for the rule that snapshots
+   * it at creation.
+   */
+  mcpSubset?: readonly string[] | null
   listRunningTools?: () => McpRunningTool[]
   callTool?: (serverId: string, toolName: string, args: Record<string, unknown>) => Promise<unknown>
   serverContext?: (serverId: string) => Promise<McpServerContext | null>
@@ -172,7 +183,23 @@ export function createMcpToolBridge(options: McpToolBridgeOptions = {}): McpTool
      * would ask the same question with the tools written down differently.
      */
     toolDefinitions(): ToolDefinition[] {
-      return listRunningTools()
+      const running = listRunningTools()
+
+      // The turn's subset, read against the set that is actually running — intersection, in that
+      // direction and no other. A server is offered precisely because it is running, which is what being
+      // trusted and enabled means here, so the subset can only ever take tools away: a snapshot naming a
+      // server the user has not trusted, or has switched off, finds nothing to include, and there is
+      // nothing this code could do to start one.
+      //
+      // The rule itself lives in the protocol, with the rest of the Buddy rules, and is handed the whole
+      // trusted set when there is no subset — which is why a conversation that named no Buddy reaches
+      // this line and leaves with exactly the list it has always had, rather than a list assembled by a
+      // second code path that could drift from this one.
+      const trusted = [...new Set(running.map((entry) => entry.serverId))]
+      const allowed = new Set(mcpSubsetFor(options.mcpSubset, trusted))
+
+      return running
+        .filter((entry) => allowed.has(entry.serverId))
         .map((entry) => ({ entry, identity: mcpToolIdentity(entry.serverId, entry.tool.name) }))
         .sort((a, b) => (a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0))
         .map((item) => toolDefinitionFor(item.entry))
