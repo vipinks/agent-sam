@@ -16,6 +16,7 @@ import {
   buddyRecordSchema,
   buddySessionSeed,
   checkBuddy,
+  MAX_BUDDY_DESCRIPTION_CHARS,
   MAX_BUDDY_MCP_IDS,
   MAX_BUDDY_NAME_CHARS,
   MAX_BUDDY_ROLE_PROMPT_CHARS,
@@ -96,6 +97,83 @@ function aDraftIsRefusedByField() {
   assert.equal(good.ok, true, 'a record that passes is handed back')
   assert.deepEqual(good.ok === true && good.buddy, fullCustom(), 'unchanged')
   results.push('a draft is refused by field: empty name, over-long name, over-long role prompt')
+}
+
+// ---------------------------------------------------------------- the caps
+
+/**
+ * The two bounds a serious role runs into, asserted as the numbers the design names.
+ *
+ * A role prompt written out in full is a page of prose rather than a paragraph, and the seam the Boss hit
+ * is a real one: 13,770 characters of a role that has to reach the model whole. Stating the caps as
+ * literals is deliberate — every other assertion in this suite is relational, so a later turn could lower a
+ * bound back and leave all of them passing — and the parity loop below is the other half of the claim: the
+ * rule a draft is checked against and the record schema the store's payload extends are read together, so a
+ * bound raised in one and not in the other cannot pass here.
+ */
+function theCapsAdmitASeriousRoleAndAnHonestDescription() {
+  assert.equal(MAX_BUDDY_ROLE_PROMPT_CHARS, 32_000, 'a role prompt may be 32,000 characters')
+  assert.equal(MAX_BUDDY_DESCRIPTION_CHARS, 400, 'a description may be 400 characters')
+
+  const atCap = checkBuddy(fullCustom({ rolePrompt: 'x'.repeat(32_000) }))
+  assert.equal(atCap.ok, true, 'a 32,000-character role prompt is accepted')
+  assert.equal(atCap.ok === true && atCap.buddy.rolePrompt.length, 32_000, 'and kept whole rather than cut')
+
+  const pastCap = checkBuddy(fullCustom({ rolePrompt: 'x'.repeat(32_001) }))
+  assert.equal(pastCap.ok, false, '32,001 characters is refused')
+  assert.equal(pastCap.ok === false && pastCap.field, 'rolePrompt', 'and the refusal names the role field')
+
+  assert.equal(
+    checkBuddy(fullCustom({ description: 'd'.repeat(400) })).ok,
+    true,
+    'a 400-character description is accepted'
+  )
+
+  const descriptionPastCap = checkBuddy(fullCustom({ description: 'd'.repeat(401) }))
+  assert.equal(descriptionPastCap.ok, false, '401 characters is refused')
+  assert.equal(
+    descriptionPastCap.ok === false && descriptionPastCap.field,
+    'description',
+    'and the refusal names the description field'
+  )
+
+  // The Boss's own case: a role written out in full, read the way a real one is. It is prose rather than
+  // filler, and it comes back as it was written — trimmed at its edges and untouched in the middle.
+  const sentence =
+    'Read every claim as a claim about a process, name the relations that produce it, and say what would refute it. '
+  const dialectical = sentence.repeat(Math.ceil(13_770 / sentence.length)).slice(0, 13_770)
+  assert.equal(dialectical.length, 13_770, 'the case under test is 13,770 characters')
+
+  const realRole = checkBuddy(fullCustom({ rolePrompt: dialectical }))
+  assert.equal(realRole.ok, true, 'the 13,770-character role is accepted')
+  assert.equal(realRole.ok === true && realRole.buddy.rolePrompt, dialectical, 'and stored as it was written')
+
+  // Renderer and main read one number, not two: the lengths either side of each cap are the whole claim.
+  for (const length of [1, 4000, 13_770, 32_000, 32_001]) {
+    const draft = fullCustom({ rolePrompt: 'x'.repeat(length) })
+    assert.equal(
+      buddyRecordSchema.safeParse(draft).success,
+      checkBuddy(draft).ok,
+      `the schema and the rule agree on a ${length}-character role prompt`
+    )
+  }
+  for (const length of [1, 160, 400, 401]) {
+    const draft = fullCustom({ description: 'x'.repeat(length) })
+    assert.equal(
+      buddyRecordSchema.safeParse(draft).success,
+      checkBuddy(draft).ok,
+      `the schema and the rule agree on a ${length}-character description`
+    )
+  }
+
+  // The session record is bounded by the same number, so the larger role survives the write and is read
+  // back as the standing context it is rather than stripped as a record this build could not have written.
+  assert.equal(
+    readBuddySession({ rolePrompt: dialectical }).rolePrompt,
+    dialectical,
+    'a session snapshots the larger role whole'
+  )
+  results.push('the caps admit a 32,000-character role and a 400-character description, at the same seam in both')
 }
 
 // ---------------------------------------------------------------- resolution
@@ -307,6 +385,7 @@ function theSessionKeysAreAdditiveAndOptional() {
 async function main() {
   theSchemaAcceptsAFullRecord()
   aDraftIsRefusedByField()
+  theCapsAdmitASeriousRoleAndAnHonestDescription()
   theDefaultAndAbsentIdsResolveToNothing()
   builtInsResolveToTheirOwnRecords()
   theSeedRuleReturnsWhatTheBuddyDeclares()

@@ -58,8 +58,15 @@ export const MAX_BUDDY_NAME_CHARS = 40
 /** How long the mark beside a Buddy's name may be. Two characters: a letter, or a letter and a tiebreak. */
 export const MAX_BUDDY_GLYPH_CHARS = 2
 
-/** How long the one line under a Buddy's name may be: what it is for, in a sentence. */
-export const MAX_BUDDY_DESCRIPTION_CHARS = 160
+/**
+ * How long the one line under a Buddy's name may be: what it is for, one or two sentences.
+ *
+ * Four hundred characters, because a line that says what a Buddy is for *and* what it will not do is
+ * longer than a label: the bound the section shipped with was written for what fits a row and read as a
+ * refusal by anyone writing the line properly. Still bounded, so a pasted paragraph is refused where it is
+ * stored rather than discovered in a row that cannot draw it.
+ */
+export const MAX_BUDDY_DESCRIPTION_CHARS = 400
 
 /**
  * How long a role prompt may be.
@@ -68,8 +75,13 @@ export const MAX_BUDDY_DESCRIPTION_CHARS = 160
  * the conversation, ahead of the project's own instructions: it is the most expensive thing a Buddy can
  * declare, so it is bounded at the boundary where it is stored rather than discovered in a request that
  * has already been built. Over the cap is a refusal, not a truncation — half a role reads as a whole one.
+ *
+ * Thirty-two thousand, because a role written out in full is a page of prose rather than a paragraph: the
+ * roles worth having are the ones somebody took the trouble to write, and a bound low enough to refuse one
+ * is a bound that decides which roles are worth having. It stays a bound for the reason above — the number
+ * is what keeps an accidental paste from being injected into every turn of a conversation.
  */
-export const MAX_BUDDY_ROLE_PROMPT_CHARS = 4000
+export const MAX_BUDDY_ROLE_PROMPT_CHARS = 32_000
 
 /** How many starter prompts a Buddy may offer. Four fit a row; more is a menu. */
 export const MAX_BUDDY_STARTERS = 4

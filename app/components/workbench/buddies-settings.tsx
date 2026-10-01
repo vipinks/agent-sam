@@ -110,6 +110,15 @@ const GLYPH_CHOICES: ReadonlyArray<{ icon: LucideIcon; mark: string }> = [
 /** The value a `Select` needs for \"nothing chosen\": Radix refuses an empty string as an item's value. */
 const NONE = 'none'
 
+/**
+ * The role bound as the hint under the field states it, grouped the way a number that long is read.
+ *
+ * `32000` beside a live count reads as a different kind of number from the one the field means, and the
+ * separator is the whole of the difference between a budget somebody can size a role against and a limit
+ * that looks internal.
+ */
+const ROLE_PROMPT_CHAR_COUNT = MAX_BUDDY_ROLE_PROMPT_CHARS.toLocaleString('en-US')
+
 /** The id every new record's slug is checked against: the app's own ids, and the user's own. */
 function takenIds(custom: readonly BuddyRecord[]): string[] {
   return [...BUILTIN_BUDDIES.map((buddy) => buddy.id), SAMAI_BUDDY_ID, ...custom.map((buddy) => buddy.id)]
@@ -475,7 +484,10 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
 
   return (
     <AlertDialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <AlertDialogContent className="max-h-[85vh] overflow-auto">
+      {/* Capped at the viewport and laid out as a column, so the fields scroll inside the dialog rather
+          than the dialog growing past the window: the header and the actions stay where they are and only
+          the body between them moves. */}
+      <AlertDialogContent className="flex max-h-[85vh] flex-col">
         <AlertDialogHeader>
           <AlertDialogTitle>{record === null ? 'New Buddy' : `Edit ${record.name}`}</AlertDialogTitle>
           <AlertDialogDescription>
@@ -491,7 +503,10 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
         <FieldError field="id" error={error} />
         <FieldError field="builtin" error={error} />
 
-        <div className="flex flex-col gap-4">
+        {/* The scrolling region: the fields and the lists scroll inside a surface capped at the window,
+            rather than the dialog growing until it is taller than the screen. `min-h-0` is what lets a flex
+            child smaller than its content scroll instead of stretching its parent. */}
+        <div data-slot="buddy-editor-body" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="buddy-name">Name</Label>
             <Input
@@ -551,7 +566,7 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
             <Textarea
               id="buddy-role-prompt"
               data-slot="buddy-role-prompt-field"
-              className="min-h-24 text-[12.5px] leading-relaxed"
+              className="field-sizing-fixed h-40 resize-y overflow-y-auto text-[12.5px] leading-relaxed"
               value={draft.rolePrompt}
               autoComplete="off"
               spellCheck={false}
@@ -560,9 +575,8 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
               onChange={(event) => edit({ rolePrompt: event.target.value })}
             />
             <FieldHint>
-              Sent ahead of every turn of a conversation started as this Buddy. Over {MAX_BUDDY_ROLE_PROMPT_CHARS}{' '}
-              characters is refused rather than cut, and half a role reads as a whole one. {draft.rolePrompt.length} so
-              far.
+              Sent ahead of every turn of a conversation started as this Buddy. Over {ROLE_PROMPT_CHAR_COUNT} characters
+              is refused rather than cut, and half a role reads as a whole one. {draft.rolePrompt.length} so far.
             </FieldHint>
             <FieldError field="rolePrompt" error={error} />
           </div>

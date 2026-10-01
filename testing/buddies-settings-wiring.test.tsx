@@ -16,7 +16,7 @@
  * jsdom proves wiring and words, not pixels. Nothing here says the section looks right; that is Boss's eyes
  * on the running app.
  */
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -452,5 +452,106 @@ describe('the Buddies section', () => {
     await userEvent.click(screen.getByRole('switch', { name: `Enable ${builtinName}` }))
     await waitFor(() => expect(main.state().disabledIds).toEqual([CAPTAIN.id]))
     await waitFor(() => expect(switchState(`Enable ${builtinName}`)).toBe('true'))
+  })
+})
+
+/**
+ * The editor's bounds and its containment.
+ *
+ * Two defects are pinned here, and both were reported against a role the app would not hold. The first is
+ * the cap: a role prompt written out in full is a page of prose, and the 4,000-character bound refused the
+ * Boss's own 13,770-character role before any field could be saved. The second is the surface: the editor
+ * grew with its contents, so the dialog asked for more height than the window it was drawn in.
+ *
+ * The honest ceiling of these assertions is the same as the picker containment suite's. jsdom lays nothing
+ * out: every box reports zero height, no element here can be observed to scroll, and "the role scrolls
+ * inside the field" is a claim about pixels that only the running app can settle. What is asserted instead
+ * is the *structure* that states each policy — which element carries the viewport cap, which region scrolls,
+ * which classes carry the field's own bar and resize handle, the numbers the helper lines name — plus the
+ * record a save actually writes. Pixel acceptance is Boss's eyes: paste the full role and watch it scroll.
+ */
+describe('the Buddy editor’s bounds and containment', () => {
+  it('states the new caps and draws the role prompt as its own scrolling field', async () => {
+    stubBuddies()
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    // A textarea with a height of its own, a vertical bar and a resize handle: the three classes that make
+    // a written-out role scroll inside the box rather than grow the box.
+    const role = within(editor()).getByLabelText('Role prompt')
+    expect(role.tagName).toBe('TEXTAREA')
+    const classes = role.className.split(/\s+/)
+    expect(classes).toContain('h-40')
+    expect(classes).toContain('resize-y')
+    expect(classes).toContain('overflow-y-auto')
+
+    // The words under both fields state the raised numbers, and the numbers they used to state are gone
+    // rather than sitting beside them.
+    expect(within(editor()).getByText(/Over 32,000 characters is refused rather than cut/)).toBeTruthy()
+    expect(within(editor()).getByText(/Up to 400 characters/)).toBeTruthy()
+    expect(within(editor()).queryByText(/Over 4,?000 characters/)).toBeNull()
+    expect(within(editor()).queryByText(/Up to 160 characters/)).toBeNull()
+
+    // And the live count survives the rewording, because it is the thing that says how far along the role is.
+    expect(within(editor()).getByText(/0 so far/)).toBeTruthy()
+  })
+
+  it('caps the editor at the viewport, scrolls its body, and leaves the two lists their own bars', async () => {
+    stubBuddies()
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    const dialog = editor()
+    expect(dialog.className).toContain('max-h-[85vh]')
+
+    // The scrolling region is the body and not the dialog: the fields scroll inside a capped surface, and
+    // the actions stay outside that region so Save and Cancel cannot be scrolled away from.
+    const body = dialog.querySelector<HTMLElement>('[data-slot="buddy-editor-body"]')
+    expect(body).not.toBeNull()
+    expect(body?.className).toContain('overflow-y-auto')
+    expect(body?.className).toContain('min-h-0')
+    expect(body?.contains(within(dialog).getByLabelText('Role prompt'))).toBe(true)
+    expect(body?.contains(within(dialog).getByRole('button', { name: 'Save Buddy' }))).toBe(false)
+
+    // The skills and MCP lists keep the scrollbars they already had, which is what stops a hundred skills
+    // from being a page rather than a list.
+    for (const slot of ['buddy-skill-list', 'buddy-mcp-list']) {
+      const list = dialog.querySelector<HTMLElement>(`[data-slot="${slot}"]`)
+      expect(list).not.toBeNull()
+      expect(list?.className).toContain('overflow-auto')
+    }
+  })
+
+  it('saves a Buddy whose role is the Boss’s own 13,770 characters', async () => {
+    const { stub } = stubBuddies()
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    const sentence =
+      'Read every claim as a claim about a process, name the relations that produce it, and say what would refute it. '
+    const role = sentence.repeat(Math.ceil(13_770 / sentence.length)).slice(0, 13_770)
+
+    await userEvent.type(within(editor()).getByLabelText('Name'), 'Dialectical Materialist')
+    await userEvent.type(
+      within(editor()).getByLabelText('Description'),
+      'Reads every claim as a claim about a process.'
+    )
+    // Pasted rather than typed: 13,770 keystrokes would measure the typing simulation rather than the field.
+    fireEvent.change(within(editor()).getByLabelText('Role prompt'), { target: { value: role } })
+    expect((within(editor()).getByLabelText('Role prompt') as HTMLTextAreaElement).value.length).toBe(13_770)
+
+    await userEvent.click(within(editor()).getByRole('button', { name: 'Save Buddy' }))
+
+    await waitFor(() => expect(called(stub, 'addBuddy')).toBe(true))
+    const payload = payloadOf(stub, 'addBuddy') as { rolePrompt?: string }
+    expect(payload.rolePrompt?.length).toBe(13_770)
+    expect(payload.rolePrompt).toBe(role)
+
+    // And the row main's answer makes appear is the record just written, whole.
+    await waitFor(() => expect(rows().some((node) => node.dataset.buddyId === 'dialectical-materialist')).toBe(true))
+    expect(within(row('dialectical-materialist')).getByText('Dialectical Materialist')).toBeTruthy()
   })
 })
