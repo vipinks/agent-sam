@@ -128,7 +128,19 @@ const MANIFEST: Record<string, Record<string, string>> = {
     exit: 'event',
   },
   llm: { chat: 'stream' },
-  window: { init: 'query', isMaximized: 'query', onFocusChange: 'event', onMaximizeChange: 'event' },
+  window: {
+    init: 'query',
+    isMaximized: 'query',
+    onFocusChange: 'event',
+    onMaximizeChange: 'event',
+    // The titlebar's four view acts. Commands, the kind main registered them as, and listed rather
+    // than left out: the client refuses a member that is missing from this map before any handler is
+    // reached, so a button whose act is absent here could not dispatch at all.
+    zoomIn: 'command',
+    zoomOut: 'command',
+    resetZoom: 'command',
+    toggleFullscreen: 'command',
+  },
   // The running app's own version, which `/version` reports. A query, like `sessions.transcriptVersion`
   // above it, and listed for the same reason: the client refuses an unlisted member rather than
   // dispatching it, and a command that reached nothing would render an empty notice rather than fail.

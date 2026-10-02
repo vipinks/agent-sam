@@ -1,13 +1,15 @@
-import { useEffect } from 'react'
-import { Minus, Square, Copy, X, Sun, Moon, SquareTerminal } from 'lucide-react'
+import { useEffect, type ReactNode } from 'react'
+import { Minus, Square, Copy, X, Sun, Moon, SquareTerminal, ZoomIn, ZoomOut, Ratio, Maximize } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { cn } from '@/lib/utils'
 import { useWindowStore } from './window-store'
 import { useThemeStore } from './theme-store'
+import { MENUS } from './menu'
 import { TitlebarMenu } from './titlebar-menu'
 import { ControlButton } from './control-button'
 import { BrightnessButton, ThemeButton } from './theme-controls'
 import { Separator } from '../components/ui/separator'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import { useWorkbenchStore } from '../components/workbench/store'
 
 /**
@@ -24,6 +26,12 @@ import { useWorkbenchStore } from '../components/workbench/store'
  * else in this row needs one. It reports a state rather than an action — pressed while the panel is
  * showing — and that state is the persisted flag and nothing else, so what the glyph says cannot drift
  * from what the panel below is doing.
+ *
+ * The zoom ladder and fullscreen lead the row, immediately before the light/dark toggle: they are the
+ * acts the View menu's own zoom and fullscreen entries perform, drawn on the bar because a reader
+ * reaches for them while looking at the page rather than while looking for the View menu. Nothing here
+ * remembers a level — each press dispatches its act and the window's own page stays the only thing that
+ * knows what size it is drawn at — so the four are buttons and tooltips and no state at all.
  */
 export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
   const platform = useWindowStore((s) => s.platform)
@@ -63,6 +71,7 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
       </div>
 
       <div className="ml-auto flex items-center [-webkit-app-region:no-drag]">
+        <ViewActions />
         <ThemeToggle />
         <ThemeButton />
         <BrightnessButton />
@@ -70,6 +79,64 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
         {!isMac && <WindowControls />}
       </div>
     </header>
+  )
+}
+
+/**
+ * The View menu's own words for an action: its label, and its accelerator when the menu shows one.
+ *
+ * Read from the menu rather than written again here, so a button and the entry it mirrors cannot
+ * disagree — and so an accelerator added to the View menu turns up on the button without a second edit.
+ * Three of the four entries carry no accelerator today, so their tooltips are the label alone; only
+ * fullscreen names one, and it names the F11 the menu declares.
+ */
+function viewActionTooltip(label: string): string {
+  const entry = MENUS.find((menu) => menu.label === 'View')?.items.find((item) => item.label === label)
+
+  return entry?.shortcut ? `${entry.label} (${entry.shortcut})` : label
+}
+
+/** One view action: the row's own square control, under a tooltip that names it and its accelerator. */
+function ViewAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ControlButton label={label} onClick={onClick}>
+            {children}
+          </ControlButton>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{viewActionTooltip(label)}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+/**
+ * The zoom ladder and fullscreen, in the order the View menu lists them, before the theme toggle.
+ *
+ * The glyphs are the ladder read left to right — a magnifier gaining, a magnifier losing, the sizes a
+ * page can be drawn at — and the window's own corners for fullscreen, which is the one of the four that
+ * is not about size. A fragment rather than a wrapping element: the four are buttons of the row, level
+ * with the theme controls beside them, and a box around them would put a gap in the row where there is
+ * none between any of the others.
+ */
+function ViewActions() {
+  return (
+    <>
+      <ViewAction label="Zoom In" onClick={() => conveyor.window.zoomIn()}>
+        <ZoomIn className="size-4" />
+      </ViewAction>
+      <ViewAction label="Zoom Out" onClick={() => conveyor.window.zoomOut()}>
+        <ZoomOut className="size-4" />
+      </ViewAction>
+      <ViewAction label="Actual Size" onClick={() => conveyor.window.resetZoom()}>
+        <Ratio className="size-4" />
+      </ViewAction>
+      <ViewAction label="Toggle Fullscreen" onClick={() => conveyor.window.toggleFullscreen()}>
+        <Maximize className="size-4" />
+      </ViewAction>
+    </>
   )
 }
 
