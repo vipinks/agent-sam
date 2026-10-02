@@ -104,6 +104,12 @@ const MANIFEST: Record<string, Record<string, string>> = {
     // registered it. Listed even though only the spreadsheet suites stub it, because an unlisted member is
     // dispatched by the client's Proxy as something else rather than failing loudly.
     writeSpreadsheet: 'command',
+    // The document read and the shell hand-off the two document viewers are built on. A query and a
+    // command, in that order, because that is how main registered them; the read is listed for the
+    // reason every read above it is — the client refuses an unlisted member rather than dispatching it,
+    // and a viewer whose read never ran would render its loading state forever.
+    readDocument: 'query',
+    openDocument: 'command',
   },
   terminal: { execute: 'stream', shell: 'query' },
   // The PTY: one shell per folder, owned by main. Its four commands are the pane's whole write side,

@@ -30,6 +30,14 @@ declare module '*?raw' {
   export default content
 }
 
+// A file addressed as an asset rather than imported as code: vite emits it next to the bundle and
+// answers with its url. Used for pdf.js's worker, which has to be a script of this app's own origin
+// because the window's policy allows no other kind of worker.
+declare module '*?url' {
+  const url: string
+  export default url
+}
+
 declare module '*.web' {
   const content: string
   export default content

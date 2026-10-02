@@ -1,5 +1,5 @@
 import { afterEach, beforeEach } from 'vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import { createBridgeStub, setActiveStub } from './bridge-stub'
 
 /**
@@ -94,6 +94,21 @@ if (typeof HTMLElement.prototype.scrollIntoView !== 'function') {
 beforeEach(() => {
   setActiveStub(createBridgeStub())
 })
+
+/**
+ * How long a `find*` query waits, raised for the reason `testTimeout` is raised in `vitest.config.ts`.
+ *
+ * Testing Library's own default is 1000ms, and it is a *separate* allowance from the test timeout: the
+ * runner's 20s governs how long a test may take, not how long one query waits before it gives up. So a
+ * suite could still fail on a green tree — the observed case is `explorer-double-click.test.tsx`, whose
+ * first row lookup timed out while the workbench was still rendering under the full 95-file parallel
+ * run, and passed unattended in isolation. Nothing about the assertion was wrong; the wait was.
+ *
+ * Five seconds, and the assertions are untouched: a query that now waits still has to find the node, and
+ * a genuinely missing node still fails. The margin is about machine contention, not about which query
+ * happens to be running when it happens — which is the same reasoning the runner's own timeout carries.
+ */
+configure({ asyncUtilTimeout: 5000 })
 
 afterEach(() => {
   cleanup()
