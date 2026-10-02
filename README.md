@@ -1,8 +1,8 @@
-# Sam AI
+# Agent Sam
 
 An Electron + React + TypeScript agentic workstation.
 
-Sam AI is a local-first desktop coding assistant. You open a folder, and an agent works inside it —
+Agent Sam is a local-first desktop coding assistant. You open a folder, and an agent works inside it —
 reading files, writing files, running commands — while everything that changes something waits for
 your answer. Conversations, settings, and credentials stay on your machine.
 
@@ -56,8 +56,8 @@ your answer. Conversations, settings, and credentials stay on your machine.
 ## Installation
 
 ```shell
-git clone <repository-url> sam-ai
-cd sam-ai
+git clone <repository-url> agent-sam
+cd agent-sam
 npm install
 npm start
 ```
@@ -115,7 +115,7 @@ it is committed, and a commit is only made when it is green on its own.
 
 Operations that could destroy work — a force-push, a recursive delete, a publish — are gated by a
 reviewer component: each such command is approved on its own before it runs, and a refusal is a hard
-stop rather than an obstacle to route around. Sam AI's own consent gate is the same discipline applied
+stop rather than an obstacle to route around. Agent Sam's own consent gate is the same discipline applied
 to the agent.
 
 ## License

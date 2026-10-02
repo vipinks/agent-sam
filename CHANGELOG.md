@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Sam AI are listed here, newest first. This app started life as the
+All notable changes to Agent Sam are listed here, newest first. This app started life as the
 `electron-react-app` shell; the entries below are the work that turned it into a local-first desktop
 coding assistant.
 
@@ -28,6 +28,8 @@ coding assistant.
 - Home's starters swap with the choice, and the record's fields are seeded into the session at that same
   first send rather than at the click that picked it: a Buddy that declares a way in is what home offers,
   and the app's own three are what is left for SamAi or for a Buddy that offers none.
+- The product is renamed: **Sam AI** is now **Agent Sam**, its identifiers move from `sam-ai` to `agent-sam`,
+  and the app ships a new logo. Historical entries keep the name they shipped under.
 - The v1.0.0 baseline is everything before this entry: Phases 1 through 57, which shipped under the
   standing versioning rule that a release names the work since the last one. This entry is v1.1.0 —
   Phase 58's three turns, which are the Buddies work described above.
