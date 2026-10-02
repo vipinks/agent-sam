@@ -18,7 +18,7 @@ if (process.platform === 'linux') app.commandLine.appendSwitch('password-store',
 app.whenReady().then(() => {
   // Set app user model id for windows. Kept in step with the appId in electron-builder.yml, so the
   // Windows taskbar/notification identity, the installer entry and the window title all agree.
-  electronApp.setAppUserModelId('com.samai.desktop')
+  electronApp.setAppUserModelId('com.agentsam.desktop')
   // One line of evidence that the identity pin took effect, written before any window opens. Logged
   // at warn level because this is the app's only startup assertion about where its data lives, and the
   // house `no-console` rule allows warn/error precisely so a diagnostic does not have to weaken it.

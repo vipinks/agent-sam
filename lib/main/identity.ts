@@ -15,7 +15,7 @@ import { join } from 'path'
  * Chromium keeps the key that protects `safeStorage` ciphertext in `<userData>/Local State`. Move
  * `userData` and a fresh, empty `Local State` is created under the new name — so the old ciphertext
  * can never be decrypted again, no matter that the JSON file still exists. That is not a theory; it
- * is measured. With `productName: "Sam AI"` and the default path, all three stored provider keys
+ * is measured. With `productName: "Agent Sam"` and the default path, all three stored provider keys
  * failed with `Error while decrypting the ciphertext provided to safeStorage.decryptString`, and a
  * saved session could not be found. With the path pinned back to `era`, all three decrypted and the
  * session loaded. See `tests/probes/law0-identity-probe.cjs`, which is that experiment.
@@ -26,9 +26,9 @@ import { join } from 'path'
  *
  * - `app.setPath('userData', <appData>/era)` — so `%APPDATA%\era`, where the keys and sessions already
  *   are, stays the app's directory. The directory name is a storage contract from here on, not
- *   branding; "Sam AI" is what the user sees in the installer, the window, and the OS, which is what
+ *   branding; "Agent Sam" is what the user sees in the installer, the window, and the OS, which is what
  *   branding is for.
- * - `app.setName('Sam AI')` — so the name Chromium uses for the Windows AppUserModelID and the macOS
+ * - `app.setName('Agent Sam')` — so the name Chromium uses for the Windows AppUserModelID and the macOS
  *   keychain entry matches the product. Without this the *other* half of safeStorage's identity (the
  *   OS-level service name) would still say `era`. See the note below on why the pin is what makes this
  *   safe.
@@ -37,7 +37,7 @@ import { join } from 'path'
  *
  * `safeStorage` sits on two layers of key material: a key stored in `<userData>/Local State`, and — on
  * macOS — that key wrapped by a Keychain item named after the app. The measured failure above was
- * entirely the first layer: the pinned run kept the name `Sam AI` *and* the old `Local State`, and
+ * entirely the first layer: the pinned run kept the name `Agent Sam` *and* the old `Local State`, and
  * decrypted cleanly. So the layer that branding would have broken is the one this file pins, and the
  * keychain-name question does not arise on Windows, which is the platform this phase ships to.
  * macOS is untested here and is called out as such in the release notes rather than assumed fine.
@@ -63,7 +63,7 @@ import { join } from 'path'
 const USER_DATA_DIR = 'era'
 
 /** The name the OS and the user see. Set on the real `app` so every platform surface agrees. */
-const DISPLAY_NAME = 'Sam AI'
+const DISPLAY_NAME = 'Agent Sam'
 
 app.setName(DISPLAY_NAME)
 app.setPath('userData', join(app.getPath('appData'), USER_DATA_DIR))

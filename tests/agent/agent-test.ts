@@ -1305,7 +1305,7 @@ async function theRoleSectionJoinsAfterTheBasePrompt() {
 /**
  * A conversation that named no Buddy sends exactly what it sent before Buddies existed.
  *
- * Byte-for-byte rather than "still contains": the SamAi default is the case every existing
+ * Byte-for-byte rather than "still contains": the Agent Sam default is the case every existing
  * conversation is in, so it is the one a change to this assembly could quietly alter. The file text is
  * passed through the same pure rule the loop uses, so the comparison is against the composed message
  * rather than against a copy of its fence written out here.

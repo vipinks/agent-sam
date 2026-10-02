@@ -189,7 +189,7 @@ export function buildRequest(
   const headers = openAiHeaders(apiKey)
   // OpenRouter attributes traffic by referer; harmless elsewhere but only sent where it means
   // something.
-  if (providerId === 'openrouter') headers['x-title'] = 'Sam AI'
+  if (providerId === 'openrouter') headers['x-title'] = 'Agent Sam'
 
   return { url, headers, body: openAiBody(model, messages, tools) }
 }

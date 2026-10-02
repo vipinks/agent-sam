@@ -101,7 +101,7 @@ async function main() {
 
     // --- a real, visible title: the window title comes from the shell, not from a stale default
     const title = await evaluate(send, 'document.title')
-    record('2b. document title is Sam AI', typeof title === 'string' && title.length > 0, String(title))
+    record('2b. document title is Agent Sam', typeof title === 'string' && title.length > 0, String(title))
 
     // --- the topbar element the titlebar lives in is present and has height (rendered, not hidden)
     const bar = await evaluate(

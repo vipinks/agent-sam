@@ -10,7 +10,7 @@
  *
  * - the built-ins are always the first three, in their own fixed order, and a custom record can never
  *   displace one;
- * - the SamAi default is *not* a row, because it is the app's own behavior rather than one choice among
+ * - the Agent Sam default is *not* a row, because it is the app's own behavior rather than one choice among
  *   several — while an absent id still has to be *called* something, which is what the label rule is for;
  * - switching a Buddy off takes it out of the offerable set without taking it out of the list, because the
  *   settings screen has to be able to switch it back on.
@@ -26,7 +26,7 @@ import {
   MAX_BUDDY_STARTERS,
   REMOVED_BUDDY_LABEL,
   SAMAI_BUDDY_ID,
-  SAMAI_BUDDY_NAME,
+  AGENT_SAM_BUDDY_NAME,
   type BuddyRecord,
 } from '../../conveyor/protocol/buddies'
 
@@ -100,7 +100,7 @@ function aRowCarriesTheRecordsOwnFields() {
   assert.equal(
     rows.some((row) => row.id === SAMAI_BUDDY_ID),
     false,
-    'the SamAi default is not a row'
+    'the Agent Sam default is not a row'
   )
   results.push('each row carries its id, name, glyph and built-in flag, and the default is not a row')
 }
@@ -174,18 +174,18 @@ function aLabelIsTheRecordsName() {
   results.push('a Buddy id labels as the record’s name, built-in or custom')
 }
 
-/** Absent ids, and the default's own id, label as the SamAi default. */
-function theDefaultLabelsAsSamAi() {
-  assert.equal(SAMAI_BUDDY_NAME, 'SamAi', 'the default is named SamAi')
+/** Absent ids, and the default's own id, label as the Agent Sam default. */
+function theDefaultLabelsAsAgentSam() {
+  assert.equal(AGENT_SAM_BUDDY_NAME, 'Agent Sam', 'the default is named Agent Sam')
 
   for (const absent of [null, undefined, '', SAMAI_BUDDY_ID]) {
     assert.equal(
       buddyLabel(absent, [custom()]),
-      SAMAI_BUDDY_NAME,
+      AGENT_SAM_BUDDY_NAME,
       `an absent Buddy (${String(absent)}) labels as the default`
     )
   }
-  results.push('an absent Buddy and the default’s own id both label as SamAi')
+  results.push('an absent Buddy and the default’s own id both label as Agent Sam')
 }
 
 /** An id whose custom record is gone labels as removed, and never as the default. */
@@ -193,7 +193,7 @@ function aVanishedRecordLabelsAsRemoved() {
   const label = buddyLabel(custom().id, [])
 
   assert.equal(label, REMOVED_BUDDY_LABEL, 'a custom id with no record behind it labels as removed')
-  assert.notEqual(label, SAMAI_BUDDY_NAME, 'which is not the default: the conversation had a Buddy')
+  assert.notEqual(label, AGENT_SAM_BUDDY_NAME, 'which is not the default: the conversation had a Buddy')
 
   // A built-in is never removed — it is not in the store to delete — so its id still resolves to its name
   // even when the custom list is empty or holds something else entirely.
@@ -272,7 +272,7 @@ async function main() {
   theCustomsFollowInCreationOrder()
   switchedOffRowsStayListedAndStopBeingOfferable()
   aLabelIsTheRecordsName()
-  theDefaultLabelsAsSamAi()
+  theDefaultLabelsAsAgentSam()
   aVanishedRecordLabelsAsRemoved()
   anEditorDraftIsRefusedByField()
 

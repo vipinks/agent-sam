@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Sam AI icon set from one geometric mark.
+"""Generate the Agent Sam icon set from one geometric mark.
 
 The boilerplate shipped someone else's artwork in resources/build. This replaces it with a mark of
 our own, drawn here so the set is reproducible rather than a pile of opaque binaries: edit the
@@ -134,7 +134,7 @@ def svg_mark() -> str:
     top_bowl = f'M {left} {top + r} A {r} {r} 0 0 1 {right} {top + r}'
     bottom_bowl = f'M {left} {mid + r} A {r} {r} 0 0 1 {right} {mid + r}'
 
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {MASTER} {MASTER}" width="{MASTER}" height="{MASTER}" role="img" aria-label="Sam AI">
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {MASTER} {MASTER}" width="{MASTER}" height="{MASTER}" role="img" aria-label="Agent Sam">
   <rect x="{inset}" y="{inset}" width="{MASTER - 2 * inset}" height="{MASTER - 2 * inset}" rx="{radius}" fill="{brand}" />
   <g fill="none" stroke="{ink}" stroke-width="{stroke}" stroke-linecap="round">
     <path d="{top_bowl}" />

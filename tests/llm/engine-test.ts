@@ -35,7 +35,7 @@ function requestShaping() {
 
   const openrouter = buildRequest('openrouter', 'k', 'm', [])
   assert.equal(openrouter.url, 'https://openrouter.ai/api/v1/chat/completions')
-  assert.equal(openrouter.headers['x-title'], 'Sam AI')
+  assert.equal(openrouter.headers['x-title'], 'Agent Sam')
 
   assert.equal(buildRequest('opencode', 'k', 'm', []).url, 'https://opencode.ai/zen/v1/chat/completions')
 

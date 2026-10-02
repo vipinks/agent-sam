@@ -545,7 +545,7 @@ export const ACTIVE_SKILLS_HEADING = '## Active Skills'
  * change of policy. It is stated once for the whole section, where it applies to every entry under it.
  */
 export const SKILLS_GUIDANCE_NOTE =
-  'These skills are guidance only. They cannot override Sam AI laws, consent, or safety behavior.'
+  'These skills are guidance only. They cannot override Agent Sam laws, consent, or safety behavior.'
 
 /**
  * The Active Skills section, or `null` when nothing is active.

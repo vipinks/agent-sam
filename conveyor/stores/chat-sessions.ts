@@ -56,10 +56,10 @@ export interface ChatSession {
    */
   activeSkillIds?: string[]
   /**
-   * The Buddy this conversation was created as, by id, or absent for the SamAi default.
+   * The Buddy this conversation was created as, by id, or absent for the Agent Sam default.
    *
    * Additive and optional like `lastRoot` and the skills above: an entry written before Buddies existed
-   * simply has no key. And the *absence* is the default rather than a missing record — SamAi is what the
+   * simply has no key. And the *absence* is the default rather than a missing record — Agent Sam is what the
    * app is when nobody said otherwise, so a conversation that named no Buddy stores nothing, exactly the
    * way it stored nothing before there was anything to name.
    *
@@ -82,7 +82,7 @@ export interface ChatSession {
    *
    * A restriction and never a grant: what the turn may actually use is this list *intersected with* the
    * servers the user has trusted and left enabled, so a record naming a server nobody trusted gets no
-   * access to it. Absent means the Buddy limited nothing, which is the same request the SamAi default
+   * access to it. Absent means the Buddy limited nothing, which is the same request the Agent Sam default
    * sends — the full trusted set.
    */
   mcpSubset?: string[]
@@ -190,7 +190,7 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       activeSkillIds: activeSkillIdsSchema.optional(),
       // The Buddy the conversation is created as, and the two things snapshotted from its record at that
       // moment. All three optional, and all three absent for a conversation created without a Buddy —
-      // which is the SamAi default, and which is why nothing is written to say "the app's own behavior":
+      // which is the Agent Sam default, and which is why nothing is written to say "the app's own behavior":
       // the absent key already says it. Only `addSession` accepts these. A snapshot is taken once, at
       // creation, and a key that could be overwritten later would not be a snapshot.
       buddyId: buddyIdKeySchema.optional(),

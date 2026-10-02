@@ -241,10 +241,10 @@ function aBuddyIdSeedsTheNewConversation() {
   results.push('a buddyId sets buddyId, rolePrompt and mcpSubset from the resolved record')
 }
 
-function noBuddyIdLeavesTheSamAiDefault() {
+function noBuddyIdLeavesTheAgentSamDefault() {
   // Both spellings: a caller that says nothing, and one that says the default by name. Neither is a
-  // Buddy, so neither writes a key — the SamAi case is the absence of the keys rather than a record
-  // describing SamAi.
+  // Buddy, so neither writes a key — the Agent Sam case is the absence of the keys rather than a record
+  // describing Agent Sam.
   for (const absent of [null, 'samai'] as const) {
     const record = createSessionWith(absent)
     assert.equal('buddyId' in record, false, `${String(absent)}: no Buddy is named`)
@@ -257,12 +257,12 @@ function noBuddyIdLeavesTheSamAiDefault() {
 
 function anUnknownBuddyIdIsTheDefault() {
   // An id that resolves to nothing — a custom Buddy deleted since, a record from a build that never
-  // had one — is the SamAi default rather than an error: the user asked for a conversation, and a
+  // had one — is the Agent Sam default rather than an error: the user asked for a conversation, and a
   // missing Buddy is not a reason to refuse one.
   const record = createSessionWith('deleted-buddy', [custom()])
   assert.equal('buddyId' in record, false, 'an id that resolves to nothing writes nothing')
   assert.equal('rolePrompt' in record, false, 'and injects no role')
-  results.push('a buddyId nothing resolves to is the SamAi default')
+  results.push('a buddyId nothing resolves to is the Agent Sam default')
 }
 
 // ---------------------------------------------------------------- main
@@ -275,7 +275,7 @@ async function main() {
   switchingABuddyOffAndOn()
   theStateRoundTrips()
   aBuddyIdSeedsTheNewConversation()
-  noBuddyIdLeavesTheSamAiDefault()
+  noBuddyIdLeavesTheAgentSamDefault()
   anUnknownBuddyIdIsTheDefault()
 
   console.log(`buddy store: ${results.length} passed`)

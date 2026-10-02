@@ -1,13 +1,13 @@
-# electron-builder packaging for Sam AI.
+# electron-builder packaging for Agent Sam.
 #
 # `main` in package.json is `./out/main/main.js`, and electron-vite emits out/{main,preload,renderer},
 # so the packaged app runs the same bundles `npm run dev` produces. The icon the main process loads is
 # resolved at `../../resources/build/icon.png` relative to out/main, so `resources/` must ship next to
 # `out/` inside the app — that is why it is listed explicitly below rather than relying on the default
 # include-everything behaviour.
-appId: com.samai.desktop
-productName: Sam AI
-copyright: Copyright © 2026 Sam AI
+appId: com.agentsam.desktop
+productName: Agent Sam
+copyright: Copyright © 2026 Agent Sam
 
 asar: true
 # The main process reads icons and the macOS entitlements plist off disk, so resources/ stays outside
@@ -45,7 +45,7 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,eslint.config.*}'
 
 win:
-  executableName: SamAI
+  executableName: AgentSam
   # An .ico with a 256px entry is required; resources/build/icon.ico has 16..256.
   icon: resources/build/icon.ico
   target:
@@ -87,7 +87,7 @@ linux:
   target:
     - target: AppImage
       arch: [x64]
-  maintainer: Sam AI
+  maintainer: Agent Sam
   category: Development
   synopsis: A local-first desktop coding assistant
 

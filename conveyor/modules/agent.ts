@@ -1056,7 +1056,7 @@ interface LoopOptions {
    *
    * The *snapshot* rather than the Buddy's id, deliberately: editing the record must not rewrite what a
    * conversation already running as it was set up to do, and a run that resolved the id again would do
-   * exactly that. Absent for every conversation that named no Buddy, which is the SamAi case.
+   * exactly that. Absent for every conversation that named no Buddy, which is the Agent Sam case.
    */
   rolePrompt?: string
   /**
@@ -1230,7 +1230,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // every turn since. Read from the same untouched history as the three above, for the same reason: all
   // four rules answer "is this already in the conversation", and the first unshift would answer for the
   // rest. A conversation created without a Buddy has none, and this plans nothing — which is what keeps
-  // the SamAi case the request it has always been.
+  // the Agent Sam case the request it has always been.
   const roleInjection = planRoleInjection(history, opts.rolePrompt ?? null)
 
   // The skills this session has activated, resolved here, at the turn start, from the same folder the
@@ -1788,7 +1788,7 @@ export const agentModule = defineModule({
        * Bounded at this boundary as well as in the record it was snapshotted from, because the role
        * becomes standing context in every turn of the conversation: a payload claiming a role past the
        * cap is refused here rather than sent to a provider on every request. Absent for a conversation
-       * that named no Buddy — the SamAi default — and injecting nothing is then the correct behavior.
+       * that named no Buddy — the Agent Sam default — and injecting nothing is then the correct behavior.
        */
       rolePrompt: z.string().min(1).max(MAX_BUDDY_ROLE_PROMPT_CHARS).optional(),
       /**

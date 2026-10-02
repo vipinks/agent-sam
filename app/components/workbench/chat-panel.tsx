@@ -15,7 +15,13 @@ import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { buddiesStore } from '@/conveyor/stores/buddies'
-import { buddyLabel, listBuddies, resolveBuddy, SAMAI_BUDDY_ID, SAMAI_BUDDY_NAME } from '@/conveyor/protocol/buddies'
+import {
+  buddyLabel,
+  listBuddies,
+  resolveBuddy,
+  SAMAI_BUDDY_ID,
+  AGENT_SAM_BUDDY_NAME,
+} from '@/conveyor/protocol/buddies'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -390,7 +396,7 @@ export function ChatPanel() {
    *
    * Two sources rather than one, because they are two different facts and the lock between them is the
    * difference: before a send there is a choice that can still change, and after it there is a record
-   * that cannot. Null is the SamAi default in both places, which is a state of the control rather than a
+   * that cannot. Null is the Agent Sam default in both places, which is a state of the control rather than a
    * Buddy that has no label.
    */
   const buddyId = atHome ? sessions.pendingBuddyId : sessions.buddyId
@@ -404,7 +410,7 @@ export function ChatPanel() {
   const customBuddies = useConveyorStore(buddiesStore, (s) => s.custom) ?? []
   const disabledBuddies = useConveyorStore(buddiesStore, (s) => s.disabledIds) ?? []
   /**
-   * The rows the Select offers: the SamAi default first, then every Buddy that is switched on.
+   * The rows the Select offers: the Agent Sam default first, then every Buddy that is switched on.
    *
    * Built-ins before custom records, in the order `listBuddies` returns them, because that rule is what
    * says what a list's order is and a picker that sorted again would be a second answer to it. A
@@ -416,7 +422,7 @@ export function ChatPanel() {
   const buddyName = buddyLabel(buddyId, customBuddies)
   /**
    * What home offers as a way in: the chosen Buddy's own starters when it declares any, and the app's
-   * three when it is SamAi or a Buddy that offers none.
+   * three when it is Agent Sam or a Buddy that offers none.
    *
    * Resolved rather than read off a record the header already found, because the two questions differ: a
    * Buddy deleted since is a conversation that runs under the role it was created with, and a home choice
@@ -1586,7 +1592,7 @@ export function ChatPanel() {
         afterTitle={
           <Select
             value={buddyId ?? SAMAI_BUDDY_ID}
-            // SamAi is stored as the absent id rather than as itself: the default is what a conversation
+            // Agent Sam is stored as the absent id rather than as itself: the default is what a conversation
             // that names nobody runs as, so picking it clears the choice instead of recording one.
             onValueChange={(picked) => sessions.setPendingBuddyId(picked === SAMAI_BUDDY_ID ? null : picked)}
             disabled={!atHome}
@@ -1612,7 +1618,7 @@ export function ChatPanel() {
             </SelectTrigger>
             <SelectContent>
               {/* The default first, always: it is what a conversation that names nobody runs as. */}
-              <SelectItem value={SAMAI_BUDDY_ID}>{SAMAI_BUDDY_NAME}</SelectItem>
+              <SelectItem value={SAMAI_BUDDY_ID}>{AGENT_SAM_BUDDY_NAME}</SelectItem>
               {buddyRows.map((row) => (
                 <SelectItem key={row.id} value={row.id}>
                   {row.name}

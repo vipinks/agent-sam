@@ -220,11 +220,11 @@ export interface ChatSessions {
    *
    * Handed to the send as it stands, and intersected with the running servers there: this is what the
    * conversation was restricted to, not what it may reach, and the difference is the whole safety
-   * property of the feature. Null is the SamAi case and means the full trusted set, exactly as before.
+   * property of the feature. Null is the Agent Sam case and means the full trusted set, exactly as before.
    */
   buddyMcpSubset: string[] | null
   /**
-   * The Buddy the conversation on screen was created as, or null for the SamAi default and at home.
+   * The Buddy the conversation on screen was created as, or null for the Agent Sam default and at home.
    *
    * The id rather than a name, because the one rule that knows what an id is *called* is `buddyLabel`:
    * an id that resolves to nothing is a removed Buddy there, and a name spelled here would be a second
@@ -245,8 +245,8 @@ export interface ChatSessions {
   /**
    * Choose the Buddy the next conversation is created as.
    *
-   * `null` is the SamAi default rather than a third state: a conversation that names nobody runs as the
-   * app does, so there is no difference to draw between "SamAi" and "nothing chosen", and storing one
+   * `null` is the Agent Sam default rather than a third state: a conversation that names nobody runs as the
+   * app does, so there is no difference to draw between "Agent Sam" and "nothing chosen", and storing one
    * would make the create below carry a key that says what its own absence already says.
    */
   setPendingBuddyId: (buddyId: string | null) => void
@@ -696,7 +696,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       const lastRoot = planRootStamp({ sessionLastRoot: undefined, windowRoot: rootPathRef.current })
       // The Buddy this conversation is created as, resolved once here and snapshotted onto the row. The
       // resolution is against the store's records as well as the built-ins, because a user's own Buddy is
-      // as real as one the app ships. An id that resolves to nothing — the SamAi default, or an id whose
+      // as real as one the app ships. An id that resolves to nothing — the Agent Sam default, or an id whose
       // record was deleted between the choice and the send — seeds nothing, which is the same conversation
       // a send without a Buddy creates rather than an error on the way to one.
       const buddy = resolveBuddy(buddyId, customBuddiesRef.current)
@@ -719,7 +719,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         ...(chosenSkills.length > 0 ? { activeSkillIds: [...chosenSkills] } : {}),
         // The snapshots, taken now and never rewritten: the role this conversation runs in, and the
         // servers it may use. Written as separate keys only when the Buddy declares them, so a
-        // conversation created without one carries no key at all — which is what the SamAi default is.
+        // conversation created without one carries no key at all — which is what the Agent Sam default is.
         ...(seed === null ? {} : { buddyId: seed.buddyId, rolePrompt: seed.rolePrompt }),
         ...(seed?.mcpSubset === undefined ? {} : { mcpSubset: [...seed.mcpSubset] }),
       })
@@ -1037,7 +1037,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     buddyRolePrompt: buddySession.rolePrompt,
     buddyMcpSubset: buddySession.mcpSubset,
     // The conversation's own Buddy for the header to name, and the choice that Buddy is made from while
-    // there is no conversation yet. Null in both places is the SamAi default, which is not a Buddy to
+    // there is no conversation yet. Null in both places is the Agent Sam default, which is not a Buddy to
     // render but a state of the select: the app's own behavior, offered first and offered again.
     buddyId: buddySession.buddyId,
     pendingBuddyId,

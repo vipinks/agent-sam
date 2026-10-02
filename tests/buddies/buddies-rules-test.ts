@@ -179,15 +179,15 @@ function theCapsAdmitASeriousRoleAndAnHonestDescription() {
 // ---------------------------------------------------------------- resolution
 
 function theDefaultAndAbsentIdsResolveToNothing() {
-  // SamAi is what a conversation runs as when it named nobody, and it is not a record: resolving it to
+  // Agent Sam is what a conversation runs as when it named nobody, and it is not a record: resolving it to
   // one would make the default a Buddy to be edited, disabled and listed beside the others.
-  assert.equal(resolveBuddy(SAMAI_BUDDY_ID), null, 'the SamAi default is not a Buddy record')
+  assert.equal(resolveBuddy(SAMAI_BUDDY_ID), null, 'the Agent Sam default is not a Buddy record')
   assert.equal(resolveBuddy(''), null, 'an empty id is an absent one')
   assert.equal(resolveBuddy(null), null, 'and so is no id at all')
   assert.equal(resolveBuddy(undefined), null, 'in every spelling')
   assert.equal(resolveBuddy('nobody-by-this-name'), null, 'an id that names nothing resolves to nothing')
   assert.equal(resolveBuddy('release-captain'), null, 'and a custom id with no store behind it resolves to nothing')
-  results.push('resolveBuddy returns null for absent ids and for the SamAi default')
+  results.push('resolveBuddy returns null for absent ids and for the Agent Sam default')
 }
 
 function builtInsResolveToTheirOwnRecords() {
@@ -286,7 +286,7 @@ function theSubsetRuleOnlyEverNarrows() {
   assert.deepEqual(mcpSubsetFor(['ghost'], trusted), [], 'a Buddy naming only untrusted servers gets none of them')
 
   // Declaring nothing is not declaring nothing may run: it is declining to narrow, which is what the
-  // SamAi default means, and it is why a Buddy with no `mcpIds` behaves exactly like no Buddy at all.
+  // Agent Sam default means, and it is why a Buddy with no `mcpIds` behaves exactly like no Buddy at all.
   assert.deepEqual(mcpSubsetFor([], trusted), trusted, 'declaring nothing leaves the whole trusted set')
   assert.deepEqual(mcpSubsetFor(undefined, trusted), trusted, 'an absent declaration does the same')
   assert.deepEqual(mcpSubsetFor(null, trusted), trusted, 'in every spelling of absent')
@@ -318,7 +318,7 @@ function theSessionKeysAreAdditiveAndOptional() {
     'the keys read back as written'
   )
 
-  // An old record: written before the keys existed, and still a conversation. It reads as the SamAi
+  // An old record: written before the keys existed, and still a conversation. It reads as the Agent Sam
   // default — every key absent, which is exactly what a conversation that named no Buddy means — and
   // nothing writes a key onto it on the way out.
   const old = {

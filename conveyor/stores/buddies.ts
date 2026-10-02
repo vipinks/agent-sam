@@ -62,7 +62,7 @@ const customBuddySchema = buddyRecordSchema.extend({
   builtin: z.literal(false),
   id: buddyIdSchema.refine(
     (id) => !isReservedBuddyId(id),
-    'That id belongs to the app: the SamAi default or a built-in.'
+    'That id belongs to the app: the Agent Sam default or a built-in.'
   ),
 })
 

@@ -242,7 +242,7 @@ async function markdownIsWrittenWhereTheDialogSaid() {
   const written = readFileSync(target, 'utf8')
   assert.ok(written.startsWith('# the parser drops trailing newlines'), 'the title heads the export')
   assert.equal(written.split('## You').length - 1, 1, 'the user turn has its heading once')
-  assert.equal(written.split('## Sam AI').length - 1, 1, 'the assistant turn has its heading once')
+  assert.equal(written.split('## Agent Sam').length - 1, 1, 'the assistant turn has its heading once')
   assert.ok(written.includes('```tool read_file'), 'the tool card is rendered')
   assert.ok(written.includes('outcome (ok): parse()'), 'the tool outcome is rendered')
   results.push('the markdown export is written to the dialog path, with the conversation rendered')

@@ -350,7 +350,7 @@ export const CONTEXT_EM_DASH = '\u2014'
  * do something on its own. No verb about compacting appears anywhere in it, because no such behaviour
  * exists to describe.
  */
-export const CONTEXT_PILL_CAPTION = 'Sam AI does not compact yet. Past the point, consider a new session.'
+export const CONTEXT_PILL_CAPTION = 'Agent Sam does not compact yet. Past the point, consider a new session.'
 
 /**
  * The footnote under the card: the estimate stated as the rule it is, rather than as a measurement.

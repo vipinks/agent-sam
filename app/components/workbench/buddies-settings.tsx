@@ -10,7 +10,7 @@
  * Two kinds of row, and the difference is the whole shape of the screen. The three built-ins are the
  * app's own data: they are listed, they can be switched off, and there is nothing else to do to them —
  * no edit control and no delete control exists in the row at all. The user's own records carry a pencil,
- * a bin and a switch. The SamAi default is not listed, because it is the app's own behavior rather than
+ * a bin and a switch. The Agent Sam default is not listed, because it is the app's own behavior rather than
  * one Buddy among several.
  *
  * What a row's switch writes is an *id* in the store's disabled set, not a flag on a record, because a

@@ -285,10 +285,10 @@ describe('the Buddies section', () => {
       expect(control(mine, slot)).not.toBeNull()
     }
 
-    // The SamAi default is absent by design: it is what a conversation that named nobody runs as, so it is
+    // The Agent Sam default is absent by design: it is what a conversation that named nobody runs as, so it is
     // not one row among these.
     expect(rows().some((node) => node.dataset.buddyId === 'samai')).toBe(false)
-    expect(screen.queryByText('SamAi')).toBeNull()
+    expect(screen.queryByText('Agent Sam')).toBeNull()
   })
 
   // The one test in this file that fills ten fields and opens two selects, so it is the one that pays the

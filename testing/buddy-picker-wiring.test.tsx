@@ -6,7 +6,12 @@ import { BUDDY_LOCK_CAPTION, ChatPanel } from '@/app/components/workbench/chat-p
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { HOME_STARTERS } from '@/app/components/workbench/home'
-import { BUILTIN_BUDDIES, REMOVED_BUDDY_LABEL, SAMAI_BUDDY_NAME, type BuddyRecord } from '@/conveyor/protocol/buddies'
+import {
+  BUILTIN_BUDDIES,
+  REMOVED_BUDDY_LABEL,
+  AGENT_SAM_BUDDY_NAME,
+  type BuddyRecord,
+} from '@/conveyor/protocol/buddies'
 import type { BuddiesState } from '@/conveyor/stores/buddies'
 import type { ChatSession } from '@/conveyor/stores/chat-sessions'
 import { queryClient } from '@/conveyor/client'
@@ -18,7 +23,7 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  * The rules behind it are the protocol module's and are `tests/buddies/buddies-list-test.ts`'s — which
  * rows a list holds, which id calls itself what, and what a record seeds. What only a rendered pane can
  * show is the composition, and that is the whole of this file: that the Select sits beside the Chat
- * title and offers the enabled rows with SamAi fixed first, that its value is the home choice before a
+ * title and offers the enabled rows with Agent Sam fixed first, that its value is the home choice before a
  * conversation exists and that conversation's own frozen Buddy after, that the home starters follow the
  * choice, and that the first send is where the choice reaches a record.
  *
@@ -280,30 +285,30 @@ beforeEach(() => {
 })
 
 describe('the Buddy Select on the home screen', () => {
-  it('is enabled, and shows the SamAi default', async () => {
+  it('is enabled, and shows the Agent Sam default', async () => {
     stubScreen()
     renderScreen()
 
     const trigger = await buddyTrigger()
 
     expect(isDisabled(trigger)).toBe(false)
-    expect(trigger.textContent).toContain(SAMAI_BUDDY_NAME)
+    expect(trigger.textContent).toContain('Agent Sam')
   })
 
-  it('offers SamAi first, then the enabled built-ins and customs, and none of the switched-off', async () => {
+  it('offers Agent Sam first, then the enabled built-ins and customs, and none of the switched-off', async () => {
     stubScreen({ buddies: { custom: [CAPTAIN, REVIEWER], disabledIds: [SWITCHED_OFF] } })
     renderScreen()
     await openBuddyPicker()
 
     expect(options()).toEqual([
-      SAMAI_BUDDY_NAME,
+      AGENT_SAM_BUDDY_NAME,
       ...BUILTINS.filter((buddy) => buddy.id !== SWITCHED_OFF).map((buddy) => buddy.name),
       CAPTAIN.name,
       REVIEWER.name,
     ])
   })
 
-  it('swaps the home starters for the chosen Buddy’s, and back for SamAi', async () => {
+  it('swaps the home starters for the chosen Buddy’s, and back for Agent Sam', async () => {
     const { stub } = stubScreen()
     renderScreen()
 
@@ -321,7 +326,7 @@ describe('the Buddy Select on the home screen', () => {
     expect(stub.methodsOn('agent')).not.toContain('chatWithTools')
 
     await openBuddyPicker()
-    await pick(SAMAI_BUDDY_NAME)
+    await pick(AGENT_SAM_BUDDY_NAME)
 
     expect(screen.getByRole('button', { name: HOME_STARTERS[0] })).toBeTruthy()
     expect(screen.queryByRole('button', { name: WRITER.starters[0] })).toBeNull()
@@ -373,7 +378,7 @@ describe('the first send, with a Buddy chosen on home', () => {
     )
   })
 
-  it('seeds nothing at all when the send is the SamAi default', async () => {
+  it('seeds nothing at all when the send is the Agent Sam default', async () => {
     const { actions } = stubScreen()
     renderScreen()
 

@@ -16,7 +16,7 @@
  * One law is load-bearing enough to state up front, because every rule below is shaped by it: a Buddy
  * may only ever **narrow** what the app was already allowed to do. Its server list is read as an
  * intersection with the servers the user trusted and enabled, never as a wish list — so a record cannot
- * grant itself a server, and `SamAi`, the default, is what every conversation that named nobody runs as.
+ * grant itself a server, and `Agent Sam`, the default, is what every conversation that named nobody runs as.
  */
 import { z } from 'zod'
 import { isSafeMcpServerId, MAX_MCP_SERVER_ID_CHARS } from './mcp-ids'
@@ -38,7 +38,7 @@ export const SAMAI_BUDDY_ID = 'samai'
  * Named beside the id above for the same reason: a conversation that named nobody still has to be *called*
  * something on a row, and a label spelled at each surface is a label that drifts.
  */
-export const SAMAI_BUDDY_NAME = 'SamAi'
+export const AGENT_SAM_BUDDY_NAME = 'Agent Sam'
 
 /**
  * What a Buddy is called when the record behind it is gone.
@@ -217,7 +217,7 @@ export function isReservedBuddyId(id: string): boolean {
 /**
  * The record an id names, or null.
  *
- * `null` for the default and for an absent id, and the caller is expected to read that as SamAi rather
+ * `null` for the default and for an absent id, and the caller is expected to read that as Agent Sam rather
  * than as a failure: a conversation with no Buddy and a conversation whose Buddy was deleted both mean
  * "run as the app does". Built-ins are searched first, so a stored record can never shadow one — which,
  * with `isReservedBuddyId` refusing such a write at the boundary, is a second answer to the same
@@ -291,7 +291,7 @@ function listRowFor(buddy: BuddyRecord, switchedOff: ReadonlySet<string>): Buddy
  * a user looks for. A custom record cannot displace a built-in: the two are separate lists concatenated,
  * not one list sorted, so an id claimed twice still draws the app's record first.
  *
- * The default is not a row at all, and that is the design rather than an omission: SamAi is what a
+ * The default is not a row at all, and that is the design rather than an omission: Agent Sam is what a
  * conversation that named nobody runs as, so it is the app's own behavior rather than one Buddy among
  * several to be listed, edited or switched off.
  *
@@ -312,7 +312,7 @@ export function listBuddies(state: BuddyListState): BuddyListRow[] {
  * What a Buddy is called on a surface that has only the id.
  *
  * Three answers, and the distinction between the last two is the whole reason this is a rule rather than a
- * lookup: an absent id — none named, the default itself, or a field that is nonsense — is SamAi, because
+ * lookup: an absent id — none named, the default itself, or a field that is nonsense — is Agent Sam, because
  * that is what such a conversation actually runs as; an id that resolves is the record's own name; and an
  * id that resolves to nothing is a Buddy that was *removed*, which is not the default and must not be
  * shown as one, because the conversation still carries the role that Buddy seeded it with.
@@ -322,7 +322,7 @@ export function listBuddies(state: BuddyListState): BuddyListRow[] {
  * one.
  */
 export function buddyLabel(buddyId: string | null | undefined, custom: readonly BuddyRecord[] = []): string {
-  if (typeof buddyId !== 'string' || buddyId === '' || buddyId === SAMAI_BUDDY_ID) return SAMAI_BUDDY_NAME
+  if (typeof buddyId !== 'string' || buddyId === '' || buddyId === SAMAI_BUDDY_ID) return AGENT_SAM_BUDDY_NAME
 
   return resolveBuddy(buddyId, custom)?.name ?? REMOVED_BUDDY_LABEL
 }
@@ -377,7 +377,7 @@ export function buddySessionSeed(buddy: BuddyRecord): BuddySessionSeed {
  * it does not bring that server in, and a declaration naming nothing at all is *not* a claim about
  * anything, so it leaves the whole trusted set standing.
  *
- * That last case is what makes the SamAi default and a Buddy with no `mcpIds` the same request, and it
+ * That last case is what makes the Agent Sam default and a Buddy with no `mcpIds` the same request, and it
  * is why this returns a fresh array in the trusted set's own order: the same subset has to produce the
  * same list on two builds, and a caller that mutated the result must not be able to edit the set it was
  * handed.
@@ -399,7 +399,7 @@ export function mcpSubsetFor(declared: readonly string[] | null | undefined, tru
  * a session restored from an older file keeps exactly the keys it had.
  */
 export interface BuddySessionSnapshot {
-  /** The Buddy the conversation was created as, or null for the SamAi default. */
+  /** The Buddy the conversation was created as, or null for the Agent Sam default. */
   buddyId: string | null
   /** The role snapshotted at creation, or null when the conversation has none. */
   rolePrompt: string | null

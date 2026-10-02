@@ -223,7 +223,7 @@ export function planAgentPrompt(
  *
  * `null` in, `null` out, exactly as `assembleSystemContext` behaves: a conversation created without a
  * Buddy has no role prompt, and inventing a section for it would spend context saying nothing. It would
- * also make the SamAi case a different request from the one every conversation sent before this
+ * also make the Agent Sam case a different request from the one every conversation sent before this
  * existed, which is what the assembly's order and its regression rule are here to keep true.
  *
  * The fence says whose words these are, in the same terms the instructions fence does: this is standing

@@ -52,8 +52,8 @@ export function ContextSection() {
       <header className="mb-6">
         <h1 className="text-lg font-semibold tracking-tight">Context</h1>
         <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-          How full a conversation is allowed to get before the Overview calls it past its compact point. Sam AI does not
-          compact yet, so the point marks where starting a new session is the cheaper move.
+          How full a conversation is allowed to get before the Overview calls it past its compact point. Agent Sam does
+          not compact yet, so the point marks where starting a new session is the cheaper move.
         </p>
       </header>
 

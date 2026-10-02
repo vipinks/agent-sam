@@ -26,7 +26,7 @@ export const HOME_SUBLINE = 'Describe what you want to change, ask about a file,
  *
  * Static, and the fallback rather than the whole offer: a Buddy carries starters of its own, and one that
  * declares any is what home shows — the same rule the record is read by. These three are what is left when
- * the choice is the SamAi default, or a Buddy that offers none.
+ * the choice is the Agent Sam default, or a Buddy that offers none.
  */
 export const HOME_STARTERS: readonly string[] = [
   'Explain how this project is put together.',

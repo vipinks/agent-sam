@@ -17,7 +17,7 @@ import type { TranscriptSnapshot, TranscriptToolStep } from './transcript'
 export type ExportFormat = 'markdown' | 'json'
 
 /** How the assistant's turns are headed. The product name, because that is who the reader spoke to. */
-const ASSISTANT_HEADING = 'Sam AI'
+const ASSISTANT_HEADING = 'Agent Sam'
 const USER_HEADING = 'You'
 
 /**

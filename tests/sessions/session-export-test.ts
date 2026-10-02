@@ -79,7 +79,7 @@ function everyElementAppearsExactlyOnceInOrder() {
   // Headings: one title, and one per turn.
   assert.equal(occurrences(markdown, '# test run'), 1, 'the title heading appears once')
   assert.equal(occurrences(markdown, '## You'), 2, 'one user heading per user turn')
-  assert.equal(occurrences(markdown, '## Sam AI'), 2, 'one assistant heading per assistant turn')
+  assert.equal(occurrences(markdown, '## Agent Sam'), 2, 'one assistant heading per assistant turn')
 
   // Prose, in order.
   const order = ['run the test suite', 'Running it now.', 'now wipe the dist folder', 'That needs your approval.']
@@ -115,7 +115,7 @@ function theCardsSitInsideTheirTurn() {
   // what makes "inside its own turn" checkable — a bare `indexOf('## You')` finds the first one, which
   // is how this assertion first came out comparing the wrong pair.
   const headings: Array<{ at: number; text: string }> = []
-  for (const text of ['## You', '## Sam AI', '## You', '## Sam AI']) {
+  for (const text of ['## You', '## Agent Sam', '## You', '## Agent Sam']) {
     const from = headings.length > 0 ? headings[headings.length - 1].at + 1 : 0
     headings.push({ at: markdown.indexOf(text, from), text })
   }
