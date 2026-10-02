@@ -113,6 +113,9 @@ const SUITES = [
     src: 'agent/context-snapshot-request-test.ts',
   },
   { name: 'composer commands (slash rules)', src: 'ui/composer-commands-test.ts' },
+  { name: 'preview kind (dispatch rule, pdf bytes, document cap)', src: 'ui/preview-kind-test.ts' },
+  { name: 'docx convert (mammoth over a real container)', src: 'ui/docx-convert-test.ts' },
+  { name: 'document read (base64 round trip, refusals)', src: 'workspace/document-read-test.ts' },
 ]
 
 mkdirSync(outDir, { recursive: true })
@@ -165,6 +168,10 @@ for (const suite of SUITES) {
         // instead. Bundling it would try to inline a native binding, and would test a spawner the app
         // never runs.
         '--external:node-pty',
+        // And again for the document reader: the docx suite's whole value is that mammoth's *own*
+        // reader produced the html, so inlining a copy would make the claim about the copy. Left
+        // external, node resolves the package the way any consumer does.
+        '--external:mammoth',
         '--log-level=error',
       ],
       { stdio: 'inherit' }

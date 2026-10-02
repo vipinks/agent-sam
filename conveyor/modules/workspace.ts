@@ -1,6 +1,6 @@
 import { basename, dirname, join, resolve } from 'path'
 import { mkdir, readFile as readFileFromDisk, readdir, stat, writeFile as writeFileToDisk } from 'fs/promises'
-import { dialog } from 'electron'
+import { dialog, shell } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, command, event } from '../init'
@@ -10,6 +10,14 @@ import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 import { IMAGE_TOO_LARGE, imageKindForPath, imageOverCap } from '../protocol/image'
 import { SPREADSHEET_TOO_LARGE, spreadsheetKindForPath, spreadsheetOverCap } from '../protocol/spreadsheet'
+import {
+  DOCUMENT_TOO_LARGE,
+  DOCUMENT_UNSUPPORTED,
+  PDF_BYTES_INVALID,
+  documentOverCap,
+  looksLikePdf,
+  previewKind,
+} from '../protocol/preview-kind'
 import type { SpreadsheetEdit } from '../protocol/spreadsheet-edit'
 import { parseSpreadsheet } from './spreadsheet-parse'
 import { applySpreadsheetEdits } from './spreadsheet-write'
@@ -437,6 +445,106 @@ export const workspaceModule = defineModule({
     }
 
     return { content, path: input.path, baselineMtime: stats.mtimeMs }
+  }),
+
+  /**
+   * Read one document — a pdf or a Word container — as base64, decided by its name.
+   *
+   * A fourth shape beside the text, image and workbook results, and the fourth kind of number: a pdf
+   * is a container of already-compressed streams with nothing to trim, so it is shipped whole and
+   * capped at a size of its own. `kind: 'document'` rather than an optional half on the text result,
+   * for the reason the other two are separate objects — a caller that understands one shape cannot
+   * mistake it for another, and no existing caller or stored transcript changes.
+   *
+   * Base64 rather than bytes, for the reason the image path gives: it is the one encoding that crosses
+   * IPC as a string, and the renderer needs nothing but `atob` to undo it. What happens next is the
+   * renderer's: pdf.js and mammoth both want a buffer, and neither is a main-process concern — parsing
+   * a document is work the window that draws it should pay for.
+   *
+   * Two refusals are this action's own, and both are decided before the file is handed on. A name that
+   * is not a document is refused here rather than by a viewer that would have to say so, and a `.pdf`
+   * whose bytes do not begin with the pdf header is refused on the bytes — the alternative is shipping
+   * a mislabelled file to pdf.js and rendering *its* complaint about a missing structure. `.doc` is
+   * named by `previewKind` and refused here: nothing in the app can read the legacy container, and the
+   * action that offers it to the user's own word processor is `openDocument` below.
+   */
+  readDocument: query(z.object({ path: z.string().min(1) }), async ({ input }) => {
+    const kind = previewKind(input.path)
+    if (kind !== 'pdf' && kind !== 'docx') {
+      throw new ConveyorError(DOCUMENT_UNSUPPORTED, `${basename(input.path)} is not a document this viewer can read.`)
+    }
+
+    let stats: { size: number; mtimeMs: number }
+    try {
+      const result = await stat(input.path)
+      stats = { size: result.size, mtimeMs: result.mtimeMs }
+    } catch {
+      // A missing document and a missing text file are one failure, and it arrives before the bytes are
+      // asked for — the kind is the name's, so it is known even for a file the disk has lost.
+      throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
+    }
+
+    if (documentOverCap(stats.size)) {
+      throw new ConveyorError(
+        DOCUMENT_TOO_LARGE,
+        `${basename(input.path)} is ${(stats.size / 1024 / 1024).toFixed(1)} MB — the viewer caps documents at 16 MB.`
+      )
+    }
+
+    let bytes: Buffer
+    try {
+      bytes = await readFileFromDisk(input.path)
+    } catch {
+      throw new ConveyorError('FILE_UNAVAILABLE', 'This file could not be read.')
+    }
+
+    // On the bytes that were actually read, and only for a pdf: a docx is a zip container, and whether
+    // it is a *Word* container is mammoth's question to answer, not one this path can settle from the
+    // first four bytes.
+    if (kind === 'pdf' && !looksLikePdf(bytes)) {
+      throw new ConveyorError(
+        PDF_BYTES_INVALID,
+        `${basename(input.path)} does not begin with a pdf header, so it is not a pdf.`
+      )
+    }
+
+    return {
+      kind: 'document' as const,
+      base64: bytes.toString('base64'),
+      path: input.path,
+      baselineMtime: stats.mtimeMs,
+    }
+  }),
+
+  /**
+   * Hand one document to the OS's own handler for it.
+   *
+   * What the viewer's two document toolbars and Turn 2's fallback for the legacy binary Word format all
+   * need, and it is not a download: there is no browser here to save through, and the only way a file
+   * leaves this app into the user's own tools is the desktop shell. `shell.openPath` resolves through
+   * whatever the OS associates with the extension, and it answers with a message rather than throwing,
+   * so a refusal reaches the renderer as a code the pane can branch on.
+   *
+   * The path is not workspace-contained, and that is the trust level `readFile` already has: it is an
+   * absolute path main itself listed for this window, and reading it is what the viewer did before it
+   * offered to open it. What *is* narrowed is the kind, and the narrowing is the point: only the kinds
+   * `previewKind` calls documents are opened, so this action cannot be turned into a launcher for an
+   * arbitrary executable by a caller that names one. `.doc` is deliberately among the three — it is the
+   * file this action exists for, since nothing in the app can draw it.
+   */
+  openDocument: command(z.object({ path: z.string().min(1) }), async ({ input }) => {
+    const kind = previewKind(input.path)
+    if (kind !== 'pdf' && kind !== 'docx' && kind !== 'doc') {
+      throw new ConveyorError(DOCUMENT_UNSUPPORTED, `${basename(input.path)} is not a document this viewer opens.`)
+    }
+
+    // Empty on success; anything else is the shell's own wording for why it could not.
+    const failure = await shell.openPath(input.path)
+    if (failure) {
+      throw new ConveyorError('OPEN_FAILED', failure)
+    }
+
+    return { path: input.path }
   }),
 
   /**
