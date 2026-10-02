@@ -1,23 +1,34 @@
+import { useState } from 'react'
 import { Eye, TriangleAlert } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
+import { previewKind } from '@/conveyor/protocol/preview-kind'
 import { ConveyorError } from 'electron-conveyor/react'
 import { PaneHeader } from './pane-header'
+import { DocumentError, documentReadFailure, openFailure, type DocumentFailure } from './document-error'
+import { DocxViewer } from './docx-viewer'
 import { formatBytes, imageOf, type ImageRead } from './image'
 import { MarkdownContent } from './markdown'
-import { previewablePath } from './preview'
+import { PdfViewer } from './pdf-viewer'
+import { isDocumentPath, previewablePath } from './preview'
 import { spreadsheetOf, type SpreadsheetEdit } from './spreadsheet'
 import { SpreadsheetView } from './spreadsheet-view'
 import { useWorkbenchStore } from './store'
+import { Button } from '../ui/button'
 import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 
 /**
  * The right rail's Preview resident, and the rendered surfaces it is made of.
  *
  * The surfaces live here rather than inside the code pane, and this module is the one place each of
- * them is written down: a markdown file rendered, a picture, a workbook's grid. Two panels draw them —
- * this one, which reads the open file and shows whichever of the three it is, and the code pane's own
+ * them is written down: a markdown file rendered, a picture, a workbook's grid — and, since the pdf and
+ * Word readers arrived, the document surfaces the routing picks between. Two panels draw them — this
+ * one, which reads the open file and shows whichever of the kinds it is, and the code pane's own
  * Code | Preview switch, which imports them from here rather than growing a second copy of the same
  * markup. One implementation of a surface, two places that can put it on screen.
+ *
+ * The document surfaces are reached through `DocumentSurface`, which is the whole of the routing: one
+ * `previewKind` call decides whether the file gets a reader, the legacy-format card or the card a
+ * refused read is drawn as, and because both panels mount *it*, one file is one surface in both.
  *
  * What makes it a *panel* rather than a second viewer is where its state comes from: `selectedFile`,
  * the same field the code pane reads, so the two residents are two views of one open file rather than
@@ -31,9 +42,18 @@ import { PanelCollapseControl, PanelExpandControl } from './right-rail'
 export function PreviewPanel() {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
 
+  /**
+   * The open file, when it is one of the three document kinds.
+   *
+   * It changes what this panel *reads* rather than only what it draws: a pdf and a Word container are
+   * not text, so the text read is not made for one at all, and the bytes the reader needs come from the
+   * document read the surface itself makes.
+   */
+  const documentPath = selectedFile !== null && isDocumentPath(selectedFile) ? selectedFile : null
+
   const file = conveyor.workspace.readFile.useQuery({
     input: { path: selectedFile ?? '' },
-    enabled: selectedFile !== null,
+    enabled: selectedFile !== null && documentPath === null,
     retry: false,
   })
 
@@ -42,7 +62,7 @@ export function PreviewPanel() {
   const image = imageOf(file.data) ? file.data : null
   const spreadsheet = spreadsheetOf(file.data) ? file.data : null
   const content = file.data !== undefined && typeof file.data.content === 'string' ? file.data.content : ''
-  const fileName = selectedFile ? (selectedFile.split(/[\\/]/).pop() ?? selectedFile) : ''
+  const fileName = selectedFile ? fileNameOf(selectedFile) : ''
   // Whether the open file has a rendered form at all. The extension is the whole of the question, and
   // it is the same question the code pane's switch asks, answered by the same rule.
   const markdown = selectedFile !== null && previewablePath(selectedFile)
@@ -67,10 +87,13 @@ export function PreviewPanel() {
           <div>
             <p className="text-[13px] font-medium">Nothing rendered</p>
             <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-              Pick a markdown file, a picture or a workbook in the explorer and its rendered view opens here.
+              Pick a markdown file, a picture, a workbook or a document in the explorer and its rendered view opens
+              here.
             </p>
           </div>
         </div>
+      ) : documentPath !== null ? (
+        <DocumentSurface path={documentPath} />
       ) : file.isLoading && file.data === undefined ? (
         <div className="flex flex-1 items-center justify-center text-[12.5px] text-muted-foreground">Loading…</div>
       ) : file.error ? (
@@ -101,8 +124,8 @@ export function PreviewPanel() {
           <div>
             <p className="text-[13px] font-medium">Nothing to render</p>
             <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-              This viewer renders markdown, pictures and workbooks. {fileName} is none of them — its source is in the
-              Code panel.
+              This viewer renders markdown, pictures, workbooks and documents. {fileName} is none of them — its source
+              is in the Code panel.
             </p>
           </div>
         </div>
@@ -230,6 +253,110 @@ export function FileError({ error, path }: { error: unknown; path: string }) {
         <p className="text-[13px] font-medium">{title}</p>
         <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">{detail}</p>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The name a path ends in — the name a sentence about the file should use.
+ *
+ * Read from the last segment in either slash, the same reading `extensionOf` and the document read in
+ * main make of the same path, so a pane names the file the way every other surface does.
+ */
+function fileNameOf(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path
+}
+
+/**
+ * A document, routed to the surface its name asks for.
+ *
+ * This is the single point the routing runs at: one `previewKind` call, and whichever of the four
+ * surfaces it names is the one drawn. Both panes mount *this* rather than a switch of their own, so the
+ * Preview resident and the code pane cannot disagree about what a `.pdf` or a `.docx` is, and neither of
+ * them has to know which reader the format needs.
+ *
+ * The read is made here rather than inside each reader because two of the four surfaces are *made of* a
+ * refusal: a document past the cap and a document the disk has lost are drawn as cards with the way out,
+ * and that failure is known only once the bytes have been asked for. The readers ask for the same read
+ * through the same query key, so the document is fetched once and answered from the cache, and the
+ * loading and parsing states stay exactly where Turn 1 left them — inside the readers.
+ *
+ * `.doc` is decided by name and never read: the legacy container is not something this app can draw, and
+ * reading it to prove so would be work with a known answer.
+ */
+export function DocumentSurface({ path }: { path: string }) {
+  const kind = previewKind(path)
+  const fileName = fileNameOf(path)
+  const read = conveyor.workspace.readDocument.useQuery({ input: { path }, enabled: kind !== 'doc', retry: false })
+
+  if (kind === 'doc') return <LegacyDocumentCard path={path} />
+
+  /*
+    The one card a *read* produces: over the cap, gone from the disk, mislabelled as a pdf, or not a
+    document the read will ship at all. `documentReadFailure` words each case by its code — never by the
+    message main wrote — and every one of them ends with the same escape, because a document this window
+    cannot show is a document another application still can.
+  */
+  if (read.error) {
+    return <DocumentError {...documentReadFailure(read.error, fileName)} action={<ExternalEscape path={path} />} />
+  }
+
+  /*
+    The two kinds that are drawn, and the only two that reach this line: a pane routes here only for a
+    document path, and `doc` returned above. What a page tree or a Word container is made of stays the
+    readers' business — nothing here parses, draws, or measures anything.
+  */
+  return kind === 'pdf' ? <PdfViewer path={path} /> : <DocxViewer path={path} />
+}
+
+/**
+ * A `.doc`: the one document kind this viewer routes but cannot draw.
+ *
+ * The card states a rule rather than a failure, because nothing failed — this app reads the modern
+ * container and has never claimed to read the binary one — and a reader told only that the file "could
+ * not be opened" would try the same thing again. The format is named as what it is, and the button under
+ * the sentence is the reason the kind is routed at all rather than left as an empty pane.
+ */
+function LegacyDocumentCard({ path }: { path: string }) {
+  return (
+    <DocumentError
+      title={`${fileNameOf(path)} is a legacy Word file`}
+      detail="This viewer renders the modern .docx container; the binary .doc format it replaced is not one it can preview."
+      action={<ExternalEscape path={path} />}
+    />
+  )
+}
+
+/**
+ * The way out of a card: the file handed to whatever the OS associates with it.
+ *
+ * The same action the two readers' toolbars call, and worded from the same `openFailure` when the
+ * hand-off itself is refused, because a refused hand-off is one failure however it was attempted. It is
+ * a component of its own rather than markup inside the cards because the refusal has to be state, and
+ * state needs a home of its own.
+ */
+function ExternalEscape({ path }: { path: string }) {
+  const openExternally = conveyor.workspace.openDocument.useMutation()
+  const [refused, setRefused] = useState<DocumentFailure | null>(null)
+
+  const open = () => {
+    setRefused(null)
+    void openExternally
+      .mutateAsync({ path })
+      .catch((error: unknown) => setRefused(openFailure(error, fileNameOf(path))))
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <Button variant="outline" size="sm" onClick={open}>
+        Open externally
+      </Button>
+
+      {refused !== null && (
+        <p className="max-w-72 text-[11.5px] leading-relaxed text-muted-foreground">
+          {`${refused.title}. ${refused.detail}`}
+        </p>
+      )}
     </div>
   )
 }

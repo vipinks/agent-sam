@@ -12,8 +12,8 @@ import { gutterText } from './gutter'
 import { editorHighlightPlan, skipNote, utf8Bytes } from './highlight'
 import { useHighlightedCode } from './use-highlight'
 import { imageOf } from './image'
-import { defaultViewModeForPath, previewablePath, type ViewMode } from './preview'
-import { FileError, ImageView, MarkdownPreview } from './preview-panel'
+import { defaultViewModeForPath, isDocumentPath, previewablePath, type ViewMode } from './preview'
+import { DocumentSurface, FileError, ImageView, MarkdownPreview } from './preview-panel'
 import { lossNotice, recordEdit, savedLossNotice, spreadsheetOf, type SpreadsheetEdit } from './spreadsheet'
 import { SpreadsheetView } from './spreadsheet-view'
 import { useWorkbenchStore } from './store'
@@ -45,9 +45,20 @@ export function CodeViewer() {
 
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
+  /**
+   * The open file, when it is one of the three document kinds — which changes what this pane reads
+   * rather than only what it draws: a pdf and a Word container are not text, so the text read is not made
+   * for one at all, and the bytes its reader needs come from the document read the surface makes.
+   *
+   * Held as a path rather than as a flag for the reason the image and the workbook are values rather than
+   * flags: everything the pane branches on is then derived from what is actually open, and a boolean that
+   * could disagree with it is one state fewer to keep true.
+   */
+  const documentPath = selectedFile !== null && isDocumentPath(selectedFile) ? selectedFile : null
+
   const file = conveyor.workspace.readFile.useQuery({
     input: { path: selectedFile ?? '' },
-    enabled: selectedFile !== null,
+    enabled: selectedFile !== null && documentPath === null,
     retry: false,
   })
 
@@ -186,7 +197,8 @@ export function CodeViewer() {
   const spreadsheet = spreadsheetOf(file.data) ? file.data : null
   // Neither an image nor a workbook has characters to put in a textarea, so neither offers the editor.
   // This is the only place the two are treated alike, and they are alike for exactly this reason.
-  const editable = selectedFile !== null && image === null && spreadsheet === null && canEdit(readCode)
+  const editable =
+    selectedFile !== null && image === null && spreadsheet === null && documentPath === null && canEdit(readCode)
   // A workbook's unsaved work is its edit list and a text file's is its characters, and only one of the
   // two is ever non-empty — so the dot, the Save button and the store's dirty flag all mean the same thing
   // in both panes without either of them having to know which kind is open.
@@ -244,10 +256,10 @@ export function CodeViewer() {
    */
   const readText = file.data !== undefined && typeof file.data.content === 'string' ? file.data.content : ''
   const readContent = buffer ?? readText
-  // The preview and the workbook are drawn, not tokenized: there are no tokens to paint, so none are
-  // computed while either is on screen — and, for the same reason, no note about a cap neither of them
-  // has either.
-  const plainView = showingDiff || editing || preview || spreadsheet !== null
+  // The preview, the workbook and the document surfaces are drawn, not tokenized: there are no tokens to
+  // paint, so none are computed while any of them is on screen — and, for the same reason, no note about a
+  // cap none of them has either.
+  const plainView = showingDiff || editing || preview || spreadsheet !== null || documentPath !== null
   const { plan, html } = useHighlightedCode(plainView ? null : selectedFile, plainView ? null : readContent)
   const highlightNote = plan === null ? null : skipNote(plan)
 
@@ -590,7 +602,7 @@ export function CodeViewer() {
    * than one with a mode, because what they open is not the same thing — one holds characters and the other
    * holds values — and a single button would have to pick a noun for one of them.
    */
-  const toolbar = !showingDiff && selectedFile && image === null && (
+  const toolbar = !showingDiff && selectedFile && image === null && documentPath === null && (
     <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-3">
       <p className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground" title={selectedFile}>
         {selectedFile}
@@ -726,9 +738,11 @@ export function CodeViewer() {
               ? 'Image'
               : spreadsheet !== null
                 ? 'Spreadsheet'
-                : selectedFile
-                  ? `Code${editing ? ' · editing' : ''}`
-                  : 'Code Viewer'
+                : documentPath !== null
+                  ? 'Document'
+                  : selectedFile
+                    ? `Code${editing ? ' · editing' : ''}`
+                    : 'Code Viewer'
         }
       >
         {/*
@@ -941,6 +955,17 @@ export function CodeViewer() {
               onEdit={onWorkbookEdit}
               saveNote={workbookSaveNote}
             />
+          ) : documentPath !== null ? (
+            /*
+              A document, drawn by the same surface the Preview resident mounts. It is a branch of its own
+              and it ignores the Code | Preview choice, exactly as the picture and the workbook above it do:
+              a pdf has no source text to show, so the two views would be one view and a lie.
+
+              That is also why no toolbar is drawn for it — the reader's own toolbar carries the file's name
+              and the way out to the OS — and why the text read is not made: there is nothing here for an
+              editor to hold.
+            */
+            <DocumentSurface path={documentPath} />
           ) : editing && buffer !== null ? (
             <>
               {/*

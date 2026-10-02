@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { TriangleAlert } from 'lucide-react'
 import { ConveyorError } from 'electron-conveyor/react'
 import { DOCUMENT_TOO_LARGE, DOCUMENT_UNSUPPORTED, PDF_BYTES_INVALID } from '@/conveyor/protocol/preview-kind'
@@ -80,8 +81,16 @@ export function openFailure(error: unknown, name: string): DocumentFailure {
   }
 }
 
-/** The drawn failure: one icon, the title, and the sentence under it. */
-export function DocumentError({ title, detail }: DocumentFailure) {
+/**
+ * The drawn failure: one icon, the title, and the sentence under it.
+ *
+ * `action` is the optional way out, and it exists for the two cards the routing draws rather than for
+ * the readers' own failures: a format this app cannot open and a read it refused are both answers that
+ * *end* in this window, so the pane that shows them also offers the one thing left to do with the file
+ * — hand it to the application that owns the format. The readers pass nothing, because a document they
+ * can draw has its own toolbar for that.
+ */
+export function DocumentError({ title, detail, action }: DocumentFailure & { action?: ReactNode }) {
   return (
     <div data-slot="document-error" className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
       <TriangleAlert className="size-6 text-muted-foreground/50" />
@@ -89,6 +98,7 @@ export function DocumentError({ title, detail }: DocumentFailure) {
         <p className="text-[13px] font-medium">{title}</p>
         <p className="mt-1 max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">{detail}</p>
       </div>
+      {action}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultViewModeForPath, previewablePath } from '@/app/components/workbench/preview'
+import { defaultViewModeForPath, isDocumentPath, previewablePath } from '@/app/components/workbench/preview'
 
 /**
  * Which paths the viewer may preview as rendered markdown, without a DOM.
@@ -132,5 +132,39 @@ describe('defaultViewModeForPath', () => {
     ]) {
       expect(defaultViewModeForPath(path)).toBe(previewablePath(path) ? 'preview' : 'code')
     }
+  })
+})
+
+/**
+ * Which paths the pane draws through a document surface of its own.
+ *
+ * The routing's own question, and the one both panes ask before they choose a branch: a `.pdf`, a
+ * `.docx` and a `.doc` are the three kinds Turn 2 wires to the readers and the fallback card, and
+ * every other kind has to answer `false` so its branch is left exactly as it was.
+ *
+ * The refusal of `.doc` is the one worth stating: the legacy container is *routed* — it gets a card
+ * rather than a plain "nothing to render" — but it is not drawn, so what it must not do is answer like
+ * a document this viewer can read. The predicate answers for the routing, and the card is what tells
+ * the difference.
+ */
+describe('isDocumentPath', () => {
+  it('accepts the three document kinds, whichever case the extension arrived in', () => {
+    expect(isDocumentPath('C:/w/manual.pdf')).toBe(true)
+    expect(isDocumentPath('C:/w/report.docx')).toBe(true)
+    expect(isDocumentPath('C:/w/legacy/report.doc')).toBe(true)
+    expect(isDocumentPath('C:/w/NOTES.PDF')).toBe(true)
+    expect(isDocumentPath('C:\\w\\legacy\\Report.DOC')).toBe(true)
+  })
+
+  it('refuses the kinds that keep their own branches', () => {
+    expect(isDocumentPath('C:/w/notes.md')).toBe(false)
+    expect(isDocumentPath('C:/w/logo.png')).toBe(false)
+    expect(isDocumentPath('C:/w/book.xlsx')).toBe(false)
+    expect(isDocumentPath('C:/w/app.ts')).toBe(false)
+    expect(isDocumentPath('C:/w/archive.zip')).toBe(false)
+    // A name with no extension, and a directory that happens to be spelled like one.
+    expect(isDocumentPath('C:/w/Makefile')).toBe(false)
+    expect(isDocumentPath('C:/reports.pdf/notes.txt')).toBe(false)
+    expect(isDocumentPath('')).toBe(false)
   })
 })

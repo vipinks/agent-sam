@@ -14,6 +14,7 @@
  * moment after it.
  */
 
+import { previewKind } from '@/conveyor/protocol/preview-kind'
 import { extensionOf } from './highlight'
 
 /**
@@ -42,6 +43,23 @@ const PREVIEWABLE_EXTENSIONS: ReadonlySet<string> = new Set(['md', 'markdown'])
  */
 export function previewablePath(path: string): boolean {
   return PREVIEWABLE_EXTENSIONS.has(extensionOf(path))
+}
+
+/**
+ * Whether a path is one of the three kinds the viewer draws through a document surface of its own: a
+ * pdf, a modern Word container, and the legacy binary Word one.
+ *
+ * One question here rather than three, because the panes ask it only to choose a *branch*: which of the
+ * three it is stays `previewKind`'s answer, and the surface that mounts the readers asks for it once.
+ *
+ * The answer is read from the protocol's dispatch rule rather than from a second extension list, for the
+ * reason `previewablePath` derives its own from `extensionOf`: a table of document extensions kept here
+ * would be a second place the same question is answered, free to disagree with main's.
+ */
+export function isDocumentPath(path: string): boolean {
+  const kind = previewKind(path)
+
+  return kind === 'pdf' || kind === 'docx' || kind === 'doc'
 }
 
 /** The two read-only views a file can be drawn in. */
