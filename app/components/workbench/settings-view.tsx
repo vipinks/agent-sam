@@ -55,19 +55,28 @@ import { useWorkbenchStore, type SettingsSection } from './store'
  * rail that marked its active entry differently from one position to the next would be seven controls
  * pretending to be one.
  *
- * The trigger's own classes are the primitive's, and this constant is the column reading of them, so
- * what is stated here is the deltas: the pill's fixed height and even growth are dropped, because in a
- * column they would divide the rail's height between the entries instead of stacking them at their own
- * size; the left alignment and full width are stated for the column the primitive reads them from; and
- * the active surface becomes the brand tint `icon-rail.tsx` and `right-rail.tsx` mark their own active
- * items with, with the raised pill shadow taken off it — an accent stripe down a rail does not sit on a
- * floating card.
+ * The trigger's own classes are the primitive's, so what is stated here is the deltas, and each of the
+ * first three is a class the primitive states too and this constant replaces — the later of the two wins,
+ * which is what makes them deltas rather than additions.
+ *
+ * `h-8` replaces the pill's `h-[calc(100%-1px)]`. That class is a percentage, and in a column it resolves
+ * against the list rather than against a row: every entry came out exactly as tall as the box holding all
+ * seven of them, so the rail read as three enormous rows with the rest of the stack past the window's
+ * edge. A rail row's height belongs to the row, and it is a compact one.
+ *
+ * `flex-none` replaces the pill's `flex-1`, for the same reason growth is wrong in a column: the entries
+ * would divide the rail's height between them instead of stacking from the top at their own size.
+ *
+ * The left alignment (`justify-start`) and full width are stated for the column the primitive reads them
+ * from, and the active surface becomes the brand tint `icon-rail.tsx` and `right-rail.tsx` mark their own
+ * active items with, with the raised pill shadow taken off it — an accent stripe down a rail does not sit
+ * on a floating card.
  *
  * The hover pair is the traced idiom's too, and it is what makes the rail feel like the app's other
  * navigation rather than like a row of pills someone stood on end.
  */
 const RAIL_ENTRY = [
-  'flex-none w-full justify-start px-2.5 py-1.5 text-[12.5px] font-medium',
+  'h-8 flex-none w-full justify-start px-2.5 py-1.5 text-[12.5px] font-medium',
   'text-muted-foreground hover:bg-accent hover:text-foreground',
   'dark:text-muted-foreground dark:hover:text-foreground',
   'data-[state=active]:bg-brand-soft data-[state=active]:text-brand',
@@ -117,16 +126,24 @@ export function SettingsView() {
         {/* The rail is the panel's own left: it stays put while a section scrolls beside it, so the choice
             of section is never something the reader has scrolled away from. A fixed column rather than a
             shrinking one, so a narrow window costs the content its width before it costs the rail an
-            entry — the section list is never the thing that goes off the panel. */}
+            entry — the section list is never the thing that goes off the panel. It scrolls as well, rather
+            than resizing what it holds: seven compact rows stand at their own size, and a window too short
+            for them is reached by scrolling this column, never by growing a row until the last one is off
+            the window. */}
         <nav
           data-slot="settings-rail"
           aria-label="Settings sections"
           aria-orientation="vertical"
-          className="flex w-44 shrink-0 flex-col gap-1 border-r border-border px-2 py-3"
+          className="flex w-44 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border px-2 py-3"
         >
+          {/* The list stacks its rows from its own top. `justify-start` is not decoration: the primitive
+              centres this axis, and a column of rows centred in a box shorter than itself spills out of
+              both ends of that box — which is how the stack came to lie invisibly over the header and take
+              the back control's clicks. `shrink-0` is the same rule for the stack as a whole: this column
+              scrolls, so the list is never squashed to fit it. */}
           <TabsList
             data-slot="settings-sections"
-            className="flex w-full flex-col items-stretch gap-0.5 bg-transparent p-0"
+            className="flex w-full shrink-0 flex-col items-stretch justify-start gap-0.5 bg-transparent p-0"
           >
             <TabsTrigger value="providers" className={RAIL_ENTRY}>
               Providers
