@@ -256,18 +256,22 @@ export const MessageBubble = memo(function MessageBubble({
       data-slot="message-row"
       className={cn('flex w-full px-4 py-2.5', isUser && alignment === 'split' ? 'justify-end' : 'justify-start')}
     >
-      {/* The button is a sibling of the bubble, on the side away from the message's own edge, rather
-          than a layer over it: overlaid it would cover the first line of a short message, and a corner
-          reserved inside the bubble would indent every bubble for a control most readers never use.
-          `group` sits on this pair, so the button answers to the bubble it belongs to and not to
-          empty space beside it. The pair carries the width cap the bubble used to carry, so the
-          button's box is reserved even while it is invisible — a control that appeared on hover
-          would reflow the text it is offering to copy. */}
-      <div className="group flex max-w-[85%] min-w-0 items-start gap-1.5">
-        {/* Beside the copy control, and for the same reason: a sibling rather than an overlay, so a
-            short message is never hidden by the controls that act on it. */}
-        {isUser && canEdit && <EditMessageButton onEdit={startEditing} />}
-        {isUser && copyButton}
+      {/* The bubble and the row of controls that acts on it, stacked: the bubble's own column, so the
+          row sits at the message's bottom rather than beside it, and `items-*` puts both on the side
+          the bubble itself sits on — the right for the user's own under `split`, the left for both
+          modes otherwise, which is the one side a reply ever takes.
+
+          `group` sits here, so the row answers to the bubble it acts on and not to empty space beside
+          it: hovering the message, or putting the keyboard anywhere inside it, is what reveals the
+          row. The column carries the width cap the bubble used to carry, and the row keeps the box it
+          reserves whether or not it is showing — a control that appeared on hover would reflow the
+          text it is offering to act on. */}
+      <div
+        className={cn(
+          'group flex max-w-[85%] min-w-0 flex-col gap-1',
+          isUser && alignment === 'split' ? 'items-end' : 'items-start'
+        )}
+      >
         <div
           data-slot="message-body"
           className={cn(
@@ -363,11 +367,32 @@ export const MessageBubble = memo(function MessageBubble({
             <p className="mt-2 border-t border-border pt-2 text-[12px] text-destructive">{message.error}</p>
           )}
         </div>
-        {!isUser && copyButton}
-        {/* And the control that replaces the reply, on the reply's own side and for the same reason. Only
-            with a callback behind it: a bubble that cannot reach the pane offers no control whose effect
-            it cannot perform. */}
-        {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={askToRegenerate} />}
+        {/*
+          The controls that act on this message, at the bottom of its bubble and in one row.
+
+          The set each kind carries is unchanged; where it is drawn is what moved. Copy sits on both,
+          because both have words; edit sits on the user's own, because only their message is theirs
+          to rewrite; regenerate sits on a reply, and only with a callback behind it — a bubble that
+          cannot reach the pane offers no control whose effect it cannot perform.
+
+          Hidden at rest and revealed by the bubble's own hover or by the keyboard arriving inside it:
+          `opacity-0` rather than `hidden`, so the controls stay in the tab order, and `focus-within`
+          alongside `group-hover`, because an affordance only a pointer can reach is not one. The
+          reveal is opacity alone — every control's box, and the row's own, is the same whether it is
+          showing or not — so nothing under it is rearranged by its appearing.
+        */}
+        <div
+          data-slot="message-actions"
+          className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+        >
+          {/* The user's own half of the row, in the order the transcript has always drawn it: the
+              control that rewrites the message, then the one that copies it. */}
+          {isUser && canEdit && <EditMessageButton onEdit={startEditing} />}
+          {isUser && copyButton}
+          {/* And the reply's half: the copy beside it, then the control that writes the reply again. */}
+          {!isUser && copyButton}
+          {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={askToRegenerate} />}
+        </div>
       </div>
 
       {/*
@@ -440,9 +465,9 @@ function removedTurnsText(laterTurns: number): string {
 /**
  * Opens the editor on the message it sits beside.
  *
- * Hidden until the bubble is hovered, and revealed by focus as well — the same treatment as the copy
- * button beside it, and for the same reason: `opacity-0` leaves it in the tab order, so a keyboard
- * reaches it without a pointer ever crossing the message.
+ * Drawn by the row at the bubble's bottom, and hidden or revealed by the row rather than by itself: a
+ * control that carried its own `opacity-0` and its own reveal could be showing while the box around it
+ * was not, and the row is the one place that knows what the bubble is doing.
  *
  * The label names the action rather than the message: "Edit message" is what a screen reader user is
  * told, and the message itself is the thing their focus has just arrived next to.
@@ -453,7 +478,7 @@ function EditMessageButton({ onEdit }: { onEdit: () => void }) {
       type="button"
       aria-label="Edit message"
       onClick={onEdit}
-      className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <Pencil className="size-3.5" />
     </button>
@@ -463,10 +488,9 @@ function EditMessageButton({ onEdit }: { onEdit: () => void }) {
 /**
  * Asks for the reply beside it to be written again.
  *
- * The same treatment as the edit control on the other side of the transcript: hidden until the bubble
- * is hovered, revealed by focus as well, and revealed rather than disabled — an affordance only a
- * pointer can reach is not an affordance, and `opacity-0` leaves this in the tab order for exactly
- * that reason.
+ * The same treatment as the edit control one kind of bubble over: drawn by the row, hidden and
+ * revealed by it, and revealed rather than disabled — an affordance only a pointer can reach is not
+ * an affordance, and `opacity-0` on the row leaves this in the tab order for exactly that reason.
  *
  * The label names the action rather than the message, like the two buttons it sits with: "Regenerate
  * reply" is what this does, and the reply is the thing the user's focus has just arrived next to.
@@ -477,7 +501,7 @@ function RegenerateButton({ onRegenerate }: { onRegenerate: () => void }) {
       type="button"
       aria-label="Regenerate reply"
       onClick={onRegenerate}
-      className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <RefreshCw className="size-3.5" />
     </button>
@@ -487,10 +511,11 @@ function RegenerateButton({ onRegenerate }: { onRegenerate: () => void }) {
 /**
  * Copies one bubble's text to the clipboard.
  *
- * Hidden until the bubble is hovered, and revealed by focus as well — the button stays in the tab
- * order while hidden, because `opacity-0` is not `display: none`, so a keyboard reaches it without a
- * pointer ever crossing a bubble. That is also why it is revealed rather than disabled: an affordance
- * that exists only for a mouse is not an affordance.
+ * Drawn by the row at the bubble's bottom, and hidden or revealed by the row rather than by itself:
+ * the button stays in the tab order while the row is at `opacity-0`, because that is not
+ * `display: none`, so a keyboard reaches it without a pointer ever crossing a bubble. That is also why
+ * it is revealed rather than disabled: an affordance that exists only for a mouse is not an
+ * affordance.
  *
  * The confirmation is the glyph and it clears itself, so a bubble cannot sit there claiming a copy
  * from an hour ago. The label stays the name of the action throughout: it is what the button does,
@@ -519,7 +544,7 @@ function CopyMessageButton({ value, label }: { value: string; label: string }) {
       type="button"
       aria-label={label}
       onClick={() => void copy()}
-      className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
     </button>
