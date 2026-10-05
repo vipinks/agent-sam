@@ -19,7 +19,7 @@ import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
 /**
- * Settings: a screen of sections, and the row at the top that switches between them.
+ * Settings: a screen of sections, and the rail down the left that switches between them.
  *
  * The screen takes the whole main area rather than the drawer, so leaving it is its own business: the
  * back glyph beside the title returns to whatever the drawer was showing when the visit began, and it
@@ -27,9 +27,15 @@ import { useWorkbenchStore, type SettingsSection } from './store'
  * Which view that was, and which section is showing, are memories of the visit — the store's
  * `settingsReturnView` and `settingsSection` — and neither is written anywhere.
  *
- * The section row is the primitive the app already ships, so there is no second way to present a
- * choice of panes here. Radix renders the selected section and only the selected one, which is what
- * makes "the Providers section" a thing a reader of the DOM can point at.
+ * The section rail is the primitive the app already ships, told to lay out as a column, so there is no
+ * second way to present a choice of panes here: the list is a column beside the pane rather than a strip
+ * across its top, and the chosen section's content takes the area to its right. Radix renders the
+ * selected section and only the selected one, which is what makes "the Providers section" a thing a
+ * reader of the DOM can point at.
+ *
+ * Each entry is marked the way this app already marks a vertical navigation's active item — the same
+ * brand-tinted surface its icon rail and right rail paint theirs with — while the content around it is
+ * left exactly as it was: the relocation is the navigation chrome's, and not one section's business.
  *
  * Providers, in that first section, is one row per provider, each holding its own key and its own model
  * list. This is the only screen that handles a secret, and it hands the value straight to main —
@@ -41,6 +47,34 @@ import { useWorkbenchStore, type SettingsSection } from './store'
  * the same box with different wiring, not a lookalike of it, and the parity suite compares the two
  * through the slots that sub-component renders.
  */
+
+/**
+ * One section's entry in the rail.
+ *
+ * Written once rather than seven times because the seven entries are one control in seven positions: a
+ * rail that marked its active entry differently from one position to the next would be seven controls
+ * pretending to be one.
+ *
+ * The trigger's own classes are the primitive's, and this constant is the column reading of them, so
+ * what is stated here is the deltas: the pill's fixed height and even growth are dropped, because in a
+ * column they would divide the rail's height between the entries instead of stacking them at their own
+ * size; the left alignment and full width are stated for the column the primitive reads them from; and
+ * the active surface becomes the brand tint `icon-rail.tsx` and `right-rail.tsx` mark their own active
+ * items with, with the raised pill shadow taken off it — an accent stripe down a rail does not sit on a
+ * floating card.
+ *
+ * The hover pair is the traced idiom's too, and it is what makes the rail feel like the app's other
+ * navigation rather than like a row of pills someone stood on end.
+ */
+const RAIL_ENTRY = [
+  'flex-none w-full justify-start px-2.5 py-1.5 text-[12.5px] font-medium',
+  'text-muted-foreground hover:bg-accent hover:text-foreground',
+  'dark:text-muted-foreground dark:hover:text-foreground',
+  'data-[state=active]:bg-brand-soft data-[state=active]:text-brand',
+  'dark:data-[state=active]:bg-brand-soft dark:data-[state=active]:text-brand',
+  'group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none',
+].join(' ')
+
 export function SettingsView() {
   const providers = conveyor.settings.listProviders.useQuery()
   const configured = conveyor.settings.listConfigured.useQuery()
@@ -71,26 +105,55 @@ export function SettingsView() {
 
       <Tabs
         value={section}
+        // The orientation the primitive branches on: it is what lays the list out as a column and keeps
+        // the pane beside it rather than under a strip, and it is what gives each entry the column
+        // reading of the trigger's own alignment classes.
+        orientation="vertical"
         // One cast, at the boundary where Radix hands back a string: the values below are the union, and
         // the store is the only writer, so nothing else can arrive here.
         onValueChange={(next) => setSection(next as SettingsSection)}
-        className="min-h-0 flex-1 gap-0"
+        className="min-h-0 min-w-0 flex-1 gap-0"
       >
-        {/* The row is the panel's own top: it stays put while a section scrolls under it, so the choice
-            of section is never something the reader has scrolled away from. */}
-        <div className="border-b border-border px-8 py-2.5">
-          <TabsList data-slot="settings-sections">
-            <TabsTrigger value="providers">Providers</TabsTrigger>
-            <TabsTrigger value="mcp-servers">MCP Servers</TabsTrigger>
-            <TabsTrigger value="skills">Skills</TabsTrigger>
-            <TabsTrigger value="terminal">Terminal</TabsTrigger>
-            <TabsTrigger value="context">Context</TabsTrigger>
-            <TabsTrigger value="appearance">Appearance</TabsTrigger>
-            <TabsTrigger value="buddies">Buddies</TabsTrigger>
+        {/* The rail is the panel's own left: it stays put while a section scrolls beside it, so the choice
+            of section is never something the reader has scrolled away from. A fixed column rather than a
+            shrinking one, so a narrow window costs the content its width before it costs the rail an
+            entry — the section list is never the thing that goes off the panel. */}
+        <nav
+          data-slot="settings-rail"
+          aria-label="Settings sections"
+          aria-orientation="vertical"
+          className="flex w-44 shrink-0 flex-col gap-1 border-r border-border px-2 py-3"
+        >
+          <TabsList
+            data-slot="settings-sections"
+            className="flex w-full flex-col items-stretch gap-0.5 bg-transparent p-0"
+          >
+            <TabsTrigger value="providers" className={RAIL_ENTRY}>
+              Providers
+            </TabsTrigger>
+            <TabsTrigger value="mcp-servers" className={RAIL_ENTRY}>
+              MCP Servers
+            </TabsTrigger>
+            <TabsTrigger value="skills" className={RAIL_ENTRY}>
+              Skills
+            </TabsTrigger>
+            <TabsTrigger value="terminal" className={RAIL_ENTRY}>
+              Terminal
+            </TabsTrigger>
+            <TabsTrigger value="context" className={RAIL_ENTRY}>
+              Context
+            </TabsTrigger>
+            <TabsTrigger value="appearance" className={RAIL_ENTRY}>
+              Appearance
+            </TabsTrigger>
+            <TabsTrigger value="buddies" className={RAIL_ENTRY}>
+              Buddies
+            </TabsTrigger>
           </TabsList>
-        </div>
+        </nav>
 
-        <div className="min-h-0 flex-1 overflow-auto">
+        {/* The pane: what is left of the panel after the rail, and the only part of it that scrolls. */}
+        <div data-slot="settings-pane" className="min-h-0 min-w-0 flex-1 overflow-auto">
           <TabsContent value="providers" data-slot="settings-section-providers" className="mx-auto max-w-2xl px-8 py-7">
             <header className="mb-6">
               <h1 className="text-lg font-semibold tracking-tight">Model providers</h1>
