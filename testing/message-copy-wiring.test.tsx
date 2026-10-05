@@ -125,7 +125,11 @@ describe('copy on a message bubble', () => {
 
     // Opened first, so the exclusions below are a real exclusion: the card's output is on screen
     // while the copy is taken, and still does not reach the clipboard.
-    await user.click(screen.getByRole('button', { expanded: false }))
+    //
+    // Named by the call it is the header of, because the reply is no longer the only folded thing in
+    // the bubble: its prose is a section of its own now, so "the button that is collapsed" is two
+    // buttons and the card is the one this test is about.
+    await user.click(screen.getByRole('button', { name: /Reading src\/parser\.ts/ }))
     expect(screen.getByText(TOOL_OUTPUT)).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Copy reply' }))

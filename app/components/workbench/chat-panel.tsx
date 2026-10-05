@@ -1795,6 +1795,11 @@ export function ChatPanel() {
                     message={messages[item.index]}
                     canEdit={editAllowed}
                     laterTurns={messages.length - item.index - 1}
+                    // Whether this is the turn the run is writing: the last one on screen while a run
+                    // is in flight, which is what the sections inside it fold themselves from. Read
+                    // here rather than inside the bubble because the run is the pane's to know about —
+                    // a turn that has stopped growing and one that never grew are the same turn.
+                    streaming={isStreaming && item.index === messages.length - 1}
                     // The conversation these turns belong to, which is where a turn's images are stored:
                     // a chip asks that folder for its bytes, so a message sent in this session and a
                     // message restored from its file are read the same way.
