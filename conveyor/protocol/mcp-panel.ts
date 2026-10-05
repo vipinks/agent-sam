@@ -229,3 +229,77 @@ export function planMcpPanelView(
   const matched = filterMcpPanelRowsByStatus(filterMcpPanelRows(rows, query), status)
   return { ...paginateMcpPanelRows(matched, page, MCP_PANEL_PAGE_SIZE), matched: matched.length }
 }
+
+/** Where a row's own call has got to. The panel's record of the call it asked for, not main's. */
+export type McpPanelProcessPhase = 'idle' | 'starting' | 'stopping'
+
+/** Which glyph the row's one control draws. The status, in a mark rather than in a word. */
+export type McpServerButtonGlyph = 'play' | 'stop' | 'spinner' | 'retry'
+
+/** The conveyor command a click dispatches, which is one of the two the settings section already calls. */
+export type McpServerButtonAction = 'start' | 'stop'
+
+/** The one word the control's label and tooltip lead with, before the server's own id. */
+export type McpServerButtonWord = 'Start' | 'Stop' | 'Starting' | 'Stopping' | 'Retry'
+
+/** What one row's control is drawn from. */
+export interface McpServerButtonView {
+  glyph: McpServerButtonGlyph
+  /** Null while a call is in flight, so a disabled click has nothing to dispatch rather than a start to swallow. */
+  action: McpServerButtonAction | null
+  enabled: boolean
+  word: McpServerButtonWord
+}
+
+/** The three facts the rule reads: the panel's classification, the panel's own phase, and the last answer. */
+export interface McpServerButtonInput {
+  status: McpPanelRowStatus
+  phase: McpPanelProcessPhase
+  /** Whether the last start this row made was refused. Never a reason to offer a click the spawn would refuse. */
+  failed: boolean
+}
+
+/**
+ * What a row's one process control draws, says and dispatches.
+ *
+ * The glyph *is* the status: a play when nothing answers for the server, a stop when a process does, a
+ * spinner while the call that changes that is in flight, and a retry when the last start refused. That is
+ * why the rule is here rather than in the component — a status, a phase and a failure are data in, and the
+ * four facts a button is drawn from are data out — and why it imports nothing: this is the protocol layer,
+ * so neither the store that holds the listing nor the component that draws the row is reachable from it,
+ * and saying "Start" is a fact about two enums rather than about a screen.
+ *
+ * The order is the rule, and each step is a different question. A call in flight comes first, because it is
+ * the one fact that is true of the row while it lasts and because there is nothing for a second click to
+ * dispatch. Then a process that answers, because that is the present fact and a failure recorded before
+ * the refresh that found the process is the older one. Then the failure — on a row whose status says a
+ * start is what it would do anyway, which is the only place a retry can mean anything. Then the two
+ * statuses that cannot start at all: the switch is off, or a project server's grant is absent or stale,
+ * which `canStartServer` refuses for the same two reasons. `disabled` and `needs-trust` are therefore one
+ * button, and the row's own scope badge and trust chip are what tell them apart — the control is about the
+ * process, and a word about the flag would be the status text this button exists to replace.
+ *
+ * `action` is the command a click dispatches, stated apart from the glyph so the component infers nothing;
+ * `null` while a call is in flight is the honest answer rather than a start a disabled button would
+ * swallow. Two calls with the same input answer the same way and the input is left as it was: nothing here
+ * reads, writes or remembers.
+ */
+export function planMcpServerButton(input: McpServerButtonInput): McpServerButtonView {
+  if (input.phase === 'starting') return { glyph: 'spinner', action: null, enabled: false, word: 'Starting' }
+  if (input.phase === 'stopping') return { glyph: 'spinner', action: null, enabled: false, word: 'Stopping' }
+
+  if (input.status === 'running') return { glyph: 'stop', action: 'stop', enabled: true, word: 'Stop' }
+
+  switch (input.status) {
+    case 'stopped':
+      return input.failed
+        ? { glyph: 'retry', action: 'start', enabled: true, word: 'Retry' }
+        : { glyph: 'play', action: 'start', enabled: true, word: 'Start' }
+    // Both are a start main would refuse, so both are the same disabled play. `failed` is deliberately not
+    // consulted: a start cannot be the thing that failed while the row could not start, so the flag would
+    // only ever be stale here.
+    case 'disabled':
+    case 'needs-trust':
+      return { glyph: 'play', action: 'start', enabled: false, word: 'Start' }
+  }
+}

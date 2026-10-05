@@ -82,6 +82,7 @@ const SUITES = [
   { name: 'mcp bridge (tool list, consent, failures)', src: 'mcp/mcp-bridge-test.ts' },
   { name: 'mcp settings rules (running, trust, start gate)', src: 'mcp/mcp-settings-rules-test.ts' },
   { name: 'mcp panel rules (rows, status, search, page)', src: 'mcp/mcp-panel-test.ts' },
+  { name: 'mcp panel process button (glyph, action, label word)', src: 'mcp/mcp-panel-button-test.ts' },
   { name: 'git porcelain parser', src: 'git/porcelain-test.ts' },
   { name: 'git module', src: 'git/git-module-test.ts' },
   { name: 'write guard rules', src: 'workspace/write-guard-test.ts' },
