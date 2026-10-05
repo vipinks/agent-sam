@@ -13,29 +13,24 @@ import {
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
-import { CollapsibleSection } from './collapsible-section'
 import { DiffView } from './diff-view'
 import { ABANDONED_PAUSE_CODE, LOST_PAUSE_CODE, type ToolStep } from './agent-session'
 
 /**
  * One tool call, as a card in the transcript.
  *
- * Folded by the shared section rule, and for the interesting cases that matters: an agent that reads
- * three files should not bury its own answer under their contents, but the user should still be able to
- * open any of them and see exactly what came back. The header states the intent in the user's terms
- * ("Reading src/app.ts") rather than naming the tool, because the tool name is the model's vocabulary,
- * not the user's.
+ * A card is content, not a section: it no longer folds, because the run of steps it belongs to folds
+ * instead and the row above it is the one control the reader is offered. Thirty calls used to be thirty
+ * foldable headers, which is a decision per call about work nobody wants to read; one row over the run
+ * says how much work happened and leaves the reading of it to the reader.
  *
- * A call in flight is open: a card that says what a running call is doing is the thing worth reading
- * while it runs, and the rule folds it the moment the call has an outcome. The two pause states are in
- * flight on the same grounds — nothing has happened to the call yet — and only `awaiting` has buttons:
- * consent is per call, so a queued card shows that it is coming without offering a decision it is not
- * entitled to yet. For a `write_file` the card also shows the change itself, so the write is approved
- * after being read rather than before.
+ * What is left here is the card's own account of one call, and it is unchanged: the intent in the user's
+ * terms ("Reading src/app.ts") rather than the tool's name, the arguments, the diff of a write, the
+ * output, and the outcome. The status mark stays on every card, which is what keeps a run's internals
+ * readable once its row is open — which call is still running, which landed, which was refused.
  *
- * A call nobody ever decided mounts open for the same reason it always did — a collapsed prompt would
- * hide the one thing worth reading there, which of the two ways that question ended — and it is the
- * user's to fold afterwards, which a card the old rule pinned open could not be.
+ * A call nobody ever decided still says why, in its body, and its card is on screen the moment the row
+ * is: nothing about an unanswered question is folded away by this change.
  */
 export function AgentActionCard({
   step,
@@ -51,20 +46,10 @@ export function AgentActionCard({
   // Why this call was never decided, as the code the pause that owned it left behind. `undefined` for
   // a step whose turn simply ended, which needs no note: nothing was asked about it.
   const undecided = step.code === LOST_PAUSE_CODE || step.code === ABANDONED_PAUSE_CODE ? step.code : null
-  // In flight from the moment the call starts until it has an outcome, which is the whole of what the
-  // auto rule reads: a decision being waited on is as much a step in progress as a call being run.
-  const inFlight = step.status === 'running' || awaiting || queued
 
   return (
-    <CollapsibleSection
-      slot="agent-action-card"
-      summary={describe(step)}
-      inFlight={inFlight}
-      // A question that ended without an answer opens folded nowhere: it is the state a reopened
-      // conversation is read in, and it is a state only the user may leave.
-      defaultOpen={undecided !== null}
-      icon={<ToolIcon tool={step.tool} />}
-      trailing={<StatusMark status={step.status} />}
+    <div
+      data-slot="agent-action-card"
       className={cn(
         'rounded-md border text-[12px]',
         // The brand token rather than a warning colour, which this theme does not define: a pending
@@ -74,75 +59,87 @@ export function AgentActionCard({
         // what is waiting behind the decision without mistaking it for something they can act on now.
         queued && 'opacity-70'
       )}
-      bodyClassName="border-t border-border/70 px-2.5 py-2"
     >
-      {/* Why nobody was asked about this call, on the calls nobody was asked about. A flagged
+      {/* The card's own one line: which call this is, and how it ended. The same three glyphs the
+          header carried, in the same order, so a reader who knew the folded card reads this instantly. */}
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
+        <ToolIcon tool={step.tool} />
+        <span className="min-w-0 flex-1 truncate font-medium">{describe(step)}</span>
+        <StatusMark status={step.status} />
+      </div>
+
+      <div data-slot="agent-action-card-body" className="border-t border-border/70 px-2.5 py-2">
+        {/* Why nobody was asked about this call, on the calls nobody was asked about. A flagged
           server's calls run without a pause, so the card names the flag that let this one through
           instead of leaving a server call with no Approve button behind it and no explanation.
           Absent on every call that *was* put to the user, and then nothing is drawn here at all. */}
-      {step.autoApproved && (
-        <p data-slot="mcp-auto-approved" className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Zap className="size-3.5 shrink-0 text-brand" />
-          Ran without asking — the {step.autoApproved} flag is on for this server.
-        </p>
-      )}
+        {step.autoApproved && (
+          <p
+            data-slot="mcp-auto-approved"
+            className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground"
+          >
+            <Zap className="size-3.5 shrink-0 text-brand" />
+            Ran without asking — the {step.autoApproved} flag is on for this server.
+          </p>
+        )}
 
-      {/* Arguments first: for a write, what is being changed matters more than that it changed.
+        {/* Arguments first: for a write, what is being changed matters more than that it changed.
           For a call to a running server the same room is spent on the consent block, which carries
           the same information with that server's own secrets taken out and cut to a length a card
           can hold — printing the raw arguments as well would put the secrets back on screen next to
           their redaction, which is the one thing the preview exists to prevent. */}
-      {step.mcp ? (
-        <McpConsentBlock consent={step.mcp} />
-      ) : (
-        <pre className="max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-          {formatArgs(step)}
-        </pre>
-      )}
+        {step.mcp ? (
+          <McpConsentBlock consent={step.mcp} />
+        ) : (
+          <pre className="max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            {formatArgs(step)}
+          </pre>
+        )}
 
-      {step.diff && <DiffView diff={step.diff} />}
+        {step.diff && <DiffView diff={step.diff} />}
 
-      {step.output && (
-        <pre
-          className={cn(
-            'mt-1.5 max-h-52 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap',
-            step.status === 'failed' && 'text-destructive'
-          )}
-        >
-          {step.output}
-        </pre>
-      )}
+        {step.output && (
+          <pre
+            className={cn(
+              'mt-1.5 max-h-52 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap',
+              step.status === 'failed' && 'text-destructive'
+            )}
+          >
+            {step.output}
+          </pre>
+        )}
 
-      {awaiting && (
-        <div className="mt-2 flex items-center gap-2">
-          <Button size="sm" onClick={() => onApprove?.(step.callId)}>
-            Approve
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => onDeny?.(step.callId)}>
-            Deny
-          </Button>
-          <span className="text-[11px] text-muted-foreground">Decides this action only.</span>
-        </div>
-      )}
+        {awaiting && (
+          <div className="mt-2 flex items-center gap-2">
+            <Button size="sm" onClick={() => onApprove?.(step.callId)}>
+              Approve
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onDeny?.(step.callId)}>
+              Deny
+            </Button>
+            <span className="text-[11px] text-muted-foreground">Decides this action only.</span>
+          </div>
+        )}
 
-      {queued && (
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Waiting its turn — nothing here runs until the decision above is made.
-        </p>
-      )}
+        {queued && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Waiting its turn — nothing here runs until the decision above is made.
+          </p>
+        )}
 
-      {/* The two ways a question can end unanswered, told apart because they are different news:
+        {/* The two ways a question can end unanswered, told apart because they are different news:
           a pause the process did not survive ended without the user, and one the user ended
           themselves did not. Branching on the code, never on a sentence. */}
-      {undecided === LOST_PAUSE_CODE && (
-        <p className="mt-2 text-[11px] text-muted-foreground">Not decided — the app closed before you answered.</p>
-      )}
-      {undecided === ABANDONED_PAUSE_CODE && (
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Not decided — the turn was ended before this was answered.
-        </p>
-      )}
-    </CollapsibleSection>
+        {undecided === LOST_PAUSE_CODE && (
+          <p className="mt-2 text-[11px] text-muted-foreground">Not decided — the app closed before you answered.</p>
+        )}
+        {undecided === ABANDONED_PAUSE_CODE && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Not decided — the turn was ended before this was answered.
+          </p>
+        )}
+      </div>
+    </div>
   )
 }
 

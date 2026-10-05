@@ -13,9 +13,10 @@ import {
   AlertDialogTitle,
 } from '../ui/alert-dialog'
 import { Textarea } from '../ui/textarea'
-import { AgentActionCard } from './agent-action-card'
+import { groupStepRuns } from '@/conveyor/protocol/step-runs'
 import { AutoContinueMark } from './auto-continue-mark'
 import { MarkdownContent } from './markdown'
+import { StepRunSection } from './step-run-section'
 import {
   DEFAULT_BUBBLE_ALIGNMENT,
   DEFAULT_FONT_PRESET,
@@ -48,6 +49,11 @@ import type { AgentTurn } from './agent-session'
  * behind a header is an answer nobody read. What folds instead is the work — the runs of tool steps —
  * and never the words.
  *
+ * The cards are drawn one row per run rather than one header per call. A run is the stretch of steps
+ * between two seams, which is why the seam positions are the cuts the grouping rule is given: the work
+ * before a nudge and the work after it were two different stretches of the turn, and they read as two
+ * rows. A turn that was never nudged drew its cards in one stretch, so it shows one row.
+ *
  * Clamped to what exists: a seam recorded after the last card of the turn as it arrived is drawn after
  * the last card, which is what a transcript read back from disk shows when the resumed stretch narrated
  * but called nothing. A mark stored without a prose position — written before seams carried one, or read
@@ -61,23 +67,34 @@ function turnBlocks(
 ): ReactNode[] {
   const marks = turn.continuations ?? []
   const blocks: ReactNode[] = []
-  // Where the walk has got to: the cards drawn and the characters narrated so far. Both move forward
+  // Where the walk has got to: the steps drawn and the characters narrated so far. Both move forward
   // only, and only to a position a seam was recorded at.
-  let cards = 0
+  let steps = 0
   let chars = 0
 
-  /** Push the cards up to `boundary`, which is either a seam or the end of the frame. */
-  const cardsUpTo = (boundary: number) => {
+  // The runs, cut at the seams: a step after a nudge begins a new stretch of work, so it begins a new
+  // row. Computed once for the whole turn, so the row a step falls into and the count its row reads are
+  // the same answer.
+  const runs = groupStepRuns(
+    turn.steps,
+    marks.map((mark) => mark.afterSteps)
+  )
+  let run = 0
+
+  /** Push the rows whose steps all fall before `boundary`, which is either a seam or the end of the frame. */
+  const runsUpTo = (boundary: number) => {
     const end = Math.min(boundary, turn.steps.length)
-    for (let index = cards; index < end; index += 1) {
-      const step = turn.steps[index]
-      blocks.push(<AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />)
+    // Clamped to whole runs: a seam recorded inside a run still draws that run entire, because a row cut
+    // in half is not a row. The mark is placed after it, which is the closest the record supports.
+    while (run < runs.length && steps < end) {
+      blocks.push(<StepRunSection key={runs[run].key} run={runs[run]} onApprove={onApprove} onDeny={onDeny} />)
+      steps += runs[run].count
+      run += 1
     }
-    cards = end
   }
 
   for (const [position, mark] of marks.entries()) {
-    cardsUpTo(mark.afterSteps)
+    runsUpTo(mark.afterSteps)
     const start = chars
     const slice = turn.content.slice(start, mark.afterChars ?? start)
     chars += slice.length
@@ -87,7 +104,7 @@ function turnBlocks(
     blocks.push(<AutoContinueMark key={`auto-${position}-${mark.count}`} mark={mark} />)
   }
 
-  cardsUpTo(turn.steps.length)
+  runsUpTo(turn.steps.length)
   const rest = turn.content.slice(chars)
   // The last slice is the one the empty state reads: a turn with no cards and nothing written yet is
   // still thinking, and the bubble says so. An empty slice *between* two seams is not that — the answer
