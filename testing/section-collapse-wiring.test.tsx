@@ -11,14 +11,17 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  *
  * The decision itself — open in flight, fold on completion, never fight a manual toggle — is a pure
  * rule and is tested in `tests/ui/section-collapse-test.ts`, without a DOM. What is left here is the
- * half a rule test cannot see: that the two components which draw a section are wired to that rule, that
- * a live run's own chunks drive it, and that folding a section hides its body without taking it out of
+ * half a rule test cannot see: that the component which draws a section is wired to that rule, that a
+ * live run's own chunks drive it, and that folding a section hides its body without taking it out of
  * the document.
  *
- * Driven through the panel rather than by rendering the components directly, because the in-flight
- * signal is the pane's: a turn is streaming while its own chunks arrive, and only the transport can say
- * when that starts and stops. The turn here is prose, a tool call and its result, which is the shortest
- * transcript that carries both kinds of section.
+ * Driven through the panel rather than by rendering the component directly, because the in-flight
+ * signal is a step's own status, which only the transport's chunks move. The turn here is prose, a tool
+ * call and its result.
+ *
+ * The prose cases this file used to hold are gone with the sections they asserted: a turn's answer is
+ * plain visible words now and there is nothing about it to fold, which is asserted in
+ * `testing/answer-visibility.test.tsx` instead.
  *
  * jsdom proves wiring and words, not pixels: that a section's chevron carries the class that rotates it
  * is a claim about the class, and whether it looks like a chevron is read by eye. The copy path is
@@ -127,11 +130,6 @@ function only<T extends HTMLElement>(selector: string): T {
   return nodes[0]
 }
 
-/** The thinking section a turn is writing: the prose block, as its own section. */
-function thinking(): HTMLElement {
-  return only<HTMLElement>('[data-slot="thinking-section"]')
-}
-
 /** The one tool-call card on screen. */
 function card(): HTMLElement {
   return only<HTMLElement>('[data-slot="agent-action-card"]')
@@ -161,13 +159,6 @@ function bodyIsHidden(section: HTMLElement): boolean {
   return body(section).hasAttribute('hidden')
 }
 
-/** The chevron's own class, which is what turns with the section. */
-function chevronClass(section: HTMLElement): string {
-  const svg = header(section).querySelector('svg')
-  if (!svg) throw new Error('the section draws no chevron')
-  return svg.getAttribute('class') ?? ''
-}
-
 /** The bubble the sections sit in, which is where the message's own size class is painted. */
 function bubbleOf(section: HTMLElement): HTMLElement {
   const found = section.closest<HTMLElement>('[data-slot="message-body"]')
@@ -176,37 +167,6 @@ function bubbleOf(section: HTMLElement): HTMLElement {
 }
 
 describe('the collapsible sections of a transcript', () => {
-  it('keeps the thinking section open while the turn is producing it', async () => {
-    const stub = stubChat()
-    const channel = await startRun(stub)
-
-    // The section exists before a token does — a turn that has said nothing yet is still a step in
-    // flight — and it is named for what it is, which is the whole of what the header says.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Thinking' })).toBeTruthy())
-    chunk(stub, channel, { type: 'text_delta', text: PROSE })
-    await waitFor(() => expect(body(thinking()).textContent).toContain(PROSE))
-
-    expect(isOpen(thinking())).toBe(true)
-    expect(bodyIsHidden(thinking())).toBe(false)
-    expect(chevronClass(thinking())).toContain('rotate-90')
-  })
-
-  it('folds the thinking section when the turn completes, and turns its chevron back', async () => {
-    const stub = stubChat()
-    const channel = await startRun(stub)
-
-    chunk(stub, channel, { type: 'text_delta', text: PROSE })
-    await waitFor(() => expect(isOpen(thinking())).toBe(true))
-
-    finishTurn(stub, channel)
-
-    // The transition, not a re-render: the run's own ending is what folds the section, and it folds
-    // without taking the prose out of the document.
-    await waitFor(() => expect(isOpen(thinking())).toBe(false))
-    expect(bodyIsHidden(thinking())).toBe(true)
-    expect(chevronClass(thinking())).not.toContain('rotate-90')
-  })
-
   it('opens a tool card while its result is out, and folds it when the result arrives', async () => {
     const stub = stubChat()
     const channel = await startRun(stub)
@@ -215,14 +175,13 @@ describe('the collapsible sections of a transcript', () => {
     chunk(stub, channel, { type: 'tool_call_start', callId: 'a1', tool: 'read_file', args: { path: 'parser.ts' } })
 
     // Open on arrival, because the call is in flight: the card the user is watching is the step being
-    // taken, and the thinking section above it stays open for the same reason.
+    // taken.
     //
     // Found by its accessible name rather than by its words, which is what a reader who cannot see the
     // header is given: the name is the intent plus the status glyph's own label, and both are part of
     // what the header says about the call.
     await waitFor(() => expect(screen.getByRole('button', { name: /Reading parser\.ts/ })).toBeTruthy())
     expect(isOpen(card())).toBe(true)
-    expect(isOpen(thinking())).toBe(true)
 
     chunk(stub, channel, { type: 'tool_result', callId: 'a1', tool: 'read_file', ok: true, output: 'body' })
 
@@ -235,18 +194,20 @@ describe('the collapsible sections of a transcript', () => {
     const stub = stubChat()
     const channel = await startRun(stub)
 
-    chunk(stub, channel, { type: 'text_delta', text: PROSE })
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'a1', tool: 'read_file', args: { path: 'parser.ts' } })
+    await waitFor(() => expect(isOpen(card())).toBe(true))
+    chunk(stub, channel, { type: 'tool_result', callId: 'a1', tool: 'read_file', ok: true, output: 'body' })
     finishTurn(stub, channel)
-    await waitFor(() => expect(isOpen(thinking())).toBe(false))
+    await waitFor(() => expect(isOpen(card())).toBe(false))
 
-    await user.click(screen.getByRole('button', { name: 'Thinking' }))
-    expect(isOpen(thinking())).toBe(true)
+    await user.click(header(card()))
+    expect(isOpen(card())).toBe(true)
 
     // A state tick that reaches the bubble: the appearance store moving is the pane re-rendering the
     // transcript with a different size, which is the app's own way of redrawing a message it is not
     // editing. The bubble really did re-render — the size class proves it — and the section the user
     // opened is still open, which is the claim.
-    const sizeBefore = bubbleOf(thinking()).className
+    const sizeBefore = bubbleOf(card()).className
     expect(sizeBefore).toContain('text-[13px]')
     act(() =>
       stub.pushToChannel(`conveyor:store:${APPEARANCE_STORE_ID}:changed`, {
@@ -255,8 +216,8 @@ describe('the collapsible sections of a transcript', () => {
       })
     )
 
-    await waitFor(() => expect(bubbleOf(thinking()).className).toContain('text-[15px]'))
-    expect(isOpen(thinking())).toBe(true)
+    await waitFor(() => expect(bubbleOf(card()).className).toContain('text-[15px]'))
+    expect(isOpen(card())).toBe(true)
   })
 
   it('keeps a folded section’s content in the DOM, in a copy, and in the transcript out', async () => {
@@ -268,13 +229,16 @@ describe('the collapsible sections of a transcript', () => {
     const channel = await startRun(stub)
 
     chunk(stub, channel, { type: 'text_delta', text: PROSE })
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'a1', tool: 'read_file', args: { path: 'parser.ts' } })
+    chunk(stub, channel, { type: 'tool_result', callId: 'a1', tool: 'read_file', ok: true, output: 'the file body' })
     finishTurn(stub, channel)
-    await waitFor(() => expect(isOpen(thinking())).toBe(false))
+    await waitFor(() => expect(isOpen(card())).toBe(false))
 
-    // Hidden, not removed: the body is still in the document, with the prose still in it. That parity is
-    // what keeps a folded section a drawing decision rather than a claim about what the turn says.
-    expect(bodyIsHidden(thinking())).toBe(true)
-    expect(body(thinking()).textContent).toContain(PROSE)
+    // Hidden, not removed: the body is still in the document, with the call's own content still in it.
+    // That parity is what keeps a folded section a drawing decision rather than a claim about what the
+    // turn did.
+    expect(bodyIsHidden(card())).toBe(true)
+    expect(body(card()).textContent).toContain('the file body')
 
     await user.click(screen.getByRole('button', { name: 'Copy reply' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))

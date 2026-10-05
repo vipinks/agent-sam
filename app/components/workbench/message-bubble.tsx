@@ -15,7 +15,6 @@ import {
 import { Textarea } from '../ui/textarea'
 import { AgentActionCard } from './agent-action-card'
 import { AutoContinueMark } from './auto-continue-mark'
-import { CollapsibleSection } from './collapsible-section'
 import { MarkdownContent } from './markdown'
 import {
   DEFAULT_BUBBLE_ALIGNMENT,
@@ -44,20 +43,19 @@ import type { AgentTurn } from './agent-session'
  * rendered by cutting the string there. Each slice is its own markdown block, and the slices stay in the
  * order the run wrote them.
  *
+ * Every slice is plain visible prose, drawn exactly as the pre-seam path drew the whole answer. A
+ * stretch of narration is not a thing the reader has to open: it is what the turn said, and an answer
+ * behind a header is an answer nobody read. What folds instead is the work — the runs of tool steps —
+ * and never the words.
+ *
  * Clamped to what exists: a seam recorded after the last card of the turn as it arrived is drawn after
  * the last card, which is what a transcript read back from disk shows when the resumed stretch narrated
  * but called nothing. A mark stored without a prose position — written before seams carried one, or read
  * from a file saved before they did — leaves the whole answer below it, which is the only placement such
  * a record supports.
- *
- * Every stretch of prose is its own section, folded by the same rule the cards are: the one the run is
- * writing now is open, and the ones behind it folded when the run moved past them. `streaming` is the
- * half of that only the pane knows — that this turn is the one being written — and it is handed to the
- * last stretch alone, since a stretch with a seam or a card after it is not being produced any more.
  */
 function turnBlocks(
   turn: AgentTurn,
-  streaming: boolean,
   onApprove?: (callId: string) => void,
   onDeny?: (callId: string) => void
 ): ReactNode[] {
@@ -85,7 +83,7 @@ function turnBlocks(
     chars += slice.length
     // An empty slice is not a piece of the answer to render — and for a mark with no prose position it is
     // exactly the case above: the text that follows belongs below the line rather than above it.
-    if (slice) blocks.push(<ThinkingSection key={`prose-${start}`} content={slice} inFlight={false} />)
+    if (slice) blocks.push(<MarkdownContent key={`prose-${start}`} content={slice} />)
     blocks.push(<AutoContinueMark key={`auto-${position}-${mark.count}`} mark={mark} />)
   }
 
@@ -96,38 +94,13 @@ function turnBlocks(
   // simply paused there, and a "Thinking…" there would be a claim about work that is already done.
   //
   // Keyed by where it starts rather than by being the last one: the seam that arrives next cuts this
-  // stretch in two, and the same offset on both sides of that cut keeps it the same section — one the
-  // user may have opened by hand — rather than a new one drawn in its place.
+  // stretch in two, and the same offset on both sides of that cut keeps it the same block — rather than
+  // a new one drawn in its place, which would remount the markdown inside it.
   if (rest || turn.steps.length === 0) {
-    blocks.push(<ThinkingSection key={`prose-${chars}`} content={rest} inFlight={streaming} />)
+    blocks.push(<MarkdownContent key={`prose-${chars}`} content={rest} />)
   }
 
   return blocks
-}
-
-/**
- * One stretch of a turn's prose, as a section of its own.
- *
- * A step like any other, and folded by the same rule: open while the run is writing it, folded once the
- * run has moved past it. The prose inside is drawn exactly as it always was — the same renderer, and the
- * same empty state for a turn that has said nothing yet — because how an answer reads is not what this
- * section is about.
- */
-function ThinkingSection({ content, inFlight }: { content: string; inFlight: boolean }) {
-  return (
-    <CollapsibleSection
-      slot="thinking-section"
-      summary="Thinking"
-      inFlight={inFlight}
-      className="rounded-md"
-      // Flatter than a card's, deliberately: this sits inside the bubble already, and a box drawn
-      // around prose would read as something the reader has to get out of.
-      headerClassName="px-1.5 py-1 text-muted-foreground"
-      bodyClassName="px-1.5 pb-1"
-    >
-      <MarkdownContent content={content} />
-    </CollapsibleSection>
-  )
 }
 
 /**
@@ -148,7 +121,6 @@ export const MessageBubble = memo(function MessageBubble({
   sessionId,
   alignment = DEFAULT_BUBBLE_ALIGNMENT,
   fontPreset = DEFAULT_FONT_PRESET,
-  streaming = false,
 }: {
   message: AgentTurn
   onApprove?: (callId: string) => void
@@ -206,23 +178,11 @@ export const MessageBubble = memo(function MessageBubble({
    * own is the size this app has always painted.
    */
   fontPreset?: FontPresetId
-  /**
-   * Whether this turn is the one a run is writing right now.
-   *
-   * The pane's fact rather than the bubble's, and the one thing the auto-collapse rule cannot read off
-   * the turn: a reply that has stopped growing and a reply that never grew look the same in the
-   * transcript, and only the run knows which it is. It decides which stretch of prose counts as in
-   * flight, so it is the difference between a section that folds when the answer lands and one that
-   * folds while it is still being written. Defaulted off, so a bubble rendered on its own — as the copy
-   * and markdown suites do — draws every section of a finished turn folded, which is how a conversation
-   * reopened from disk is read.
-   */
-  streaming?: boolean
 }) {
   const isUser = message.role === 'user'
   // The turn's blocks, built once per render: their order is the order the run happened in, and two
   // passes over the same data would be a second place for it to be got wrong.
-  const blocks = turnBlocks(message, streaming, onApprove, onDeny)
+  const blocks = turnBlocks(message, onApprove, onDeny)
 
   /*
    * The editor, held here rather than in the pane.
