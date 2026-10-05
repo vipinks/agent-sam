@@ -33,7 +33,7 @@
  */
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ConveyorError } from 'electron-conveyor/react'
@@ -43,7 +43,14 @@ import { percentSize, type LayoutSizes } from '@/app/components/workbench/layout
 import { queryClient } from '@/conveyor/client'
 import { useMcpServersStore } from '@/conveyor/stores/mcp-servers'
 import type { SkillListing, SkillScope, SkillSummary, SkillTierId, SkillTierListing } from '@/conveyor/protocol/skills'
-import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
+import {
+  activeStub,
+  CHAT_SESSIONS_STORE_ID,
+  createBridgeStub,
+  setActiveStub,
+  stubStore,
+  type BridgeStub,
+} from './bridge-stub'
 
 /**
  * The resize primitive is stood in for, exactly as the other layout suites stand in for it: with the real
@@ -247,6 +254,12 @@ function stubWorkbench(overrides: Record<string, (input: unknown) => unknown> = 
       id: (input as { serverId: string }).serverId,
       enabled: (input as { enabled: boolean }).enabled,
     }),
+    // The two process calls a row's control dispatches, which the panel did not make before this surface
+    // had one: each answers the way main answers, so a click has somewhere to land. What the row reads
+    // back is the *read's* answer rather than this call's — `MCP_TOOLS` above is fixed — which is why a
+    // started row's glyph is the play the mirror still reports rather than a stop this stub implied.
+    startServer: (input) => ({ id: (input as { serverId: string }).serverId, tools: [] }),
+    stopServer: (input) => ({ id: (input as { serverId: string }).serverId, running: false }),
     ...overrides,
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
@@ -617,6 +630,20 @@ describe('the MCP servers tab', () => {
     return row
   }
 
+  /**
+   * The one process control a row carries, by the server it is about.
+   *
+   * Found by its slot rather than by its label, because the label is one of the things under assertion:
+   * the glyph the button draws, the word it says and the command it dispatches are three claims about one
+   * node, and a helper that looked it up by the claim would fail as "not found" rather than as a wrong
+   * word.
+   */
+  function processControl(id: string): HTMLButtonElement {
+    const button = mcpRow(id).querySelector<HTMLButtonElement>('[data-slot="mcp-panel-process"]')
+    if (!button) throw new Error(`no process control on ${id}`)
+    return button
+  }
+
   /** The second tab of the docked panel, open on its own read. */
   async function dockMcp(): Promise<void> {
     await userEvent.click(panelTab(/^MCP servers/))
@@ -667,7 +694,7 @@ describe('the MCP servers tab', () => {
     expect(mcpCountLine()).toBe('6 of 6')
   })
 
-  it('draws each row’s id, scope, running state and tool count, and the trust chip only where it belongs', async () => {
+  it('draws each row’s id, scope, tool count and process control, and the trust chip only where it belongs', async () => {
     stubWorkbench()
     renderWorkbench()
     await dockTools()
@@ -676,21 +703,26 @@ describe('the MCP servers tab', () => {
     // The first page of the whole list, in the order the settings section draws the same two reads in.
     expect(mcpRowIds()).toEqual(['filesystem', 'memory', 'playwright', 'github', 'atlas'])
 
-    // A running user row: the id, the scope it came from, and what the process is offering.
+    // A running user row: the id, the scope it came from, what the process is offering, and the one thing
+    // the row can do about it — a Stop, which is the status drawn rather than written.
     const file = mcpRow('filesystem')
     expect(within(file).getByText('filesystem')).toBeTruthy()
     expect(within(file).getByText('User')).toBeTruthy()
-    expect(within(file).getByText('Running · 2 tools')).toBeTruthy()
+    expect(within(file).getByText('2 tools')).toBeTruthy()
     expect(within(file).queryByText('Needs trust')).toBeNull()
+    expect(processControl('filesystem').getAttribute('data-glyph')).toBe('stop')
 
-    // The same three marks on a trusted project server, with its own tool count.
+    // The same marks on a trusted project server, with its own tool count and its own control.
     const github = mcpRow('github')
     expect(within(github).getByText('Project')).toBeTruthy()
-    expect(within(github).getByText('Running · 3 tools')).toBeTruthy()
+    expect(within(github).getByText('3 tools')).toBeTruthy()
     expect(within(github).queryByText('Needs trust')).toBeNull()
+    expect(processControl('github').getAttribute('data-glyph')).toBe('stop')
 
-    // An enabled server with nothing behind it says so rather than claiming a count of none.
-    expect(within(mcpRow('memory')).getByText('Stopped')).toBeTruthy()
+    // An enabled server with nothing behind it says so through the control and claims no count: a play,
+    // and no process to have counted anything.
+    expect(mcpRow('memory').textContent ?? '').not.toContain('tool')
+    expect(processControl('memory').getAttribute('data-glyph')).toBe('play')
 
     // The chip: a project row whose grant is absent (`atlas`) carries it even though it is running, which
     // is the one thing a row's marks say that its status does not.
@@ -890,6 +922,216 @@ describe('the MCP servers tab', () => {
         'The server lists could not be read. The last answer is still shown.'
       )
     )
+  })
+
+  /**
+   * A row's one process control: which glyph it draws, what it names, and the command a click sends.
+   *
+   * Which of the four states a row's facts produce is `conveyor/protocol/mcp-panel.ts`'s rule, asserted
+   * without a render in `tests/mcp/mcp-panel-button-test.ts`. What is here is what only a render can show:
+   * that the row carries the control the rule describes, that pressing it dispatches the traced conveyor
+   * action with the settings section's own payload, and that the enable switch beside it still means what
+   * it meant. The words this suite reads are the button's label, not a status: nothing on the rail states
+   * what a server is doing in text, which is the claim the last case here pins.
+   */
+  describe('a row’s process control', () => {
+    /**
+     * The bridge call on one mcp method, in order, which is what a "dispatched once" claim is about.
+     *
+     * Counted rather than looked up as the first one: a row that fired twice would still have a first
+     * call whose payload is right, and the count is the half of that claim a single lookup cannot make.
+     */
+    function callsOn(method: string): number {
+      return activeStub()
+        .methodsOn('mcp')
+        .filter((called) => called === method).length
+    }
+
+    it('starts a stopped server through the settings command, naming the action and the server', async () => {
+      const stub = stubWorkbench()
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      // A row with nothing behind it offers the start, and says so in the two places a reader can reach:
+      // the label everything hears, and the tooltip a pointer sees. Neither states a status.
+      const control = processControl('memory')
+      expect(control.getAttribute('data-glyph')).toBe('play')
+      expect(control.getAttribute('aria-label')).toBe('Start memory')
+      expect(control.getAttribute('title')).toBe('Start memory')
+      expect(control.disabled).toBe(false)
+
+      const readsBefore = callsOn('listServers')
+      await userEvent.click(control)
+
+      // One dispatch, and the settings section's payload exactly: the row's own scope, the folder that is
+      // open, and the id. A second payload shape for the same command is how two surfaces start to mean
+      // different things.
+      await waitFor(() => expect(callsOn('startServer')).toBe(1))
+      expect(stub.callsTo('mcp').find((call) => call.method === 'startServer')?.args[0]).toEqual({
+        scope: 'user',
+        rootPath: ROOT,
+        serverId: 'memory',
+      })
+      expect(callsOn('stopServer')).toBe(0)
+      expect(callsOn('setEnabled')).toBe(0)
+
+      // And the list is asked for again, because the running set is main's answer rather than this
+      // click's memory of it — the glyph has to follow a process that started, not an intention that it had.
+      await waitFor(() => expect(callsOn('listServers')).toBe(readsBefore + 1))
+      // What the mirror reports decides the glyph, so a server the read still calls stopped is a play.
+      expect(processControl('memory').getAttribute('data-glyph')).toBe('play')
+    })
+
+    it('stops a running server through the settings command, and sends the id alone', async () => {
+      const stub = stubWorkbench()
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      const control = processControl('filesystem')
+      expect(control.getAttribute('data-glyph')).toBe('stop')
+      expect(control.getAttribute('aria-label')).toBe('Stop filesystem')
+
+      await userEvent.click(control)
+
+      await waitFor(() => expect(callsOn('stopServer')).toBe(1))
+      // The stop takes the id and nothing else, as the settings section's own Stop does: scope and folder
+      // are what a start needs, and a stop that asked for them would be reading a file to kill a process.
+      expect(stub.callsTo('mcp').find((call) => call.method === 'stopServer')?.args[0]).toEqual({
+        serverId: 'filesystem',
+      })
+      expect(callsOn('startServer')).toBe(0)
+    })
+
+    it('draws a disabled spinner while a call is in flight, and dispatches nothing on a second click', async () => {
+      const releases: Array<() => void> = []
+      stubWorkbench({
+        startServer: () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve)
+          }),
+        stopServer: () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve)
+          }),
+      })
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      await userEvent.click(processControl('memory'))
+      await waitFor(() => expect(processControl('memory').getAttribute('data-glyph')).toBe('spinner'))
+      const starting = processControl('memory')
+      expect(starting.getAttribute('aria-label')).toBe('Starting memory')
+      expect(starting.disabled).toBe(true)
+
+      // The click is refused twice over, and the second is the one this asserts: a disabled button is
+      // handed no pointer, and the control reads its own action before dispatching, so a click that
+      // arrives anyway — a synthetic one, or a keyboard activation on a node the DOM has already disabled
+      // — has nothing to send. `fireEvent` is used precisely because it dispatches regardless of the
+      // disabled attribute, which is what makes the assertion about the component rather than about jsdom.
+      fireEvent.click(starting)
+      expect(callsOn('startServer')).toBe(1)
+
+      // And the other direction, so the spinner is not only the start's: a stop in flight is one too.
+      await userEvent.click(processControl('filesystem'))
+      await waitFor(() => expect(processControl('filesystem').getAttribute('data-glyph')).toBe('spinner'))
+      expect(processControl('filesystem').getAttribute('aria-label')).toBe('Stopping filesystem')
+      expect(processControl('filesystem').disabled).toBe(true)
+
+      for (const release of releases) release()
+      // Both calls land, and each row goes back to what the mirror says rather than to what was asked for.
+      await waitFor(() => expect(processControl('memory').getAttribute('data-glyph')).toBe('play'))
+      expect(processControl('filesystem').getAttribute('data-glyph')).toBe('stop')
+    })
+
+    it('offers the retry after a start that failed, dispatching that same start again', async () => {
+      const stub = stubWorkbench({
+        startServer: () => {
+          throw new ConveyorError('MCP_SPAWN_FAILED', 'main says the spawn failed at a path you have never seen')
+        },
+      })
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      await userEvent.click(processControl('memory'))
+
+      await waitFor(() => expect(processControl('memory').getAttribute('data-glyph')).toBe('retry'))
+      const retry = processControl('memory')
+      expect(retry.getAttribute('aria-label')).toBe('Retry memory')
+      expect(retry.disabled).toBe(false)
+
+      // Why it is a retry is the panel's line, in the shared words for the code — the same sentence and the
+      // same slot the switch's refusals use. Main's message is for a log and never reaches the screen.
+      await waitFor(() =>
+        expect(document.querySelector('[data-slot="tools-mcp-write-error"]')?.textContent).toBe(
+          'memory: The command could not be started on this machine.'
+        )
+      )
+      expect(document.body.textContent ?? '').not.toContain('main says')
+
+      await userEvent.click(retry)
+      await waitFor(() => expect(callsOn('startServer')).toBe(2))
+      expect(callsOn('stopServer')).toBe(0)
+      // A start that succeeded on the second attempt would clear the line, so a failed one leaves it: this
+      // is the row still saying what went wrong.
+      expect(document.querySelector('[data-slot="tools-mcp-write-error"]')?.textContent).toBe(
+        'memory: The command could not be started on this machine.'
+      )
+      expect(stub.methodsOn('mcp')).toContain('listServers')
+    })
+
+    it('keeps the switch and the control apart: neither dispatches the other’s command', async () => {
+      const stub = stubWorkbench()
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      // The switch, unchanged: the settings section's write, with the row's own scope and the flag turned
+      // over, and no process touched by it.
+      await userEvent.click(within(mcpRow('memory')).getByRole('switch'))
+      await waitFor(() => expect(callsOn('setEnabled')).toBe(1))
+      expect(stub.callsTo('mcp').find((call) => call.method === 'setEnabled')?.args[0]).toEqual({
+        scope: 'user',
+        rootPath: ROOT,
+        serverId: 'memory',
+        enabled: false,
+      })
+      expect(callsOn('startServer')).toBe(0)
+      expect(callsOn('stopServer')).toBe(0)
+
+      // The control beside it is the same control: the switch redraws the row, and what the row offers is
+      // still a Start for a server the mirror reports as stopped. Nothing about the flag reached it.
+      expect(processControl('memory').getAttribute('data-glyph')).toBe('play')
+      expect(processControl('memory').getAttribute('aria-label')).toBe('Start memory')
+
+      // And the other way round: a start is not the enable flag's write.
+      await userEvent.click(processControl('memory'))
+      await waitFor(() => expect(callsOn('startServer')).toBe(1))
+      expect(callsOn('setEnabled')).toBe(1)
+    })
+
+    it('states no status word on any row, on either page', async () => {
+      stubWorkbench()
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      // Every row of the first page, and then the second: the words the rail used to write about a process
+      // are gone, and what says it is the control's glyph. The status filter's own options are the one
+      // place those words remain, which is why this reads rows rather than the whole panel.
+      for (const row of mcpRows()) {
+        expect(row.textContent ?? '').not.toMatch(/Running|Stopped/)
+      }
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+      expect(mcpRows().length).toBeGreaterThan(0)
+      for (const row of mcpRows()) {
+        expect(row.textContent ?? '').not.toMatch(/Running|Stopped/)
+      }
+    })
   })
 })
 
