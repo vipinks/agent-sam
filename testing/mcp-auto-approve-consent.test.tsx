@@ -116,18 +116,12 @@ function call(id: string, name: string, args: Record<string, unknown>) {
   return { id, type: 'function', function: { name, arguments: JSON.stringify(args) } }
 }
 
-/**
- * The card a call is drawn on, found by the call it names.
- *
- * The card is content now rather than a section: it no longer folds, so there is no header button to
- * click and no `closest('button')` to reach. Its body — whether the flag let a call through — is on
- * screen for as long as the run's row is open.
- */
-function cardFor(tool: string): HTMLElement {
+/** The card's own header, which is what expands it. */
+function cardHeader(tool: string): HTMLElement {
   const found = screen.getByText(tool, { exact: false })
-  const card = found.closest<HTMLElement>('[data-slot="agent-action-card"]')
-  if (!card) throw new Error(`no card for ${tool}`)
-  return card
+  const button = found.closest('button')
+  if (!button) throw new Error(`no card header for ${tool}`)
+  return button
 }
 
 /** The marker line as the card draws it, or null when the card draws nothing. */
@@ -159,10 +153,8 @@ describe('a server call that ran without asking', () => {
     expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull()
     expect(stub.calls.some((entry) => String(entry.method).startsWith('agent.resume'))).toBe(false)
 
-    // A call's card no longer folds behind a header of its own, so the row is now the only control
-    // between the reader and the marker: it is opened, and the card inside it is asserted.
-    await userEvent.click(screen.getByRole('button', { name: /View Steps/ }))
-    expect(cardFor(FLAGGED_TOOL)).toBeTruthy()
+    // Collapsed cards draw nothing, so the marker is asserted where a reader would find it: open.
+    await userEvent.click(cardHeader(FLAGGED_TOOL))
     expect(marker()?.textContent).toMatch(/Ran without asking/)
     // And it names the flag in words, rather than only saying that nobody was asked.
     expect(marker()?.textContent).toMatch(/autoApprove/)

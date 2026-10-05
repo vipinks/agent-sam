@@ -126,10 +126,10 @@ describe('copy on a message bubble', () => {
     // Opened first, so the exclusions below are a real exclusion: the card's output is on screen
     // while the copy is taken, and still does not reach the clipboard.
     //
-    // Opened by the row that folds the run of steps, which is the only foldable thing left in a
-    // transcript: a card no longer carries a header of its own, so "the button the call is behind" is
-    // the run's row and not the call. The reply's prose, meanwhile, is not folded at all any more.
-    await user.click(screen.getByRole('button', { name: /View Steps/ }))
+    // Opened by the card's own header, which is the button the call is behind: a call folds itself, so
+    // its own row is the way in — found by the words of the call, since the status glyph is part of the
+    // header's accessible name. The reply's prose, meanwhile, is not folded at all.
+    await user.click(screen.getByRole('button', { name: /Reading src\/parser\.ts/ }))
     expect(screen.getByText(TOOL_OUTPUT)).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Copy reply' }))

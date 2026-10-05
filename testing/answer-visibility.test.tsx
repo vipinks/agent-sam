@@ -141,7 +141,7 @@ function hiddenAncestorOf(node: HTMLElement): HTMLElement | null {
 
 /** Every foldable section a turn has drawn, whatever it calls itself. */
 function sections(): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>('[data-slot="thinking-section"], [data-slot="step-run"]')]
+  return [...document.querySelectorAll<HTMLElement>('[data-slot="agent-action-card"]')]
 }
 
 describe('the answer a completed turn leaves on screen', () => {

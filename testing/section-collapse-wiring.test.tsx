@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { CollapsibleSection } from '@/app/components/workbench/collapsible-section'
 
 /**
- * The one kind of section a transcript still folds, as wiring.
+ * The one kind of section a transcript folds, as wiring.
  *
  * The decision itself — open in flight, fold on completion, never fight a manual toggle — is a pure rule
  * and is tested in `tests/ui/section-collapse-test.ts`, without a DOM. What is left here is the half a
@@ -12,45 +12,42 @@ import { CollapsibleSection } from '@/app/components/workbench/collapsible-secti
  * *transition* of the in-flight input which moves it, and that a folded body is hidden rather than taken
  * out of the document.
  *
- * Rendered directly rather than through the pane, and that is a consequence of the reshape rather than a
- * shortcut: there is exactly one foldable thing left in a transcript — the row over a run of tool steps
- * — and the claims about *that* row, its count and the cards it reveals, are made through the real
- * transcript in `testing/step-run-rows.test.tsx`. What belongs here is the component's own contract,
- * which the rule suite cannot reach.
+ * Rendered directly rather than through the pane, and that is a consequence of the shape rather than a
+ * shortcut: the foldable thing in a transcript is the card of one tool call, and the claims about *those*
+ * rows — how many a turn draws, what each one carries, which of them is open — are made through the real
+ * transcript in `testing/step-rows.test.tsx`. What belongs here is the component's own contract, which
+ * the rule suite cannot reach.
  *
  * The prose cases this file used to hold are gone with the sections they asserted: a turn's answer is
- * plain visible words now and there is nothing about it to fold, which is asserted in
- * `testing/answer-visibility.test.tsx` instead. A card no longer folds either — the row above it does —
- * which is asserted in `testing/step-run-rows.test.tsx`.
+ * plain visible words and there is nothing about it to fold, which is asserted in
+ * `testing/answer-visibility.test.tsx` instead.
  *
  * jsdom proves wiring and words, not pixels: that the chevron carries the class that rotates it is a
  * claim about the class, and whether it looks like a chevron is read by eye.
  */
 
-/** The section under test, drawn with the props the transcript's run row actually passes it. */
+/** The section under test, drawn with the props a tool call's own card passes it. */
 function section(inFlight: boolean, defaultOpen = false) {
   return (
     <CollapsibleSection
-      slot="step-run"
-      kind="row"
-      summary="View Steps"
-      meta="· 3"
+      slot="agent-action-card"
+      summary="Reading parser.ts"
       inFlight={inFlight}
       defaultOpen={defaultOpen}
     >
-      <p>the cards</p>
+      <p>the call</p>
     </CollapsibleSection>
   )
 }
 
 /** The section's header button, which is what a user clicks and what states the state. */
 function header(): HTMLElement {
-  return screen.getByRole('button', { name: /View Steps/ })
+  return screen.getByRole('button', { name: /Reading parser\.ts/ })
 }
 
 /** The section's body, which stays in the document whether or not it is shown. */
 function body(): HTMLElement {
-  return document.querySelector<HTMLElement>('[data-slot="step-run-body"]') as HTMLElement
+  return document.querySelector<HTMLElement>('[data-slot="agent-action-card-body"]') as HTMLElement
 }
 
 /** Whether the section is open, read the way a screen reader reads it. */
@@ -66,24 +63,22 @@ function chevronClass(): string {
 }
 
 describe('the section that folds a transcript', () => {
-  it('mounts open while its step is in flight, and folds when the run lands', async () => {
+  it('mounts open while its step is in flight, and folds when the call lands', async () => {
     const view = render(section(true))
 
-    // Open on arrival, because the run is still going: the work the user is watching is the work on
-    // screen, and the count is part of what the header says about it.
+    // Open on arrival, because the call is still going: the work the user is watching is the work on
+    // screen.
     expect(isOpen()).toBe(true)
     expect(body().hasAttribute('hidden')).toBe(false)
     expect(chevronClass()).toContain('rotate-90')
-    expect(header().textContent).toContain('View Steps')
-    expect(header().textContent).toContain('3')
 
-    // The transition, not a re-render: the run's own ending is what folds it, and it folds without
-    // taking the cards out of the document.
+    // The transition, not a re-render: the call's own ending is what folds it, and it folds without
+    // taking the body out of the document.
     view.rerender(section(false))
 
     expect(isOpen()).toBe(false)
     expect(body().hasAttribute('hidden')).toBe(true)
-    expect(body().textContent).toContain('the cards')
+    expect(body().textContent).toContain('the call')
     expect(chevronClass()).not.toContain('rotate-90')
   })
 
@@ -91,7 +86,7 @@ describe('the section that folds a transcript', () => {
     const user = userEvent.setup()
     const view = render(section(true))
 
-    // The run lands and folds the section, and the user opens it again — the claim the rule must honour.
+    // The call lands and folds the section, and the user opens it again — the claim the rule must honour.
     view.rerender(section(false))
     expect(isOpen()).toBe(false)
 
@@ -105,7 +100,7 @@ describe('the section that folds a transcript', () => {
     expect(body().hasAttribute('hidden')).toBe(false)
   })
 
-  it('re-opens on a new run and forgets the claim, so the next completion folds it', async () => {
+  it('re-opens when the step is in flight again and forgets the claim, so the next completion folds it', async () => {
     const user = userEvent.setup()
     const view = render(section(false))
 

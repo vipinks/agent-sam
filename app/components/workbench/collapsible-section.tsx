@@ -6,10 +6,10 @@ import { advanceSectionCollapse, openingSectionCollapse, type SectionCollapse } 
 /**
  * One step of a transcript, as a section with a header that folds it.
  *
- * What folds here is work, not words: a run of tool steps folds behind one row, and the answer a turn
- * wrote is plain prose outside any section. Both callers are sections of the same kind — folded by the
- * same rule, stated by the same `aria-expanded` — which is the point of the extraction, since a second
- * implementation would be a second answer to "when is this open" and the two would drift.
+ * What folds here is work, not words: the card of a single tool call, and never the answer a turn wrote —
+ * the prose a turn said is plain visible markdown outside any section. The card is therefore the one
+ * foldable thing in a transcript, and it is drawn here rather than inside the caller so that there is one
+ * answer to "when is this open" rather than two that drift.
  *
  * The body stays mounted and is hidden rather than dropped. That is deliberate, and it is the one thing
  * here that is not about looks: what a turn did is what the transcript holds, and a section that
@@ -22,11 +22,6 @@ import { advanceSectionCollapse, openingSectionCollapse, type SectionCollapse } 
  * and `aria-expanded`, which is what states the state to a reader who cannot see the chevron. No new
  * tokens: the header is the styling the tool card has always had, and the chevron is the glyph the app
  * already turns for the same purpose.
- *
- * `kind` is dress rather than behaviour. A `card` is the boxed header the tool cards have always worn; a
- * `row` is the slim inline line a run of steps folds behind — the icon, the label in the accent colour,
- * the count and the chevron, with no box around them, so a transcript's work reads as a narrow spine
- * beside its answers rather than as a column of cards.
  */
 
 /**
@@ -59,12 +54,10 @@ function useSectionCollapse(inFlight: boolean, defaultOpen: boolean): { expanded
 
 export function CollapsibleSection({
   summary,
-  meta,
   inFlight,
   slot,
   icon,
   trailing,
-  kind = 'card',
   defaultOpen = false,
   className,
   headerClassName,
@@ -73,13 +66,6 @@ export function CollapsibleSection({
 }: {
   /** The one line the header says about the step, in the words the transcript uses for it. */
   summary: string
-  /**
-   * What the header says after the name — a middle-dot and a count, where a row counts its steps.
-   *
-   * Beside the label rather than in `trailing`, which belongs to the outcome: a row is about how much
-   * work happened, and its count reads as part of what it is called.
-   */
-  meta?: string
   /** Whether the step this section is about is happening now, which is what the auto rule reads. */
   inFlight: boolean
   /**
@@ -95,15 +81,6 @@ export function CollapsibleSection({
   /** A glyph after it — the outcome, where the card shows how its call ended. */
   trailing?: ReactNode
   /**
-   * Which of the two things a header can be.
-   *
-   * `card` is the boxed header the tool cards have always worn, and it is the default so that a caller
-   * which says nothing is unmoved. `row` is the slim line a run of steps folds behind: tighter padding,
-   * the label in the accent colour, and the chevron last rather than first, which is what makes it read
-   * as an inline disclosure rather than as another box.
-   */
-  kind?: 'card' | 'row'
-  /**
    * Whether the section mounts open, whatever the rule would say.
    *
    * For the one case a transcript has where a folded section would hide something the run is stuck on:
@@ -117,17 +94,6 @@ export function CollapsibleSection({
   children: ReactNode
 }) {
   const { expanded, toggle } = useSectionCollapse(inFlight, defaultOpen)
-  const row = kind === 'row'
-  // One glyph, drawn either side of the label depending on the kind. Turned rather than swapped, so the
-  // header cannot read as two different controls depending on which state the reader caught it in; and
-  // hooked with a `data-slot` because a row's header holds an icon as well, and a chevron that can only
-  // be found by being the first `svg` is not one a test can point at.
-  const chevron = (
-    <ChevronRight
-      data-slot="section-chevron"
-      className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')}
-    />
-  )
 
   return (
     <section data-slot={slot} className={cn('overflow-hidden', className)}>
@@ -136,17 +102,21 @@ export function CollapsibleSection({
         onClick={toggle}
         aria-expanded={expanded}
         className={cn(
-          'flex w-full items-center text-left transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-          row ? 'gap-1.5 px-1.5 py-1' : 'gap-2 px-2.5 py-1.5',
+          'flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
           headerClassName
         )}
       >
-        {!row && chevron}
+        {/* Turned rather than swapped: one glyph, so the header cannot read as two different controls
+            depending on which state the reader caught it in. Hooked with a `data-slot` because a row's
+            header holds an icon as well, and a chevron that can only be found by being the first `svg`
+            is not one a test can point at. */}
+        <ChevronRight
+          data-slot="section-chevron"
+          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')}
+        />
         {icon}
-        <span className={cn('min-w-0 flex-1 truncate font-medium', row && 'text-brand')}>{summary}</span>
-        {meta && <span className="shrink-0 text-muted-foreground">{meta}</span>}
+        <span className="min-w-0 flex-1 truncate font-medium">{summary}</span>
         {trailing}
-        {row && chevron}
       </button>
 
       {/* Mounted either way; `hidden` is what folds it. Not `hidden` as a utility class and not a
