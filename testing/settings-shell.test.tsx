@@ -157,12 +157,13 @@ describe('the settings shell', () => {
     // The tab list, pinned as the sections that exist rather than as a count: a new section has to be
     // added here deliberately, which is what keeps "a launch opens Providers" an assertion about the
     // whole row instead of about whichever tab happens to be first. Buddies joined the row in the phase
-    // that built it, last of all: it is the advanced surface behind the header's own Buddy Select.
+    // that built it, last of all: it is the advanced surface behind the header's own Buddy Select, and
+    // Appearance was added ahead of it in the phase that built the two display preferences.
     expect(
       within(row as HTMLElement)
         .getAllByRole('tab')
         .map((node) => node.textContent)
-    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Buddies'])
+    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Appearance', 'Buddies'])
     // The first section is the one a launch opens, and it is the one showing.
     expect(tab('Providers').getAttribute('aria-selected')).toBe('true')
     expect(tab('MCP Servers').getAttribute('aria-selected')).toBe('false')

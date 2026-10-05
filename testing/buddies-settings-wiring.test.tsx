@@ -250,7 +250,7 @@ describe('the Buddies section', () => {
       within(row)
         .getAllByRole('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Buddies'])
+    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Appearance', 'Buddies'])
 
     act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
 

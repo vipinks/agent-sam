@@ -16,6 +16,13 @@ import { Textarea } from '../ui/textarea'
 import { AgentActionCard } from './agent-action-card'
 import { AutoContinueMark } from './auto-continue-mark'
 import { MarkdownContent } from './markdown'
+import {
+  DEFAULT_BUBBLE_ALIGNMENT,
+  DEFAULT_FONT_PRESET,
+  FONT_PRESETS,
+  type BubbleAlignment,
+  type FontPresetId,
+} from '@/conveyor/protocol/appearance'
 import { MentionChipRow } from './mention-chip'
 import { AttachmentRefChipRow } from './attachment-chip'
 import { contextNoticeText } from './mentions'
@@ -100,6 +107,8 @@ export const MessageBubble = memo(function MessageBubble({
   onResend,
   onRegenerate,
   sessionId,
+  alignment = DEFAULT_BUBBLE_ALIGNMENT,
+  fontPreset = DEFAULT_FONT_PRESET,
 }: {
   message: AgentTurn
   onApprove?: (callId: string) => void
@@ -138,6 +147,25 @@ export const MessageBubble = memo(function MessageBubble({
    * on its own, as the copy tests do — there is no conversation behind it, so its chips stay records.
    */
   sessionId?: string
+  /**
+   * Which side the user's own bubble sits on.
+   *
+   * The pane passes the preference it read from the store, because where a bubble sits is a fact about
+   * how this app draws a transcript rather than about one turn — and because a bubble rendered on its
+   * own, as the copy and markdown suites do, then draws the arrangement those suites already assert
+   * against. Under `split` the agent's placement is the same one `same-side` puts both at: this prop
+   * moves the user's row off the right edge and never the agent's off the left.
+   */
+  alignment?: BubbleAlignment
+  /**
+   * The size the message body is painted at, on both sides of the bubble.
+   *
+   * The preset rather than a size class: the classes are fixed strings in `protocol/appearance` —
+   * Tailwind reads source text — and a caller that assembled one would be building a class the
+   * stylesheet does not contain. Defaulted to the preset a launch starts on, so a bubble drawn on its
+   * own is the size this app has always painted.
+   */
+  fontPreset?: FontPresetId
 }) {
   const isUser = message.role === 'user'
   // The turn's blocks, built once per render: their order is the order the run happened in, and two
@@ -224,7 +252,10 @@ export const MessageBubble = memo(function MessageBubble({
   const copyButton = <CopyMessageButton value={message.content} label={isUser ? 'Copy message' : 'Copy reply'} />
 
   return (
-    <div className={cn('flex w-full px-4 py-2.5', isUser ? 'justify-end' : 'justify-start')}>
+    <div
+      data-slot="message-row"
+      className={cn('flex w-full px-4 py-2.5', isUser && alignment === 'split' ? 'justify-end' : 'justify-start')}
+    >
       {/* The button is a sibling of the bubble, on the side away from the message's own edge, rather
           than a layer over it: overlaid it would cover the first line of a short message, and a corner
           reserved inside the bubble would indent every bubble for a control most readers never use.
@@ -238,8 +269,14 @@ export const MessageBubble = memo(function MessageBubble({
         {isUser && canEdit && <EditMessageButton onEdit={startEditing} />}
         {isUser && copyButton}
         <div
+          data-slot="message-body"
           className={cn(
-            'min-w-0 rounded-lg px-3.5 py-2.5 text-[13px] leading-relaxed',
+            'min-w-0 rounded-lg px-3.5 py-2.5',
+            FONT_PRESETS[fontPreset].sizeClass,
+            // The line-height after the size, deliberately: tailwind-merge reads an arbitrary
+            // `text-[13px]` beside a `leading-*` class as one conflict and keeps whichever comes later,
+            // so a preset placed after this one would silently take the bubble's line-height away.
+            'leading-relaxed',
             isUser ? 'bg-brand-soft text-foreground' : 'border border-border bg-card text-card-foreground'
           )}
         >

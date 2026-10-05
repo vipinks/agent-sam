@@ -25,6 +25,7 @@ import {
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
+import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
@@ -294,6 +295,12 @@ export function ChatPanel() {
   const toggleThemeMode = useThemeStore((s) => s.toggle)
   // The file the code viewer has open, which the attach control adds as a mention.
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
+  // How a conversation is drawn, from the store the Appearance section writes to: the pane is the reader
+  // and the section is the writer, so one preference reaches the bubble that it is about rather than a
+  // copy kept here. Read as two scalars, so a change to either one re-renders the pane and a memoised
+  // bubble is told about it by a primitive that changed rather than by an object rebuilt each render.
+  const appearanceAlignment = useConveyorStore(appearancePreferencesStore, (s) => s.alignment)
+  const appearanceFontPreset = useConveyorStore(appearancePreferencesStore, (s) => s.fontPreset)
 
   // Sessions own the transcript: it is shared with the panel (which saves it before a switch) and
   // persisted at turn boundaries. The pane reads and replaces it, but does not hold it.
@@ -1792,6 +1799,11 @@ export function ChatPanel() {
                     // a chip asks that folder for its bytes, so a message sent in this session and a
                     // message restored from its file are read the same way.
                     sessionId={sessions.openId ?? undefined}
+                    // Which side the user's own bubble sits on and how large the message text is painted:
+                    // two values of the store's, passed down as they are, so a bubble's own memo sees a
+                    // primitive change rather than a new object.
+                    alignment={appearanceAlignment}
+                    fontPreset={appearanceFontPreset}
                     onResend={resendEditedMessage}
                     onRegenerate={regenerateReply}
                     onApprove={() => void decide(true)}

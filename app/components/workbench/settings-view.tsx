@@ -13,6 +13,7 @@ import { McpServersSection } from './mcp-settings'
 import { SkillsSection } from './skills-settings'
 import { TerminalSection } from './terminal-settings'
 import { ContextSection } from './context-settings'
+import { AppearanceSection } from './appearance-settings'
 import { BuddiesSection } from './buddies-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
@@ -84,6 +85,7 @@ export function SettingsView() {
             <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="terminal">Terminal</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
+            <TabsTrigger value="appearance">Appearance</TabsTrigger>
             <TabsTrigger value="buddies">Buddies</TabsTrigger>
           </TabsList>
         </div>
@@ -149,6 +151,16 @@ export function SettingsView() {
 
           <TabsContent value="context" data-slot="settings-section-context" className="mx-auto max-w-2xl px-8 py-7">
             <ContextSection />
+          </TabsContent>
+
+          {/* The last of the preference sections, and beside the other two that are set once: the Terminal's
+              two values and the compact point are preferences too, and Appearance is the third of them. */}
+          <TabsContent
+            value="appearance"
+            data-slot="settings-section-appearance"
+            className="mx-auto max-w-2xl px-8 py-7"
+          >
+            <AppearanceSection />
           </TabsContent>
 
           {/* Last in the row, and that placement is the policy: a Buddy is chosen from the header for the
