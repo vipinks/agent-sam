@@ -29,6 +29,7 @@ import { chatSessionsStore } from './stores/chat-sessions'
 import { terminalPreferencesStore } from './stores/terminal-preferences'
 import { contextPreferencesStore } from './stores/context-preferences'
 import { buddiesStore } from './stores/buddies'
+import { appearancePreferencesStore } from './stores/appearance-preferences'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -68,6 +69,7 @@ export const router = createRouter(
       terminalPreferencesStore,
       contextPreferencesStore,
       buddiesStore,
+      appearancePreferencesStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }

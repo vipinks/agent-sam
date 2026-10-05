@@ -6,6 +6,7 @@ import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { terminalPreferencesStore } from '@/conveyor/stores/terminal-preferences'
 import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
 import { buddiesStore } from '@/conveyor/stores/buddies'
+import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -311,6 +312,11 @@ const initialStates = new Map<string, unknown>([
   // without a genuine initial state here the mirror would cache `undefined` for this store and the read
   // of the custom list would throw before a single conversation could be created.
   ['conveyor:store:buddies', structuredClone(buddiesStore.initialState)],
+  // The chat pane's two display preferences — the side the user's bubbles sit on and the size the message
+  // body is painted at. The pane reads both on every render, so without a genuine initial state here the
+  // mirror would cache `undefined` for this store and the transcript would throw on the first message it
+  // drew.
+  ['conveyor:store:appearance-preferences', structuredClone(appearancePreferencesStore.initialState)],
 ])
 
 /**
