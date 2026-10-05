@@ -118,6 +118,7 @@ const SUITES = [
   { name: 'document read (base64 round trip, refusals)', src: 'workspace/document-read-test.ts' },
   { name: 'window zoom (rule + titlebar acts)', src: 'ui/window-zoom-test.ts' },
   { name: 'appearance preferences (alignment, font presets, store)', src: 'ui/appearance-preferences-test.ts' },
+  { name: 'section collapse (in flight, completion, manual toggle, purity)', src: 'ui/section-collapse-test.ts' },
 ]
 
 mkdirSync(outDir, { recursive: true })
