@@ -1,6 +1,6 @@
 {
   "name": "agent-sam",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Agent Sam — a local-first desktop coding assistant",
   "main": "./out/main/main.js",
   "license": "MIT",

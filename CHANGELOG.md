@@ -6,6 +6,34 @@ coding assistant.
 
 <br>
 
+## 2026-10-05: v1.2.0 — Documents, view acts and appearance
+
+- **Documents open in the app.** A name is read once by a pure `previewKind` dispatch — `pdf`, `docx`,
+  `doc`, `image`, `markdown`, `spreadsheet` or `other` — and that one answer is what both the Preview
+  resident and the Code panel's preview pane mount from, so the two surfaces cannot disagree about what a
+  file is. A **PDF** is drawn on `pdfjs-dist`, loaded as its own lazy chunk against a same-origin worker,
+  with zoom, page navigation and a download button in its toolbar; a **DOCX** goes through `mammoth` and
+  reaches the pane as pruned HTML rather than as the converter's raw output; a legacy **`.doc`** — a
+  different container that this app cannot render at all — gets a card offering **Open externally**; and
+  a read that failed, or a file past the reader's cap, gets a card naming the file and the code behind
+  the refusal rather than an empty pane.
+- **The titlebar carries four view acts**, immediately before the theme toggle and in the order the View
+  menu lists them: **Zoom In**, **Zoom Out**, **Actual Size** and **Toggle Fullscreen**, over a bounded
+  zoom ladder whose step and ceiling are declared in the protocol rather than inside the button.
+- **Appearance becomes a settings section**, holding the two preferences that are about a conversation as
+  drawn: **bubble alignment**, split as it has always been or both sides on the same side, and the **chat
+  font preset** — 12.5, 13, 15 or 17 pixels, with 13 the default because that is the size a message body
+  was already painted at. The transcript gains a **hover action row at the bottom of every bubble** —
+  **Copy** on both kinds, **Edit** on the user's own, **Regenerate** on the agent's — and every step
+  becomes a **collapsible row** with its own status glyph: folded shut when it lands, opened again while
+  the turn is in flight, a manual toggle left where the user put it, and never the answer — the prose a
+  turn wrote stays visible whether or not a step is folded.
+- The v1.1.0 baseline is everything before this entry: Phases 1 through 62, which shipped under the
+  standing versioning rule that a release names the work since the last one. This entry is v1.2.0 —
+  Phases 63, 64 and 65, which are the three groups above.
+
+<br>
+
 ## 2026-09-29: v1.1.0 — Buddies
 
 - A **Buddy** is a way of working rather than a preset: a record with a name, a role section, a starter
