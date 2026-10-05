@@ -15,6 +15,7 @@ import {
 import type { BuddiesState } from '@/conveyor/stores/buddies'
 import type { ChatSession } from '@/conveyor/stores/chat-sessions'
 import { queryClient } from '@/conveyor/client'
+import samMark from '@/resources/build/icon.svg'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -245,12 +246,21 @@ async function openBuddyPicker(): Promise<HTMLElement> {
   return trigger
 }
 
+/**
+ * The name an option shows, read from the element that holds it rather than from the whole row.
+ *
+ * Every option is prefixed with its entry's mark since the marks landed, so a row's `textContent` is the
+ * badge's character followed by the name — `WWriter` — and what these cases are about is the name. The
+ * slot is where the name is, which is also the same slot the Buddies list gives the same name.
+ */
+const optionName = (option: HTMLElement): string => option.querySelector('[data-slot="buddy-name"]')?.textContent ?? ''
+
 /** Every option the open Select offers, in the order it offers them. */
-const options = (): string[] => screen.getAllByRole('option').map((option) => option.textContent ?? '')
+const options = (): string[] => screen.getAllByRole('option').map(optionName)
 
 /** Choose one option by its label. The list is open, so it is read from there. */
 async function pick(label: string): Promise<void> {
-  const option = screen.getAllByRole('option').find((candidate) => (candidate.textContent ?? '') === label)
+  const option = screen.getAllByRole('option').find((candidate) => optionName(candidate) === label)
   if (!option) throw new Error(`no option named ${label} — the Select offered ${options().join(', ')}`)
   await userEvent.click(option)
 }
@@ -347,6 +357,70 @@ describe('the Buddy Select on the home screen', () => {
   })
 })
 
+describe('the marks the Buddy Select draws', () => {
+  it('gives the default entry the app’s own logo and every Buddy the glyph its record carries', async () => {
+    stubScreen({ buddies: { custom: [CAPTAIN, REVIEWER], disabledIds: [SWITCHED_OFF] } })
+    renderScreen()
+    await openBuddyPicker()
+
+    // One row per entry, in the list rule's own order: the marks follow the rows they belong to rather
+    // than being a list of their own.
+    const rows = screen.getAllByRole('option')
+    expect(rows.map(optionName)).toEqual([
+      AGENT_SAM_BUDDY_NAME,
+      ...BUILTINS.filter((buddy) => buddy.id !== SWITCHED_OFF).map((buddy) => buddy.name),
+      CAPTAIN.name,
+      REVIEWER.name,
+    ])
+
+    // Agent Sam is the app itself rather than one of the records, so its mark is the app's own: the same
+    // logo the window and the installers already ship, and no letter badge anywhere in that row.
+    const logo = rows[0].querySelector('img[data-slot="buddy-avatar-logo"]')
+    expect(logo?.getAttribute('src')).toBe(samMark)
+    expect(rows[0].querySelector('[data-slot="buddy-avatar-glyph"]')).toBeNull()
+
+    // Every Buddy draws the character its own record carries — the same badge the Buddies list draws for
+    // it — the app's own three first, then the user's, each beside its own name.
+    const glyphs = rows.slice(1).map((row) => row.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent)
+    expect(glyphs).toEqual([
+      ...BUILTINS.filter((buddy) => buddy.id !== SWITCHED_OFF).map((buddy) => buddy.glyph),
+      CAPTAIN.glyph,
+      REVIEWER.glyph,
+    ])
+    expect(rows.slice(1).every((row) => row.querySelector('img[data-slot="buddy-avatar-logo"]') === null)).toBe(true)
+  })
+
+  it('leaves every option readable by its own name rather than by its badge', async () => {
+    stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
+    renderScreen()
+    await openBuddyPicker()
+
+    // The badge is decoration and the name stands beside it, so what a screen reader is given for a row
+    // is the entry's name: the character is not read out ahead of it.
+    expect(screen.getByRole('option', { name: CAPTAIN.name })).toBeTruthy()
+    expect(screen.getByRole('option', { name: AGENT_SAM_BUDDY_NAME })).toBeTruthy()
+  })
+
+  it('shows the selected entry’s own mark on the trigger, before and after a choice', async () => {
+    stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
+    renderScreen()
+
+    // Home's default: the logo, beside the name the trigger has always shown.
+    const initial = await buddyTrigger()
+    expect(initial.querySelector('img[data-slot="buddy-avatar-logo"]')).toBeTruthy()
+    expect(initial.querySelector('[data-slot="buddy-avatar-glyph"]')).toBeNull()
+
+    await openBuddyPicker()
+    await pick(CAPTAIN.name)
+
+    // The chosen entry's own mark, for the same record the row above was drawn from.
+    const chosen = await buddyTrigger()
+    expect(chosen.textContent).toContain(CAPTAIN.name)
+    expect(chosen.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe(CAPTAIN.glyph)
+    expect(chosen.querySelector('img[data-slot="buddy-avatar-logo"]')).toBeNull()
+  })
+})
+
 describe('the first send, with a Buddy chosen on home', () => {
   it('seeds the conversation with its snapshots and the defaults the record declares', async () => {
     const { actions } = stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
@@ -415,6 +489,10 @@ describe('the Buddy Select in an open conversation', () => {
 
     expect(trigger.textContent).toContain(CAPTAIN.name)
     expect(isDisabled(trigger)).toBe(true)
+    // The mark is the record's while the control is locked, which is where the two facts meet: the identity
+    // is fixed, and the badge is the fixed identity's own rather than the default's or the last choice's.
+    expect(trigger.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe(CAPTAIN.glyph)
+    expect(trigger.querySelector('img[data-slot="buddy-avatar-logo"]')).toBeNull()
     // The rule, in one sentence: the identity is fixed and the two controls beside it are not — which is
     // what makes a locked control read as deliberate rather than broken.
     expect(trigger.getAttribute('title')).toBe(BUDDY_LOCK_CAPTION)

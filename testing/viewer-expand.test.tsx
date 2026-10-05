@@ -154,7 +154,11 @@ const KINDS: Kind[] = [
     name: 'an image',
     path: IMAGE_PATH,
     read: () => imageResult(),
-    marker: (container) => container.querySelector<HTMLElement>('img'),
+    // The picture inside the image viewer's own slot rather than the first `img` in the workbench: the
+    // chat header draws the app's own logo as an `img` too, and that one leaves the document when the
+    // viewer expands — which is exactly the layout change this file holds a node across. Scoped to the
+    // slot the pane renders the image in, so the node held is the viewer's own.
+    marker: (container) => container.querySelector<HTMLElement>('[data-slot="image"] img'),
   },
   {
     name: 'a markdown preview',

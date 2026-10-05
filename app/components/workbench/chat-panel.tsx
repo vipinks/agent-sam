@@ -27,6 +27,7 @@ import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
 import { cn } from '@/lib/utils'
+import samMark from '@/resources/build/icon.svg'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
@@ -257,6 +258,42 @@ export const BUDDY_LOCK_CAPTION =
   'Fixed for this conversation — a new chat can pick another; the model and auto-approve stay yours to change.'
 
 /**
+ * The mark a Buddy entry is drawn with: the app's own logo where an entry is the app itself, and the
+ * record's own glyph in the badge the Buddies list draws it in for every Buddy.
+ *
+ * `null` rather than a separate flag, because `null` is already how this screen reads the default: an id
+ * that resolves to no record is the Agent Sam entry, and it is the one entry with no record to carry a
+ * character of its own. The mark is then the app's logo from the renderer's own path in the repo — the same
+ * file the window, the installers and the app's icon are built from, so a default entry and the app cannot
+ * end up with two different marks.
+ *
+ * One element for both places it is drawn, because the trigger and the list it opens show the same entry
+ * twice: a trigger that marked a Buddy differently from the row it was picked from would be two marks for
+ * one entry. The badge is the settings list's own — the same square, the same muted surface, the same
+ * monospace character — read at this row's height, which is the shorter of the two rows the app draws a
+ * Buddy in.
+ *
+ * Both forms are decoration and both are drawn that way: the name stands beside them, so the logo is given
+ * no description and the badge is hidden from the accessibility tree. That is what keeps an entry's name
+ * the name a reader and a screen reader find it by, rather than a character read out ahead of it.
+ */
+function BuddyAvatar({ glyph }: { glyph: string | null }) {
+  if (glyph === null) {
+    return <img src={samMark} alt="" data-slot="buddy-avatar-logo" className="size-4.5 shrink-0 rounded-md" />
+  }
+
+  return (
+    <span
+      data-slot="buddy-avatar-glyph"
+      aria-hidden="true"
+      className="flex size-4.5 shrink-0 items-center justify-center rounded-md bg-muted font-mono text-[10px] font-medium"
+    >
+      {glyph}
+    </span>
+  )
+}
+
+/**
  * The chat pane: a virtualized transcript, a composer, and the agent's consent gate.
  *
  * The agent run is a sequence of streamed chunks that each either extend the assistant's prose or
@@ -436,6 +473,18 @@ export function ChatPanel() {
    * that resolves to nothing offers exactly what the default offers.
    */
   const chosenBuddy = resolveBuddy(buddyId, customBuddies)
+  /**
+   * The mark the trigger draws beside that name: the app's own for the default, the record's own glyph for
+   * a Buddy.
+   *
+   * The default is read off the id rather than off the resolution, because the two answers that resolve to
+   * nothing are not the same entry: a conversation that named nobody draws the logo, and one whose Buddy
+   * was deleted since draws the first letter of the label standing in its place. Without the id there the
+   * second case would borrow the app's own mark and read as a conversation nothing ever chose.
+   */
+  const selectedGlyph =
+    buddyId === null || buddyId === SAMAI_BUDDY_ID ? null : (chosenBuddy?.glyph ?? buddyName.slice(0, 1))
+
   const starters = chosenBuddy !== null && chosenBuddy.starters.length > 0 ? chosenBuddy.starters : HOME_STARTERS
 
   /**
@@ -1615,6 +1664,10 @@ export function ChatPanel() {
               {/* Drawn rather than only explained: a control that refuses without saying why reads as
                   broken, and the caption carried above says the rest. */}
               {!atHome && <Lock aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />}
+              {/* The entry's own mark, and the same one its row in the list below carries: the id is the
+                  conversation's while one is open and the pending choice while home, so the badge names
+                  the entry the label beside it names. */}
+              <BuddyAvatar glyph={selectedGlyph} />
               {/*
                 The label is drawn here rather than through `SelectValue`, and this is the one place the
                 control differs from the model picker beside it: a conversation whose Buddy was deleted has
@@ -1624,11 +1677,26 @@ export function ChatPanel() {
               <span className="min-w-0 flex-1 truncate">{buddyName}</span>
             </SelectTrigger>
             <SelectContent>
+              {/*
+                Every row is its entry's mark and then its entry's name. The pair sits in a flex line of
+                its own because the primitive draws a row's children inside an inline span, where an
+                inline line would stack the badge over the name rather than set it beside. The name
+                carries the slot the Buddies list gives the same name, because it is the same thing: the
+                words a row is read by.
+              */}
               {/* The default first, always: it is what a conversation that names nobody runs as. */}
-              <SelectItem value={SAMAI_BUDDY_ID}>{AGENT_SAM_BUDDY_NAME}</SelectItem>
+              <SelectItem value={SAMAI_BUDDY_ID}>
+                <span className="flex items-center gap-1.5">
+                  <BuddyAvatar glyph={null} />
+                  <span data-slot="buddy-name">{AGENT_SAM_BUDDY_NAME}</span>
+                </span>
+              </SelectItem>
               {buddyRows.map((row) => (
                 <SelectItem key={row.id} value={row.id}>
-                  {row.name}
+                  <span className="flex items-center gap-1.5">
+                    <BuddyAvatar glyph={row.glyph} />
+                    <span data-slot="buddy-name">{row.name}</span>
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
