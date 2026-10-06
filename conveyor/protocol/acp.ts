@@ -60,6 +60,15 @@ export const ACP_CODES = {
   ACP_REFUSED: 'ACP_REFUSED',
   /** The process could not be started at all. */
   ACP_SPAWN_FAILED: 'ACP_SPAWN_FAILED',
+  /**
+   * A call was never answered, and the budget it was given ran out.
+   *
+   * The code a hung turn ends on: an agent that answers the handshake and then says nothing — no answer, no
+   * refusal, no close — used to leave the turn waiting with no chunk, no error and no `[engine]` line, because
+   * nothing in the client was ever going to settle that promise. The bound is what turns that silence into a
+   * stated cause.
+   */
+  ACP_CALL_TIMEOUT: 'ACP_CALL_TIMEOUT',
 } as const
 
 export type AcpCode = (typeof ACP_CODES)[keyof typeof ACP_CODES]

@@ -55,6 +55,24 @@ export type AcpSpawnImpl = (
   options: SpawnOptionsWithoutStdio
 ) => ChildProcessWithoutNullStreams
 
+/**
+ * How long one ACP call may stay unanswered before the turn ends with a traced cause.
+ *
+ * Generous on purpose, and stated rather than derived from a hunch: the live two-sequence probe measured
+ * `session/new` answering in 22 to 24 seconds against `opencode 1.4.7`, so a bound tight enough to feel
+ * comfortable would fail a working engine. What it exists for is the other end of the range — the call that is
+ * never answered at all, which used to leave the pane on Thinking with nothing in the terminal to read.
+ */
+export const ACP_CALL_BOUND_MS = 120_000
+
+/**
+ * How long the child is given to die politely before its tree is killed outright.
+ *
+ * The Codex child's own grace, stated here for this client: the same two seconds, for the same reason — a CLI
+ * mid-turn is waiting on a model, and a kill that never escalates is an orphan holding a pipe.
+ */
+export const ACP_KILL_GRACE_MS = 2000
+
 /** What to start: the command, its arguments as an array, and where it runs. */
 export interface AcpSpawnSpec {
   command: string
@@ -95,6 +113,102 @@ export interface AcpClientDeps {
   onPermissionRequest: (request: AcpPermissionRequest) => Promise<string>
   /** A line that was not JSON. Reported rather than swallowed, because a bad line is a fact about the peer. */
   onMalformedLine?: (line: string) => void
+  /**
+   * The budget one call is given.
+   *
+   * Left out in the app, where `ACP_CALL_BOUND_MS` is the product's answer; a suite states a small one so a call
+   * that is never answered fails an assertion inside its own bound rather than waiting the product's out.
+   */
+  callBoundMs?: number
+  /** The grace before the child's tree is killed outright. Left out in the app. */
+  killGraceMs?: number
+  /**
+   * How the child's whole tree is ended, by the pid it was started with.
+   *
+   * Left out in the app, where the platform's own tool is used; supplied by a suite that would rather observe the
+   * pid than kill something real.
+   */
+  killTree?: (pid: number | undefined) => void
+  /** Left out in the app: the real `setTimeout`. Supplied by the suites that watch the escalation. */
+  setTimer?: (listener: () => void, ms: number) => AcpTimer
+  /** Left out in the app: the real `clearTimeout`. */
+  clearTimer?: (timer: AcpTimer) => void
+}
+
+/** A timer handle, as this client uses it: the escalation only ever unrefs one, and a call only ever clears one. */
+export interface AcpTimer {
+  unref?: () => void
+}
+
+/** The client's child, as the kill needs it: the pid, the signal, and whether it has already ended. */
+export interface AcpKillable {
+  readonly pid?: number
+  /** Node's own signals, so the process this client spawned satisfies it as it stands. */
+  kill: (signal?: NodeJS.Signals) => unknown
+  readonly exitCode?: number | null
+}
+
+/**
+ * End a child's whole tree, by the pid it was started with, using the platform's own tool.
+ *
+ * Named and exported rather than inlined into `killAcpTree`, so a suite can observe the request *and* let it
+ * happen: what has to be provable is that the tree — not merely the process in hand — is what a turn's ending
+ * asks for, and a spy that replaced the behaviour entirely would prove only that a callback was called.
+ *
+ * Windows is the platform with a tool for this, and the one the leak was measured on. Elsewhere the escalation
+ * below is the whole answer: there is no portable way to name a child's descendants, and this app's own process
+ * group is the one the child shares, so nothing here may signal a group.
+ */
+export function killTreeByPlatform(pid: number | undefined): void {
+  if (process.platform !== 'win32' || pid === undefined) return
+  const tree = spawnProcess('taskkill', ['/pid', String(pid), '/T', '/F'], {
+    stdio: 'ignore',
+    // Never a shell, and never a line of words for one to read.
+    shell: false,
+    windowsHide: true,
+  })
+  // A killer that could not start is not this turn's problem: the escalation below still runs.
+  tree.on('error', () => undefined)
+  tree.unref?.()
+}
+
+/**
+ * End the child and everything it started.
+ *
+ * The direct child of an ACP engine is not necessarily the process that holds the engine's state, and that is
+ * measured rather than supposed: `opencode` on `PATH` here is a shim that starts `tools\opencode.exe acp`, the
+ * real one binds the CLI's own fixed `127.0.0.1:4096`, and after `child.kill()` had been sent to the shim a live
+ * probe still listed the shim, the real binary and the CLI's own `serve` helper running. What a shim leaves behind
+ * is an engine still holding its port, and a child still holding it is what the next turn then waits on — the
+ * second and third prompts of a session, hanging with no error to read. So the tree is what a turn's ending asks
+ * for, not merely the process in hand.
+ *
+ * The tree is ended first, while the process it hangs off is still there to enumerate — a killed parent leaves its
+ * child behind, and a child whose parent is gone cannot be found through it afterwards. Then the escalation the
+ * Codex child is ended by: a signal now, and `SIGKILL` once the grace is up, with the timer unref'd because a
+ * child being ended must never be the reason the app stays alive.
+ *
+ * What this does *not* reach, measured rather than guessed: a descendant that deliberately detached itself. The
+ * suite's fixture starts its own child with `detached: true` and the platform's tree kill does not find it, so a
+ * vendor CLI that leaks one is beyond any kill this client could send. That case is why the bound below
+ * (`ACP_CALL_BOUND_MS`) is the floor rather than a nicety: a turn whose engine was left holding a port ends with
+ * a cause in words, and never on Thinking.
+ */
+export function killAcpTree(
+  child: AcpKillable,
+  deps: Pick<AcpClientDeps, 'killGraceMs' | 'killTree' | 'setTimer'> = {}
+): void {
+  const killTree = deps.killTree ?? killTreeByPlatform
+  killTree(child.pid)
+
+  child.kill('SIGTERM')
+
+  const setTimer = deps.setTimer ?? ((listener: () => void, ms: number) => setTimeout(listener, ms))
+  const escalation = setTimer(() => {
+    if (child.exitCode !== null && child.exitCode !== undefined) return
+    child.kill('SIGKILL')
+  }, deps.killGraceMs ?? ACP_KILL_GRACE_MS)
+  escalation.unref?.()
 }
 
 export interface AcpClient {
@@ -106,10 +220,12 @@ export interface AcpClient {
   close(): void
 }
 
-/** One call the client is waiting on, and the two ways it can end. */
+/** One call the client is waiting on, and the three ways it can end: an answer, a refusal, or its own budget. */
 interface Waiting {
   resolve: (result: unknown) => void
   reject: (error: unknown) => void
+  /** Disarms the call's budget, so no timer outlives the call it was armed for. */
+  disarm: () => void
 }
 
 /**
@@ -134,11 +250,20 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
   let closed = false
   const waiting = new Map<number, Waiting>()
 
+  const callBoundMs = deps.callBoundMs ?? ACP_CALL_BOUND_MS
+  const setTimer =
+    deps.setTimer ?? ((listener: () => void, ms: number) => setTimeout(listener, ms) as unknown as AcpTimer)
+  const clearTimer =
+    deps.clearTimer ?? ((timer: AcpTimer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>))
+
   /** Refuse everything still in flight, by code, so no caller is left on a promise nothing will answer. */
   const abandon = (code: string, message: string): void => {
     const outstanding = [...waiting.values()]
     waiting.clear()
-    for (const entry of outstanding) entry.reject(new ConveyorError(code, message))
+    for (const entry of outstanding) {
+      entry.disarm()
+      entry.reject(new ConveyorError(code, message))
+    }
   }
 
   child.stdout.on('data', (chunk) => {
@@ -222,7 +347,15 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
     child.stdin.write(encodeAcpMessage(message))
   }
 
-  /** Send one request and wait for its own response, addressed by id. */
+  /**
+   * Send one request and wait for its own response, addressed by id — or for its budget to run out.
+   *
+   * The budget is the whole of the legibility here: a peer that neither answers nor closes leaves the entry in
+   * `waiting` for the life of the process, and a caller with no timer waits on it forever — which is what the
+   * second prompt of a session did, with no chunk, no error and no `[engine]` line to read. It is armed per call
+   * rather than over the turn, so an engine that is slow but working is not punished for the call before it, and
+   * it is disarmed the moment the call is answered, refused, or abandoned.
+   */
   function call(method: string, params: unknown): Promise<unknown> {
     if (closed) {
       return Promise.reject(new ConveyorError(ACP_CODES.ACP_CLOSED, 'The engine process is no longer running.'))
@@ -230,7 +363,31 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
     const id = nextId
     nextId += 1
     return new Promise<unknown>((resolve, reject) => {
-      waiting.set(id, { resolve, reject })
+      const budget = setTimer(() => {
+        const entry = waiting.get(id)
+        if (entry === undefined) return
+        waiting.delete(id)
+        // The sentence names the call and the budget, because that is the whole of what a user can act on: an
+        // engine that answers its handshake and then goes quiet is usually one nobody has signed in to.
+        entry.reject(
+          new ConveyorError(
+            ACP_CODES.ACP_CALL_TIMEOUT,
+            `The engine did not answer ${method} within ${Math.round(callBoundMs / 1000)} seconds. Check that the engine is signed in, then try again.`
+          )
+        )
+      }, callBoundMs)
+      const disarm = (): void => clearTimer(budget)
+      waiting.set(id, {
+        resolve: (result) => {
+          disarm()
+          resolve(result)
+        },
+        reject: (error) => {
+          disarm()
+          reject(error)
+        },
+        disarm,
+      })
       write(acpRequest(id, method, params))
     })
   }
@@ -315,7 +472,13 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
       if (closed) return
       closed = true
       abandon(ACP_CODES.ACP_CLOSED, 'The engine process was closed.')
-      child.kill()
+      // The whole tree, not merely the process in hand: what a shim leaves behind is the engine holding its own
+      // port, and a child still holding it is what the next turn waits on forever.
+      killAcpTree(child, {
+        ...(deps.killGraceMs === undefined ? {} : { killGraceMs: deps.killGraceMs }),
+        ...(deps.killTree === undefined ? {} : { killTree: deps.killTree }),
+        ...(deps.setTimer === undefined ? {} : { setTimer: deps.setTimer }),
+      })
     },
   }
 }

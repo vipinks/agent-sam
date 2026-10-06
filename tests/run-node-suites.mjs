@@ -150,6 +150,10 @@ const SUITES = [
     name: 'codex child lifecycle (stdin closed at spawn, per-turn child, reap, silent exit, cancel)',
     src: 'engines/engine-lifecycle-test.ts',
   },
+  {
+    name: 'acp turn lifecycle (per-turn child, tree reaped on close, call bound, every ending kind)',
+    src: 'engines/engine-acp-lifecycle-test.ts',
+  },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
   {
     name: 'session row (engine name, Sam pair, unnamed engine)',

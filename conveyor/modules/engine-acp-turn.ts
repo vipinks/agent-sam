@@ -46,6 +46,22 @@ export interface AcpTurnDeps {
   binaryOverride?: string
   /** Left out in the app: the real `child_process.spawn`. Supplied by the suites that watch it. */
   spawnImpl?: AcpSpawnImpl
+  /**
+   * The budget one call is given, and the grace before the child's tree is killed outright.
+   *
+   * Left out in the app, where the client's own `ACP_CALL_BOUND_MS` and `ACP_KILL_GRACE_MS` are the answers; a
+   * suite states small ones so a call that is never answered fails an assertion inside its own bound rather than
+   * waiting the product's out.
+   */
+  callBoundMs?: number
+  killGraceMs?: number
+  /**
+   * How the child's whole tree is ended, by the pid it was started with.
+   *
+   * Left out in the app, where the client's own platform kill is used; a suite supplies one that observes the
+   * request and then lets it happen.
+   */
+  killTree?: (pid: number | undefined) => void
   /** Put one permission question to whoever can answer it, and answer with the option id they picked. */
   onPermissionRequest: (request: AcpPermissionRequest) => Promise<string>
   /** A line that was not JSON, reported rather than swallowed. */
@@ -111,6 +127,9 @@ export async function runAcpTurn(
   const client = createAcpClient({
     spawn: { command: resolution.command, args: resolution.args, cwd: input.cwd },
     ...(deps.spawnImpl === undefined ? {} : { spawnImpl: deps.spawnImpl }),
+    ...(deps.callBoundMs === undefined ? {} : { callBoundMs: deps.callBoundMs }),
+    ...(deps.killGraceMs === undefined ? {} : { killGraceMs: deps.killGraceMs }),
+    ...(deps.killTree === undefined ? {} : { killTree: deps.killTree }),
     onEvent: (event) => emit(acpTranscriptChunks([event], input.engineId)),
     onPermissionRequest: deps.onPermissionRequest,
     ...(deps.onMalformedLine === undefined ? {} : { onMalformedLine: deps.onMalformedLine }),

@@ -23,7 +23,19 @@
  *                error of its own, which is the shape a session that was closed and then reused gets.
  *                It exists so the client's refusal path can be stated as an assertion: what the child
  *                said, and what of it survives into the wrapper's own code.
+ * - grandchild   an ordinary turn that also starts a child of its own and streams that child's pid, so
+ *                `close()` can be proved to end the *tree* rather than one process. A vendor CLI is
+ *                reached through a shim that starts the real binary, which is the measured shape this
+ *                mode stands in for.
+ * - stalled      answer `initialize`, then never answer `session/new`: an engine whose stateful calls go
+ *                unanswered without ever closing, which is what the call budget is for.
+ * - grandchild-stalled  start the child of its own first, then stall the prompt, so a cancel can be proved
+ *                to end the tree rather than the process it was pointed at.
+ * - die          exit mid-turn, after the handshake, without answering the prompt, so the client's
+ *                close-event path is stated as an assertion rather than inferred.
  */
+
+const { spawn } = require('node:child_process')
 
 const mode = process.argv[2] || 'normal'
 
@@ -53,6 +65,27 @@ function toolCallUpdate(sessionId, status) {
 }
 
 const SESSION_ID = 'fixture-session-1'
+
+/**
+ * A child of this process, kept alive until something ends it.
+ *
+ * The stand-in for the real binary behind a vendor shim: it shares nothing with the parent, so a kill that
+ * reaches only the parent leaves this running — which is the leak the tree kill exists for, observed rather
+ * than described.
+ *
+ * `detached` is the whole of the modelling, and it was measured rather than assumed: an ordinary child of a
+ * killed parent on this platform dies with it, so a fixture that spawned one plainly would prove nothing about
+ * a tree. The live shape is the detached one — the probe recorded the shim's real `tools\opencode.exe acp`
+ * still running, and still holding its port, after `child.kill()` had been sent to the shim. stdio is ignored,
+ * so it holds nothing of the suite's open and the suite can end it by pid alone.
+ */
+function startGrandchild() {
+  return spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+    windowsHide: true,
+    detached: true,
+  })
+}
 
 /** The sessions this process has already answered a prompt on, for the mode above. */
 const usedSessions = new Set()
@@ -100,11 +133,33 @@ async function handle(message) {
   }
 
   if (message.method === 'session/new') {
+    // A stateful call that is never answered and never refused: the process stays alive and silent, which
+    // is the shape a turn hangs in. Nothing closes, so nothing the client waits on ever settles.
+    if (mode === 'stalled') return
     success(message.id, { sessionId: SESSION_ID })
     return
   }
 
   if (message.method === 'session/prompt') {
+    if (mode === 'die') {
+      // A process that ends mid-turn: the client's close event is the only thing that can end this turn.
+      process.exit(2)
+    }
+
+    if (mode === 'grandchild' || mode === 'grandchild-stalled') {
+      const grandchild = startGrandchild()
+      notify('session/update', {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'grandchild:' + grandchild.pid },
+        },
+      })
+      // A parent that ends without its own child is exactly the shape `close()` has to end the tree for.
+      if (mode === 'grandchild-stalled') return
+      success(message.id, { stopReason: 'end_turn' })
+      return
+    }
     // A session this peer has already answered on is refused with an error of its own rather than answered
     // twice. Real engines do exactly this — a session id they do not know, or one that has been closed,
     // comes back as a JSON-RPC error — and that refusal is the one the client has to keep legible.
