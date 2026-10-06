@@ -12,6 +12,9 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
+import { acpOptionApproves } from '@/conveyor/protocol/acp'
+import { engineLabel, type PendingEngineConsent } from '@/conveyor/protocol/engine'
+import { engineConsentStore } from '@/conveyor/stores/engine-consent'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { buddiesStore } from '@/conveyor/stores/buddies'
@@ -38,6 +41,9 @@ import { COMPOSER_MIN_HEIGHT, clampComposerHeight, composerBounds } from './comp
 import { HOME_STARTERS } from './home'
 import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
+import { AgentActionCard } from './agent-action-card'
+import { EnginePicker } from './engine-picker'
+import type { ToolStep } from './agent-session'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
 import { CommandNotice, CommandPicker, type CommandNoticeText } from './command-picker'
@@ -258,6 +264,47 @@ export const BUDDY_LOCK_CAPTION =
   'Fixed for this conversation — a new chat can pick another; the model and auto-approve stay yours to change.'
 
 /**
+ * Why the engine picker will not move inside a conversation, in the same two halves the Buddy caption above has.
+ *
+ * The first half is the refusal and the way out, because a control that simply would not move reads as broken.
+ * The second half scopes the word *fixed* to the one thing it covers — the engine a conversation was created
+ * as — and says what stays live, which is everything else in the row.
+ */
+export const ENGINE_LOCK_CAPTION =
+  'Fixed for this conversation — a new chat can run as another engine; the model and auto-approve stay yours to change.'
+
+/**
+ * Why the model picker will not move while an engine owns the conversation.
+ *
+ * It names the engine rather than saying "the engine", because the reader's next question is which one, and the
+ * answer is on the record rather than in this sentence: a conversation created under an engine runs that
+ * engine's own model and provider, so a choice made here would be a promise nothing keeps — the send would
+ * leave under the engine and the model this control showed would have had no part in it.
+ */
+export const ENGINE_MODEL_LOCK_CAPTION = (engineName: string): string =>
+  `${engineName} runs its own model and provider for this conversation.`
+
+/**
+ * An engine's question, as the shield card draws it.
+ *
+ * The card is the same one a tool call gets — same section, same two buttons, same words — and this is the
+ * shape it is handed: an `engine` marker where a server's consent block would be, so the card says who is
+ * asking rather than drawing the arguments a call of ours would have had. There are none to draw: the
+ * question arrived over a protocol, and what the engine wrote about the call is its title.
+ */
+function engineConsentStep(consent: PendingEngineConsent): ToolStep {
+  return {
+    callId: consent.toolCallId,
+    // The tool's own name is the engine's question rather than a call of ours: `describe` reads the marker
+    // first, so nothing downstream has to know that this tool id is a special case.
+    tool: 'engine',
+    args: {},
+    status: 'awaiting',
+    engine: { engineId: consent.engineId, engineName: consent.engineName, title: consent.title },
+  }
+}
+
+/**
  * The mark a Buddy entry is drawn with: the app's own logo where an entry is the app itself, and the
  * record's own glyph in the badge the Buddies list draws it in for every Buddy.
  *
@@ -434,6 +481,33 @@ export function ChatPanel() {
   const atHome = sessions.atHome
   /** The pause of the conversation on screen, which is the only one the pane may act on. */
   const pending = (sessions.openId ? sessions.pauses[sessions.openId] : undefined) ?? null
+
+  const engineId = sessions.engineId
+  /**
+   * The engine the model picker names when it refuses, and the question on the shield.
+   *
+   * The engine question, mirrored from main: one question at a time, because an engine asks about one call
+   * before it makes it and its next question cannot arrive until this one is answered. It is read from the
+   * store rather than from the transcript, because it did not come from a turn — nothing has been written
+   * yet, which is exactly what the question is about.
+   */
+  const engineName = engineLabel(engineId)
+  const engineConsent = useConveyorStore(engineConsentStore, (s) => s.pending) ?? null
+  const consentAnswer = conveyor.engine.answerConsent.useMutation()
+
+  /**
+   * Answer the engine's question with the option that means what the user clicked.
+   *
+   * By kind, never by label: an engine writes its buttons' words, and the only thing that says whether an
+   * option grants consent is the kind the protocol gives that option. A kind that was not offered leaves the
+   * question standing rather than answering it with something the user did not pick — a question that cannot
+   * be answered as asked is better left asked than answered wrongly.
+   */
+  const answerEngineConsent = (consent: PendingEngineConsent, approved: boolean): void => {
+    const option = consent.options.find((candidate) => acpOptionApproves(candidate) === approved)
+    if (option === undefined) return
+    consentAnswer.mutate({ requestId: consent.requestId, optionId: option.optionId })
+  }
 
   /**
    * The Buddy the header names: the conversation's own once one is open, the pending choice while home.
@@ -1646,61 +1720,70 @@ export function ChatPanel() {
         icon={MessageSquare}
         title="Chat"
         afterTitle={
-          <Select
-            value={buddyId ?? SAMAI_BUDDY_ID}
-            // Agent Sam is stored as the absent id rather than as itself: the default is what a conversation
-            // that names nobody runs as, so picking it clears the choice instead of recording one.
-            onValueChange={(picked) => sessions.setPendingBuddyId(picked === SAMAI_BUDDY_ID ? null : picked)}
-            disabled={!atHome}
-          >
-            <SelectTrigger
-              aria-label="Buddy"
-              // The value while home, and the reason the value cannot change once a conversation exists.
-              // A native title rather than the tooltip the shield beside it uses, because a disabled
-              // control is not a pointer target: a tooltip would mount on a hover it never receives.
-              title={atHome ? buddyName : BUDDY_LOCK_CAPTION}
-              className="max-w-40 min-w-0 shrink-6"
+          <>
+            <Select
+              value={buddyId ?? SAMAI_BUDDY_ID}
+              // Agent Sam is stored as the absent id rather than as itself: the default is what a conversation
+              // that names nobody runs as, so picking it clears the choice instead of recording one.
+              onValueChange={(picked) => sessions.setPendingBuddyId(picked === SAMAI_BUDDY_ID ? null : picked)}
+              disabled={!atHome}
             >
-              {/* Drawn rather than only explained: a control that refuses without saying why reads as
+              <SelectTrigger
+                aria-label="Buddy"
+                // The value while home, and the reason the value cannot change once a conversation exists.
+                // A native title rather than the tooltip the shield beside it uses, because a disabled
+                // control is not a pointer target: a tooltip would mount on a hover it never receives.
+                title={atHome ? buddyName : BUDDY_LOCK_CAPTION}
+                className="max-w-40 min-w-0 shrink-6"
+              >
+                {/* Drawn rather than only explained: a control that refuses without saying why reads as
                   broken, and the caption carried above says the rest. */}
-              {!atHome && <Lock aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />}
-              {/* The entry's own mark, and the same one its row in the list below carries: the id is the
+                {!atHome && <Lock aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />}
+                {/* The entry's own mark, and the same one its row in the list below carries: the id is the
                   conversation's while one is open and the pending choice while home, so the badge names
                   the entry the label beside it names. */}
-              <BuddyAvatar glyph={selectedGlyph} />
-              {/*
+                <BuddyAvatar glyph={selectedGlyph} />
+                {/*
                 The label is drawn here rather than through `SelectValue`, and this is the one place the
                 control differs from the model picker beside it: a conversation whose Buddy was deleted has
                 no item to be read from, and the label rule already answers for that id — which is what lets
                 a conversation outlive the Buddy it was created as.
               */}
-              <span className="min-w-0 flex-1 truncate">{buddyName}</span>
-            </SelectTrigger>
-            <SelectContent>
-              {/*
+                <span className="min-w-0 flex-1 truncate">{buddyName}</span>
+              </SelectTrigger>
+              <SelectContent>
+                {/*
                 Every row is its entry's mark and then its entry's name. The pair sits in a flex line of
                 its own because the primitive draws a row's children inside an inline span, where an
                 inline line would stack the badge over the name rather than set it beside. The name
                 carries the slot the Buddies list gives the same name, because it is the same thing: the
                 words a row is read by.
               */}
-              {/* The default first, always: it is what a conversation that names nobody runs as. */}
-              <SelectItem value={SAMAI_BUDDY_ID}>
-                <span className="flex items-center gap-1.5">
-                  <BuddyAvatar glyph={null} />
-                  <span data-slot="buddy-name">{AGENT_SAM_BUDDY_NAME}</span>
-                </span>
-              </SelectItem>
-              {buddyRows.map((row) => (
-                <SelectItem key={row.id} value={row.id}>
+                {/* The default first, always: it is what a conversation that names nobody runs as. */}
+                <SelectItem value={SAMAI_BUDDY_ID}>
                   <span className="flex items-center gap-1.5">
-                    <BuddyAvatar glyph={row.glyph} />
-                    <span data-slot="buddy-name">{row.name}</span>
+                    <BuddyAvatar glyph={null} />
+                    <span data-slot="buddy-name">{AGENT_SAM_BUDDY_NAME}</span>
                   </span>
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                {buddyRows.map((row) => (
+                  <SelectItem key={row.id} value={row.id}>
+                    <span className="flex items-center gap-1.5">
+                      <BuddyAvatar glyph={row.glyph} />
+                      <span data-slot="buddy-name">{row.name}</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <EnginePicker
+              atHome={atHome}
+              engineId={sessions.engineId}
+              pendingEngineId={sessions.pendingEngineId}
+              lockCaption={ENGINE_LOCK_CAPTION}
+              onPick={sessions.setPendingEngineId}
+            />
+          </>
         }
       >
         {/*
@@ -1740,6 +1823,9 @@ export function ChatPanel() {
         */}
         <Select
           value={`${activeProviderId}::${activeModel}`}
+          // Refused while an engine owns this conversation, for the reason the caption below states: the engine
+          // runs its own model and provider, so a choice here would be one nothing honours.
+          disabled={engineId !== null}
           onValueChange={(picked) => {
             const [providerId, ...rest] = picked.split('::')
             const model = rest.join('::')
@@ -1757,7 +1843,12 @@ export function ChatPanel() {
             if (first) setTarget({ providerId, model: first })
           }}
         >
-          <SelectTrigger aria-label="Provider and model" title={`${providerName} · ${activeModel}`}>
+          <SelectTrigger
+            aria-label="Provider and model"
+            // The engine's name in place of the pair while an engine owns the conversation: a disabled control
+            // is not a pointer target, so the reason travels in the native title rather than in a tooltip.
+            title={engineId === null ? `${providerName} · ${activeModel}` : ENGINE_MODEL_LOCK_CAPTION(engineName)}
+          >
             <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
@@ -1917,6 +2008,22 @@ export function ChatPanel() {
         second composer drawn for the home screen would be a second thing to keep in step with this one,
         and the send it performed would be the second send path the doc above rules out.
       */}
+      {/*
+        An engine's permission question, on the shield the agent's own calls use: the same card, the same two
+        buttons, and the engine's name where a server's consent block would be. Above the composer rather than
+        inside the transcript, because this question did not come from a turn in it — nothing of this exchange
+        has been written yet, and a card in the history would have no turn to belong to.
+      */}
+      {engineConsent !== null && (
+        <div className="shrink-0 border-t border-border px-3 py-2">
+          <AgentActionCard
+            step={engineConsentStep(engineConsent)}
+            onApprove={() => answerEngineConsent(engineConsent, true)}
+            onDeny={() => answerEngineConsent(engineConsent, false)}
+          />
+        </div>
+      )}
+
       <div
         ref={composerRef}
         className={cn(

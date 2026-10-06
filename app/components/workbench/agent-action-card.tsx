@@ -92,7 +92,9 @@ export function AgentActionCard({
           the same information with that server's own secrets taken out and cut to a length a card
           can hold — printing the raw arguments as well would put the secrets back on screen next to
           their redaction, which is the one thing the preview exists to prevent. */}
-      {step.mcp ? (
+      {step.engine ? (
+        <EngineConsentBlock engine={step.engine} />
+      ) : step.mcp ? (
         <McpConsentBlock consent={step.mcp} />
       ) : (
         <pre className="max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
@@ -146,8 +148,7 @@ export function AgentActionCard({
   )
 }
 
-/**
- * Which server is asking, and what it wants to run.
+/** Which server is asking, and what it wants to run.
  *
  * The one card that describes a process the user cannot see, so it says all four things a decision needs:
  * the server's id, whether it belongs to the whole app or to this folder, what the config says about its
@@ -172,6 +173,33 @@ function McpConsentBlock({ consent }: { consent: McpConsent }) {
       <pre className="mt-1 max-h-24 overflow-auto rounded bg-background/60 p-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
         {consent.argsPreview || 'No arguments.'}
       </pre>
+    </div>
+  )
+}
+
+/**
+ * Which engine is asking, and what it says it is about to do.
+ *
+ * The other half of the shield, and it reads the engine-origin marker rather than a tool name: an engine's
+ * question arrives over a protocol as its own words about a call it wants to make, so there is no tool in our
+ * vocabulary to name and no arguments shaped like ours to print. What a decision needs is therefore the two
+ * things that are known — who is asking, and what the call is — and the card says only those rather than
+ * dressing an engine's request in the language of our own tool calls.
+ */
+function EngineConsentBlock({ engine }: { engine: { engineId: string; engineName: string; title: string } }) {
+  return (
+    <div className="rounded bg-background/60 p-2">
+      <div className="flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+        <span className="text-muted-foreground">Engine</span>
+        <span className="font-medium" data-slot="engine-name">
+          {engine.engineName}
+        </span>
+        <span className="text-muted-foreground">is asking</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+        <span className="text-muted-foreground">Call</span>
+        <span className="font-mono">{engine.title}</span>
+      </div>
     </div>
   )
 }
@@ -233,6 +261,9 @@ function StatusMark({ status }: { status: ToolStep['status'] }) {
 
 /** The action in the user's words, since "run_command" means nothing to someone reading a chat. */
 function describe(step: ToolStep): string {
+  // An engine's own question first, because an engine has no tool with a name in our vocabulary: what the
+  // card can say is who is asking and what they said they are about to do.
+  if (step.engine) return `${step.engine.engineName} is asking — ${step.engine.title}`
   // A running server's tool is named by what it does and where it runs, because "which server" is half
   // of what the user is being asked to allow: the same tool name on another server is another decision.
   if (step.mcp) return `${step.mcp.toolName} on ${step.mcp.serverId}`

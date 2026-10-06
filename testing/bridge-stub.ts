@@ -9,6 +9,12 @@ import { buddiesStore } from '@/conveyor/stores/buddies'
 import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
 import { updateStatusStore } from '@/conveyor/stores/update-status'
 import { updatePreferencesStore } from '@/conveyor/stores/update-preferences'
+// The engine rail's two stores: the probed rows the picker draws, and the consent question the shield answers.
+// Both are seeded here because every suite that renders the pane reads them on mount — an unseeded store makes
+// the mirror cache `undefined`, and the selector that reads a row or a pending question out of it would throw
+// before a single message could be drawn.
+import { engineConsentStore } from '@/conveyor/stores/engine-consent'
+import { engineStatusStore } from '@/conveyor/stores/engine-status'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -190,6 +196,10 @@ const MANIFEST: Record<string, Record<string, string>> = {
   },
   // The repository view: the reads the changes panel makes, and the commands it offers. Listed by
   // kind, so the client dispatches each the way main registered it.
+  // The engine rail: the picker's read of what a probe found, and the one write the consent bridge
+  // offers. Listed by kind for the reason the entries around it are — the client refuses an unlisted
+  // member rather than dispatching it, so a picker whose read was absent here could not dispatch.
+  engine: { answerConsent: 'command' },
   git: {
     status: 'query',
     branch: 'query',
@@ -325,6 +335,8 @@ const initialStates = new Map<string, unknown>([
   // for either, and the notice would throw on the selector that reads a state out of it.
   ['conveyor:store:update-status', structuredClone(updateStatusStore.initialState)],
   ['conveyor:store:update-preferences', structuredClone(updatePreferencesStore.initialState)],
+  ['conveyor:store:engine-consent', structuredClone(engineConsentStore.initialState)],
+  ['conveyor:store:engine-status', structuredClone(engineStatusStore.initialState)],
 ])
 
 /**

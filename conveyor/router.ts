@@ -24,6 +24,7 @@ import { skillsModule, setSkillPruneSink } from './modules/skills'
 import { mcpModule } from './modules/mcp'
 import { gitModule } from './modules/git'
 import { updatesModule, setUpdateStatusSink, setAutoDownloadSource } from './modules/updates'
+import { engineModule, setEngineConsentSink, setEngineStatusSink, refreshEngineStatus } from './modules/engine'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
@@ -33,6 +34,8 @@ import { buddiesStore } from './stores/buddies'
 import { appearancePreferencesStore } from './stores/appearance-preferences'
 import { updatePreferencesStore } from './stores/update-preferences'
 import { updateStatusStore } from './stores/update-status'
+import { engineConsentStore } from './stores/engine-consent'
+import { engineStatusStore } from './stores/engine-status'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -63,6 +66,7 @@ export const router = createRouter(
     mcp: mcpModule,
     git: gitModule,
     updates: updatesModule,
+    engine: engineModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
@@ -76,6 +80,8 @@ export const router = createRouter(
       appearancePreferencesStore,
       updatePreferencesStore,
       updateStatusStore,
+      engineConsentStore,
+      engineStatusStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
@@ -263,6 +269,45 @@ setUpdateStatusSink({
   startDownloading: () => router.stores['update-status'].dispatch('startDownloading'),
   recordReady: (version) => router.stores['update-status'].dispatch('recordReady', { version }),
   recordError: (code) => router.stores['update-status'].dispatch('recordError', { code }),
+})
+
+/**
+ * Put an engine's permission question on the shield, and take it back when it is answered.
+ *
+ * A store dispatch rather than an event, because a question is state and not a notification: every window has
+ * to mirror the one question that is pending — an event would leave a second window believing nothing is
+ * being asked — and the answer arriving is the same state moving, which is what `clear` is.
+ *
+ * Declared here for the reason the sinks above are: the store only exists once the router does, and the
+ * module that asks owns no store of its own.
+ */
+setEngineConsentSink({
+  request: (consent) => router.stores['engine-consent'].dispatch('request', consent),
+  clear: (requestId) => router.stores['engine-consent'].dispatch('clear', { requestId }),
+})
+
+/**
+ * Publish what is installed, once, as the app starts.
+ *
+ * The sink first, then the probe — never the other way round: the probe publishes when it answers, and a sink
+ * installed afterwards would drop the answer on the floor and leave the picker saying "not installed" for the
+ * rest of the session.
+ *
+ * Here rather than behind a read, because the answer is a fact about the machine that every window needs and
+ * no window should have to ask for: the picker draws from the store this fills, and the spawn happens in main
+ * through the spawn law. Not awaited, like the sweeps above and for the same reason — a window appearing must
+ * not wait on a process — so the rows land a moment later, with the picker drawing every engine as not
+ * installed until they do.
+ *
+ * The failure is caught rather than left to surface: a probe is a read for the user's benefit, and a machine
+ * that cannot start one has a picker that says "not installed", not a start that failed.
+ */
+setEngineStatusSink({
+  record: (rows) => router.stores['engine-status'].dispatch('record', { rows }),
+})
+
+void refreshEngineStatus().catch((error: unknown) => {
+  console.warn('[engine] the startup probe failed', error)
 })
 
 /** Wire per-window push events. Call once per created window. */

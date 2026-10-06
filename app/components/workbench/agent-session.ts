@@ -67,6 +67,16 @@ export interface ToolStep {
    */
   mcp?: McpConsent
   /**
+   * The engine that is asking, when this card is that engine's question rather than a call of ours.
+   *
+   * The marker is what makes one card serve two protocols: an engine reaches its permission questions to the
+   * same shield the agent's own calls use, and what the card reads here is only who is asking and what they
+   * asked about. Present only on a card built from an engine's own request, and — like `mcp` — never written to
+   * the transcript: the question it belongs to is waiting in main, so a reopened conversation can hold no such
+   * card, exactly as it can hold no tool call still running.
+   */
+  engine?: { engineId: string; engineName: string; title: string }
+  /**
    * The name of the flag that let this call run without a pause, when one did.
    *
    * Unlike `mcp`, this one *is* written down: it says nothing about a decision still waiting to be

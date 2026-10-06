@@ -251,6 +251,31 @@ export interface ChatSessions {
    */
   setPendingBuddyId: (buddyId: string | null) => void
   /**
+   * The engine the conversation on screen was created as, or null for the Sam loop and at home.
+   *
+   * Read off the record rather than resolved again, for the same reason the Buddy snapshots above are: what a
+   * conversation runs as was decided when it started, and the picker that chose it locks on this value. Null
+   * is the Sam loop, which is every conversation that named no engine.
+   */
+  engineId: string | null
+  /**
+   * The engine chosen on the home screen, or null while the next conversation runs the Sam loop.
+   *
+   * Held above the pane for the same reason the pending Buddy beside it is: the workbench keys its resize
+   * groups on the window state, and a choice held in the pane would be dropped by a maximize. Only the create
+   * reads it, and it is not a second copy of a conversation's engine — once a record exists, the record is
+   * what the picker locks to.
+   */
+  pendingEngineId: string | null
+  /**
+   * Choose the engine the next conversation is created as.
+   *
+   * `null` is the Sam loop rather than a third state, exactly as `null` is Agent Sam for the Buddy: a
+   * conversation that names no engine runs the app's own loop, so there is nothing to store that its own
+   * absence does not already say.
+   */
+  setPendingEngineId: (engineId: string | null) => void
+  /**
    * Turn one skill on or off for the conversation in front of the user.
    *
    * A toggle rather than a setter, because the control is a list of switches and the number that
@@ -558,6 +583,17 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const pendingBuddyRef = useRef<string | null>(pendingBuddyId)
   pendingBuddyRef.current = pendingBuddyId
 
+  /**
+   * The engine chosen before there is a conversation to create as one.
+   *
+   * The same lift as the Buddy above, and the same mirror: the create reads the ref, because a send built
+   * before this render would otherwise close over the engine that was chosen then. `null` is the Sam loop, and
+   * it is what the create turns into an absent key.
+   */
+  const [pendingEngineId, setPendingEngineId] = useState<string | null>(null)
+  const pendingEngineRef = useRef<string | null>(pendingEngineId)
+  pendingEngineRef.current = pendingEngineId
+
   // The user's own Buddies, mirrored from main, and read at the moment a conversation is created rather
   // than at the moment this callback was: the record a Buddy is resolved from is the one main holds now,
   // which is why the ref is here and why the create below does not depend on the list's identity.
@@ -708,6 +744,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // that declares skills starts the conversation on them — the chips the user set before there was a
       // conversation are the fallback, not the other way round, because a Buddy is what was chosen.
       const chosenSkills = seed?.activeSkillIds ?? pendingSkillsRef.current
+      // The engine this conversation is created as, read from the ref for the reason the Buddy is resolved
+      // here rather than in the caller: what it runs as is decided at creation and cannot change afterwards,
+      // so this is the one moment the choice is written. An absent key is the Sam loop.
+      const chosenEngine = pendingEngineRef.current
       addSession({
         id,
         title: UNTITLED,
@@ -722,6 +762,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         // conversation created without one carries no key at all — which is what the Agent Sam default is.
         ...(seed === null ? {} : { buddyId: seed.buddyId, rolePrompt: seed.rolePrompt }),
         ...(seed?.mcpSubset === undefined ? {} : { mcpSubset: [...seed.mcpSubset] }),
+        // The engine, on the Buddy keys' terms: written only when one was chosen, so a conversation on the
+        // Sam loop carries no key at all — and never rewritten afterwards, which is what makes the picker's
+        // lock in the header a statement about the record rather than about the control.
+        ...(chosenEngine === null ? {} : { engineId: chosenEngine }),
       })
       setActive({ id })
       // The startup restore is decided here as much as by the effect that reads the store's active id: a
@@ -1042,6 +1086,12 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     buddyId: buddySession.buddyId,
     pendingBuddyId,
     setPendingBuddyId,
+    // The conversation's own engine for the header to name, and the choice it is made from while there is no
+    // conversation yet. Null in both places is the Sam loop, which is not an engine to render but a state of
+    // the select: the app's own loop, offered first.
+    engineId: atHome ? null : (sessionRecord?.engineId ?? null),
+    pendingEngineId,
+    setPendingEngineId,
     toggleSkill,
     streaming,
     setStreaming,
