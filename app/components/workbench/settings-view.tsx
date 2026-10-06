@@ -15,6 +15,7 @@ import { TerminalSection } from './terminal-settings'
 import { ContextSection } from './context-settings'
 import { AppearanceSection } from './appearance-settings'
 import { BuddiesSection } from './buddies-settings'
+import { UpdatesSection } from './updates-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -166,6 +167,13 @@ export function SettingsView() {
             <TabsTrigger value="buddies" className={RAIL_ENTRY}>
               Buddies
             </TabsTrigger>
+            {/* Last in the row, and that placement is the policy rather than the order sections were
+                built in: the updater works in the background and needs nothing from the user, so it is
+                reported where the other things you set once and forget are — while the one state that does
+                need an answer is announced by the notice over the main area rather than by a rail entry. */}
+            <TabsTrigger value="updates" className={RAIL_ENTRY}>
+              Updates
+            </TabsTrigger>
           </TabsList>
         </nav>
 
@@ -248,6 +256,10 @@ export function SettingsView() {
               switches, the deletions — is the advanced screen's business. */}
           <TabsContent value="buddies" data-slot="settings-section-buddies" className="mx-auto max-w-2xl px-8 py-7">
             <BuddiesSection />
+          </TabsContent>
+
+          <TabsContent value="updates" data-slot="settings-section-updates" className="mx-auto max-w-2xl px-8 py-7">
+            <UpdatesSection />
           </TabsContent>
         </div>
       </Tabs>

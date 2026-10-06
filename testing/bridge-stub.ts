@@ -7,6 +7,8 @@ import { terminalPreferencesStore } from '@/conveyor/stores/terminal-preferences
 import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
 import { buddiesStore } from '@/conveyor/stores/buddies'
 import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
+import { updateStatusStore } from '@/conveyor/stores/update-status'
+import { updatePreferencesStore } from '@/conveyor/stores/update-preferences'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -317,6 +319,12 @@ const initialStates = new Map<string, unknown>([
   // mirror would cache `undefined` for this store and the transcript would throw on the first message it
   // drew.
   ['conveyor:store:appearance-preferences', structuredClone(appearancePreferencesStore.initialState)],
+  // The updater's two stores. The status one is read by the workbench's update-ready notice on every
+  // mount — every suite that renders the workbench mounts it — and the preference one is read by the
+  // Updates settings section. Without a genuine initial state here the mirror would cache `undefined`
+  // for either, and the notice would throw on the selector that reads a state out of it.
+  ['conveyor:store:update-status', structuredClone(updateStatusStore.initialState)],
+  ['conveyor:store:update-preferences', structuredClone(updatePreferencesStore.initialState)],
 ])
 
 /**
