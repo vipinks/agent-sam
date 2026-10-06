@@ -293,7 +293,17 @@ export const MessageBubble = memo(function MessageBubble({
         <div
           data-slot="message-body"
           className={cn(
-            'min-w-0 rounded-lg px-3.5 py-2.5',
+            // `max-w-full` beside `min-w-0`, and both are load-bearing for different reasons.
+            //
+            // The bubble's column is a `flex-col` with `items-*`, and a column flex container sizes its
+            // items on the cross axis to their fit-content width — floored at their *min-content* width.
+            // `min-w-0` does not touch that floor: it lowers the automatic minimum on the item's *main*
+            // axis, which for a column is the vertical one. So one unbreakable descendant — a long command
+            // in a tool row, a path with no space in it — made this box as wide as that run, painted out
+            // of the row, and was clipped by the transcript's `overflow-x-hidden` at the container edge
+            // while the prose around it wrapped at the widened width. `max-w-full` is what caps the
+            // fit-content sizing at the column's own width, which is the constraint that was missing.
+            'min-w-0 max-w-full rounded-lg px-3.5 py-2.5',
             FONT_PRESETS[fontPreset].sizeClass,
             // The line-height after the size, deliberately: tailwind-merge reads an arbitrary
             // `text-[13px]` beside a `leading-*` class as one conflict and keeps whichever comes later,

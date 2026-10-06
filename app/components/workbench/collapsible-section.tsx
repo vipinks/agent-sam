@@ -59,6 +59,7 @@ export function CollapsibleSection({
   icon,
   trailing,
   defaultOpen = false,
+  title,
   className,
   headerClassName,
   bodyClassName,
@@ -88,6 +89,14 @@ export function CollapsibleSection({
    * arrived rather than something that can change under it.
    */
   defaultOpen?: boolean
+  /**
+   * The summary in full, for the case the header had to cut it.
+   *
+   * The header's line truncates — it has to, or a long command would widen the column it sits in — so a
+   * step named by something longer than the row is a step whose name the user could not read. The native
+   * title is what offers the whole of it, on hover, without a second element or a new surface.
+   */
+  title?: string
   className?: string
   headerClassName?: string
   bodyClassName?: string
@@ -101,6 +110,7 @@ export function CollapsibleSection({
         type="button"
         onClick={toggle}
         aria-expanded={expanded}
+        title={title}
         className={cn(
           'flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
           headerClassName

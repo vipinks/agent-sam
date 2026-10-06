@@ -403,10 +403,16 @@ describe('the chat pane’s appearance', () => {
     // rows and the two bodies carry are the ones the tree had before the preference existed, in the order
     // Tailwind's merge emits them. jsdom cannot prove a pixel, but it can prove the emitted class string
     // unchanged, and that is the half of "reproduces today's rendering" a test can hold.
+    //
+    // `max-w-full` joined the body in Phase 75 turn 2, and it is a change to the rendered box rather than
+    // to this promise: the body is the box that could be widened by an unbreakable child, and the cap is
+    // what stops the transcript clipping instead of wrapping. It sits after `min-w-0` because that is
+    // where the merge emits it — the two are the same property pair the class string has always led with.
     expect([...userRow().classList]).toEqual(['flex', 'w-full', 'px-4', 'py-2.5', 'justify-end'])
     expect([...agentRow().classList]).toEqual(['flex', 'w-full', 'px-4', 'py-2.5', 'justify-start'])
     expect([...bodyOf(userRow()).classList]).toEqual([
       'min-w-0',
+      'max-w-full',
       'rounded-lg',
       'px-3.5',
       'py-2.5',
@@ -417,6 +423,7 @@ describe('the chat pane’s appearance', () => {
     ])
     expect([...bodyOf(agentRow()).classList]).toEqual([
       'min-w-0',
+      'max-w-full',
       'rounded-lg',
       'px-3.5',
       'py-2.5',

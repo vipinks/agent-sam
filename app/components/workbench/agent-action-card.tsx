@@ -54,11 +54,15 @@ export function AgentActionCard({
   // In flight from the moment the call starts until it has an outcome, which is the whole of what the
   // auto rule reads: a decision being waited on is as much a step in progress as a call being run.
   const inFlight = step.status === 'running' || awaiting || queued
+  // The line the row names the call in, computed once: the header truncates it, so the same string is
+  // what the title offers in full when the row had to cut it.
+  const summary = describe(step)
 
   return (
     <CollapsibleSection
       slot="agent-action-card"
-      summary={describe(step)}
+      summary={summary}
+      title={summary}
       inFlight={inFlight}
       // A question that ended without an answer opens folded nowhere: it is the state a reopened
       // conversation is read in, and it is a state only the user may leave.
