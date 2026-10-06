@@ -11,6 +11,7 @@ import { ExplorerPanel } from './explorer-panel'
 import { GitPanel } from './git-panel'
 import { SessionListPanel } from './session-list-panel'
 import { SettingsView } from './settings-view'
+import { UpdateReadyNotice } from './update-ready-notice'
 import { TerminalPanel } from './terminal-panel'
 import { PreviewPanel } from './preview-panel'
 import { OverviewPanel } from './overview-panel'
@@ -200,7 +201,7 @@ function WorkbenchLayout() {
   )
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="relative flex h-full min-h-0">
       <IconRail />
 
       {activeActivity === 'settings' ? (
@@ -387,6 +388,33 @@ function WorkbenchLayout() {
           </ResizablePanel>
         </ResizablePanelGroup>
       )}
+
+      {/*
+        The update-ready notice, laid over the main area rather than carried in one of its columns.
+
+        It is here, in the shell, because the news it carries is about the app: a downloaded update is
+        waiting to install whichever view the user happens to be in, so a card living in the conversation
+        would be invisible to a user in the explorer, a document or Settings — which is exactly the user most
+        likely to have stopped looking at the app. Laid over the bottom edge rather than in a panel's flow,
+        because a notice in a column is a notice in a column the window may not have, and because a card the
+        layout can push off the screen is a card that fails at the one moment it exists for.
+
+        `pointer-events-none` on the wrapper and nothing else, so the overlay's own box never swallows a
+        click meant for the surface beneath it while the card itself stays clickable — the failure a
+        full-width overlay usually brings with it. The card is absent from the tree while the updater has
+        nothing to announce, which is every moment of a development run.
+
+        `data-overlay` states the one thing about this box the shell cannot: it is positioned out of the
+        row rather than laid in it, so it takes no width from the panels beside the rail. The
+        drawer-width budget's own walk over the row's children reads that marker to leave it out, because
+        a share is what that file measures and this box has never had one.
+      */}
+      <div
+        data-overlay="update-ready"
+        className="pointer-events-none absolute inset-x-0 bottom-3 z-40 flex justify-center px-3"
+      >
+        <UpdateReadyNotice />
+      </div>
     </div>
   )
 }

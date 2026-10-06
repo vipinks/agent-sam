@@ -158,9 +158,16 @@ function workbenchRow(container: HTMLElement): HTMLElement {
  * This is the whole subject of the file: a share is a share *of* what the group's box turns out to
  * be, so an element in this list next to the group is a slice taken from every panel in it. At
  * `8d9c03b` the list was the left icon rail alone.
+ *
+ * Elements the row declares as overlays are left out, and only those: an absolutely positioned box takes
+ * no share of the row whatever else it does, so counting one here would be measuring the wrong thing. The
+ * update-ready notice is the first such element, and it states the marker itself rather than being named
+ * here — a fixed-width column added beside the group is still caught by this walk.
  */
 function columnOutsideTheGroup(container: HTMLElement): HTMLElement[] {
-  return [...workbenchRow(container).children].filter((child) => !child.hasAttribute('data-group')) as HTMLElement[]
+  return [...workbenchRow(container).children].filter(
+    (child) => !child.hasAttribute('data-group') && !child.hasAttribute('data-overlay')
+  ) as HTMLElement[]
 }
 
 /** The outer group's own panel children, as ids and declared shares. */
