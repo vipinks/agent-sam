@@ -126,6 +126,10 @@ const SUITES = [
     src: 'engines/engine-spawn-test.ts',
   },
   { name: 'acp client (handshake, tool call, consent, event stream)', src: 'engines/acp-client-test.ts' },
+  {
+    name: 'codex jsonl mapper (captured vocabulary, tool calls, usage, exit cause)',
+    src: 'engines/codex-jsonl-test.ts',
+  },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
 ]
 

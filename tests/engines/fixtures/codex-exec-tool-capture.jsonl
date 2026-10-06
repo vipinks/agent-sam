@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"01a110ca-7eda-7752-ac7f-604ee2fd3dec"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Running the command."}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Program Files (x86)\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'echo hello'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Program Files (x86)\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'echo hello'","aggregated_output":"profile.ps1: Cannot dot-source this command because it was defined in a different language mode. To invoke this command without importing its contents, omit the '.' operator.\r\nMicrosoft.PowerShell_profile.ps1: Cannot dot-source this command because it was defined in a different language mode. To invoke this command without importing its contents, omit the '.' operator.\r\nhello\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"hello"}}
+{"type":"turn.completed","usage":{"input_tokens":38314,"cached_input_tokens":25088,"cache_write_input_tokens":0,"output_tokens":131,"reasoning_output_tokens":50}}
