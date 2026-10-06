@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps 
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   MessageSquare,
+  Folder,
   ImagePlus,
   Lock,
   Paperclip,
@@ -86,6 +87,7 @@ import {
 } from '@/conveyor/protocol/composer-commands'
 import { MAX_ACTIVE_SKILLS, offeredSkills, scopeSkills, type SkillListing } from '@/conveyor/protocol/skills'
 import { truncateFromTurn } from '@/conveyor/protocol/truncate'
+import { rootFolderName } from '@/conveyor/protocol/root-name'
 import {
   ABANDONED_PAUSE_CODE,
   abandonUndecidedCalls,
@@ -247,6 +249,40 @@ export function autoApproveHelperText(on: boolean): string {
     ? 'Writes and commands run without asking. Reads are always allowed.'
     : 'Each write and command waits for your approval.'
   return `${base} Built-in tools only — MCP servers ask unless their own auto-approve is on.`
+}
+
+/**
+ * The folder the session is running in, as the compact chip the chat header carries.
+ *
+ * A reader looking at a conversation should be able to see which folder it is running in without opening
+ * anything, and the header has room for a name rather than a path: the chip states the folder's own name —
+ * the last segment, computed by `root-name`'s rule — and keeps the whole path in its `title`, which is what
+ * answers the reader who has two folders of the same name. A native title rather than the tooltip the shield
+ * beside it uses, for the reason the Buddy trigger at the other end of the row gives: there is no control
+ * here to focus, and a popover that only a pointer could raise would look like an affordance this chip is
+ * deliberately not — it states the folder and does nothing when clicked.
+ *
+ * A session with no project draws nothing at all. That is the rule's own absent answer being taken
+ * literally: an empty chip would claim a folder, and the honest rendering of "there is none" is no chip.
+ *
+ * The width discipline is the row's, not this chip's: `max-w-40` with `min-w-0` and a heavier shrink factor,
+ * so a deep path costs the chip characters — with the name still cut cleanly by `truncate` — rather than
+ * pushing the pickers or the shield off the row.
+ */
+function RootChip({ root }: { root: string | null }) {
+  const name = rootFolderName(root)
+  if (name === null || root === null) return null
+
+  return (
+    <span
+      data-slot="chat-root-chip"
+      title={root}
+      className="flex max-w-40 min-w-0 shrink-6 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] text-muted-foreground"
+    >
+      <Folder aria-hidden="true" className="size-3 shrink-0" />
+      <span className="min-w-0 truncate font-medium">{name}</span>
+    </span>
+  )
 }
 
 /**
@@ -1803,6 +1839,14 @@ export function ChatPanel() {
         }
       >
         {/*
+          The folder the session is running in, named between the pickers and the shield: it is a fact about
+          the conversation, so it sits with the controls that state facts about it, and it is not one of the
+          things a conversation is picked by. Drawn from the workspace root the pane already reads, and
+          nothing at all when there is none.
+        */}
+        <RootChip root={rootPath ?? null} />
+
+        {/*
           Auto-approve sits beside the model picker because it is the other thing that decides what a
           send does: whether the agent acts on its own or asks first.
 
@@ -1942,7 +1986,7 @@ export function ChatPanel() {
       {atHome ? (
         <HomeHero />
       ) : (
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+        <div ref={scrollRef} data-slot="chat-transcript" className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
               <MessageSquare className="size-6 text-muted-foreground/40" />

@@ -48,14 +48,23 @@ export function MarkdownContent({ content }: { content: string }) {
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
+          // The prose wraps, and it wraps on every construct markdown can draw it in rather than on the
+          // paragraph alone. `break-words` on a paragraph was the only containment there was, so a long
+          // inline code span inside a list item, a heading or a blockquote was an unbreakable run that
+          // painted past its block box and into the transcript's scroll container — which is what put a
+          // horizontal scrollbar under an answer. The two constructs that must *not* wrap are excluded on
+          // purpose and keep their own horizontal scroll below: a wrapped code line is a line that can no
+          // longer be copied as written, and a wrapped cell is a table that reflows instead of scrolling.
           p: ({ children }) => <p className="break-words whitespace-pre-wrap">{children}</p>,
-          ul: ({ children }) => <ul className="ml-4 list-disc space-y-1">{children}</ul>,
-          ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1">{children}</ol>,
-          h1: ({ children }) => <h1 className="text-[15px] font-semibold">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-[14px] font-semibold">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-[13px] font-semibold">{children}</h3>,
+          ul: ({ children }) => <ul className="ml-4 list-disc space-y-1 break-words">{children}</ul>,
+          ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1 break-words">{children}</ol>,
+          h1: ({ children }) => <h1 className="text-[15px] font-semibold break-words">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-[14px] font-semibold break-words">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-[13px] font-semibold break-words">{children}</h3>,
           blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
+            <blockquote className="border-l-2 border-border pl-3 break-words text-muted-foreground">
+              {children}
+            </blockquote>
           ),
           // Fenced blocks keep their own horizontal scroll so a long line cannot widen the bubble.
           code: ({ children, className }) => (

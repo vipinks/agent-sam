@@ -321,10 +321,41 @@ function countLine(): string {
   return document.querySelector('[data-slot="tools-skills-range"]')?.textContent ?? ''
 }
 
-/** The panel's own surface, waited for rather than assumed: the dock renders on a query. */
+/**
+ * The panel's own surface, waited for rather than assumed: the dock renders on a query.
+ *
+ * Two steps since the panel's default tab became MCP servers. The dock is the same dock; the surface the
+ * rest of this file's claims are made in is no longer the one a bare dock lands on, so it is opened here
+ * rather than assumed. What a bare dock opens on is the subject of the case below, which uses
+ * `dockOnItsDefaultTab`.
+ */
 async function dockTools(): Promise<void> {
-  await userEvent.click(resident('Tools'))
+  await dockOnItsDefaultTab()
+  await userEvent.click(panelTab(/^Skills/))
   await screen.findByLabelText('Search skills')
+}
+
+/**
+ * Docks the Tools panel and touches nothing else, so the tab it landed on is the thing left to read.
+ *
+ * The MCP surface is what is waited for rather than the tab row: a tab row can be drawn before its body
+ * has been read, and waiting on it would make a claim about the wrong node.
+ */
+async function dockOnItsDefaultTab(): Promise<void> {
+  await userEvent.click(resident('Tools'))
+  await screen.findByLabelText('Search MCP servers')
+}
+
+/**
+ * The panel's own tabs, which the settings screen's row of tabs is not.
+ *
+ * At the file's helpers rather than inside one describe, because the case that pins the default has to
+ * name a tab without having opened one first.
+ */
+function panelTab(name: RegExp): HTMLElement {
+  const list = document.querySelector<HTMLElement>('[data-slot="tools-tabs"]')
+  if (!list) throw new Error('no tools tab row')
+  return within(list).getByRole('tab', { name })
 }
 
 /**
@@ -596,18 +627,67 @@ describe('the manage button', () => {
     // And the dock is where it was left: which panel is open is a way of looking at the drawer's view, not
     // one of the views.
     expect(useWorkbenchStore.getState().rightPanel).toBe('tools')
+    // The panel itself is a fresh mount after the visit, so it opens on its default tab rather than on the
+    // tab it was showing — which is the memory it already had, and the reason this waits for the servers
+    // rather than for the skills the reader had open before the trip. What the trip preserved is the dock.
+    await screen.findByLabelText('Search MCP servers')
+  })
+})
+
+/**
+ * The tab a bare dock opens on, and the memory that outranks it.
+ *
+ * The polish this pins: a reader opening Tools for the first time is looking for the servers the agent can
+ * actually reach, so MCP servers is where the panel opens. Two things must not move with it. The tab row
+ * still states Skills first — the order is the panel's, not the default's — and a tab the reader has chosen
+ * still wins over the default for as long as the panel is mounted, which is the memory the panel already
+ * had: it is Radix's own uncontrolled selection, and nothing about it is written to storage.
+ */
+describe('the tab the panel opens on', () => {
+  it('is MCP servers while nothing has been chosen', async () => {
+    stubWorkbench()
+    renderWorkbench()
+
+    await dockOnItsDefaultTab()
+
+    // The order is unchanged: Skills first, MCP servers second, and only the selection moved.
+    const list = document.querySelector<HTMLElement>('[data-slot="tools-tabs"]')
+    expect(
+      within(list as HTMLElement)
+        .getAllByRole('tab')
+        .map((tab) => tab.getAttribute('data-slot'))
+    ).toEqual(['tools-tab-skills', 'tools-tab-mcp'])
+    expect(panelTab(/^MCP servers/).getAttribute('aria-selected')).toBe('true')
+    expect(panelTab(/^Skills/).getAttribute('aria-selected')).toBe('false')
+
+    // And the surface under the selection is the MCP one, so the claim is about what is drawn rather than
+    // about a flag: the tab that is not showing is not in the document at all.
+    expect(screen.getByLabelText('Search MCP servers')).toBeTruthy()
+    expect(screen.queryByLabelText('Search skills')).toBeNull()
+  })
+
+  it('gives way to a tab the reader has chosen, and stays chosen while the panel is mounted', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockOnItsDefaultTab()
+
+    await userEvent.click(panelTab(/^Skills/))
     await screen.findByLabelText('Search skills')
+    expect(panelTab(/^Skills/).getAttribute('aria-selected')).toBe('true')
+    expect(panelTab(/^MCP servers/).getAttribute('aria-selected')).toBe('false')
+
+    // Back and forth: the default is a starting point, not a value written back over the reader's choice.
+    await userEvent.click(panelTab(/^MCP servers/))
+    await screen.findByLabelText('Search MCP servers')
+    expect(panelTab(/^MCP servers/).getAttribute('aria-selected')).toBe('true')
+
+    await userEvent.click(panelTab(/^Skills/))
+    await screen.findByLabelText('Search skills')
+    expect(panelTab(/^Skills/).getAttribute('aria-selected')).toBe('true')
   })
 })
 
 describe('the MCP servers tab', () => {
-  /** One of the panel's own tabs, which the settings screen's row of tabs is not. */
-  function panelTab(name: RegExp): HTMLElement {
-    const list = document.querySelector<HTMLElement>('[data-slot="tools-tabs"]')
-    if (!list) throw new Error('no tools tab row')
-    return within(list).getByRole('tab', { name })
-  }
-
   /** Every MCP row the panel is drawing, in the order it drew them. */
   function mcpRows(): HTMLElement[] {
     return [...document.querySelectorAll<HTMLElement>('[data-slot="mcp-panel-row"]')]
@@ -1144,9 +1224,11 @@ describe('a failed skills read', () => {
     })
     renderWorkbench()
 
-    // The panel is opened by hand rather than through `dockTools`, because a failed listing is exactly the
-    // case with no search box to wait for: the sentence is the whole tab.
-    await userEvent.click(resident('Tools'))
+    // The panel is docked by hand rather than through `dockTools`, because a failed listing is exactly the
+    // case with no search box to wait for: the sentence is the whole tab. Its Skills tab is then opened
+    // deliberately, since the tab a bare dock lands on is no longer the one this claim is about.
+    await dockOnItsDefaultTab()
+    await userEvent.click(panelTab(/^Skills/))
 
     // The sentence the shared map holds for this code, asserted on the panel this turn closes the gap for:
     // the wording is one function, and both surfaces that draw the read now have a case that pins it.

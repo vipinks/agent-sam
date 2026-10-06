@@ -23,6 +23,11 @@
  * status and the page. A tab that is not showing is not in the document, so state held inside a pane would
  * be state a reader loses by glancing at the other one. Held here, each tab's own search and page survive
  * the switch, and neither can overwrite the other's.
+ *
+ * MCP servers is the tab the panel opens on, while a tab the reader has chosen outranks it for as long as
+ * the panel is mounted: the first thing someone opening Tools is looking for is the servers the agent can
+ * reach, and the memory of their own choice is the selection they already had rather than a preference
+ * written anywhere. The row's order is unchanged — Skills first, the servers second.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, TriangleAlert, Wrench } from 'lucide-react'
@@ -88,7 +93,7 @@ export function ToolsPanel() {
        * The tab row, and the panel's own body under it. `gap-0` because the row's bottom border is the
        * separator: a themed gap between them would draw a second one.
        */}
-      <Tabs defaultValue="skills" className="flex min-h-0 flex-1 flex-col gap-0">
+      <Tabs defaultValue="mcp" className="flex min-h-0 flex-1 flex-col gap-0">
         <div className="shrink-0 border-b border-border px-3 py-2">
           <TabsList data-slot="tools-tabs">
             <TabsTrigger value="skills" data-slot="tools-tab-skills">
