@@ -32,6 +32,7 @@ import { useWorkbenchStore } from '@/app/components/workbench/store'
 import {
   ENGINE_AUTH_HINTS,
   ENGINE_DEFAULT_PERMISSION_MODE,
+  ENGINE_IDS,
   ENGINE_LABELS,
   ENGINE_NOT_INSTALLED_NOTE,
   ENGINE_PERMISSION_MODE_IDS,
@@ -310,8 +311,10 @@ describe('the Engines settings section', () => {
     act(() => useWorkbenchStore.getState().openSettingsAt('engines'))
     await waitFor(() => expect(section('settings-section-engines')).not.toBeNull())
 
-    // One row per allowlisted engine, and the config this phase has: Codex.
-    expect(enginesSection().querySelectorAll('[data-slot="engine-row"]')).toHaveLength(1)
+    // One row per allowlisted engine: the ids the registry ships, and no count written out here — an engine
+    // joins this section by joining the registry, and a pin on one would have to be edited for it. Which
+    // engine the first row is, and what it says, is asserted below.
+    expect(enginesSection().querySelectorAll('[data-slot="engine-row"]')).toHaveLength(ENGINE_IDS.length)
     expect(slot('engine-name').textContent).toBe(ENGINE_LABELS[CODEX])
     // The version is the probe's own answer — the same rows the chat header's picker draws, not a second
     // detection path and not a value this section invented.
@@ -333,7 +336,7 @@ describe('the Engines settings section', () => {
 
     // The row is still there, still named, and says which of the two things a reader is looking at: an
     // engine that is not on this machine rather than an engine this app has no config for.
-    expect(enginesSection().querySelectorAll('[data-slot="engine-row"]')).toHaveLength(1)
+    expect(enginesSection().querySelectorAll('[data-slot="engine-row"]')).toHaveLength(ENGINE_IDS.length)
     expect(slot('engine-name').textContent).toBe(ENGINE_LABELS[CODEX])
     expect(slot('engine-status').textContent).toBe(ENGINE_NOT_INSTALLED_NOTE)
     // The override is still offered: "not installed" is the answer to `PATH` and the vendor install, and the

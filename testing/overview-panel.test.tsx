@@ -436,6 +436,24 @@ describe('the Overview resident and its tiles', () => {
     expect(tile(container, 'turns').textContent).toBe('1')
   })
 
+  it('leaves a Kimi session unpriced too, because the rule reads the engine and not one engine id', async () => {
+    // The second engine, on the same branch: `kimi` is not `codex`, and a rule written against one id would
+    // price this conversation's tokens against a table that knows nothing about the agent that reported them.
+    // The declaration is the one the Sam twin below prices at $0.6135, so what differs across the three
+    // cases is one field.
+    stubWorkbench({
+      sessions: { sessions: [session(MEASURED, undefined, 'deepseek-chat', 'kimi')], activeSessionId: SESSION_ID },
+      providers: declaredRates(),
+      transcript: saved(['user', 'assistant']),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    await waitFor(() => expect(tile(container, 'tokens').textContent).toBe('1M'))
+    expect(tile(container, 'cost').textContent).toBe(EM_DASH)
+    expect(note(container, 'cost').textContent).toBe('engine session: usage is not priced')
+  })
+
   it('prices a Sam session on the same numbers exactly as before', async () => {
     // The twin of the test above, and the guard on it: one field differs — no `engineId` — and the tile
     // draws the figure this suite has always asserted, with the caption it has always carried.
