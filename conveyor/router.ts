@@ -24,7 +24,14 @@ import { skillsModule, setSkillPruneSink } from './modules/skills'
 import { mcpModule } from './modules/mcp'
 import { gitModule } from './modules/git'
 import { updatesModule, setUpdateStatusSink, setAutoDownloadSource } from './modules/updates'
-import { engineModule, setEngineConsentSink, setEngineStatusSink, refreshEngineStatus } from './modules/engine'
+import {
+  engineModule,
+  setEngineBinaryPathSink,
+  setEngineConsentSink,
+  setEnginePreferenceSource,
+  setEngineStatusSink,
+  refreshEngineStatus,
+} from './modules/engine'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
@@ -35,6 +42,7 @@ import { appearancePreferencesStore } from './stores/appearance-preferences'
 import { updatePreferencesStore } from './stores/update-preferences'
 import { updateStatusStore } from './stores/update-status'
 import { engineConsentStore } from './stores/engine-consent'
+import { enginePreferencesStore } from './stores/engine-preferences'
 import { engineStatusStore } from './stores/engine-status'
 import { setWorkspaceChangeSink } from './events'
 
@@ -81,6 +89,7 @@ export const router = createRouter(
       updatePreferencesStore,
       updateStatusStore,
       engineConsentStore,
+      enginePreferencesStore,
       engineStatusStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
@@ -287,17 +296,39 @@ setEngineConsentSink({
 })
 
 /**
+ * Let the engine rail read, and write, the preferences a user sets on it.
+ *
+ * Two directions, declared here for the reason the sinks above are: neither store exists until the router
+ * does. The read is what makes a stored path and a stored mode reach the places that need them — a path is
+ * resolved before a probe and before a turn, and the mode is what the launch arguments are built from — and
+ * the write is the other half: a path is kept only after a probe has run it, so the save happens in the
+ * module and lands in the store through here.
+ *
+ * The read is `getState` on the router's own handle rather than a mirror, because this is main: the state it
+ * reads is the one it dispatches into, which is the state every window mirrors. `undefined` is answered for an
+ * engine nobody has configured, and the protocol's own defaults fill that in — so the store never has to hold
+ * a value nobody chose.
+ */
+setEnginePreferenceSource({
+  read: (engineId) => router.stores['engine-preferences'].getState().engines[engineId],
+})
+
+setEngineBinaryPathSink({
+  record: ({ engineId, path }) => router.stores['engine-preferences'].dispatch('recordBinaryPath', { engineId, path }),
+  clear: ({ engineId }) => router.stores['engine-preferences'].dispatch('clearBinaryPath', { engineId }),
+})
+
+/**
  * Publish what is installed, once, as the app starts.
  *
  * The sink first, then the probe — never the other way round: the probe publishes when it answers, and a sink
  * installed afterwards would drop the answer on the floor and leave the picker saying "not installed" for the
  * rest of the session.
  *
- * Here rather than behind a read, because the answer is a fact about the machine that every window needs and
- * no window should have to ask for: the picker draws from the store this fills, and the spawn happens in main
- * through the spawn law. Not awaited, like the sweeps above and for the same reason — a window appearing must
- * not wait on a process — so the rows land a moment later, with the picker drawing every engine as not
- * installed until they do.
+ * Read after the preferences and not before: the startup probe measures the stored override, so the row a
+ * launch draws is the binary a turn would run. Not awaited, like the sweeps above and for the same reason — a
+ * window appearing must not wait on a process — so the rows land a moment later, with the picker drawing every
+ * engine as not installed until they do.
  *
  * The failure is caught rather than left to surface: a probe is a read for the user's benefit, and a machine
  * that cannot start one has a picker that says "not installed", not a start that failed.

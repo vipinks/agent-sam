@@ -8,12 +8,17 @@ import {
   ENGINE_LABELS,
   ENGINE_PROBE_ARGS,
   ENGINE_SPAWN_CODES,
+  enginePreference,
   engineRows,
   engineVersion,
+  resolveEnginePathOverride,
   resolveEngineSpawn,
+  type EngineId,
+  type EnginePreference,
   type EngineProbe,
   type EngineRow,
   type PendingEngineConsent,
+  type StoredEnginePreference,
 } from '../protocol/engine'
 import type { AcpPermissionRequest } from '../protocol/acp'
 import { installedBinaryFor, runCodexTurn } from './engine-codex'
@@ -57,6 +62,41 @@ export type EngineSpawnImpl = (
 /** How long a version probe may take before it is a binary that does not answer. */
 const PROBE_TIMEOUT_MS = 5000
 
+/**
+ * The stored engine preferences, as this module reads them.
+ *
+ * A source rather than an import of the store, for the reason every other cross-boundary read in this repo
+ * takes that shape: the store does not exist until the router has created it, and a module that imported the
+ * definition would be holding a second copy of the state — the one the renderer mirrors — rather than the one
+ * main dispatches into. The router installs this after the store exists, and reads go through it from then
+ * on.
+ *
+ * `undefined` when nobody has set anything for that engine, which is the ordinary case: the shipped defaults
+ * answer for it, and this module never has to know which fields a file happened to name.
+ */
+export interface EnginePreferenceSource {
+  read: (engineId: string) => StoredEnginePreference | undefined
+}
+
+let preferenceSource: EnginePreferenceSource | null = null
+
+/** Install the preferences read. Called once from `router.ts`, after the router — and so the store — exists. */
+export function setEnginePreferenceSource(source: EnginePreferenceSource | null): void {
+  preferenceSource = source
+}
+
+/**
+ * One engine's preferences, defaults filled in.
+ *
+ * Silent when no source is installed, which is the state of a headless run and of a suite that is proving the
+ * probe rather than the preference: an engine nobody has configured is the shipped default, and that is what
+ * the protocol's `enginePreference` answers for an absent record.
+ */
+function preferenceFor(engineId: string): EnginePreference {
+  return enginePreference(preferenceSource?.read(engineId), engineId as EngineId)
+}
+
+/** The probe's own dependencies. */
 export interface EngineProbeDeps {
   /** Left out in the app: the real `child_process.spawn`. Supplied by the suites that watch it. */
   spawnImpl?: EngineSpawnImpl
@@ -91,9 +131,13 @@ export async function probeEngine(
 ): Promise<EngineProbe> {
   // Where the install pattern finds the binary first, and the allowlisted name on `PATH` after that: the
   // vendor's own install is the location the probe measured and the one that survives the CLI updating itself,
-  // so it is preferred when it is there. An override still wins over both, because it is the user's own answer.
+  // so it is preferred when it is there. A stored override wins over both, because it is the user's own answer
+  // about this machine — and it is asked here, on every probe, rather than remembered from the save: a machine
+  // whose binary moved is discovered by probing it again, which is what `refreshEngineStatus` does at startup
+  // and after every save.
+  const override = input.binaryOverride ?? preferenceFor(input.engineId).binaryPath
   const installed =
-    input.binaryOverride ??
+    override ??
     installedBinaryFor(input.engineId, {
       ...(deps.env === undefined ? {} : { env: deps.env }),
       ...(deps.readdir === undefined ? {} : { readdir: deps.readdir }),
@@ -256,6 +300,67 @@ export function setEngineStatusSink(sink: EngineStatusSink | null): void {
   statusSink = sink
 }
 
+/** Where a probed path is kept. Installed by the router, which owns the store it lands in. */
+export interface EngineBinaryPathSink {
+  record: (input: { engineId: string; path: string }) => void
+  clear: (input: { engineId: string }) => void
+}
+
+let binaryPathSink: EngineBinaryPathSink | null = null
+
+/** Install the preference write. Called once from `router.ts`, for the reason the sink above is. */
+export function setEngineBinaryPathSink(sink: EngineBinaryPathSink | null): void {
+  binaryPathSink = sink
+}
+
+/**
+ * Save a path a user stated, or refuse with the code that says why.
+ *
+ * The *save* is the re-probe, and that is the whole design of this function: nothing is written until the
+ * path has been executed and answered with a version, so the field in the section can never store a promise
+ * the machine has not kept. The gate is the protocol's own rule — `resolveEnginePathOverride` — so the order
+ * this obeys is the order the law states rather than a second version of it kept here, and the refusal that
+ * travels is the probe's code and never a sentence about it.
+ *
+ * A path that fails writes nothing at all, which is what "keeps the last good value" means concretely: the
+ * sink is not called, so the store still holds the path that worked and the field is redrawn on it. A blank
+ * path is not a failure but a clearing, and it is asked for as an absence rather than stored as a path of
+ * nothing.
+ *
+ * The caller is the section, through the module's own command; a probe that throws out of this function is
+ * turned into the error the renderer branches on by whoever asked, which is why the code is thrown rather
+ * than returned: there is no partial success to report.
+ */
+export async function saveEngineBinaryPath(
+  input: { engineId: string; path: string },
+  deps: EngineProbeDeps = {}
+): Promise<void> {
+  const requested = input.path.trim()
+  if (requested === '') {
+    clearEngineBinaryPath({ engineId: input.engineId })
+    return
+  }
+
+  // An explicit override, so the probe measures the path being *saved* rather than the one already stored —
+  // which is what makes a second save of a different path meaningful.
+  const probe = await probeEngine({ engineId: input.engineId, binaryOverride: requested }, deps)
+  const resolution = resolveEnginePathOverride({ override: requested, probe })
+  if (!resolution.ok) throw new ConveyorError(resolution.code, 'The engine path could not be probed.')
+
+  binaryPathSink?.record({ engineId: input.engineId, path: resolution.path ?? requested })
+}
+
+/**
+ * Put the allowlist back in charge of one engine.
+ *
+ * No probe and no error: a clearing cannot fail — the state it asks for is the state of a machine that never
+ * set an override — and nothing is started. Silent when no sink is installed, for the reason the status
+ * fan-out is: a headless run has no store to write into, which is not a failure.
+ */
+export function clearEngineBinaryPath(input: { engineId: string }): void {
+  binaryPathSink?.clear({ engineId: input.engineId })
+}
+
 /**
  * Probe every allowlisted engine, and publish what was found.
  *
@@ -293,6 +398,21 @@ export const engineModule = defineModule({
   }),
 
   /**
+   * Save, or clear, the binary path one engine runs by.
+   *
+   * A command rather than a store action, and that is the design: the save *is* the re-probe, so it happens
+   * here, where a process may be started and the allowlist may judge the file the path names. The store is
+   * written from this side, through the sink the router installed, so the preference the section draws is
+   * always a path something has already executed. A blank path clears the override instead of storing one.
+   *
+   * The refusal travels as a `ConveyorError` carrying the probe's code, which is what the section branches on
+   * to word the refusal — the message is never read by anyone.
+   */
+  setBinaryPath: command(z.object({ engineId: z.string().min(1), path: z.string() }), async ({ input }) => {
+    await saveEngineBinaryPath(input)
+  }),
+
+  /**
    * One engine turn, streamed as the transcript chunks the panel already applies.
    *
    * A stream rather than a command, because a turn is long: the panel draws narration as it arrives, and a
@@ -317,6 +437,11 @@ export const engineModule = defineModule({
     }),
     async function* ({ input, signal }) {
       const installed = installedBinaryFor(input.engineId)
+      // The mode is read here rather than sent with the turn, which is what keeps the choice a *setting*: the
+      // conversation does not carry it, a resumed turn runs under today's choice rather than the one that was
+      // current when it was written, and the pane that starts a turn needs to know nothing about sandboxes.
+      // The store is the only writer, and its schema accepts only the three traced values.
+      const preference = preferenceFor(input.engineId)
       const queue: EngineTranscriptChunk[] = []
       let wake: (() => void) | null = null
       let finished = false
@@ -336,7 +461,13 @@ export const engineModule = defineModule({
       const turn = runCodexTurn(
         // An empty root means the conversation has no folder open, and the engine is given the app's own working
         // directory rather than an empty string, which is not a directory a process can be started in.
-        { engineId: input.engineId, prompt: input.prompt, cwd: input.cwd === '' ? process.cwd() : input.cwd, signal },
+        {
+          engineId: input.engineId,
+          prompt: input.prompt,
+          cwd: input.cwd === '' ? process.cwd() : input.cwd,
+          permissionMode: preference.permissionMode,
+          signal,
+        },
         installed === undefined ? {} : { binaryOverride: installed },
         (chunk) => {
           queue.push(chunk)

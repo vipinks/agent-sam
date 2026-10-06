@@ -134,6 +134,10 @@ const SUITES = [
     name: 'codex launch config and turn (sandbox args, install pattern, cancel, capture)',
     src: 'engines/engine-codex-test.ts',
   },
+  {
+    name: 'engine preferences (mode to sandbox flag, path override order, refused probe)',
+    src: 'engines/engine-preferences-test.ts',
+  },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
 ]
 

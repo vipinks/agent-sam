@@ -3,7 +3,7 @@ import { readdirSync, statSync } from 'fs'
 import { ConveyorError } from 'electron-conveyor/main'
 import {
   ENGINE_INSTALL_PATTERNS,
-  ENGINE_LAUNCH_ARGS,
+  engineLaunchArgs,
   expandInstallDir,
   resolveEngineSpawn,
   type EngineId,
@@ -152,6 +152,14 @@ export interface CodexTurnInput {
   engineId: string
   prompt: string
   cwd: string
+  /**
+   * The mode this turn runs under, from the engine's stored preference.
+   *
+   * Read by the caller — main, which owns the store — and carried as the raw value rather than narrowed
+   * here: `engineLaunchArgs` is the boundary that decides what a mode is, so a value no rule offers falls
+   * back to the default inside the one function that builds the flags, and this file never has to know.
+   */
+  permissionMode?: unknown
   /** Fires when the user cancels. The turn kills the child rather than leaving it running. */
   signal?: AbortSignal
 }
@@ -188,7 +196,9 @@ export function runCodexTurn(
   deps: CodexTurnDeps,
   onChunk: (chunk: EngineTranscriptChunk) => void
 ): Promise<CodexTurnOutcome> {
-  const args = [...(ENGINE_LAUNCH_ARGS[input.engineId as EngineId] ?? []), input.prompt]
+  // The sandbox value is the chosen mode's, and the mode is the only part of the array that a preference can
+  // reach: the dialect verbs come from the protocol's table, so a setting cannot add a flag.
+  const args = [...engineLaunchArgs(input.engineId as EngineId, input.permissionMode), input.prompt]
   const resolution = resolveEngineSpawn({
     engineId: input.engineId,
     args,

@@ -41,17 +41,100 @@ export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = { codex: 'ChatG
 export const ENGINE_MARKER_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex' }
 
 /**
- * The permission mode each engine runs under, as a name this app decided rather than a flag the CLI invented.
+ * The three sandbox values the CLI traces, strictest first.
  *
- * It exists because the trace settled that the `exec` stream cannot pause for a per-call decision: the CLI's
- * own approval surface is not on the JSONL stream at all, so a turn cannot be put to the shield the way an
- * ACP agent's question is. What is left is the sandbox flag, and it is set to the strictest mode that still
- * lets the engine do the work a user asked for — `workspace-write`, which confines writes to the folder the
- * conversation is rooted in. `read-only` would be stricter and would make the engine unable to answer half of
- * what it is asked; `danger-full-access` is the one this app will not set. Phase 71 owns letting a user choose
- * between them, which is why the name travels as a name.
+ * They are the CLI's own names, quoted rather than invented, because this is the one place a user's choice
+ * becomes a word an OS is handed: a mode spelled differently here would be a flag the engine refuses or,
+ * worse, silently reads as its default. The order is stated so a control can offer them from the strictest
+ * to the loosest, which is the order they are reasoned about in.
  */
-export const ENGINE_PERMISSION_MODES: Readonly<Record<EngineId, string>> = { codex: 'workspace-write' }
+export const ENGINE_PERMISSION_MODE_IDS = ['read-only', 'workspace-write', 'danger-full-access'] as const
+
+export type EnginePermissionMode = (typeof ENGINE_PERMISSION_MODE_IDS)[number]
+
+/**
+ * The mode an engine runs under until a user chooses otherwise.
+ *
+ * `workspace-write`, which confines writes to the folder the conversation is rooted in. It is the default
+ * because it is the strictest mode that still lets an engine do the work it was asked for: `read-only`
+ * cannot answer half of what a user asks, and `danger-full-access` is a grant nobody should receive by
+ * not saying anything. A default is what a user gets without choosing, so it has to be the mode that
+ * needs no warning — the other two are chosen, and one of them is chosen carefully.
+ */
+export const ENGINE_DEFAULT_PERMISSION_MODE: EnginePermissionMode = 'workspace-write'
+
+/**
+ * What each mode is called where a user chooses it.
+ *
+ * The CLI's own word is the flag, not the name: `danger-full-access` is what the OS is handed and
+ * `Full access` is what the control says, because a label is read by a person and a flag is read by a
+ * binary. The two are held together rather than derived, so renaming the control cannot rename the flag.
+ */
+export const ENGINE_PERMISSION_MODE_LABELS: Readonly<Record<EnginePermissionMode, string>> = {
+  'read-only': 'Read only',
+  'workspace-write': 'Workspace write',
+  'danger-full-access': 'Full access',
+}
+
+/**
+ * What the section says beside a mode, or `null` when it has nothing to add.
+ *
+ * Only the mode that grants more than the default carries words, and they name what it grants rather than
+ * that it is dangerous: "full machine access" is a fact a user can weigh, and "are you sure?" is not. A
+ * warning attached to every mode would be a warning nobody reads on the one that matters.
+ */
+export const ENGINE_PERMISSION_MODE_WARNINGS: Readonly<Record<EnginePermissionMode, string | null>> = {
+  'read-only': null,
+  'workspace-write': null,
+  'danger-full-access': 'Full machine access: the engine may write anywhere you can, and will not stop to ask.',
+}
+
+/**
+ * The mode each engine runs under when nobody has chosen one.
+ *
+ * Per engine rather than one global default, because the trace settled the modes against the `exec` stream
+ * of a particular CLI: a second engine joins with its own answer here rather than inheriting this one's.
+ * The declaration above is what every entry starts from, so a mode's default is stated once.
+ */
+export const ENGINE_PERMISSION_MODES: Readonly<Record<EngineId, EnginePermissionMode>> = {
+  codex: ENGINE_DEFAULT_PERMISSION_MODE,
+}
+
+/**
+ * Whether a value is one of the traced modes.
+ *
+ * The boundary's guard, and deliberately not a cast: a mode arrives from a settings file, a select's string
+ * or a schema, and the answer to "is this a mode" is the only thing that may stand between an unknown
+ * string and the flag an OS is handed.
+ */
+export function isEnginePermissionMode(value: unknown): value is EnginePermissionMode {
+  return typeof value === 'string' && (ENGINE_PERMISSION_MODE_IDS as readonly string[]).includes(value)
+}
+
+/**
+ * The mode to run under, from whatever was stored for an engine.
+ *
+ * The one place a stored value becomes a mode, so the store, the section and the turn cannot each decide
+ * separately what to do about a file that names something no rule offers: it is the engine's own default,
+ * never the unknown string, because passing one through would be handing a settings file the flag.
+ */
+export function enginePermissionMode(value: unknown, engineId?: string): EnginePermissionMode {
+  if (isEnginePermissionMode(value)) return value
+  const byEngine = engineId === undefined ? undefined : ENGINE_PERMISSION_MODES[engineId as EngineId]
+  return byEngine ?? ENGINE_DEFAULT_PERMISSION_MODE
+}
+
+/**
+ * The line a section shows about how an engine is signed in to.
+ *
+ * One sentence per engine because there is no shared answer: this app never sees a credential, and each
+ * CLI signs itself in by its own means. For Codex that means the CLI's own login, through the account the
+ * user already has — which is what this says so that a user staring at a not-installed engine knows what
+ * the next step is. A second engine states its own; an engine with no line is an engine added without one.
+ */
+export const ENGINE_AUTH_HINTS: Readonly<Record<EngineId, string>> = {
+  codex: 'Sign in with your ChatGPT account through the CLI\u2019s own login.',
+}
 
 /**
  * The arguments a conversation with an engine is started with, before anything the turn adds.
@@ -59,12 +142,34 @@ export const ENGINE_PERMISSION_MODES: Readonly<Record<EngineId, string>> = { cod
  * An array, held here rather than written at the call site, so the words a user reads in this repo are the
  * words the OS is handed. `exec --json` is the dialect the mapper reads and the probe proved is the CLI's own
  * first-party non-interactive surface. `--sandbox` carries the permission mode above, and it is what stands in
- * for the consent the stream cannot ask for. `--skip-git-repo-check` is there because a folder a user opens in
- * this app is not necessarily a repository, and the CLI refuses to run in one — the flag relaxes that one
- * requirement and nothing else.
+ * for the consent the stream cannot ask for: the value in the template is the default, and
+ * `engineLaunchArgs` is the one rule that replaces it with a chosen mode. `--skip-git-repo-check` is there
+ * because a folder a user opens in this app is not necessarily a repository, and the CLI refuses to run in
+ * one — the flag relaxes that one requirement and nothing else.
  */
 export const ENGINE_LAUNCH_ARGS: Readonly<Record<EngineId, readonly string[]>> = {
-  codex: ['exec', '--json', '--sandbox', ENGINE_PERMISSION_MODES.codex, '--skip-git-repo-check'],
+  codex: ['exec', '--json', '--sandbox', ENGINE_DEFAULT_PERMISSION_MODE, '--skip-git-repo-check'],
+}
+
+/**
+ * The arguments a turn runs with, under one permission mode.
+ *
+ * The shipped array above is the template and this is the one rule that shapes it: the value after
+ * `--sandbox` becomes the chosen mode, so the choice a user made is the flag the OS is handed rather than a
+ * preference the turn happens to read. Nothing else in the array moves, which is what makes this a
+ * substitution and not a second launch config: a mode cannot add a flag, and an engine's own dialect is
+ * stated once, above.
+ *
+ * A mode no rule offers — a settings file that names one, a select that somehow handed back a stale string —
+ * is answered with the default rather than passed through. `read-only` and `danger-full-access` are both fine
+ * to hand over; the thing that must never be handed over is a word nobody traced, because the CLI's answer to
+ * an unknown sandbox value is its own business and not something this app can bound.
+ */
+export function engineLaunchArgs(engineId: EngineId, mode?: unknown): string[] {
+  const args = [...(ENGINE_LAUNCH_ARGS[engineId] ?? [])]
+  const at = args.indexOf('--sandbox')
+  if (at >= 0) args[at + 1] = enginePermissionMode(mode, engineId)
+  return args
 }
 
 /**
@@ -161,6 +266,39 @@ export const ENGINE_SPAWN_CODES = {
 } as const
 
 export type EngineSpawnCode = (typeof ENGINE_SPAWN_CODES)[keyof typeof ENGINE_SPAWN_CODES]
+
+/**
+ * What a refused path is said as, one line per code.
+ *
+ * A path override is the one setting in this app whose failure a user has to act on — the field they just
+ * typed into is not going to be saved, and "an error occurred" would leave them re-typing the same thing. So
+ * each code a probe can answer with gets a sentence naming what the machine said, and the section draws the
+ * one its refusal carried: the branch is on the code, the words are looked up, and no caller ever reads a
+ * message. Every code in the spawn set has an entry, including the ones a path save cannot produce — a
+ * missing word would be a silent failure on the day one of them can.
+ */
+export const ENGINE_PATH_REFUSAL_WORDS: Readonly<Record<EngineSpawnCode, string>> = {
+  ENGINE_UNKNOWN: 'That is not an engine this build can run.',
+  ENGINE_ARGS_NOT_ARRAY: 'The probe arguments were not handed over as a list.',
+  ENGINE_ARGS_NOT_STRINGS: 'The probe arguments were not a list of words.',
+  ENGINE_SHELL_REFUSED: 'This app never starts an engine through a shell.',
+  ENGINE_BINARY_NOT_ALLOWED: 'That file is not the engine binary this app runs.',
+  ENGINE_NOT_INSTALLED: 'Nothing is installed at that path.',
+  ENGINE_VERSION_UNREADABLE: 'That binary answered something this app could not read as a version.',
+  ENGINE_SPAWN_FAILED: 'That binary could not be started.',
+  ENGINE_PROBE_TIMEOUT: 'That binary did not answer in time.',
+}
+
+/**
+ * The sentence for a refusal, from its code.
+ *
+ * The code is what a caller branches on; this is what a reader sees. A code with no words — one added to the
+ * spawn set by a later phase and not here — is answered with a sentence about the save rather than with the
+ * code itself, because a user reading `ENGINE_SOMETHING` has been told nothing they can use.
+ */
+export function enginePathRefusalWord(code: string): string {
+  return ENGINE_PATH_REFUSAL_WORDS[code as EngineSpawnCode] ?? 'That path was not saved.'
+}
 
 /**
  * The one way a consent question is refused before it is ever put.
@@ -362,4 +500,80 @@ export function engineLabel(engineId: string | null): string {
  */
 export function engineMarkerLabel(engineId: string): string {
   return ENGINE_MARKER_LABELS[engineId as EngineId] ?? ENGINE_LABELS[engineId as EngineId] ?? engineId
+}
+
+/**
+ * One engine's stored preferences, as this app reads them.
+ *
+ * Both fields together, because they are one record per engine and a caller that asked for one of them would
+ * have to ask the same question about defaults twice. `binaryPath` is `null` — never an empty string — when
+ * there is no override: the allowlist is the answer then, and a blank path is not a location.
+ */
+export interface EnginePreference {
+  binaryPath: string | null
+  permissionMode: EnginePermissionMode
+}
+
+/**
+ * A record as it arrives from a settings file, before anything has read it.
+ *
+ * `unknown` on both fields, deliberately: this is the persisted-file boundary, and a file is untrusted input
+ * like any other. Narrowing happens once, below, rather than at each of the three places a reader asks — so
+ * the section, the probe and the turn cannot each decide separately what to do about a mode nobody offers.
+ */
+export interface StoredEnginePreference {
+  binaryPath?: unknown
+  permissionMode?: unknown
+}
+
+/**
+ * The preference record for one engine, filled in from the shipped defaults.
+ *
+ * The store holds what a user set and nothing else, so this is where an engine nobody has touched, a record
+ * read off a file that named one field, and a file naming a mode no rule offers all become the same honest
+ * shape. Defaults rather than omissions, because every reader downstream — the section, the probe, the turn —
+ * should get a mode to run under without having to know what "absent" means.
+ */
+export function enginePreference(record: StoredEnginePreference | undefined, engineId: EngineId): EnginePreference {
+  const path = typeof record?.binaryPath === 'string' ? record.binaryPath.trim() : ''
+  return {
+    binaryPath: path === '' ? null : path,
+    permissionMode: enginePermissionMode(record?.permissionMode, engineId),
+  }
+}
+
+/** The law's answer about where an engine's binary comes from. */
+export type EnginePathResolution =
+  { ok: true; path: string | null; source: 'override' | 'allowlist' } | { ok: false; code: EngineSpawnCode }
+
+/**
+ * Resolve which binary an engine runs by, in the order a settings override introduces.
+ *
+ * The order is the whole rule, and it is stated in one place so a store, a probe and a save cannot each hold
+ * a different version of it:
+ *
+ * - an override that is set wins over the allowlist, because it is the user's own answer about this machine;
+ * - the probe gates that override, so a path is only ever used after something has run it — "set" is not
+ *   "works";
+ * - an override that is absent — or one emptied back to blank — leaves the allowlist exactly as it was, which
+ *   is what makes this phase's addition invisible to a user who never opens the field.
+ *
+ * The refusal is the *probe's* code and never a new one of this rule's own: a path nothing is at and a path
+ * naming something that is not this engine are different answers, and collapsing them into "the override was
+ * refused" would make the section unable to say which happened. A path with no probe behind it at all is
+ * refused as not installed, because nothing has been proven about it.
+ */
+export function resolveEnginePathOverride(input: {
+  override?: string | null
+  probe?: EngineProbe
+}): EnginePathResolution {
+  const override = typeof input.override === 'string' ? input.override.trim() : ''
+  if (override === '') return { ok: true, path: null, source: 'allowlist' }
+
+  const probe = input.probe
+  if (probe === undefined || probe.installed !== true) {
+    return { ok: false, code: probe?.code ?? ENGINE_SPAWN_CODES.ENGINE_NOT_INSTALLED }
+  }
+
+  return { ok: true, path: override, source: 'override' }
 }
