@@ -95,5 +95,11 @@ appImage:
   artifactName: ${name}-${version}.${ext}
 
 npmRebuild: false
-# No auto-update server yet; the template's placeholder URL would 404 rather than do nothing.
-publish: null
+# Where the app updates from. electron-builder writes this into the packaged app as `app-update.yml`,
+# and electron-updater reads it from there — so the owner and repo below are the GitHub releases the
+# installers are attached to, and nothing in the source names a URL. Only published, non-prerelease
+# releases are offered, which is the channel the updater's `allowPrerelease = false` matches.
+publish:
+  provider: github
+  owner: vipinks
+  repo: agent-sam
