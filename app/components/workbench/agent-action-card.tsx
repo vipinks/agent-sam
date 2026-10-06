@@ -87,6 +87,16 @@ export function AgentActionCard({
         </p>
       )}
 
+      {/* Who ran this call, when it was not our own loop. An engine's card must not read as one of our tool
+          calls: the same sentence in this app's vocabulary describes the call, and this is the half that says
+          which engine made it. Drawn rather than folded into the summary so the marker is scannable on a card
+          the user is skimming, and absent on every call the Sam loop made. */}
+      {step.via && (
+        <p data-slot="tool-via" className="mb-1.5 text-[11px] text-muted-foreground">
+          via {step.via}
+        </p>
+      )}
+
       {/* Arguments first: for a write, what is being changed matters more than that it changed.
           For a call to a running server the same room is spent on the consent block, which carries
           the same information with that server's own secrets taken out and cut to a length a card

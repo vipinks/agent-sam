@@ -1,7 +1,7 @@
 import { spawn } from 'child_process'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
-import { defineModule, command } from '../init'
+import { defineModule, command, stream } from '../init'
 import {
   ENGINE_CONSENT_CODES,
   ENGINE_IDS,
@@ -16,6 +16,8 @@ import {
   type PendingEngineConsent,
 } from '../protocol/engine'
 import type { AcpPermissionRequest } from '../protocol/acp'
+import { installedBinaryFor, runCodexTurn } from './engine-codex'
+import type { EngineTranscriptChunk } from '../protocol/codex-turn'
 
 /**
  * The engine rail: what is installed, and the one question an engine may ask the user.
@@ -60,6 +62,16 @@ export interface EngineProbeDeps {
   spawnImpl?: EngineSpawnImpl
   /** The allowlist to resolve through. The shipped one unless a suite is proving the mechanism itself. */
   allowlist?: Readonly<Record<string, string>>
+  /**
+   * The environment the install pattern is expanded against, and how a directory is read.
+   *
+   * In the app these are `process.env` and the real file system; a suite hands an empty environment so that the
+   * machine it happens to run on cannot change what it is proving — which is the difference between a probe that
+   * was tested and one that was tested on a laptop that happens to have the engine installed.
+   */
+  env?: Readonly<Record<string, string | undefined>>
+  readdir?: (dir: string) => string[]
+  exists?: (path: string) => boolean
 }
 
 /**
@@ -77,10 +89,21 @@ export async function probeEngine(
   input: { engineId: string; binaryOverride?: string },
   deps: EngineProbeDeps = {}
 ): Promise<EngineProbe> {
+  // Where the install pattern finds the binary first, and the allowlisted name on `PATH` after that: the
+  // vendor's own install is the location the probe measured and the one that survives the CLI updating itself,
+  // so it is preferred when it is there. An override still wins over both, because it is the user's own answer.
+  const installed =
+    input.binaryOverride ??
+    installedBinaryFor(input.engineId, {
+      ...(deps.env === undefined ? {} : { env: deps.env }),
+      ...(deps.readdir === undefined ? {} : { readdir: deps.readdir }),
+      ...(deps.exists === undefined ? {} : { exists: deps.exists }),
+    })
+
   const resolution = resolveEngineSpawn({
     engineId: input.engineId,
     args: [...ENGINE_PROBE_ARGS],
-    ...(input.binaryOverride === undefined ? {} : { binaryOverride: input.binaryOverride }),
+    ...(installed === undefined ? {} : { binaryOverride: installed }),
     ...(deps.allowlist === undefined ? {} : { allowlist: deps.allowlist }),
   })
 
@@ -268,4 +291,83 @@ export const engineModule = defineModule({
   answerConsent: command(z.object({ requestId: z.string().min(1), optionId: z.string().min(1) }), ({ input }) => {
     answerEngineConsent(input)
   }),
+
+  /**
+   * One engine turn, streamed as the transcript chunks the panel already applies.
+   *
+   * A stream rather than a command, because a turn is long: the panel draws narration as it arrives, and a
+   * promise that resolved at the end would hold an answer back until it was complete. The chunks are the shapes
+   * the Sam loop's own run produces — narration, a card, its result, usage, an ending — so the pane driving this
+   * reads them with the code it already has, and the protocol is not something it has to know.
+   *
+   * The binary is resolved here rather than in the client, because this is the side that owns the environment: the
+   * install pattern is expanded against `process.env` and read off the disk, and what the client is handed is an
+   * absolute path the spawn law then judges by its name.
+   *
+   * A cancel arrives as the stream's own abort. The client kills the child with the spawn layer's escalation and
+   * ends silently, so a turn the user stopped is not announced back to them as a defect; a turn that could not
+   * start at all — no binary, a refused resolution — is an ending, and one `turn_end` says so.
+   */
+  turn: stream(
+    z.object({
+      engineId: z.string().min(1),
+      prompt: z.string().min(1),
+      cwd: z.string(),
+      sessionId: z.string().min(1),
+    }),
+    async function* ({ input, signal }) {
+      const installed = installedBinaryFor(input.engineId)
+      const queue: EngineTranscriptChunk[] = []
+      let wake: (() => void) | null = null
+      let finished = false
+
+      /**
+       * Hand the generator back its turn.
+       *
+       * The wait is taken before it is called, so one arrival cannot resolve two waits and leave a chunk in the
+       * queue with nobody watching for it — which would be a turn that appeared to stop mid-answer.
+       */
+      const notify = (): void => {
+        const waiting = wake
+        wake = null
+        waiting?.()
+      }
+
+      const turn = runCodexTurn(
+        // An empty root means the conversation has no folder open, and the engine is given the app's own working
+        // directory rather than an empty string, which is not a directory a process can be started in.
+        { engineId: input.engineId, prompt: input.prompt, cwd: input.cwd === '' ? process.cwd() : input.cwd, signal },
+        installed === undefined ? {} : { binaryOverride: installed },
+        (chunk) => {
+          queue.push(chunk)
+          notify()
+        }
+      )
+
+      void turn
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          // A turn that never started is an ending rather than a thrown stream: a pane handed an exception would
+          // hold a turn that went quiet for no stated reason. The failure itself stays out of the transcript —
+          // what a user needs to know is that the engine stopped, not which errno the spawn answered with.
+          console.warn('[engine] the Codex turn failed', error)
+          queue.push({ type: 'turn_end', cause: 'stream_error' })
+        })
+        .finally(() => {
+          finished = true
+          notify()
+        })
+
+      for (;;) {
+        if (queue.length === 0) {
+          if (finished) return
+          await new Promise<void>((resolve) => {
+            wake = resolve
+          })
+          continue
+        }
+        yield queue.shift() as EngineTranscriptChunk
+      }
+    }
+  ),
 })

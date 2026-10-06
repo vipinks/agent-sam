@@ -1272,39 +1272,55 @@ export function ChatPanel() {
       updateMessages([...turns, assistantTurn])
       requestAnimationFrame(stickToBottom)
 
+      // What this conversation runs as decides where the turn is spoken. A conversation that named an engine
+      // sends its prompt to that engine and reads back the same chunk shapes this app's own loop produces, so
+      // every line after this is unchanged: one run path, two sources. The Sam loop is the `null` case, which is
+      // what every conversation written before engines existed is.
+      //
+      // The prompt is the last thing the user said, because that is what a non-interactive engine turn is given:
+      // the engine keeps its own thread for the conversation, so re-sending the transcript would be telling it
+      // twice about a history it already holds.
+      const engineId = sessionsRef.current.engineId
+      const enginePrompt = [...turns].reverse().find((turn) => turn.role === 'user')?.content ?? ''
+      const engineTurn =
+        engineId === null || enginePrompt.trim() === ''
+          ? null
+          : conveyor.engine.turn({ engineId, prompt: enginePrompt, cwd: rootPath ?? '', sessionId })
+
       await runStream(
-        conveyor.agent.chatWithTools({
-          providerId: activeProviderId,
-          model: activeModel,
-          // The descriptor of a provider the user added, when this is one. Absent for a built-in, whose
-          // route main already knows by id.
-          provider: runProvider,
-          messages: toHistory(turns),
-          workspaceRoot: rootPath,
-          autoApprove,
-          // The conversation this turn belongs to, which is where a stored image's bytes live: a
-          // reference names an id inside that conversation's folder, so this is what lets main resolve
-          // the images in the history above at the request it is about to build.
-          sessionId,
-          // Paths only. Main reads the files and appends the context section, so the renderer never
-          // carries file contents and a path the user attached is the only thing crossing this boundary.
-          // Copied rather than handed over as it stands: the chips are read-only where they came from,
-          // and the payload is the wire's own array.
-          mentionPaths: mentionPaths.length > 0 ? [...mentionPaths] : undefined,
-          // Ids only, for the same reason the paths above are paths: main reads each `SKILL.md` at the
-          // turn start, so what the model is told is the file as it is now rather than what the
-          // renderer happened to load. Read through the ref rather than closed over, because a skill
-          // turned on since this callback was built belongs to the turn about to be sent — the toggle
-          // changes the next turn, and this is the next turn.
-          activeSkillIds:
-            sessionsRef.current.activeSkillIds.length > 0 ? [...sessionsRef.current.activeSkillIds] : undefined,
-          // And what this conversation runs as, read off the record through the ref for the same reason:
-          // a conversation created as a Buddy runs as it for every turn, not only its first. Both are
-          // left out rather than sent as null when there is nothing to say — a conversation created
-          // without a Buddy sends the request it always sent, key for key.
-          rolePrompt: sessionsRef.current.buddyRolePrompt ?? undefined,
-          mcpSubset: sessionsRef.current.buddyMcpSubset ?? undefined,
-        }),
+        engineTurn ??
+          conveyor.agent.chatWithTools({
+            providerId: activeProviderId,
+            model: activeModel,
+            // The descriptor of a provider the user added, when this is one. Absent for a built-in, whose
+            // route main already knows by id.
+            provider: runProvider,
+            messages: toHistory(turns),
+            workspaceRoot: rootPath,
+            autoApprove,
+            // The conversation this turn belongs to, which is where a stored image's bytes live: a
+            // reference names an id inside that conversation's folder, so this is what lets main resolve
+            // the images in the history above at the request it is about to build.
+            sessionId,
+            // Paths only. Main reads the files and appends the context section, so the renderer never
+            // carries file contents and a path the user attached is the only thing crossing this boundary.
+            // Copied rather than handed over as it stands: the chips are read-only where they came from,
+            // and the payload is the wire's own array.
+            mentionPaths: mentionPaths.length > 0 ? [...mentionPaths] : undefined,
+            // Ids only, for the same reason the paths above are paths: main reads each `SKILL.md` at the
+            // turn start, so what the model is told is the file as it is now rather than what the
+            // renderer happened to load. Read through the ref rather than closed over, because a skill
+            // turned on since this callback was built belongs to the turn about to be sent — the toggle
+            // changes the next turn, and this is the next turn.
+            activeSkillIds:
+              sessionsRef.current.activeSkillIds.length > 0 ? [...sessionsRef.current.activeSkillIds] : undefined,
+            // And what this conversation runs as, read off the record through the ref for the same reason:
+            // a conversation created as a Buddy runs as it for every turn, not only its first. Both are
+            // left out rather than sent as null when there is nothing to say — a conversation created
+            // without a Buddy sends the request it always sent, key for key.
+            rolePrompt: sessionsRef.current.buddyRolePrompt ?? undefined,
+            mcpSubset: sessionsRef.current.buddyMcpSubset ?? undefined,
+          }),
         assistantTurn.id,
         sessionId
       )

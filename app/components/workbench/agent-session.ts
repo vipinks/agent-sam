@@ -85,6 +85,15 @@ export interface ToolStep {
    * is where a card draws nothing.
    */
   autoApproved?: string
+  /**
+   * The engine that ran this call, when it was not this app's own loop.
+   *
+   * Written by the engine turn's own mapper rather than by the model, and stored: a conversation reopened
+   * tomorrow should still show which of its calls came from an engine, and unlike the consent marker above it
+   * says nothing about a decision that is still waiting. Absent on every call our own loop made, which is where
+   * the card draws no such line.
+   */
+  via?: string
 }
 
 /** A transcript turn. Assistant turns carry both their prose and any tool steps interleaved after it. */
@@ -599,6 +608,9 @@ export function applyAgentChunk(
       // — the card draws nothing rather than a line naming a flag nobody can be shown. Absent is the
       // ordinary case, and it is what every call that was put to the user carries.
       const autoApproved = typeof c.autoApproved === 'string' ? c.autoApproved : undefined
+      // The engine that ran this call, on the same terms: an engine turn's chunks carry it, our own loop's
+      // never do, and a value this reducer cannot read is no marker rather than a blank line on the card.
+      const via = typeof c.via === 'string' && c.via !== '' ? c.via : undefined
       // Upsert, not append. A resumed run announces each call as its walk reaches it, and the calls
       // that walk reaches include the ones the pause was holding — which already have a card, waiting
       // its turn. Appending would put the same call in the transcript twice and split its outcome
@@ -611,6 +623,7 @@ export function applyAgentChunk(
             tool,
             args,
             status: 'running',
+            ...(via ? { via } : {}),
             ...(autoApproved ? { autoApproved } : {}),
           }),
         })),

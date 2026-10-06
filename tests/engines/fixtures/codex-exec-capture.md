@@ -38,13 +38,13 @@ choice about the engine.
 
 Event lines, by their `type`:
 
-| `type` | what it carries | what the mapper does with it |
-| --- | --- | --- |
-| `thread.started` | `thread_id` | files it as the session id; emits no update |
-| `turn.started` | nothing | `other` |
-| `item.started` | an `item` with `status: in_progress` | `tool_call` |
-| `item.completed` | an `item`, settled | `message_chunk`, `tool_call_update`, `other`, or a usage-bearing `turn.completed` |
-| `turn.completed` | `usage` counters | `usage` |
+| `type`           | what it carries                      | what the mapper does with it                                                      |
+| ---------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| `thread.started` | `thread_id`                          | files it as the session id; emits no update                                       |
+| `turn.started`   | nothing                              | `other`                                                                           |
+| `item.started`   | an `item` with `status: in_progress` | `tool_call`                                                                       |
+| `item.completed` | an `item`, settled                   | `message_chunk`, `tool_call_update`, `other`, or a usage-bearing `turn.completed` |
+| `turn.completed` | `usage` counters                     | `usage`                                                                           |
 
 Item kinds seen: `error` (a non-fatal warning about the skills context budget — reported as `other`, never
 drawn), `agent_message` (prose), `command_execution` (a shell command, with `command`, `aggregated_output`

@@ -235,7 +235,10 @@ async function theProbeResolvesAndReads() {
   const child = fakeChild({ stdout: 'codex-cli 9.9.9\n', exit: 0 })
   const { impl, calls } = recordingSpawn(child)
 
-  const found = await probeEngine({ engineId: CODEX }, { spawnImpl: impl })
+  // An empty environment, so the install pattern produces no candidates and the probe's answer is this machine's
+  // notwithstanding: the cases below are about the mechanism, and a suite that let the real Codex install — which
+  // is present on the machine this phase was built on — into the resolution would be asserting against a laptop.
+  const found = await probeEngine({ engineId: CODEX }, { spawnImpl: impl, env: {} })
   assert.equal(found.installed, true, 'a binary that answers is installed')
   assert.equal(found.version, '9.9.9', 'and its version is the one it printed')
   assert.equal(found.code, undefined, 'with no code, because nothing was refused')
@@ -246,17 +249,17 @@ async function theProbeResolvesAndReads() {
   assert.equal(calls[0].options.shell, false, 'and never through a shell')
 
   const missingChild = fakeChild({ error: Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }) })
-  const missing = await probeEngine({ engineId: CODEX }, { spawnImpl: recordingSpawn(missingChild).impl })
+  const missing = await probeEngine({ engineId: CODEX }, { spawnImpl: recordingSpawn(missingChild).impl, env: {} })
   assert.equal(missing.installed, false, 'a binary that is not there is not installed')
   assert.equal(missing.code, ENGINE_SPAWN_CODES.ENGINE_NOT_INSTALLED, 'reported as not installed, by code')
   assert.equal(missing.version, undefined, 'and no version is claimed for it')
 
   const silentChild = fakeChild({ stdout: 'nothing useful here\n', exit: 0 })
-  const silent = await probeEngine({ engineId: CODEX }, { spawnImpl: recordingSpawn(silentChild).impl })
+  const silent = await probeEngine({ engineId: CODEX }, { spawnImpl: recordingSpawn(silentChild).impl, env: {} })
   assert.equal(silent.installed, false, 'a binary that answers without a version is not usable')
   assert.equal(silent.code, ENGINE_SPAWN_CODES.ENGINE_VERSION_UNREADABLE, 'and says which way it failed')
 
-  const refused = await probeEngine({ engineId: 'claude' }, { spawnImpl: recordingSpawn(child).impl })
+  const refused = await probeEngine({ engineId: 'claude' }, { spawnImpl: recordingSpawn(child).impl, env: {} })
   assert.equal(refused.installed, false, 'an engine the law refuses is not probed at all')
   assert.equal(refused.code, ENGINE_SPAWN_CODES.ENGINE_UNKNOWN, 'and the refusal is the law’s own code')
 
@@ -276,7 +279,7 @@ async function theProbeRunsARealProcess() {
   assert.equal(resolved.ok, true, 'an injected allowlist resolves through the same law')
 
   const real: EngineSpawnImpl = (command, args, options) => spawn(command, args, options) as unknown as EngineSpawned
-  const probed = await probeEngine({ engineId: CODEX }, { spawnImpl: real, allowlist })
+  const probed = await probeEngine({ engineId: CODEX }, { spawnImpl: real, allowlist, env: {} })
 
   assert.equal(probed.installed, true, 'the real child is found')
   assert.match(probed.version ?? '', /^v?\d+\.\d+\.\d+/, `a real version came back: ${probed.version}`)

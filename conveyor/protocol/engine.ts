@@ -28,7 +28,86 @@ export const ENGINE_IDS = ['codex'] as const
 export type EngineId = (typeof ENGINE_IDS)[number]
 
 /** What a row is drawn as. The label is the app's, not the binary's. */
-export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex' }
+export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = { codex: 'ChatGPT (Codex)' }
+
+/**
+ * What an engine is called where the word "via" precedes it, in a transcript marker.
+ *
+ * A second name rather than the picker's, because the two sentences are not the same sentence: a picker row is
+ * naming the product a user is choosing, and a marker under a tool call is saying which engine ran it — where
+ * the short name is what a reader scans for. The picker's label is the fallback for an engine this table has no
+ * short name for, so an engine added later is drawn as itself rather than as nothing.
+ */
+export const ENGINE_MARKER_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex' }
+
+/**
+ * The permission mode each engine runs under, as a name this app decided rather than a flag the CLI invented.
+ *
+ * It exists because the trace settled that the `exec` stream cannot pause for a per-call decision: the CLI's
+ * own approval surface is not on the JSONL stream at all, so a turn cannot be put to the shield the way an
+ * ACP agent's question is. What is left is the sandbox flag, and it is set to the strictest mode that still
+ * lets the engine do the work a user asked for — `workspace-write`, which confines writes to the folder the
+ * conversation is rooted in. `read-only` would be stricter and would make the engine unable to answer half of
+ * what it is asked; `danger-full-access` is the one this app will not set. Phase 71 owns letting a user choose
+ * between them, which is why the name travels as a name.
+ */
+export const ENGINE_PERMISSION_MODES: Readonly<Record<EngineId, string>> = { codex: 'workspace-write' }
+
+/**
+ * The arguments a conversation with an engine is started with, before anything the turn adds.
+ *
+ * An array, held here rather than written at the call site, so the words a user reads in this repo are the
+ * words the OS is handed. `exec --json` is the dialect the mapper reads and the probe proved is the CLI's own
+ * first-party non-interactive surface. `--sandbox` carries the permission mode above, and it is what stands in
+ * for the consent the stream cannot ask for. `--skip-git-repo-check` is there because a folder a user opens in
+ * this app is not necessarily a repository, and the CLI refuses to run in one — the flag relaxes that one
+ * requirement and nothing else.
+ */
+export const ENGINE_LAUNCH_ARGS: Readonly<Record<EngineId, readonly string[]>> = {
+  codex: ['exec', '--json', '--sandbox', ENGINE_PERMISSION_MODES.codex, '--skip-git-repo-check'],
+}
+
+/**
+ * Where each engine is installed on a machine whose `PATH` does not carry it.
+ *
+ * A template rather than a path: the real location is `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, and the
+ * `<hash>` is a build id this app may not know and must not guess — it changes when the CLI updates itself. The
+ * `*` is therefore one path segment, resolved by reading the directory in main, where a directory may be read.
+ * The law stays free of it: nothing here expands anything, and `resolveEngineSpawn` still judges the absolute
+ * path a caller hands it by the name of the file at the end of it.
+ */
+export interface EngineInstallPattern {
+  /** A directory, percent-tokens and at most one `*` segment wide. */
+  dir: string
+  /** The binary's name inside it, without a launchable extension. */
+  binary: string
+}
+
+export const ENGINE_INSTALL_PATTERNS: Readonly<Record<EngineId, readonly EngineInstallPattern[]>> = {
+  codex: [{ dir: '%LOCALAPPDATA%/OpenAI/Codex/bin/*', binary: 'codex' }],
+}
+
+/**
+ * Expand the percent-tokens an install template may carry, or answer `null`.
+ *
+ * Null rather than a half-expanded string, and rather than a guess: a machine with no `LOCALAPPDATA` is a machine
+ * where this pattern names nothing, and a caller handed `%LOCALAPPDATA%/...` back would go looking for a
+ * directory whose name is that sentence. The separator is normalised to `/` so the rest of this app never has to
+ * ask which platform wrote the template; joining it to a real path is the caller's job, in main, where `path` is
+ * allowed to live.
+ */
+export function expandInstallDir(dir: string, env: Readonly<Record<string, string | undefined>>): string | null {
+  let expanded = dir.replace(/\\/g, '/')
+  const tokens = expanded.match(/%([A-Za-z_][A-Za-z0-9_]*)%/g) ?? []
+
+  for (const token of tokens) {
+    const value = env[token.slice(1, -1)]
+    if (value === undefined || value === '') return null
+    expanded = expanded.split(token).join(value.replace(/\\/g, '/'))
+  }
+
+  return expanded
+}
 
 /**
  * The app's own row, as a select value.
@@ -271,4 +350,16 @@ export function engineRows(probes: Partial<Record<string, EngineProbe>>): Engine
 export function engineLabel(engineId: string | null): string {
   if (engineId === null) return AGENT_SAM_ENGINE_NAME
   return ENGINE_LABELS[engineId as EngineId] ?? engineId
+}
+
+/**
+ * What an engine is called in a transcript marker, after the word "via".
+ *
+ * The short name where one exists, and the picker's label otherwise, for the reason the two tables are separate:
+ * a marker is a glance, and an engine this build cannot name shortly is still an engine whose name is known. An
+ * id in neither table is answered as itself rather than as nothing, so a release that drops an engine's name
+ * still marks its calls with the id the conversation carries.
+ */
+export function engineMarkerLabel(engineId: string): string {
+  return ENGINE_MARKER_LABELS[engineId as EngineId] ?? ENGINE_LABELS[engineId as EngineId] ?? engineId
 }

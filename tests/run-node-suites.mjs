@@ -130,6 +130,10 @@ const SUITES = [
     name: 'codex jsonl mapper (captured vocabulary, tool calls, usage, exit cause)',
     src: 'engines/codex-jsonl-test.ts',
   },
+  {
+    name: 'codex launch config and turn (sandbox args, install pattern, cancel, capture)',
+    src: 'engines/engine-codex-test.ts',
+  },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
 ]
 

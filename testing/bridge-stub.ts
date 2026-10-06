@@ -199,7 +199,7 @@ const MANIFEST: Record<string, Record<string, string>> = {
   // The engine rail: the picker's read of what a probe found, and the one write the consent bridge
   // offers. Listed by kind for the reason the entries around it are — the client refuses an unlisted
   // member rather than dispatching it, so a picker whose read was absent here could not dispatch.
-  engine: { answerConsent: 'command' },
+  engine: { answerConsent: 'command', turn: 'stream' },
   git: {
     status: 'query',
     branch: 'query',

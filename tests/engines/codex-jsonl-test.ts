@@ -220,8 +220,18 @@ function aTurnWithoutUsageIsAnEmDashAndNotAZero() {
 
   const measured = mapAll(captureLines('codex-exec-capture.jsonl')).find((update) => update.type === 'usage')
   assert.ok(measured && measured.type === 'usage', 'where a measured turn does carry counters')
+  // The dialect carries `null` where the CLI reported no cached half, and the transcript mapper drops it rather
+  // than forwarding it; the tile rule reads this app's own counters, where "not reported" is the absent key.
+  const counters =
+    measured.type === 'usage'
+      ? {
+          prompt: measured.prompt,
+          completion: measured.completion,
+          ...(measured.cached === null ? {} : { cached: measured.cached }),
+        }
+      : undefined
   assert.equal(
-    overviewTiles({ usage: measured, rates: null, turns: 2 }).tokens === '—',
+    overviewTiles({ usage: counters, rates: null, turns: 2 }).tokens === '—',
     false,
     'which is not an em dash'
   )

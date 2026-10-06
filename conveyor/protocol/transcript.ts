@@ -59,6 +59,17 @@ const toolStepSchema = z.object({
    * absence, and a written `false` would be a second way to say it.
    */
   autoApproved: z.string().optional(),
+  /**
+   * The engine that ran this call, when it was not this app's own loop.
+   *
+   * Stored for the reason `autoApproved` above is stored, and by the same rule: it says nothing about a
+   * decision still waiting to be made — the call is over — and a conversation reopened tomorrow should still
+   * show which of its calls came from an engine. Absent on every call the Sam loop made, which is where the
+   * card draws no such line. Optional, and it did not bump the version: a file written before engines could
+   * run a turn has no such key, an absent optional key is stripped rather than defaulted, and a file carrying
+   * it read by an older build loses the marker rather than the step.
+   */
+  via: z.string().optional(),
 })
 
 const turnSchema = z.object({
