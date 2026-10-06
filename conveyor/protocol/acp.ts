@@ -64,6 +64,45 @@ export const ACP_CODES = {
 
 export type AcpCode = (typeof ACP_CODES)[keyof typeof ACP_CODES]
 
+/**
+ * What an agent said when it refused a request: its JSON-RPC code, its own sentence, and its data.
+ *
+ * A refusal is the peer's statement about why it would not do something, and the whole of its usefulness is
+ * in the words and the code it chose: a session it does not know, a login it does not have, a call it cannot
+ * make. This reads that statement into a value, so the client can keep it instead of replacing it with a
+ * sentence of its own — which is what made a live refusal arrive as "The engine refused the request" with the
+ * cause, `-32000 Authentication required`, unrecorded anywhere.
+ *
+ * The code is a number and not a branch: our own vocabulary of refusals stays closed, and a caller still
+ * branches on `ACP_CODES`. This is evidence, carried for the reader.
+ */
+export interface AcpRefusal {
+  code: number | null
+  message: string
+  data?: unknown
+}
+
+/** Read a JSON-RPC `error` member, as far as it can be read, without inventing what it left out. */
+export function acpRefusal(error: unknown): AcpRefusal {
+  const candidate = (error ?? {}) as { code?: unknown; message?: unknown; data?: unknown }
+  return {
+    code: typeof candidate.code === 'number' ? candidate.code : null,
+    message: typeof candidate.message === 'string' ? candidate.message : '',
+    ...(candidate.data === undefined ? {} : { data: candidate.data }),
+  }
+}
+
+/**
+ * The refusal as one sentence, for the one place a user reads it.
+ *
+ * The lead is the caller's — it names which request was refused — and the peer's own words are appended when
+ * it gave any. Paraphrasing them was the defect: an engine that says "Authentication required" has told the
+ * user what to do, and a client that answers "the engine refused the request" has told them nothing.
+ */
+export function acpRefusalSentence(refusal: AcpRefusal, lead: string): string {
+  return refusal.message === '' ? lead : `${lead} ${refusal.message}`
+}
+
 // ---------------------------------------------------------------- framing
 
 /** What a chunk left behind: the messages it completed, what is still partial, and any line that was not JSON. */

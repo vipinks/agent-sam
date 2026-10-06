@@ -19,6 +19,10 @@
  * - no-consent   dispatch a tool call and never ask permission, so the client's answer path stays idle.
  * - garbage      write a line that is not JSON before the handshake, so the framer has to refuse it
  *                rather than treat it as a message.
+ * - stale-session answers the *first* prompt on a session and refuses every later one with a JSON-RPC
+ *                error of its own, which is the shape a session that was closed and then reused gets.
+ *                It exists so the client's refusal path can be stated as an assertion: what the child
+ *                said, and what of it survives into the wrapper's own code.
  */
 
 const mode = process.argv[2] || 'normal'
@@ -49,6 +53,9 @@ function toolCallUpdate(sessionId, status) {
 }
 
 const SESSION_ID = 'fixture-session-1'
+
+/** The sessions this process has already answered a prompt on, for the mode above. */
+const usedSessions = new Set()
 
 /** The permission request the client has to route to the shield, and whose answer it must send back. */
 let askPermission = null
@@ -98,6 +105,24 @@ async function handle(message) {
   }
 
   if (message.method === 'session/prompt') {
+    // A session this peer has already answered on is refused with an error of its own rather than answered
+    // twice. Real engines do exactly this — a session id they do not know, or one that has been closed,
+    // comes back as a JSON-RPC error — and that refusal is the one the client has to keep legible.
+    if (mode === 'stale-session') {
+      const asked = message.params && message.params.sessionId
+      if (asked !== SESSION_ID || usedSessions.has(asked)) {
+        failure(message.id, -32002, 'Session not found')
+        return
+      }
+      usedSessions.add(asked)
+      notify('session/update', {
+        sessionId: SESSION_ID,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'said:' + asked } },
+      })
+      success(message.id, { stopReason: 'end_turn' })
+      return
+    }
+
     // The tool call is announced before anyone is asked about it, which is the order the client's own
     // event stream has to preserve: consent is per call, and a card drawn before the call it belongs to
     // would be a question about nothing.

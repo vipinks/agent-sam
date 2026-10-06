@@ -428,7 +428,9 @@ export const engineModule = defineModule({
    *
    * A cancel arrives as the stream's own abort. The client kills the child with the spawn layer's escalation and
    * ends silently, so a turn the user stopped is not announced back to them as a defect; a turn that could not
-   * start at all — no binary, a refused resolution — is an ending, and one `turn_end` says so.
+   * start at all — no binary, a refused resolution, an engine that refused the request — is raised to the pane as
+   * the failure it was, after the chunks it did produce, so the cause is stated in the one place the pane words
+   * one and no turn is left claiming to be thinking.
    */
   turn: stream(
     z.object({
@@ -492,14 +494,18 @@ export const engineModule = defineModule({
             )
           : runCodexTurn(turnInput, binary, onChunk)
 
+      // A turn that never started is an ending rather than a stream that went quiet, and the ending the pane has
+      // for a run that failed is the turn's own error line — the one place it words a cause. So the failure is
+      // held here and raised after the queue has drained, which keeps its chunks in the order they arrived and
+      // still hands the pane the reason rather than a silence. The reason matters now that the ACP client keeps
+      // the engine's own words: an engine that answers `Authentication required` has said something the user can
+      // act on, and flattening it into a generic early ending stated a cause that was not the cause.
+      let failure: unknown = null
       void turn
         .then(() => undefined)
         .catch((error: unknown) => {
-          // A turn that never started is an ending rather than a thrown stream: a pane handed an exception would
-          // hold a turn that went quiet for no stated reason. The failure itself stays out of the transcript —
-          // what a user needs to know is that the engine stopped, not which errno the spawn answered with.
           console.warn('[engine] the turn failed', error)
-          queue.push({ type: 'turn_end', cause: 'stream_error' })
+          failure = error
         })
         .finally(() => {
           finished = true
@@ -508,7 +514,10 @@ export const engineModule = defineModule({
 
       for (;;) {
         if (queue.length === 0) {
-          if (finished) return
+          if (finished) {
+            if (failure !== null) throw failure
+            return
+          }
           await new Promise<void>((resolve) => {
             wake = resolve
           })

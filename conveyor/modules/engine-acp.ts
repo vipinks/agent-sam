@@ -14,6 +14,8 @@ import {
   acpPermissionAnswer,
   acpPermissionCancelled,
   acpPermissionRequest,
+  acpRefusal,
+  acpRefusalSentence,
   acpRequest,
   encodeAcpMessage,
   parseAcpChunk,
@@ -187,8 +189,18 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
       waiting.delete(id)
       const failure = (message as { error?: unknown }).error
       if (failure !== undefined) {
-        // The agent's own refusal: a code of ours, and never its sentence, because the caller branches.
-        entry.reject(new ConveyorError(ACP_CODES.ACP_REFUSED, 'The engine refused the request.'))
+        // The agent's own refusal, kept as the agent stated it. The code and the sentence it chose are the
+        // whole of what a refusal is for — a session it does not know, a login it does not have — so both are
+        // carried: in the wrapper's `issues`, where a caller can assert them, and in the sentence, so the
+        // cause reaches a user who reads no logs. The caller still branches on our code and never on this.
+        const refused = acpRefusal(failure)
+        entry.reject(
+          new ConveyorError(
+            ACP_CODES.ACP_REFUSED,
+            acpRefusalSentence(refused, 'The engine refused the request:'),
+            refused
+          )
+        )
         return
       }
       entry.resolve((message as { result?: unknown }).result)
@@ -254,9 +266,11 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
         })
       } catch (error) {
         // A handshake the agent refused is a state of its own rather than a refused call: there is no session
-        // to be had, and the code says so rather than the agent's own sentence about it.
+        // to be had, and the code says so rather than the agent's own sentence about it. What is kept is the
+        // cause — the agent's words and its code — because a handshake refused for a missing login and one
+        // refused for a wrong protocol version are two different things to tell a user.
         if (error instanceof ConveyorError && error.code === ACP_CODES.ACP_REFUSED) {
-          throw new ConveyorError(ACP_CODES.ACP_HANDSHAKE_FAILED, 'The engine refused the handshake.')
+          throw new ConveyorError(ACP_CODES.ACP_HANDSHAKE_FAILED, error.message, error.issues)
         }
         throw error
       }

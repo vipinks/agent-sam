@@ -95,10 +95,14 @@ function turnBlocks(
   // still thinking, and the bubble says so. An empty slice *between* two seams is not that — the answer
   // simply paused there, and a "Thinking…" there would be a claim about work that is already done.
   //
+  // A turn that failed is the other case that is not that: its work is over, and its cause is drawn under
+  // these blocks as the turn's own error line. An empty placeholder kept beside it would leave the bubble
+  // claiming to think about a turn nothing is thinking about.
+  //
   // Keyed by where it starts rather than by being the last one: the seam that arrives next cuts this
   // stretch in two, and the same offset on both sides of that cut keeps it the same block — rather than
   // a new one drawn in its place, which would remount the markdown inside it.
-  if (rest || turn.steps.length === 0) {
+  if (rest || (turn.steps.length === 0 && turn.error === undefined)) {
     blocks.push(<MarkdownContent key={`prose-${chars}`} content={rest} />)
   }
 

@@ -37,7 +37,7 @@ import { engineInstallCandidates, installedBinaryFor, type CodexSpawnImpl } from
 import { runAcpTurn } from '../../conveyor/modules/engine-acp-turn'
 import { ACP_CODES } from '../../conveyor/protocol/acp'
 import type { EngineTranscriptChunk } from '../../conveyor/protocol/codex-turn'
-import type { AcpSpawnImpl } from '../../conveyor/modules/engine-acp'
+import { createAcpClient, type AcpSpawnImpl } from '../../conveyor/modules/engine-acp'
 
 const results: string[] = []
 const KIMI = 'kimi'
@@ -349,6 +349,111 @@ async function anUnknownEngineNeverSpawns() {
 const _shellIsUnaskable: CodexSpawnImpl | null = null
 void _shellIsUnaskable
 
+/**
+ * A refusal is only useful to a user if it says who refused and why: the child's code and its own words
+ * survive into the wrapper rather than being flattened into the client's own sentence.
+ *
+ * The fixture's `stale-session` mode answers one prompt on a session and refuses every later one the way a
+ * real agent refuses an unknown or closed session id — a JSON-RPC error with a code and a message. What the
+ * app's own log showed was `ACP_REFUSED ("The engine refused the request")` and nothing else, so the cause
+ * the engine stated — here `-32002 Session not found`, in the live run `-32000 Authentication required` —
+ * was thrown away at exactly this boundary. Asserted by code, because a branch on the sentence is the defect
+ * this assertion exists to prevent.
+ */
+async function aRefusalKeepsTheEnginesOwnCodeAndWords() {
+  const { impl } = fixtureSpawn('stale-session')
+  const client = createAcpClient({
+    spawn: { command: 'kimi', args: ['acp'], cwd: process.cwd() },
+    spawnImpl: impl,
+    onPermissionRequest: () => Promise.resolve('allow-once'),
+  })
+
+  await client.initialize()
+  const sessionId = await client.newSession()
+  assert.equal(sessionId, 'fixture-session-1', 'the session the peer opened is the one the client holds')
+
+  const answered = await client.prompt('the first question')
+  assert.equal(answered.stopReason, 'end_turn', 'the first prompt on a fresh session is answered')
+
+  let thrown: unknown = null
+  try {
+    await client.prompt('the second question on the same session')
+  } catch (error) {
+    thrown = error
+  } finally {
+    client.close()
+  }
+
+  assert.ok(thrown instanceof ConveyorError, 'the refusal is a ConveyorError rather than a bare Error')
+  const refusal = thrown as ConveyorError
+  assert.equal(refusal.code, ACP_CODES.ACP_REFUSED, 'and it carries the client\u2019s refusal code')
+  assert.equal(
+    refusal.message.includes('Session not found'),
+    true,
+    'the sentence repeats the engine\u2019s own words, so the cause can be read without a debugger'
+  )
+
+  // The half that makes a future refusal diagnosable: the peer's code is a value, not prose in a sentence.
+  const issues = refusal.issues as { code?: unknown; message?: unknown } | undefined
+  assert.ok(issues, 'the child\u2019s error object is retained rather than discarded')
+  assert.equal(issues?.code, -32002, 'with the child\u2019s own JSON-RPC code, assertable by code')
+  assert.equal(issues?.message, 'Session not found', 'and the child\u2019s own message beside it')
+
+  await reapAll()
+  results.push('a refused request keeps the engine\u2019s code and words, so a refusal is legible by code')
+}
+
+/**
+ * The second turn of one conversation opens its own child and its own session — never the first turn's.
+ *
+ * This is the lifecycle claim the phase asked to be reproduced rather than assumed, and the fixture is the
+ * adversary that decides it: it refuses a second prompt on a session it has already answered, exactly as the
+ * refuser above does. So a module that reused a closed session, or a child that had already had its turn,
+ * would fail *here* with the very refusal the app's log showed. Two turns that both stream and both end are
+ * the proof that each turn carries its own child and its own `session/new`, which is what the live probe of
+ * the installed CLI could not be made to say while its own account refused every session.
+ */
+async function aSecondTurnInOneSessionCarriesItsOwnChildAndSession() {
+  const { impl, asks } = fixtureSpawn('stale-session')
+  const seen: EngineTranscriptChunk[][] = []
+
+  const run = async (prompt: string) => {
+    const chunks: EngineTranscriptChunk[] = []
+    const outcome = await runAcpTurn(
+      { engineId: KIMI, prompt, cwd: process.cwd() },
+      { spawnImpl: impl, onPermissionRequest: () => Promise.resolve('allow-once') },
+      (chunk) => chunks.push(chunk)
+    )
+    seen.push(chunks)
+    return outcome
+  }
+
+  const first = await run('the first question')
+  const second = await run('the second question')
+
+  assert.equal(asks.length, 2, 'two turns in one session, two children')
+  assert.equal(first.cancelled, false, 'the first turn was not cancelled')
+  assert.equal(second.cancelled, false, 'and neither was the second')
+
+  for (const [index, chunks] of seen.entries()) {
+    const end = chunks[chunks.length - 1]
+    assert.equal(
+      end?.type === 'turn_end' && end.cause,
+      'model_stop',
+      `turn ${index + 1} ended on the agent\u2019s own stop rather than in a refusal`
+    )
+    const prose = chunks.find((chunk) => chunk.type === 'text_delta')
+    assert.equal(
+      prose?.type === 'text_delta' && prose.text,
+      'said:fixture-session-1',
+      `turn ${index + 1} streamed the session its own child opened`
+    )
+  }
+
+  await reapAll()
+  results.push('a second turn in one session opens its own child and session, so it streams like the first')
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -363,6 +468,8 @@ async function main() {
   await step('registry row', theRegistryPublishesTheKimiRow)
   await step('turn', aKimiTurnHandshakesAndStreamsThroughAFixtureAgent)
   await step('handshake', aRefusedHandshakeEndsTheTurnByCode)
+  await step('refusal', aRefusalKeepsTheEnginesOwnCodeAndWords)
+  await step('second turn', aSecondTurnInOneSessionCarriesItsOwnChildAndSession)
   await step('law', anUnknownEngineNeverSpawns)
 
   console.log('kimi launch config: ' + results.length + ' passed')
