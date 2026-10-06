@@ -57,6 +57,16 @@ export const UPDATE_ERROR_CODES = [UPDATES_DISABLED_IN_DEV, UPDATES_CHECK_FAILED
 export type UpdateErrorCode = (typeof UPDATE_ERROR_CODES)[number]
 
 /**
+ * What auto-download starts as: on.
+ *
+ * A background updater that asked before every download would be one waiting for a click that, this turn,
+ * has no surface to come from — so the value that makes the preference meaningful is the one only a user
+ * who wants to be asked changes. Read by the preference store's initial state, so the default the store
+ * starts from and the default the module falls back to cannot disagree.
+ */
+export const DEFAULT_AUTO_DOWNLOAD = true
+
+/**
  * What each state is called.
  *
  * One word per state, and no two alike: a status line that read 'Update available' while an update was

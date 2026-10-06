@@ -5,6 +5,7 @@ import { app, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { openAppWindow } from './app'
 import { registerResourcesProtocol } from './protocols'
+import { startUpdateSchedule } from '@/conveyor/modules/updates'
 
 // Chromium only auto-detects a keyring on desktops it recognizes, so on anything else (Hyprland,
 // sway, bare WMs) safeStorage silently degrades to `basic_text` and reports itself unavailable.
@@ -27,6 +28,11 @@ app.whenReady().then(() => {
   // Register the custom resources protocol once. The IPC surface (modules, stores, context) is
   // registered by the `@/conveyor/router` import side-effect via ./app.
   registerResourcesProtocol()
+
+  // Wire the updater and arm its check schedule, before the first window exists so the status mirror
+  // already carries this build's version by the time a renderer reads it. Inert unless packaged: an
+  // unpackaged build has no update feed to read, and the module refuses every update action there.
+  startUpdateSchedule()
 
   // Open the main window.
   openAppWindow()

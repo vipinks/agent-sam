@@ -23,6 +23,7 @@ import { mentionsModule } from './modules/mentions'
 import { skillsModule, setSkillPruneSink } from './modules/skills'
 import { mcpModule } from './modules/mcp'
 import { gitModule } from './modules/git'
+import { updatesModule, setUpdateStatusSink, setAutoDownloadSource } from './modules/updates'
 import { workspaceStore } from './stores/workspace'
 import { providerConfigStore } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
@@ -30,6 +31,8 @@ import { terminalPreferencesStore } from './stores/terminal-preferences'
 import { contextPreferencesStore } from './stores/context-preferences'
 import { buddiesStore } from './stores/buddies'
 import { appearancePreferencesStore } from './stores/appearance-preferences'
+import { updatePreferencesStore } from './stores/update-preferences'
+import { updateStatusStore } from './stores/update-status'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -59,6 +62,7 @@ export const router = createRouter(
     skills: skillsModule,
     mcp: mcpModule,
     git: gitModule,
+    updates: updatesModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
@@ -70,6 +74,8 @@ export const router = createRouter(
       contextPreferencesStore,
       buddiesStore,
       appearancePreferencesStore,
+      updatePreferencesStore,
+      updateStatusStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
@@ -234,6 +240,30 @@ killOnRootRemoval(
  * change govern the next shell rather than resize a running one's transcript.
  */
 setTerminalScrollbackSource(() => router.stores['terminal-preferences'].getState().scrollbackLines)
+
+/**
+ * Give the updater the auto-download preference, and the status store its transitions.
+ *
+ * Installed here for the reason the five sinks above are: neither store exists until `createRouter` has
+ * returned, and the updates module is imported *by* this file — a module reaching for the router would close
+ * the cycle. The preference is read through a function, because the value a user flips is not the value this
+ * file saw at startup; the status sink is the one place the updater's events become store transitions, so
+ * every window mirrors what the updater reported rather than what a call asked it to do.
+ *
+ * The updater itself is not started here. `lib/main/main.ts` starts the schedule from the app-ready hook,
+ * which is the first moment electron-updater may be configured and the moment the design names for it.
+ */
+setAutoDownloadSource(() => router.stores['update-preferences'].getState().autoDownload)
+setUpdateStatusSink({
+  read: () => router.stores['update-status'].getState().state,
+  setCurrentVersion: (version) => router.stores['update-status'].dispatch('setCurrentVersion', { version }),
+  startChecking: () => router.stores['update-status'].dispatch('startChecking'),
+  recordAvailable: (version, at) => router.stores['update-status'].dispatch('recordAvailable', { version, at }),
+  recordUpToDate: (at) => router.stores['update-status'].dispatch('recordUpToDate', { at }),
+  startDownloading: () => router.stores['update-status'].dispatch('startDownloading'),
+  recordReady: (version) => router.stores['update-status'].dispatch('recordReady', { version }),
+  recordError: (code) => router.stores['update-status'].dispatch('recordError', { code }),
+})
 
 /** Wire per-window push events. Call once per created window. */
 export function setupEvents(win: BrowserWindow): void {
