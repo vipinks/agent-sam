@@ -25,6 +25,15 @@ coding assistant.
   shield's per-call consent, states the spawn law's one-name-per-engine rule with an empty install
   pattern and the desktop GUI named as a binary the law refuses, and the ACP second-turn lifecycle fix
   ends the child's whole tree and bounds every call so no engine turn is ever silent.
+- **The chat pane is polished in three places.** The transcript scrolls vertically only, and the
+  containment that keeps it inside the box is on the prose itself: a long inline code span inside a list
+  item, a heading or a blockquote was an unbreakable run that painted past its bubble and left a
+  horizontal scrollbar under the answer, so every block markdown can draw prose in now wraps — while the
+  fenced code block and the table wrapper keep their own horizontal scroll exactly as they were. The Tools
+  panel opens on the MCP servers tab when nothing has been chosen yet, with the tab order and the panel's
+  own memory of a reader's choice unchanged. And the chat header names the session's working folder in a
+  compact chip between the pickers and the auto-approve control, carrying the whole root path in its
+  tooltip and drawing nothing at all for a session with no project.
 - The v1.3.0 baseline is everything before this entry: Phases 1 through 69, which shipped under the
   standing versioning rule that a release names the work since the last one. This entry is v1.4.0 —
   Phases 70 through 73.
