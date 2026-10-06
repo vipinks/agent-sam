@@ -25,6 +25,14 @@ import { codexTranscriptChunks, type EngineTranscriptChunk } from '../protocol/c
  * turn's ending is read from rather than a message on the wire. stdout is the only stream read: the JSONL
  * dialect is stdout's, and the CLI writes its own notes ("Reading additional input from stdin...") to stderr,
  * where parsing them as events would report a line the mapper cannot read on every run.
+ *
+ * stdin is not a stream this client holds open, and that is load-bearing rather than tidy. `codex exec` appends
+ * a *piped* stdin to the prompt it was given and waits for that pipe to end before it prints anything, so a
+ * child spawned with the default pipe is a turn that never starts: measured against `codex-cli 0.160.1` with
+ * this file's own argument array, stdin a pipe answered nothing in 45 seconds with the process alive at 0
+ * percent CPU, while the same binary with stdin closed streamed `thread.started` to `turn.completed` and exited
+ * 0 in 12.4 seconds. A turn that never answers never ends and never reaps its child, which is how four live
+ * `codex.exe` accumulate behind two panes stuck on Thinking. `CODEX_STDIO` below is that rule, stated once.
  */
 
 /** A child process, as this client uses it: stdout, the two events, and the two halves of a kill. */
@@ -40,11 +48,21 @@ export interface CodexChild {
   readonly exitCode?: number | null
 }
 
+/**
+ * The three streams a turn's child is given.
+ *
+ * stdin is closed rather than piped: the prompt travels as an argument, and `codex exec` waits for a *piped*
+ * stdin to end before it speaks — see the note in this file's header for the measurement. stdout carries the
+ * JSONL dialect and stays piped. stderr is piped rather than inherited so the CLI's own notes are not written
+ * into the app's console as if the app had said them.
+ */
+export const CODEX_STDIO: ['ignore', 'pipe', 'pipe'] = ['ignore', 'pipe', 'pipe']
+
 /** How a process is started. Arguments as an array, and no member here through which a shell could be asked for. */
 export type CodexSpawnImpl = (
   command: string,
   args: readonly string[],
-  options: { shell: false; windowsHide: true; cwd?: string }
+  options: { shell: false; windowsHide: true; cwd?: string; stdio: ['ignore', 'pipe', 'pipe'] }
 ) => CodexChild
 
 /** How long a child is given to die politely before it is killed outright. */
@@ -249,6 +267,9 @@ export function runCodexTurn(
         shell: false,
         windowsHide: true,
         cwd: input.cwd,
+        // Stated on every turn rather than left to the default, because the default is the defect: an open
+        // stdin is a `codex exec` waiting for a pipe that will never end.
+        stdio: CODEX_STDIO,
       })
     } catch {
       finish({ exitCode: null, cancelled: false, cause: 'stream_error' })

@@ -138,6 +138,10 @@ const SUITES = [
     name: 'engine preferences (mode to sandbox flag, path override order, refused probe)',
     src: 'engines/engine-preferences-test.ts',
   },
+  {
+    name: 'codex child lifecycle (stdin closed at spawn, per-turn child, reap, silent exit, cancel)',
+    src: 'engines/engine-lifecycle-test.ts',
+  },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
 ]
 
