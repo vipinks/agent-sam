@@ -19,16 +19,20 @@
 /**
  * The engines this build may run, as ids.
  *
- * One, this phase. The list is the allowlist: an id absent here is refused by `resolveEngineSpawn`
- * whatever a payload claims, so adding an engine is a change to this line and to the two tables below it
+ * Two, this phase: Codex, whose non-interactive surface is a JSONL stream, and Kimi, whose installed CLI
+ * answers with an ACP server. The list is the allowlist: an id absent here is refused by `resolveEngineSpawn`
+ * whatever a payload claims, so adding an engine is a change to this line and to the tables below it
  * rather than a change to a caller.
  */
-export const ENGINE_IDS = ['codex'] as const
+export const ENGINE_IDS = ['codex', 'kimi'] as const
 
 export type EngineId = (typeof ENGINE_IDS)[number]
 
 /** What a row is drawn as. The label is the app's, not the binary's. */
-export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = { codex: 'ChatGPT (Codex)' }
+export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = {
+  codex: 'ChatGPT (Codex)',
+  kimi: 'Kimi (Moonshot)',
+}
 
 /**
  * What an engine is called where the word "via" precedes it, in a transcript marker.
@@ -38,7 +42,7 @@ export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = { codex: 'ChatG
  * the short name is what a reader scans for. The picker's label is the fallback for an engine this table has no
  * short name for, so an engine added later is drawn as itself rather than as nothing.
  */
-export const ENGINE_MARKER_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex' }
+export const ENGINE_MARKER_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex', kimi: 'Kimi' }
 
 /**
  * The three sandbox values the CLI traces, strictest first.
@@ -98,6 +102,10 @@ export const ENGINE_PERMISSION_MODE_WARNINGS: Readonly<Record<EnginePermissionMo
  */
 export const ENGINE_PERMISSION_MODES: Readonly<Record<EngineId, EnginePermissionMode>> = {
   codex: ENGINE_DEFAULT_PERMISSION_MODE,
+  // Kimi's traced CLI offers no sandbox flag — `kimi acp` takes no arguments at all — so this value is the
+  // mode its row starts on rather than a value a flag is ever built from: its consent surface is the
+  // per-call question the ACP stream asks, answered through the shield.
+  kimi: ENGINE_DEFAULT_PERMISSION_MODE,
 }
 
 /**
@@ -134,6 +142,7 @@ export function enginePermissionMode(value: unknown, engineId?: string): EngineP
  */
 export const ENGINE_AUTH_HINTS: Readonly<Record<EngineId, string>> = {
   codex: 'Sign in with your ChatGPT account through the CLI\u2019s own login.',
+  kimi: 'Sign in with your Kimi account through the CLI\u2019s own login.',
 }
 
 /**
@@ -149,6 +158,42 @@ export const ENGINE_AUTH_HINTS: Readonly<Record<EngineId, string>> = {
  */
 export const ENGINE_LAUNCH_ARGS: Readonly<Record<EngineId, readonly string[]>> = {
   codex: ['exec', '--json', '--sandbox', ENGINE_DEFAULT_PERMISSION_MODE, '--skip-git-repo-check'],
+  // `acp` and nothing else. The CLI's own `--help` names this subcommand as its ACP server and its older
+  // `--acp` flag as deprecated in its favour; `kimi acp --help` offers no option at all, so no mode, no
+  // directory and no prompt can be added to it. The prompt travels as a `session/prompt` on the pipe.
+  kimi: ['acp'],
+}
+
+/**
+ * How an engine's stdin is treated, as a law rather than as each caller's habit.
+ *
+ * The Phase 70 lesson, stated where it can be read: a `codex exec` whose stdin is a pipe appends that pipe to
+ * its prompt and waits for it to end, so an engine spawned that way never answers and never ends — its dialect
+ * is a command line the prompt travels in, and its stdin is `ignored` because nothing will ever be written to
+ * it. An ACP agent is the other shape entirely: the pipe *is* the transport, the handshake and every later
+ * message travel on it, and a client that closed it would have nothing left to speak through — so it is
+ * `transport-open`.
+ *
+ * A table rather than a habit of each caller, because it is the property the turn is routed by: the turn below
+ * picks its runner from this value, so a launch config cannot be authored without stating which of the two it
+ * is — and the two runners cannot be handed the same engine by accident.
+ */
+export type EngineStdinPolicy = 'transport-open' | 'ignored'
+
+export const ENGINE_STDIN_POLICIES: Readonly<Record<EngineId, EngineStdinPolicy>> = {
+  codex: 'ignored',
+  kimi: 'transport-open',
+}
+
+/**
+ * The stdin policy of one engine, or the closed one for an id this build does not ship.
+ *
+ * `ignored` as the answer to an unknown id, deliberately: of the two, that is the one whose worst case is a
+ * process with nothing to wait for. An id that is not an engine is refused by the law long before a process
+ * exists.
+ */
+export function engineStdinPolicy(engineId: string): EngineStdinPolicy {
+  return ENGINE_STDIN_POLICIES[engineId as EngineId] ?? 'ignored'
 }
 
 /**
@@ -190,6 +235,10 @@ export interface EngineInstallPattern {
 
 export const ENGINE_INSTALL_PATTERNS: Readonly<Record<EngineId, readonly EngineInstallPattern[]>> = {
   codex: [{ dir: '%LOCALAPPDATA%/OpenAI/Codex/bin/*', binary: 'codex' }],
+  // Where the CLI installs itself for one user, and where this machine's probe found it: `.local/bin` under
+  // the profile, holding `kimi.exe`. Unlike Codex's there is no build-id segment to read, so the template is
+  // one path and the probe's check of it is a `stat` rather than a directory listing.
+  kimi: [{ dir: '%USERPROFILE%/.local/bin', binary: 'kimi' }],
 }
 
 /**
@@ -235,7 +284,7 @@ export const AGENT_SAM_ENGINE_NAME = 'Agent Sam'
  * whose binary is somewhere `PATH` does not cover, and it is judged by the file it names rather than
  * trusted for being the user's.
  */
-export const ENGINE_BINARIES: Readonly<Record<EngineId, string>> = { codex: 'codex' }
+export const ENGINE_BINARIES: Readonly<Record<EngineId, string>> = { codex: 'codex', kimi: 'kimi' }
 
 /** The argument that makes a binary say its version, and nothing else. */
 export const ENGINE_PROBE_ARGS: readonly string[] = ['--version']

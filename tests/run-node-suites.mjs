@@ -127,6 +127,10 @@ const SUITES = [
   },
   { name: 'acp client (handshake, tool call, consent, event stream)', src: 'engines/acp-client-test.ts' },
   {
+    name: 'kimi launch config and turn (acp args, allowlist binary, stdin policy, fixture handshake)',
+    src: 'engines/engine-kimi-test.ts',
+  },
+  {
     name: 'codex jsonl mapper (captured vocabulary, tool calls, usage, exit cause)',
     src: 'engines/codex-jsonl-test.ts',
   },

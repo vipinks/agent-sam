@@ -376,13 +376,18 @@ function theStoreCarriesBothValuesPerEngine() {
 
 /** The section has a line to write for every engine, so an engine joining later cannot be drawn mute. */
 function everyEngineHasARowToBeDrawnFrom() {
+  // The account word each engine's own line names. Pinned per id rather than one word for all of them,
+  // because there is no shared answer to give: this app never sees a credential, and each CLI signs itself
+  // in with its own account — so a line copied from the engine beside it fails here rather than in the section.
+  const ACCOUNTS: Readonly<Record<string, RegExp>> = { codex: /ChatGPT/, kimi: /Kimi/ }
+
   for (const id of ENGINE_IDS) {
     assert.ok(ENGINE_LABELS[id].length > 0, `${id}: the row has a name`)
     assert.ok(ENGINE_AUTH_HINTS[id].length > 0, `${id}: and an auth line`)
-    assert.match(ENGINE_AUTH_HINTS[id], /ChatGPT/, `${id}: naming the account the user signs in with`)
+    assert.match(ENGINE_AUTH_HINTS[id], ACCOUNTS[id], `${id}: naming the account the user signs in with`)
   }
 
-  results.push('every allowlisted engine has a label and an auth line, and Codex names the ChatGPT account')
+  results.push('every allowlisted engine has a label and an auth line, each naming its own account')
 }
 
 // ---------------------------------------------------------------- report

@@ -10,6 +10,7 @@ import {
   ENGINE_SPAWN_CODES,
   enginePreference,
   engineRows,
+  engineStdinPolicy,
   engineVersion,
   resolveEnginePathOverride,
   resolveEngineSpawn,
@@ -22,6 +23,7 @@ import {
 } from '../protocol/engine'
 import type { AcpPermissionRequest } from '../protocol/acp'
 import { installedBinaryFor, runCodexTurn } from './engine-codex'
+import { runAcpTurn } from './engine-acp-turn'
 import type { EngineTranscriptChunk } from '../protocol/codex-turn'
 
 /**
@@ -458,22 +460,37 @@ export const engineModule = defineModule({
         waiting?.()
       }
 
-      const turn = runCodexTurn(
+      const turnInput = {
+        engineId: input.engineId,
+        prompt: input.prompt,
         // An empty root means the conversation has no folder open, and the engine is given the app's own working
         // directory rather than an empty string, which is not a directory a process can be started in.
-        {
-          engineId: input.engineId,
-          prompt: input.prompt,
-          cwd: input.cwd === '' ? process.cwd() : input.cwd,
-          permissionMode: preference.permissionMode,
-          signal,
-        },
-        installed === undefined ? {} : { binaryOverride: installed },
-        (chunk) => {
-          queue.push(chunk)
-          notify()
-        }
-      )
+        cwd: input.cwd === '' ? process.cwd() : input.cwd,
+        permissionMode: preference.permissionMode,
+        signal,
+      }
+      const binary = installed === undefined ? {} : { binaryOverride: installed }
+      const onChunk = (chunk: EngineTranscriptChunk): void => {
+        queue.push(chunk)
+        notify()
+      }
+
+      // Which dialect this engine speaks is the stdin policy's answer rather than a second list of ids kept
+      // here: a config that states `transport-open` is one whose pipe *is* the protocol, and the ACP client is
+      // the only runner that speaks to a pipe. Its consent question is put to the same shield the exec path's
+      // cards go to, so an engine asking to write a file is asked about per call whichever dialect it arrived
+      // on — and an engine added later is routed by its own config rather than by a change here.
+      const turn =
+        engineStdinPolicy(input.engineId) === 'transport-open'
+          ? runAcpTurn(
+              turnInput,
+              {
+                ...binary,
+                onPermissionRequest: (request: AcpPermissionRequest) => askEngineConsent(input.engineId, request),
+              },
+              onChunk
+            )
+          : runCodexTurn(turnInput, binary, onChunk)
 
       void turn
         .then(() => undefined)
@@ -481,7 +498,7 @@ export const engineModule = defineModule({
           // A turn that never started is an ending rather than a thrown stream: a pane handed an exception would
           // hold a turn that went quiet for no stated reason. The failure itself stays out of the transcript —
           // what a user needs to know is that the engine stopped, not which errno the spawn answered with.
-          console.warn('[engine] the Codex turn failed', error)
+          console.warn('[engine] the turn failed', error)
           queue.push({ type: 'turn_end', cause: 'stream_error' })
         })
         .finally(() => {
