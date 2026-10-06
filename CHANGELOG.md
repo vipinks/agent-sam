@@ -6,6 +6,34 @@ coding assistant.
 
 <br>
 
+## 2026-10-06: v1.3.0 — Settings rail, buddy avatars and auto-update
+
+- **Settings becomes a rail down the left.** The sections are chosen from a fixed vertical column of
+  compact stacked entries rather than a strip across the top, so the list stays put in its own column
+  while the section beside it scrolls, and the back control above it returns to the workbench.
+- **Every buddy draws a face in the picker**, on the trigger and in each row of the dropdown: a letter
+  badge taken from the buddy's own name, and the app's own logo mark for the default Agent Sam entry
+  that has no letter to give.
+- **Each MCP server in the Tools rail carries one stateful start/stop button** in place of the pair it
+  used to carry, and its glyph is the status itself — the transitioning states and the retry state
+  included — so the control and the answer to what a server is doing cannot disagree.
+- **The app updates itself.** A check runs on `electron-updater` over the github publish configuration
+  this packaging already writes, stays on the non-prerelease channel, and happens only in a packaged
+  build: the first check is delayed past launch rather than run during it, then repeats on a four-hour
+  interval. A download runs in the background when the persisted auto-download preference says so, and
+  an update that has arrived is installed on quit by default.
+- **Updates becomes the eighth settings rail entry**, carrying the version it speaks for, when the last
+  check was, the status word the rule gives the current state, and the toggle with the check, download
+  and install controls beside it.
+- **A downloaded update is announced once**, by a notice over the main area with its restart-to-install
+  action: the one updater state that needs an answer is announced where it will be seen rather than
+  filed under the rail entry with the settings nobody has to act on.
+- The v1.2.0 baseline is everything before this entry: Phases 1 through 66, which shipped under the
+  standing versioning rule that a release names the work since the last one. This entry is v1.3.0 —
+  Phases 67 and 68, which are the two groups above.
+
+<br>
+
 ## 2026-10-05: v1.2.0 — Documents, view acts and appearance
 
 - **Documents open in the app.** A name is read once by a pure `previewKind` dispatch — `pdf`, `docx`,
