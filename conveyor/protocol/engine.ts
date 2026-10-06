@@ -1,0 +1,274 @@
+/**
+ * The spawn law, and the engine picker's rows.
+ *
+ * Every engine the app will ever run is spawned by main, through this law and nothing else: the binary
+ * comes from this file's allowlist or from a settings override that still names an allowlisted binary, the
+ * arguments are an array the caller wrote, and `shell` is stated as `false` rather than left to a caller
+ * to remember. A refusal is a code, never a sentence, because the branch belongs to whoever asked.
+ *
+ * It is a rule rather than a module because it has to be provable without starting anything: `resolve`
+ * answers from its tables and its argument, so a suite can hold every refusal still. The spawning itself —
+ * the version probe — lives beside it in `conveyor/modules/engine.ts`, where a process may be started.
+ *
+ * The law imports nothing, deliberately. An import of `path` would be the first step toward a platform
+ * rule living in a second place, and an import of a store or a module would be an input the law could
+ * consult. Its whole answer is derived from what it is handed, which is what makes the suite that reads
+ * this file's own source for imports a statement about purity rather than about taste.
+ */
+
+/**
+ * The engines this build may run, as ids.
+ *
+ * One, this phase. The list is the allowlist: an id absent here is refused by `resolveEngineSpawn`
+ * whatever a payload claims, so adding an engine is a change to this line and to the two tables below it
+ * rather than a change to a caller.
+ */
+export const ENGINE_IDS = ['codex'] as const
+
+export type EngineId = (typeof ENGINE_IDS)[number]
+
+/** What a row is drawn as. The label is the app's, not the binary's. */
+export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex' }
+
+/**
+ * The app's own row, as a select value.
+ *
+ * Not an engine id and never stored: a conversation that runs the Sam loop carries no engine key at all, so
+ * this exists only because a select needs a value for the row that means "none" — and an empty string is
+ * reserved by the primitive rather than available for the purpose. It is what the picker turns back into
+ * `null` on the way out, which is the only form the record ever sees.
+ */
+export const SAM_ENGINE_VALUE = 'agent-sam'
+
+/** The app's own row's name, drawn first in the picker because it is what a conversation with no engine runs. */
+export const AGENT_SAM_ENGINE_NAME = 'Agent Sam'
+
+/**
+ * The binary each engine is run by — the name, resolved on `PATH` by the OS.
+ *
+ * A name rather than a path: where a binary lives is the machine's answer, and a path baked in here
+ * would be wrong on the next machine and stale on this one. The settings override exists for the machine
+ * whose binary is somewhere `PATH` does not cover, and it is judged by the file it names rather than
+ * trusted for being the user's.
+ */
+export const ENGINE_BINARIES: Readonly<Record<EngineId, string>> = { codex: 'codex' }
+
+/** The argument that makes a binary say its version, and nothing else. */
+export const ENGINE_PROBE_ARGS: readonly string[] = ['--version']
+
+/** What a row says when the probe found nothing, in the words a user reads rather than a code. */
+export const ENGINE_NOT_INSTALLED_NOTE = 'Not installed'
+
+/**
+ * Every way the law can refuse, as codes.
+ *
+ * Distinct rather than one `ENGINE_REFUSED` because the caller's answer differs: an unknown id is a
+ * programming mistake, a non-array is a bug in the caller's own construction, a shell is a request this
+ * app does not honour, an unallowed binary is a settings file naming something it may not, and a missing
+ * binary is a state the picker draws. A sentence would collapse all five into something nobody can branch
+ * on — which is why the message never travels and the code always does.
+ */
+export const ENGINE_SPAWN_CODES = {
+  ENGINE_UNKNOWN: 'ENGINE_UNKNOWN',
+  ENGINE_ARGS_NOT_ARRAY: 'ENGINE_ARGS_NOT_ARRAY',
+  ENGINE_ARGS_NOT_STRINGS: 'ENGINE_ARGS_NOT_STRINGS',
+  ENGINE_SHELL_REFUSED: 'ENGINE_SHELL_REFUSED',
+  ENGINE_BINARY_NOT_ALLOWED: 'ENGINE_BINARY_NOT_ALLOWED',
+  ENGINE_NOT_INSTALLED: 'ENGINE_NOT_INSTALLED',
+  ENGINE_VERSION_UNREADABLE: 'ENGINE_VERSION_UNREADABLE',
+  ENGINE_SPAWN_FAILED: 'ENGINE_SPAWN_FAILED',
+  /** A binary that started and then said nothing within the probe's budget. */
+  ENGINE_PROBE_TIMEOUT: 'ENGINE_PROBE_TIMEOUT',
+} as const
+
+export type EngineSpawnCode = (typeof ENGINE_SPAWN_CODES)[keyof typeof ENGINE_SPAWN_CODES]
+
+/**
+ * The one way a consent question is refused before it is ever put.
+ *
+ * Its own set rather than a member of the spawn codes, because it is not about spawning: the engine is
+ * running and asking, and what is missing is somebody to ask. The bridge answers with this when no window
+ * exists, and the ACP client turns that into a `cancelled` outcome — an engine is never told the user
+ * refused something the user never saw.
+ */
+export const ENGINE_CONSENT_CODES = {
+  ENGINE_CONSENT_UNANSWERED: 'ENGINE_CONSENT_UNANSWERED',
+} as const
+
+export type EngineConsentCode = (typeof ENGINE_CONSENT_CODES)[keyof typeof ENGINE_CONSENT_CODES]
+
+/** What a caller asks the law for. `args` and `shell` are `unknown` on purpose: they are untrusted. */
+export interface EngineSpawnRequest {
+  engineId: string
+  args: unknown
+  shell?: unknown
+  /** An absolute path to the allowlisted binary, from settings. Absent means the name, on `PATH`. */
+  binaryOverride?: string
+  /** The engines this call may resolve, when a caller brings its own. The shipped law is the default. */
+  allowlist?: Readonly<Record<string, string>>
+}
+
+/** The law's answer: what to run, or why it will not. */
+export type EngineSpawnResolution =
+  { ok: true; command: string; args: string[]; shell: false } | { ok: false; code: EngineSpawnCode }
+
+/** Whether a value names an engine this build may run. */
+export function isEngineId(value: unknown): value is EngineId {
+  return typeof value === 'string' && (ENGINE_IDS as readonly string[]).includes(value)
+}
+
+/**
+ * The last segment of a path, without a launchable extension.
+ *
+ * Written out rather than imported, and split on both separators rather than on the one this platform
+ * uses: a settings file can carry either, and a law that read `C:\Tools\codex\codex.exe` as one segment
+ * would refuse a binary it sanctions. `.exe` and `.cmd` are stripped because those are how a binary is
+ * named on the one platform that needs them; a bare name is stripped of nothing.
+ */
+function binaryNameOf(target: string): string {
+  const segments = target.split(/[\\/]/)
+  const last = segments[segments.length - 1] ?? ''
+  return last.replace(/\.(exe|cmd|bat)$/i, '')
+}
+
+/**
+ * Resolve what may be run, or refuse with the code that says why.
+ *
+ * The order of the checks is the order of the arguments' trustworthiness: the engine id first, because a
+ * refused id means nothing else about the call is worth reading; the argument shape next, because a
+ * string where an array belongs is the injection this law exists to prevent; the shell flag third, and
+ * refused rather than overridden, because a caller asking for one is asking for the arguments below to be
+ * interpreted by a shell; and the binary last, because it is the only input a settings file may reach.
+ */
+export function resolveEngineSpawn(request: EngineSpawnRequest): EngineSpawnResolution {
+  const allowlist = request.allowlist ?? ENGINE_BINARIES
+  const allowed = Object.prototype.hasOwnProperty.call(allowlist, request.engineId)
+    ? allowlist[request.engineId]
+    : undefined
+
+  if (!allowed) return { ok: false, code: ENGINE_SPAWN_CODES.ENGINE_UNKNOWN }
+
+  if (!Array.isArray(request.args)) return { ok: false, code: ENGINE_SPAWN_CODES.ENGINE_ARGS_NOT_ARRAY }
+  const args = request.args as unknown[]
+  if (args.some((arg) => typeof arg !== 'string')) {
+    return { ok: false, code: ENGINE_SPAWN_CODES.ENGINE_ARGS_NOT_STRINGS }
+  }
+
+  if (request.shell === true) return { ok: false, code: ENGINE_SPAWN_CODES.ENGINE_SHELL_REFUSED }
+
+  const override = request.binaryOverride
+  if (override !== undefined && binaryNameOf(override) !== allowed) {
+    return { ok: false, code: ENGINE_SPAWN_CODES.ENGINE_BINARY_NOT_ALLOWED }
+  }
+
+  return {
+    ok: true,
+    command: override ?? allowed,
+    args: args as string[],
+    // Stated rather than omitted. `shell` is false whenever it is absent, but a caller that forgot it and
+    // a caller that meant it would look the same on the page — and only one of them is safe.
+    shell: false,
+  }
+}
+
+/**
+ * The version in whatever a binary printed, or `null` when there is none.
+ *
+ * The first token that is a number with at least one dot — and the rest of it, prerelease suffixes and
+ * all, because `0.154.0-alpha.6.2` is the version the CLI reports and a rule that answered `0.154.0`
+ * would be a rule that made one up. A leading `v` is a spelling of the name, not part of the number.
+ * Prose answers `null` rather than the nearest digits: the caller has a code for "it answered something I
+ * cannot read", and reaching it is the honest outcome.
+ */
+export function engineVersion(output: string): string | null {
+  for (const token of output.split(/\s+/)) {
+    const candidate = token.replace(/^v/, '')
+    if (/^\d+(\.\d+)+([-.][0-9A-Za-z.-]+)?$/.test(candidate)) return candidate
+  }
+  return null
+}
+
+/** What a probe found, or which way it failed. */
+export interface EngineProbe {
+  installed: boolean
+  version?: string
+  code?: EngineSpawnCode
+}
+
+/** One row of the engine picker, as the renderer draws it. */
+export interface EngineRow {
+  /** The engine's id, or `null` for the app's own row — which names no engine, by construction. */
+  id: string | null
+  name: string
+  installed: boolean
+  version: string | null
+  /** What the row has to say about itself, or `null` when there is nothing to say. */
+  note: string | null
+}
+
+/**
+ * One engine question, as it crosses to the shield.
+ *
+ * Flat, and all strings: it travels to a store every window mirrors, and what the card needs is what is in it
+ * — which engine is asking, which call it is about, what the call is, and the options the agent offered. The
+ * option kinds travel too, because whether an option grants consent is decided by the kind and never by the
+ * label an engine wrote.
+ *
+ * Lives here rather than beside the bridge that fills it, because two processes need the shape: main
+ * dispatches it, the renderer reads it, and a type that only main could name would make the renderer import
+ * a module that starts processes. The option shape is written out rather than imported from the ACP protocol
+ * for the same reason this file has no imports at all.
+ */
+export interface PendingEngineConsent {
+  requestId: string
+  engineId: string
+  engineName: string
+  toolCallId: string
+  title: string
+  options: { optionId: string; name: string; kind: string }[]
+}
+
+/**
+ * The picker's rows: the app itself first, then every allowlisted engine.
+ *
+ * The app's row is not a member of the allowlist and never will be: a conversation that names no engine
+ * runs the Sam loop, which is what every conversation written before engines existed does. An engine
+ * nobody has probed is drawn as not installed rather than dropped — a row that disappeared until it was
+ * detected would be an engine the user cannot find and cannot be told about.
+ */
+export function engineRows(probes: Partial<Record<string, EngineProbe>>): EngineRow[] {
+  const sam: EngineRow = {
+    id: null,
+    name: AGENT_SAM_ENGINE_NAME,
+    installed: true,
+    version: null,
+    note: null,
+  }
+
+  const engines = ENGINE_IDS.map((id): EngineRow => {
+    const probe = probes[id]
+    const installed = probe?.installed === true
+    return {
+      id,
+      name: ENGINE_LABELS[id],
+      installed,
+      version: installed && probe?.version !== undefined ? probe.version : null,
+      note: installed ? null : ENGINE_NOT_INSTALLED_NOTE,
+    }
+  })
+
+  return [sam, ...engines]
+}
+
+/**
+ * What an engine is called in a sentence, for the copy that has to name the one a conversation runs as.
+ *
+ * The release's own label first, and then the raw id: a conversation created under an engine this build no
+ * longer ships still has that id on its record, and showing the id is the truthful reading of it — inventing
+ * a name for an engine nobody can name would be inventing one. `null` is the app's own row, which is a name
+ * like any other here because the sentence it lands in has to read as one.
+ */
+export function engineLabel(engineId: string | null): string {
+  if (engineId === null) return AGENT_SAM_ENGINE_NAME
+  return ENGINE_LABELS[engineId as EngineId] ?? engineId
+}

@@ -212,6 +212,20 @@ export const transcriptSnapshotSchema = z.object({
    * never touched the toggle, which is also what a session with no file at all shows.
    */
   autoApprove: z.boolean().optional(),
+  /**
+   * Which engine this conversation runs as, and absent for the Sam loop.
+   *
+   * On the session, and snapshotted once: what a conversation runs as is decided when it starts, because
+   * the consent a user gave it — and the adapter that would have to speak to it — belongs to the record the
+   * conversation was opened with. A control touched later must not change what an existing conversation is.
+   *
+   * Optional, and it did not bump the version for the same reason `autoApprove` did not: a file written
+   * before engines existed simply has no key, an absent optional key is stripped rather than defaulted, so
+   * old files stay valid reads — and absence means the Sam loop, which is what every session that has never
+   * named an engine is. `min(1)` rather than a bare string so a blank id is refused at the boundary, because
+   * an empty id is a second spelling of "no engine" and there is only one.
+   */
+  engineId: z.string().min(1).optional(),
 })
 
 export type TranscriptSnapshot = z.infer<typeof transcriptSnapshotSchema>

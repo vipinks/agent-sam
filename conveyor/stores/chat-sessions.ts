@@ -69,6 +69,20 @@ export interface ChatSession {
    */
   buddyId?: string
   /**
+   * The engine this conversation was created as, by id, or absent for the Sam loop.
+   *
+   * Snapshotted at creation for the same reason `buddyId` is: what a conversation runs as must not change
+   * under it because a control was touched later, and the picker that chose it locks on exactly this key.
+   *
+   * An id, not the adapter. What an engine is — its name, its binary, whether it is even installed — is the
+   * engine rail's answer, probed fresh; the session keeps only the id it was created under, so a machine that
+   * loses an engine later cannot rewrite what this conversation claims to be.
+   *
+   * Absence is the Sam loop, so a conversation created with no engine stores nothing — the same way it stored
+   * nothing before engines existed.
+   */
+  engineId?: string
+  /**
    * The role this conversation was created with, snapshotted at creation.
    *
    * The snapshot rather than a lookup, and that is the whole point of storing it: a Buddy is a way of
@@ -196,6 +210,11 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       buddyId: buddyIdKeySchema.optional(),
       rolePrompt: buddyRolePromptKeySchema.optional(),
       mcpSubset: buddyMcpSubsetKeySchema.optional(),
+      // The engine the conversation is created as, on the same terms as the Buddy keys above: optional, and
+      // absent for a conversation on the Sam loop — which is why nothing is written to say "the app's own
+      // loop": the absent key already says it. Min one so a blank id is refused at the boundary rather than
+      // stored, because "" and no key would otherwise be two spellings of the same thing.
+      engineId: z.string().min(1).optional(),
     }),
     touchSession: z.object({
       id: sessionIdSchema,
@@ -249,7 +268,10 @@ export const chatSessionsStore = defineStore('chat-sessions', {
   },
 
   actions: {
-    addSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds, buddyId, rolePrompt, mcpSubset }) => {
+    addSession: (
+      state,
+      { id, title, providerId, model, lastRoot, activeSkillIds, buddyId, rolePrompt, mcpSubset, engineId }
+    ) => {
       const now = Date.now()
       // Idempotent: a re-add of an id that already exists would otherwise give the list two rows
       // with one transcript between them.
@@ -279,6 +301,10 @@ export const chatSessionsStore = defineStore('chat-sessions', {
           ...(buddyId !== undefined ? { buddyId } : {}),
           ...(rolePrompt !== undefined ? { rolePrompt } : {}),
           ...(mcpSubset !== undefined && mcpSubset.length > 0 ? { mcpSubset: [...mcpSubset] } : {}),
+          // The engine, on the same terms and for the same reason: absence is the Sam loop, so a conversation
+          // created without one carries nothing. Written here and nowhere else — `touchSession` deliberately
+          // does not accept it, because a snapshot taken at creation is not a value a later message may edit.
+          ...(engineId !== undefined ? { engineId } : {}),
         },
       ])
     },

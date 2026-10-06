@@ -31,6 +31,15 @@ export interface TranscriptState {
    * `serializeTranscript`'s own rule rather than re-deciding what a missing value is.
    */
   autoApprove?: boolean
+  /**
+   * Which engine this conversation runs as, and absent for the Sam loop.
+   *
+   * Optional, like its counterpart on the record, and for the same reason: a conversation that has never
+   * named an engine carries no key, and the Sam loop is what absence means. Nothing here resolves it to a
+   * default — unlike `autoApprove`, whose two-valued nature a toggle has to be told apart from, an engine id
+   * has exactly one way to say "no engine", and it is not being there.
+   */
+  engineId?: string
 }
 
 /** How a turn's incompleteness is described on screen. */
@@ -111,6 +120,11 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // earlier build wrote for it. A stored `false` would say the user had decided something, and the
     // session that has merely never had the toggle touched has decided nothing.
     ...(state.autoApprove === true ? { autoApprove: true } : {}),
+    // Written only when a conversation runs as one, which is the rule every additive field here follows: a
+    // session on the Sam loop writes no key at all, so its file stays byte for byte the file an earlier
+    // build wrote for it, and an empty string is never written to mean nothing — there is one spelling of
+    // "no engine", and it is the key's absence.
+    ...(state.engineId === undefined ? {} : { engineId: state.engineId }),
   }
 }
 
@@ -173,6 +187,10 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // record is read, is what keeps "never set" and "set to off" from having to be told apart anywhere
     // else in the UI.
     autoApprove: snapshot.autoApprove === true,
+    // Left absent rather than resolved to a default, for the reason above and its opposite: the Sam loop was
+    // never a choice, so a control reading this must see that nothing was recorded rather than a value that
+    // looks like one the user picked.
+    ...(snapshot.engineId === undefined ? {} : { engineId: snapshot.engineId }),
   }
 }
 

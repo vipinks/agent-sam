@@ -121,6 +121,12 @@ const SUITES = [
   { name: 'appearance preferences (alignment, font presets, store)', src: 'ui/appearance-preferences-test.ts' },
   { name: 'section collapse (in flight, completion, manual toggle, purity)', src: 'ui/section-collapse-test.ts' },
   { name: 'update rules (status word, offers, error codes, purity)', src: 'updates/updates-rules-test.ts' },
+  {
+    name: 'engine spawn law (allowlist, arg array, refusal codes, version probe)',
+    src: 'engines/engine-spawn-test.ts',
+  },
+  { name: 'acp client (handshake, tool call, consent, event stream)', src: 'engines/acp-client-test.ts' },
+  { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
 ]
 
 mkdirSync(outDir, { recursive: true })
