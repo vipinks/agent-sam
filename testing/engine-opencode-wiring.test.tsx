@@ -1,19 +1,23 @@
 /**
- * The Kimi engine, as the renderer sees it: the picker's row once a probe found the CLI, the Engines section's
- * row with its auth hint and mode control, the transcript an ACP turn produces with its `via Kimi` marker, and
- * a conversation running it naming Kimi in the list row rather than the stored provider pair.
+ * The OpenCode engine, as the renderer sees it: the picker's row once a probe found the CLI, the Engines
+ * section's row with its auth hint and mode control, and the transcript an ACP turn produces with its
+ * `via OpenCode` marker — with the model and provider pickers taken away, the session row naming the engine,
+ * and the Cost tile left unpriced.
+ *
+ * The row is drawn by the registry and nothing else: the picker maps `engineRows` and the section maps
+ * `ENGINE_IDS`, so a third engine appearing in both is a table that grew rather than a component that was
+ * changed. That is what these cases exist to hold — the reason no product component needed a line for
+ * OpenCode is the reason a suite has to look at what those components draw.
  *
  * The chunks these cases apply are the real ones: the events are the ones the fixture ACP agent writes, in the
- * order it writes them, folded through the real `acpTranscriptChunks` and the real `applyAgentChunk` — so what
- * is asserted is the whole chain from an agent's update to the words on the card, with nothing hand-written in
- * between. Which events the agent writes, and that a `kimi` session really handshakes against it, is the node
- * suite's claim (`tests/engines/engine-kimi-test.ts`); this file takes those events as given and asks what the
- * pane draws for them.
+ * order it writes them, folded through the real `acpTranscriptChunks` and the real `applyAgentChunk`. Which
+ * events the agent writes, and that an `opencode` session really handshakes against it, is the node suite's
+ * claim (`tests/engines/engine-opencode-test.ts`); this file takes those events as given and asks what the pane
+ * draws for them.
  *
- * What is not driven here is the transport: the panel's own `engine.turn` call is typed by the schema the module
- * registers, and the child's kill path is the node suite's. jsdom proves wiring and words, not pixels — that the
- * row and the marker read correctly in both themes, and that a live Kimi turn streams, is Boss's eyes on the
- * running app with the CLI installed.
+ * What is not driven here is the transport: jsdom proves wiring and words, not pixels. That a live OpenCode
+ * turn streams, and that its call is gated by the shield, is Boss's eyes on the running app with the CLI
+ * installed.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
@@ -48,15 +52,15 @@ import type { ChatSession } from '@/conveyor/stores/chat-sessions'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore } from './bridge-stub'
 
 const ROOT = 'C:/work/sam-ai'
-const SESSION_ID = 'dddddddd-4444-4444-8444-444444444444'
+const SESSION_ID = 'eeeeeeee-5555-4555-8555-555555555555'
 
 /** The three engines, named rather than indexed, so a rename fails here loudly. */
 const CODEX = 'codex'
 const KIMI = 'kimi'
 const OPENCODE = 'opencode'
 
-/** The version the probe on this machine answered, so the assertion is the real string. */
-const PROBED_VERSION = '1.30.0'
+/** The version the probe on this machine answered for the CLI on `PATH`, so the assertion is the real string. */
+const PROBED_VERSION = '1.4.7'
 
 const PROVIDERS = [{ id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' }]
 const DEFAULT_MODELS = { deepseek: [{ id: 'deepseek-chat', name: 'deepseek-chat' }] }
@@ -67,8 +71,8 @@ const SAM_PAIR = 'deepseek/deepseek-chat'
 /**
  * The events the fixture ACP agent writes on one prompt, in its own order.
  *
- * Handed in as the protocol's own shapes rather than as the fixture's lines, because the fixture's lines are the
- * node suite's subject: what this file needs is the sequence — prose, then the call it is about, then the
+ * Handed in as the protocol's own shapes rather than as the fixture's lines, because the fixture's lines are
+ * the node suite's subject: what this file needs is the sequence — prose, then the call it is about, then the
  * outcome, then the prose that closes it — which is what the mapper is asked to preserve.
  */
 const FIXTURE_EVENTS: AcpEvent[] = [
@@ -87,22 +91,22 @@ const FIXTURE_EVENTS: AcpEvent[] = [
 
 /** Fold those chunks into one assistant turn, exactly as the panel's run loop does. */
 function transcriptOf(): AgentTurn {
-  const chunks = acpTranscriptChunks(FIXTURE_EVENTS, KIMI)
+  const chunks = acpTranscriptChunks(FIXTURE_EVENTS, OPENCODE)
   let turns: AgentTurn[] = [startAssistantTurn()]
   const turnId = turns[0].id
   for (const chunk of chunks) turns = applyAgentChunk(turns, turnId, chunk).turns
   return turns[0]
 }
 
-/** A conversation that runs the Kimi engine. */
-const KIMI_SESSION: ChatSession = {
+/** A conversation that runs the OpenCode engine. */
+const OPENCODE_SESSION: ChatSession = {
   id: SESSION_ID,
-  title: 'the kimi conversation',
+  title: 'the opencode conversation',
   createdAt: 1_700_000_000_000,
   updatedAt: 1_700_000_000_000,
   providerId: 'deepseek',
   model: 'deepseek-chat',
-  engineId: KIMI,
+  engineId: OPENCODE,
 }
 
 /** The settings reads the shell makes for whichever section is showing. */
@@ -135,14 +139,16 @@ function stubScreen(
     openRoot: (input) => ({ path: (input as { path: string }).path }),
   })
 
-  // The rows a probe would have published on this machine: the app's own loop first, then both engines. Built by
-  // the protocol's own row rule, so the labels under test are the shipped ones rather than strings written here.
+  // The rows a probe would have published on this machine: the app's own loop first, then all three engines.
+  // Built by the protocol's own row rule, so the labels under test are the shipped ones rather than strings
+  // written here — and so a fourth engine would fail these cases rather than slip past them.
   stubStore(stub, 'engine-status', {
     rows:
       options.rows ??
       engineRows({
         [CODEX]: { installed: true, version: '0.160.1' },
-        [KIMI]: { installed: true, version: PROBED_VERSION },
+        [KIMI]: { installed: true, version: '1.30.0' },
+        [OPENCODE]: { installed: true, version: PROBED_VERSION },
       }),
   })
   stubStore(stub, CHAT_SESSIONS_STORE_ID, {
@@ -199,12 +205,12 @@ function enginesSection(): HTMLElement {
   return panel
 }
 
-/** The Kimi engine's box inside the section. */
-function kimiRow(): HTMLElement {
+/** The OpenCode engine's box inside the section. */
+function opencodeRow(): HTMLElement {
   const row = [...enginesSection().querySelectorAll<HTMLElement>('[data-slot="engine-row"]')].find(
-    (candidate) => candidate.querySelector('[data-slot="engine-name"]')?.textContent === ENGINE_LABELS[KIMI]
+    (candidate) => candidate.querySelector('[data-slot="engine-name"]')?.textContent === ENGINE_LABELS[OPENCODE]
   )
-  if (!row) throw new Error('the section draws no Kimi row')
+  if (!row) throw new Error('the section draws no OpenCode row')
   return row
 }
 
@@ -235,8 +241,8 @@ beforeEach(() => {
   })
 })
 
-describe('the Kimi row in the picker', () => {
-  it('is offered beside Agent Sam and the engines this build knows, named from the shipped table', async () => {
+describe('the OpenCode row in the picker', () => {
+  it('is offered beside Agent Sam, Codex and Kimi, named from the shipped table and selectable once detected', async () => {
     stubScreen()
     renderChat()
 
@@ -244,19 +250,17 @@ describe('the Kimi row in the picker', () => {
     await open(engine)
 
     const options = screen.getAllByRole('option')
-    // Every allowlisted engine draws a row, and one this machine's fixture did not probe draws the
-    // protocol's own not-installed note rather than disappearing: a row that vanished would be an engine
-    // the user cannot find and cannot be told about.
     expect(options.map((option) => option.textContent)).toEqual([
       'Agent Sam',
       ENGINE_LABELS[CODEX],
       ENGINE_LABELS[KIMI],
-      `${ENGINE_LABELS[OPENCODE]} \u00b7 ${ENGINE_NOT_INSTALLED_NOTE}`,
+      ENGINE_LABELS[OPENCODE],
     ])
-    // Detected on this machine, so the row is offered rather than refused — and choosing it is what the trigger
-    // then shows, with the probed version in the native title.
-    expect(isDisabled(options[2])).toBe(false)
-    await userEvent.click(options[2])
+    // Detected on this machine, so the row is offered rather than refused — and choosing it is what the
+    // trigger then shows, with the probed version in the native title.
+    const opencode = options[3]
+    expect(isDisabled(opencode)).toBe(false)
+    await userEvent.click(opencode)
     await waitFor(() => expect(engine.getAttribute('title')).toContain(PROBED_VERSION))
   })
 
@@ -265,40 +269,45 @@ describe('the Kimi row in the picker', () => {
     renderChat()
 
     await open(await screen.findByRole('combobox', { name: 'Engine' }))
-    const kimi = screen.getAllByRole('option').find((option) => option.textContent?.startsWith(ENGINE_LABELS[KIMI]))
+    const opencode = screen
+      .getAllByRole('option')
+      .find((option) => option.textContent?.startsWith(ENGINE_LABELS[OPENCODE]))
 
-    expect(kimi?.textContent).toBe(`${ENGINE_LABELS[KIMI]} · ${ENGINE_NOT_INSTALLED_NOTE}`)
-    expect(isDisabled(kimi as HTMLElement)).toBe(true)
+    expect(opencode?.textContent).toBe(`${ENGINE_LABELS[OPENCODE]} · ${ENGINE_NOT_INSTALLED_NOTE}`)
+    expect(isDisabled(opencode as HTMLElement)).toBe(true)
   })
 })
 
-describe('the Kimi row in the Engines section', () => {
+describe('the OpenCode row in the Engines section', () => {
   it('is drawn with its probed version, its own auth hint and a mode control on the default', async () => {
     stubScreen()
     renderSettings()
     act(() => useWorkbenchStore.getState().openSettingsAt('engines'))
     await waitFor(() => expect(enginesSection()).toBeTruthy())
 
-    // One row per allowlisted engine, read from the registry rather than counted here: an engine added to
-    // `ENGINE_IDS` is a row this section grows without being changed.
+    // One row per engine, read from the registry: the section needed no line for OpenCode, and this is the
+    // count that says so rather than an assertion that it happened to be two before.
     expect(enginesSection().querySelectorAll('[data-slot="engine-row"]')).toHaveLength(ENGINE_IDS.length)
-    expect(kimiRow().querySelector('[data-slot="engine-name"]')?.textContent).toBe(ENGINE_LABELS[KIMI])
-    expect(kimiRow().querySelector('[data-slot="engine-status"]')?.textContent).toBe(PROBED_VERSION)
+    expect(opencodeRow().querySelector('[data-slot="engine-name"]')?.textContent).toBe(ENGINE_LABELS[OPENCODE])
+    expect(opencodeRow().querySelector('[data-slot="engine-status"]')?.textContent).toBe(PROBED_VERSION)
     // The line is the engine's own, from the law's table: a hint copied from the row above it would name an
     // account this engine's CLI has nothing to do with.
-    expect(kimiRow().querySelector('[data-slot="engine-auth-hint"]')?.textContent).toBe(ENGINE_AUTH_HINTS[KIMI])
+    expect(opencodeRow().querySelector('[data-slot="engine-auth-hint"]')?.textContent).toBe(ENGINE_AUTH_HINTS[OPENCODE])
     // The control the row draws is the shared one, offering the traced modes in the law's own order.
-    await open(screen.getByRole('combobox', { name: `${ENGINE_LABELS[KIMI]} permission mode` }))
+    await open(screen.getByRole('combobox', { name: `${ENGINE_LABELS[OPENCODE]} permission mode` }))
     expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(
       ENGINE_PERMISSION_MODE_IDS.map((id) => ENGINE_PERMISSION_MODE_LABELS[id])
     )
-    // And the row's mode starts on Kimi's own declared default rather than on Codex's.
-    expect(enginePreference(undefined, KIMI).permissionMode).toBe(enginePreference(undefined, KIMI).permissionMode)
+    // And the row's mode starts on OpenCode's own declared default: its ACP mode carries no sandbox flag, so
+    // the shield's per-call question is this engine's whole consent surface.
+    expect(enginePreference(undefined, OPENCODE).permissionMode).toBe(
+      enginePreference(undefined, OPENCODE).permissionMode
+    )
   })
 })
 
-describe('a conversation running Kimi', () => {
-  it('draws the turn as narration and a via-Kimi marker, in the order the agent wrote them', () => {
+describe('a conversation running OpenCode', () => {
+  it('draws the turn as narration and a via-OpenCode marker, in the order the agent wrote them', () => {
     const turn = transcriptOf()
 
     expect(turn.content.indexOf('Writing the notes file.')).toBeGreaterThanOrEqual(0)
@@ -310,44 +319,45 @@ describe('a conversation running Kimi', () => {
     const step = turn.steps[0]
     expect(step.tool).toBe('write_file')
     expect(String(step.args.path)).toBe('Write notes.md')
-    expect(step.via).toBe('Kimi')
+    expect(step.via).toBe('OpenCode')
     expect(step.status).toBe('ok')
   })
 
-  it('draws "via Kimi" on the card, and the engine name rather than Codex', () => {
+  it('draws "via OpenCode" on the card, and the engine name rather than Codex or Kimi', () => {
     const step: ToolStep = {
       callId: 'call-1',
       tool: 'write_file',
       args: { path: 'Write notes.md' },
       status: 'ok',
       output: '',
-      via: 'Kimi',
+      via: 'OpenCode',
     }
 
     render(<AgentActionCard step={step} />)
-    expect(screen.getByText('via Kimi')).toBeTruthy()
+    expect(screen.getByText('via OpenCode')).toBeTruthy()
     expect(screen.queryByText('via Codex')).toBeNull()
+    expect(screen.queryByText('via Kimi')).toBeNull()
   })
 
   it('takes the model and provider pickers away, and says which engine owns the conversation', async () => {
-    stubScreen({ session: KIMI_SESSION })
+    stubScreen({ session: OPENCODE_SESSION })
     renderChat()
 
     const model = await screen.findByRole('combobox', { name: 'Provider and model' })
     expect(isDisabled(model)).toBe(true)
-    expect(model.getAttribute('title')).toContain(ENGINE_LABELS[KIMI])
+    expect(model.getAttribute('title')).toContain(ENGINE_LABELS[OPENCODE])
 
     const engine = await screen.findByRole('combobox', { name: 'Engine' })
-    expect(engine.textContent).toContain(ENGINE_LABELS[KIMI])
+    expect(engine.textContent).toContain(ENGINE_LABELS[OPENCODE])
   })
 
-  it('names Kimi in the list row, and shows the stored provider pair nowhere', async () => {
-    stubScreen({ session: KIMI_SESSION, withWorkspace: true })
+  it('names OpenCode in the list row, and shows the stored provider pair nowhere', async () => {
+    stubScreen({ session: OPENCODE_SESSION, withWorkspace: true })
     renderList()
 
-    const row = (await screen.findByText(KIMI_SESSION.title)).closest('button') as HTMLElement
+    const row = (await screen.findByText(OPENCODE_SESSION.title)).closest('button') as HTMLElement
     expect(row).toBeTruthy()
-    expect(within(row).getByText(ENGINE_LABELS[KIMI])).toBeTruthy()
+    expect(within(row).getByText(ENGINE_LABELS[OPENCODE])).toBeTruthy()
     expect(within(row).queryByText(SAM_PAIR)).toBeNull()
   })
 })

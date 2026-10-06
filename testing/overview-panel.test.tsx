@@ -454,6 +454,23 @@ describe('the Overview resident and its tiles', () => {
     expect(note(container, 'cost').textContent).toBe('engine session: usage is not priced')
   })
 
+  it('leaves an OpenCode session unpriced too, on the same branch rather than a third one', async () => {
+    // The third engine, and the last one the registry can add without the rule needing to know it exists:
+    // the tile withholds because the conversation names *an* engine, not because it names one this suite
+    // happens to have heard of. The declaration is again the one the Sam twin below prices at $0.6135.
+    stubWorkbench({
+      sessions: { sessions: [session(MEASURED, undefined, 'deepseek-chat', 'opencode')], activeSessionId: SESSION_ID },
+      providers: declaredRates(),
+      transcript: saved(['user', 'assistant']),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    await waitFor(() => expect(tile(container, 'tokens').textContent).toBe('1M'))
+    expect(tile(container, 'cost').textContent).toBe(EM_DASH)
+    expect(note(container, 'cost').textContent).toBe('engine session: usage is not priced')
+  })
+
   it('prices a Sam session on the same numbers exactly as before', async () => {
     // The twin of the test above, and the guard on it: one field differs — no `engineId` — and the tile
     // draws the figure this suite has always asserted, with the caption it has always carried.
