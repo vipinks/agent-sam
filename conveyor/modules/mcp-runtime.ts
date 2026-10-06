@@ -48,7 +48,7 @@ import {
 } from '../protocol/mcp'
 
 /** How this app identifies itself to a server during the initialize handshake. */
-const CLIENT_INFO = { name: 'agent-sam', version: '1.3.0' } as const
+const CLIENT_INFO = { name: 'agent-sam', version: '1.4.0' } as const
 
 /**
  * How long the abort path waits for a client to close on its own before it kills the process.

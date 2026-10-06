@@ -6,6 +6,31 @@ coding assistant.
 
 <br>
 
+## 2026-10-07: v1.4.0 — Command-line engines, an Engines rail entry and the consent shield
+
+- **A command-line engine is a first-class execution path beside the Sam loop.** Phase 70 carries the
+  spawn law in one place: the spawn happens in main only, arguments are handed over as arrays,
+  `shell: true` is never used, the binary is resolved from an allowlist with a user override, and its
+  version is probed before a turn. An ACP client was proven against a fixture peer, and the ChatGPT
+  (Codex) pilot rides the JSONL dialect that probe proved — marking via-Codex tool calls and taking its
+  consent from the sandbox flag. The engine picker locks at session start, a consent bridge carries the
+  prompt, the child's stdin is closed when the turn ends, the session list row names the engine that
+  ran the turn, and engine sessions are left unpriced in the Cost tile.
+- **Engines becomes the ninth settings rail entry.** Phase 71 re-probes the binary path override when
+  it is saved and exposes each engine's permission mode over the three traced sandbox values.
+- **The Kimi (Moonshot) engine arrives on the ACP path.** Phase 72 rides the path the live probe
+  proved, with the shield's per-call consent as its whole consent surface, and a refused turn is
+  rendered legible — the peer's error is retained and no failed turn is left thinking.
+- **The OpenCode engine arrives on the ACP path.** Phase 73 rides the path the probe proved with the
+  shield's per-call consent, states the spawn law's one-name-per-engine rule with an empty install
+  pattern and the desktop GUI named as a binary the law refuses, and the ACP second-turn lifecycle fix
+  ends the child's whole tree and bounds every call so no engine turn is ever silent.
+- The v1.3.0 baseline is everything before this entry: Phases 1 through 69, which shipped under the
+  standing versioning rule that a release names the work since the last one. This entry is v1.4.0 —
+  Phases 70 through 73.
+
+<br>
+
 ## 2026-10-06: v1.3.0 — Settings rail, buddy avatars and auto-update
 
 - **Settings becomes a rail down the left.** The sections are chosen from a fixed vertical column of
