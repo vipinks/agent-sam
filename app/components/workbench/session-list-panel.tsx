@@ -5,6 +5,7 @@ import { conveyor } from '@/conveyor/client'
 import { chatSessionsStore, type ChatSession } from '@/conveyor/stores/chat-sessions'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { SEARCH_MIN_TERM } from '@/conveyor/protocol/search'
+import { sessionRowLabel } from '@/conveyor/protocol/session-row'
 import type { ExportFormat } from '@/conveyor/protocol/export'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
@@ -280,6 +281,9 @@ export function SessionListPanel({
                     {group.sessions.map((session) => {
                       const isActive = session.id === activeSessionId
                       const isBroken = error?.id === session.id
+                      // Who ran the turn, which is the engine's own name for a conversation an engine
+                      // answered and the stored pair for one that runs the Sam loop.
+                      const metaLabel = sessionRowLabel(session)
                       const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
 
                       return (
@@ -312,9 +316,17 @@ export function SessionListPanel({
                                   <span aria-hidden="true">·</span>
                                   <span
                                     className="truncate font-mono"
-                                    title={`${session.providerId} · ${session.model}`}
+                                    // The pair's middot spelling is kept for a Sam conversation only: a
+                                    // conversation an engine ran is described in the same words its label
+                                    // uses, so the tooltip cannot explain the line with a model that did
+                                    // not answer it.
+                                    title={
+                                      session.engineId === undefined
+                                        ? `${session.providerId} · ${session.model}`
+                                        : metaLabel
+                                    }
                                   >
-                                    {session.providerId}/{session.model}
+                                    {metaLabel}
                                   </span>
                                 </p>
                                 {isBroken && (

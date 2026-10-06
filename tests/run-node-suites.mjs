@@ -143,6 +143,10 @@ const SUITES = [
     src: 'engines/engine-lifecycle-test.ts',
   },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
+  {
+    name: 'session row (engine name, Sam pair, unnamed engine)',
+    src: 'sessions/session-row-test.ts',
+  },
 ]
 
 mkdirSync(outDir, { recursive: true })
