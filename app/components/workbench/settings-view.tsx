@@ -16,6 +16,7 @@ import { ContextSection } from './context-settings'
 import { AppearanceSection } from './appearance-settings'
 import { BuddiesSection } from './buddies-settings'
 import { UpdatesSection } from './updates-settings'
+import { EnginesSection } from './engines-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -174,6 +175,13 @@ export function SettingsView() {
             <TabsTrigger value="updates" className={RAIL_ENTRY}>
               Updates
             </TabsTrigger>
+            {/* After the updater, because this is the second thing you set once and then leave alone — and
+                because it is the one section that grants something rather than reporting something: a rail
+                entry that appeared beside the sections a user visits weekly would make the grant look like
+                the same kind of choice. */}
+            <TabsTrigger value="engines" className={RAIL_ENTRY}>
+              Engines
+            </TabsTrigger>
           </TabsList>
         </nav>
 
@@ -260,6 +268,10 @@ export function SettingsView() {
 
           <TabsContent value="updates" data-slot="settings-section-updates" className="mx-auto max-w-2xl px-8 py-7">
             <UpdatesSection />
+          </TabsContent>
+
+          <TabsContent value="engines" data-slot="settings-section-engines" className="mx-auto max-w-2xl px-8 py-7">
+            <EnginesSection />
           </TabsContent>
         </div>
       </Tabs>

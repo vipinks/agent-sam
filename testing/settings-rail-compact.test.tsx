@@ -145,6 +145,7 @@ const SECTIONS = [
   { label: 'Appearance', value: 'appearance' },
   { label: 'Buddies', value: 'buddies' },
   { label: 'Updates', value: 'updates' },
+  { label: 'Engines', value: 'engines' },
 ] as const satisfies ReadonlyArray<{ label: string; value: SettingsSection }>
 
 beforeEach(() => {

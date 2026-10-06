@@ -23,7 +23,7 @@ import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
  * control is found, and the value itself is persisted by the store that owns it rather than by this one.
  */
 export type SettingsSection =
-  'providers' | 'mcp-servers' | 'skills' | 'terminal' | 'context' | 'appearance' | 'buddies' | 'updates'
+  'providers' | 'mcp-servers' | 'skills' | 'terminal' | 'context' | 'appearance' | 'buddies' | 'updates' | 'engines'
 
 /**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —

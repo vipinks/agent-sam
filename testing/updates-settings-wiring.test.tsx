@@ -194,8 +194,8 @@ describe('the Updates settings section', () => {
     stubSettings()
     renderSettings()
 
-    // The whole set, in order, with the new section last: a rail that grew a section in the middle would
-    // be a different navigation from the one the design names.
+    // The whole set, in order, with the section this phase added after it: a rail that grew a section in
+    // the middle would be a different navigation from the one the design names.
     const entries = within(sectionRow()).getAllByRole('tab')
     expect(entries.map((entry) => entry.textContent)).toEqual([
       'Providers',
@@ -206,6 +206,7 @@ describe('the Updates settings section', () => {
       'Appearance',
       'Buddies',
       'Updates',
+      'Engines',
     ])
 
     await openUpdates()

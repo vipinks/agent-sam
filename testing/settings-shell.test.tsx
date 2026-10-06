@@ -123,7 +123,17 @@ function sectionPane(): HTMLElement | null {
  * what keeps "a launch opens Providers" and "the rail lists them in this order" assertions about the
  * whole set rather than about whichever entry happens to be first.
  */
-const SECTIONS = ['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Appearance', 'Buddies', 'Updates']
+const SECTIONS = [
+  'Providers',
+  'MCP Servers',
+  'Skills',
+  'Terminal',
+  'Context',
+  'Appearance',
+  'Buddies',
+  'Updates',
+  'Engines',
+]
 
 /**
  * One of the two sections' panels, or null while it is the one that is not showing.
@@ -350,6 +360,7 @@ describe('the settings shell', () => {
       { label: 'Appearance', value: 'appearance', slot: 'settings-section-appearance', heading: 'Appearance' },
       { label: 'Buddies', value: 'buddies', slot: 'settings-section-buddies', heading: 'Buddies' },
       { label: 'Updates', value: 'updates', slot: 'settings-section-updates', heading: 'Updates' },
+      { label: 'Engines', value: 'engines', slot: 'settings-section-engines', heading: 'Engines' },
     ] as const
 
     for (const entry of walk) {

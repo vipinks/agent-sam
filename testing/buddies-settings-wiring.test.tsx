@@ -244,14 +244,25 @@ describe('the Buddies section', () => {
     renderSettings()
 
     // A launch opens the first section, and Buddies is the last of the sections this phase built: the row
-    // states the order — with Updates after it, the updater's own screen having joined the rail last of all.
+    // states the order — with Updates after it, the updater's own screen having joined the rail last of all,
+    // and Engines after that.
     expect(buddiesSection()).toBeNull()
     const row = document.querySelector<HTMLElement>('[data-slot="settings-sections"]') as HTMLElement
     expect(
       within(row)
         .getAllByRole('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Appearance', 'Buddies', 'Updates'])
+    ).toEqual([
+      'Providers',
+      'MCP Servers',
+      'Skills',
+      'Terminal',
+      'Context',
+      'Appearance',
+      'Buddies',
+      'Updates',
+      'Engines',
+    ])
 
     act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
 

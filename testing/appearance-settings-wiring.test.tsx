@@ -298,13 +298,23 @@ describe('the Appearance section', () => {
 
     // A launch opens the first section, and Appearance is the last of the preference sections: the row
     // states the order — with Updates after it, the updater's own screen having joined the rail last of
-    // all in the phase that gave it one.
+    // all in the phase that gave it one, and Engines after that.
     expect(appearanceSection()).toBeNull()
     expect(
       within(sectionRow())
         .getAllByRole('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['Providers', 'MCP Servers', 'Skills', 'Terminal', 'Context', 'Appearance', 'Buddies', 'Updates'])
+    ).toEqual([
+      'Providers',
+      'MCP Servers',
+      'Skills',
+      'Terminal',
+      'Context',
+      'Appearance',
+      'Buddies',
+      'Updates',
+      'Engines',
+    ])
 
     act(() => useWorkbenchStore.getState().openSettingsAt('appearance'))
 

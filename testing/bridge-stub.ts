@@ -15,6 +15,7 @@ import { updatePreferencesStore } from '@/conveyor/stores/update-preferences'
 // before a single message could be drawn.
 import { engineConsentStore } from '@/conveyor/stores/engine-consent'
 import { engineStatusStore } from '@/conveyor/stores/engine-status'
+import { enginePreferencesStore } from '@/conveyor/stores/engine-preferences'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -196,10 +197,11 @@ const MANIFEST: Record<string, Record<string, string>> = {
   },
   // The repository view: the reads the changes panel makes, and the commands it offers. Listed by
   // kind, so the client dispatches each the way main registered it.
-  // The engine rail: the picker's read of what a probe found, and the one write the consent bridge
-  // offers. Listed by kind for the reason the entries around it are — the client refuses an unlisted
-  // member rather than dispatching it, so a picker whose read was absent here could not dispatch.
-  engine: { answerConsent: 'command', turn: 'stream' },
+  // The engine rail: the picker's read of what a probe found, the consent bridge's one write, and the
+  // section's path save — which is a command rather than a store action because the save *is* the re-probe,
+  // so it happens in main. Listed by kind for the reason the entries around it are — the client refuses an
+  // unlisted member rather than dispatching it, so a picker whose read was absent here could not dispatch.
+  engine: { answerConsent: 'command', setBinaryPath: 'command', turn: 'stream' },
   git: {
     status: 'query',
     branch: 'query',
@@ -337,6 +339,11 @@ const initialStates = new Map<string, unknown>([
   ['conveyor:store:update-preferences', structuredClone(updatePreferencesStore.initialState)],
   ['conveyor:store:engine-consent', structuredClone(engineConsentStore.initialState)],
   ['conveyor:store:engine-status', structuredClone(engineStatusStore.initialState)],
+  // The engine preferences, which the Engines settings section reads on every mount — and which the rail's
+  // own click-through suites reach, since selecting that entry mounts the section. Without a genuine initial
+  // state here the mirror would cache `undefined` and the section would throw on the selector that reads an
+  // engine's record out of it.
+  ['conveyor:store:engine-preferences', structuredClone(enginePreferencesStore.initialState)],
 ])
 
 /**
