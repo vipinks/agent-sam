@@ -379,7 +379,7 @@ function everyEngineHasARowToBeDrawnFrom() {
   // The account word each engine's own line names. Pinned per id rather than one word for all of them,
   // because there is no shared answer to give: this app never sees a credential, and each CLI signs itself
   // in with its own account — so a line copied from the engine beside it fails here rather than in the section.
-  const ACCOUNTS: Readonly<Record<string, RegExp>> = { codex: /ChatGPT/, kimi: /Kimi/ }
+  const ACCOUNTS: Readonly<Record<string, RegExp>> = { codex: /ChatGPT/, kimi: /Kimi/, opencode: /OpenCode/ }
 
   for (const id of ENGINE_IDS) {
     assert.ok(ENGINE_LABELS[id].length > 0, `${id}: the row has a name`)

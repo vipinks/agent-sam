@@ -45,6 +45,9 @@ const CODEX = 'codex'
 /** The second, added by the phase that proved its installed CLI answers with an ACP server. */
 const KIMI = 'kimi'
 
+/** The third, added on the same ACP path the phase's probe proved for it. */
+const OPENCODE = 'opencode'
+
 /** Where the law lives, from the root the suite is run from. */
 const LAW_PATH = join(process.cwd(), 'conveyor', 'protocol', 'engine.ts')
 
@@ -106,7 +109,7 @@ function recordingSpawn(child: EngineSpawned): {
  * never be offered for an engine the law would refuse.
  */
 function theAllowlistIsTheOnlyWayIn() {
-  assert.deepEqual([...ENGINE_IDS], [CODEX, KIMI], 'the phase allowlists two engines, in this order')
+  assert.deepEqual([...ENGINE_IDS], [CODEX, KIMI, OPENCODE], 'the phase allowlists three engines, in this order')
   assert.deepEqual(Object.keys(ENGINE_BINARIES).sort(), [...ENGINE_IDS].sort(), 'every engine has a binary')
   assert.deepEqual(Object.keys(ENGINE_LABELS).sort(), [...ENGINE_IDS].sort(), 'and a label to be drawn by')
 
@@ -123,7 +126,7 @@ function theAllowlistIsTheOnlyWayIn() {
   assert.equal(isEngineId(''), false, 'and neither is nothing')
   assert.equal(isEngineId(undefined), false, 'nor an absent value')
 
-  results.push('the allowlist names two engines, and each binary, label and id agree')
+  results.push('the allowlist names three engines, and each binary, label and id agree')
 }
 
 // ---------------------------------------------------------------- refusals

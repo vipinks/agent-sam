@@ -19,12 +19,13 @@
 /**
  * The engines this build may run, as ids.
  *
- * Two, this phase: Codex, whose non-interactive surface is a JSONL stream, and Kimi, whose installed CLI
- * answers with an ACP server. The list is the allowlist: an id absent here is refused by `resolveEngineSpawn`
- * whatever a payload claims, so adding an engine is a change to this line and to the tables below it
- * rather than a change to a caller.
+ * Three, this phase: Codex, whose non-interactive surface is a JSONL stream; Kimi, whose installed CLI answers
+ * with an ACP server; and OpenCode, whose installed CLI answers with an ACP server too — the same dialect, on
+ * the path the probe proved, rather than a fourth surface. The list is the allowlist: an id absent here is
+ * refused by `resolveEngineSpawn` whatever a payload claims, so adding an engine is a change to this line and
+ * to the tables below it rather than a change to a caller.
  */
-export const ENGINE_IDS = ['codex', 'kimi'] as const
+export const ENGINE_IDS = ['codex', 'kimi', 'opencode'] as const
 
 export type EngineId = (typeof ENGINE_IDS)[number]
 
@@ -32,6 +33,7 @@ export type EngineId = (typeof ENGINE_IDS)[number]
 export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = {
   codex: 'ChatGPT (Codex)',
   kimi: 'Kimi (Moonshot)',
+  opencode: 'OpenCode',
 }
 
 /**
@@ -42,7 +44,11 @@ export const ENGINE_LABELS: Readonly<Record<EngineId, string>> = {
  * the short name is what a reader scans for. The picker's label is the fallback for an engine this table has no
  * short name for, so an engine added later is drawn as itself rather than as nothing.
  */
-export const ENGINE_MARKER_LABELS: Readonly<Record<EngineId, string>> = { codex: 'Codex', kimi: 'Kimi' }
+export const ENGINE_MARKER_LABELS: Readonly<Record<EngineId, string>> = {
+  codex: 'Codex',
+  kimi: 'Kimi',
+  opencode: 'OpenCode',
+}
 
 /**
  * The three sandbox values the CLI traces, strictest first.
@@ -106,6 +112,10 @@ export const ENGINE_PERMISSION_MODES: Readonly<Record<EngineId, EnginePermission
   // mode its row starts on rather than a value a flag is ever built from: its consent surface is the
   // per-call question the ACP stream asks, answered through the shield.
   kimi: ENGINE_DEFAULT_PERMISSION_MODE,
+  // And the third, on the same terms: `opencode acp --help` lists no sandbox or permission option either, so
+  // this value is the mode its row starts on rather than a value a flag is ever built from. Its consent
+  // surface is the per-call question the ACP stream asks, answered through the shield.
+  opencode: ENGINE_DEFAULT_PERMISSION_MODE,
 }
 
 /**
@@ -143,6 +153,7 @@ export function enginePermissionMode(value: unknown, engineId?: string): EngineP
 export const ENGINE_AUTH_HINTS: Readonly<Record<EngineId, string>> = {
   codex: 'Sign in with your ChatGPT account through the CLI\u2019s own login.',
   kimi: 'Sign in with your Kimi account through the CLI\u2019s own login.',
+  opencode: 'Sign in with your OpenCode account through the CLI\u2019s own login: `opencode auth login`.',
 }
 
 /**
@@ -162,6 +173,11 @@ export const ENGINE_LAUNCH_ARGS: Readonly<Record<EngineId, readonly string[]>> =
   // `--acp` flag as deprecated in its favour; `kimi acp --help` offers no option at all, so no mode, no
   // directory and no prompt can be added to it. The prompt travels as a `session/prompt` on the pipe.
   kimi: ['acp'],
+  // The same one word, from the same shape of evidence: `opencode acp --help` names this subcommand as the
+  // CLI's ACP server and offers no sandbox, directory or prompt option either, so the prompt travels as a
+  // `session/prompt` on the pipe here too — and the shield's per-call question is this engine's whole consent
+  // surface, exactly as Kimi's is.
+  opencode: ['acp'],
 }
 
 /**
@@ -183,6 +199,7 @@ export type EngineStdinPolicy = 'transport-open' | 'ignored'
 export const ENGINE_STDIN_POLICIES: Readonly<Record<EngineId, EngineStdinPolicy>> = {
   codex: 'ignored',
   kimi: 'transport-open',
+  opencode: 'transport-open',
 }
 
 /**
@@ -239,6 +256,12 @@ export const ENGINE_INSTALL_PATTERNS: Readonly<Record<EngineId, readonly EngineI
   // the profile, holding `kimi.exe`. Unlike Codex's there is no build-id segment to read, so the template is
   // one path and the probe's check of it is a `stat` rather than a directory listing.
   kimi: [{ dir: '%USERPROFILE%/.local/bin', binary: 'kimi' }],
+  // Empty, and stated rather than omitted, because the probe reached this engine's CLI on `PATH` and nowhere
+  // else: the vendor's own directory holds the same client under the name `opencode-cli.exe`, and this law's
+  // one name per engine can sanction one of the two rather than both — so the name on `PATH` is the one it
+  // sanctions, and there is no second location to read. The settings override is still the way to any absolute
+  // path, provided the file at the end of it is named `opencode`.
+  opencode: [],
 }
 
 /**
@@ -284,7 +307,11 @@ export const AGENT_SAM_ENGINE_NAME = 'Agent Sam'
  * whose binary is somewhere `PATH` does not cover, and it is judged by the file it names rather than
  * trusted for being the user's.
  */
-export const ENGINE_BINARIES: Readonly<Record<EngineId, string>> = { codex: 'codex', kimi: 'kimi' }
+export const ENGINE_BINARIES: Readonly<Record<EngineId, string>> = {
+  codex: 'codex',
+  kimi: 'kimi',
+  opencode: 'opencode',
+}
 
 /** The argument that makes a binary say its version, and nothing else. */
 export const ENGINE_PROBE_ARGS: readonly string[] = ['--version']

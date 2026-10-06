@@ -131,6 +131,10 @@ const SUITES = [
     src: 'engines/engine-kimi-test.ts',
   },
   {
+    name: 'opencode launch config and turn (acp args, allowlist binary, stdin policy, fixture handshake)',
+    src: 'engines/engine-opencode-test.ts',
+  },
+  {
     name: 'codex jsonl mapper (captured vocabulary, tool calls, usage, exit cause)',
     src: 'engines/codex-jsonl-test.ts',
   },
