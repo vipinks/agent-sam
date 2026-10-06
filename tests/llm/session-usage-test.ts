@@ -22,7 +22,9 @@ import {
   rateText,
   readSessionUsage,
   resolveRates,
+  sessionCost,
   sessionUsageSchema,
+  totalCost,
   type UsageCounters,
 } from '../../conveyor/protocol/session-usage'
 
@@ -448,7 +450,16 @@ function theOverviewTilesReadWhatASessionUsed() {
   // whose providers report nothing at all. Three em dashes, and the count beside them: the count is
   // not a measurement of what was spent, it is how many replies the transcript holds.
   const unmeasured = overviewTiles({ usage: undefined, rates, turns: 2 })
-  assert.deepEqual(unmeasured, { tokens: '—', cost: '—', cache: '—', turns: '2' })
+  assert.deepEqual(unmeasured, {
+    tokens: '—',
+    cost: '—',
+    // The caption an unpriced *Sam* conversation carries, and the one the tile has always drawn: the
+    // figure is missing because nothing was measured or nobody priced the model, which is a different
+    // sentence from the one an engine's dash carries.
+    costNote: 'at the rates this provider is priced with',
+    cache: '—',
+    turns: '2',
+  })
 
   // Measured, but nobody has priced the model: what was used is known and what it cost is not, and the
   // one tile that cannot be priced says so rather than showing a confident zero.
@@ -466,6 +477,91 @@ function theOverviewTilesReadWhatASessionUsed() {
   assert.equal(noCache.turns, '0')
 
   results.push('the overview tiles read what a session used')
+}
+
+// ----------------------------------------------------------------- an engine session's cost
+
+function theCostRuleLeavesAnEngineSessionUnpriced() {
+  // The numbers a measured conversation on a priced model reads as, so the branch below is measured
+  // against a figure the table would really have produced rather than against nothing.
+  const rates = { input: 150_000, cacheHit: 75_000, output: 600_000 }
+  const usage = { prompt: 940_000, completion: 60_000, cached: 893_000, lastReportedAt: 1_700_000_000_000 }
+
+  // A Sam conversation, which is the case the branch must not move: today's figure and today's caption.
+  const sam = overviewTiles({ usage, rates, turns: 1 })
+  assert.equal(sam.cost, '$0.1100')
+  assert.equal(sam.costNote, 'at the rates this provider is priced with')
+  assert.equal(sessionCost({ usage, rates }).micros, costMicros(usage, rates))
+
+  // An engine ran this conversation. Its `providerId` and `model` name the Sam loop it is not running,
+  // so those tokens have no price this build knows — the usage is real, the price is not, and the one
+  // tile that would have to invent a number says so instead.
+  const engine = overviewTiles({ usage, rates, turns: 1, engineId: 'codex' })
+  assert.equal(engine.cost, '—')
+  assert.equal(engine.costNote, 'engine session: usage is not priced')
+  assert.equal(sessionCost({ usage, rates, engineId: 'codex' }).micros, null)
+  // The three tiles that measure what happened are untouched by the branch: those tokens were really
+  // reported and that reply really happened.
+  assert.equal(engine.tokens, '1M')
+  assert.equal(engine.cache, '95%')
+  assert.equal(engine.turns, '1')
+
+  // An engine this build does not ship prices the same way — what matters is that an engine ran the
+  // conversation, not which one — and so does an id that is not a usable one at all: the branch is the
+  // presence of the key, which is the same test `sessionRowLabel` makes, so a malformed record cannot
+  // be read as the Sam loop by one rule and as an engine by the other.
+  assert.equal(sessionCost({ usage, rates, engineId: 'nobody-ships-this' }).value, '—')
+  assert.equal(sessionCost({ usage, rates, engineId: '' }).value, '—')
+  assert.equal(overviewTiles({ usage, rates, turns: 1, engineId: 'nobody-ships-this' }).cost, '—')
+
+  results.push('an engine session’s usage is left unpriced, and a Sam session’s math is not moved')
+}
+
+function aTotalLeavesOutWhatNothingPrices() {
+  const rates = { input: 150_000, cacheHit: 75_000, output: 600_000 }
+  const usage = { prompt: 940_000, completion: 60_000, cached: 893_000, lastReportedAt: 1_700_000_000_000 }
+  const sam = costMicros(usage, rates)
+
+  // One conversation of each kind: the Sam one contributes what it cost, and the engine one contributes
+  // nothing because nothing prices it — and is counted rather than merely dropped.
+  const mixed = totalCost([
+    { usage, rates },
+    { usage, rates, engineId: 'codex' },
+  ])
+  assert.equal(mixed.micros, sam)
+  assert.equal(mixed.unpriced, 1)
+  assert.equal(mixed.value, `${formatCost(sam)} (1 unpriced)`)
+  // Never the half-true sum: pricing both sessions as if both were Sam would draw twice the figure
+  // above, which is the number this rule exists to refuse.
+  assert.notEqual(mixed.micros, sam * 2)
+
+  // Nothing withheld, and the total is the plain figure a reader can add up themselves.
+  const priced = totalCost([
+    { usage, rates },
+    { usage, rates },
+  ])
+  assert.equal(priced.micros, sam * 2)
+  assert.equal(priced.unpriced, 0)
+  assert.equal(priced.value, formatCost(sam * 2))
+
+  // Every conversation an engine ran: no figure at all rather than a confident zero, and the count says
+  // how many were left out of it.
+  const engines = totalCost([
+    { usage, rates, engineId: 'codex' },
+    { usage, rates, engineId: 'codex' },
+  ])
+  assert.equal(engines.micros, 0)
+  assert.equal(engines.unpriced, 2)
+  assert.equal(engines.value, '$0.0000 (2 unpriced)')
+
+  // A conversation nothing measured, or whose model nobody priced, is withheld the same way: the total
+  // is about what was priced, and the count is about how much of the list that was.
+  const unmeasured = totalCost([{ rates }, { usage, rates: null }])
+  assert.equal(unmeasured.micros, 0)
+  assert.equal(unmeasured.unpriced, 2)
+  assert.equal(totalCost([]).value, '$0.0000')
+
+  results.push('a total counts an engine session instead of pricing it')
 }
 
 function theDeclaredRatesConvertAndWin() {
@@ -542,6 +638,8 @@ async function main() {
   theFormattingIsCompactAndExact()
   theUsageKeyRidesTheMetadataEntry()
   theOverviewTilesReadWhatASessionUsed()
+  theCostRuleLeavesAnEngineSessionUnpriced()
+  aTotalLeavesOutWhatNothingPrices()
   theDeclaredRatesConvertAndWin()
   console.log('session usage tests: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)

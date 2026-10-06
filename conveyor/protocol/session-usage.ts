@@ -337,10 +337,104 @@ export function declaredRates(record: RateDeclaration | undefined): Rates | null
   return { input, cacheHit, output }
 }
 
-/** The four strings the Overview resident draws. */
+// ---------------------------------------------------------------- what a conversation's cost reads
+
+/**
+ * The caption under a priced figure, and the one under the em dash an engine session draws.
+ *
+ * Written beside the rule that withholds the number rather than at the tile, for the reason the em
+ * dashes live here: the words that explain a missing figure are part of the decision to withhold it, and
+ * a render site with words of its own would be a second place for the app to decide when it may be
+ * silent about a price.
+ */
+const RATES_COST_NOTE = 'at the rates this provider is priced with'
+const ENGINE_COST_NOTE = 'engine session: usage is not priced'
+
+/** What one conversation's cost reads as, and what it may contribute to a total. */
+export interface CostReading {
+  /** The tile's value: a formatted figure, or the unpriced marker. */
+  value: string
+  /** The caption beneath it, naming the reason in words whenever there is no figure. */
+  note: string
+  /** What a total may add, or null when this conversation's cost must not be counted. */
+  micros: number | null
+}
+
+/**
+ * What one conversation's cost reads as.
+ *
+ * The engine branch comes before the arithmetic rather than after it, and that is the whole reason this
+ * is a function of the conversation rather than of its counters. A conversation an engine ran carries
+ * the provider's own token count, and its `providerId`/`model` name the Sam loop it is not running — an
+ * engine brings its own provider and its own prices — so pricing those tokens against this build's table
+ * would invent a number out of a coincidence of names. The usage is known and its price is not, and the
+ * caption says so in words, so the dash cannot be read as a measurement nobody has taken yet.
+ *
+ * An `engineId` this build does not ship reads the same way, and so does an id that is not usable at all:
+ * what decides the branch is that the key is present, which is the same test `sessionRowLabel` makes, so
+ * one rule cannot read a record as an engine while the other reads it as the Sam loop.
+ *
+ * `micros` is null rather than zero when nothing priced the conversation, deliberately: a total has to
+ * be able to tell a session that cost nothing from one that nothing priced, and a zero would erase that
+ * difference at the last place it can still be acted on.
+ */
+export function sessionCost(input: { usage?: UsageCounters; rates: Rates | null; engineId?: string }): CostReading {
+  if (input.engineId !== undefined) return { value: '—', note: ENGINE_COST_NOTE, micros: null }
+  if (input.usage === undefined || input.rates === null) {
+    return { value: '—', note: RATES_COST_NOTE, micros: null }
+  }
+  const micros = costMicros(input.usage, input.rates)
+  return { value: formatCost(micros), note: RATES_COST_NOTE, micros }
+}
+
+/** What a set of conversations adds up to, and how much of the set is missing from that sum. */
+export interface SessionCostTotal {
+  /** What the conversations that could be priced add up to, in micros. */
+  micros: number
+  /** How many contributed nothing because nothing priced them. */
+  unpriced: number
+  /** The total as it is drawn, with the withheld conversations named beside it when there are any. */
+  value: string
+}
+
+/**
+ * What a set of conversations adds up to.
+ *
+ * The one rule an aggregate goes through, so that a total is never a half-true number: an engine
+ * conversation contributes nothing, because nothing prices it, and it is counted rather than merely
+ * dropped. Adding its zero silently would be the same lie as pricing it — the sum would read as
+ * measured, and a reader would have no way to see what is missing from it. Conversations nothing priced
+ * for any other reason are counted the same way, because the question a total answers is what was
+ * priced and how much of the list that was.
+ */
+export function totalCost(
+  sessions: Array<{ usage?: UsageCounters; rates: Rates | null; engineId?: string }>
+): SessionCostTotal {
+  let micros = 0
+  let unpriced = 0
+  for (const session of sessions) {
+    const reading = sessionCost(session)
+    if (reading.micros === null) unpriced++
+    else micros += reading.micros
+  }
+  return {
+    micros,
+    unpriced,
+    value: unpriced === 0 ? formatCost(micros) : `${formatCost(micros)} (${unpriced} unpriced)`,
+  }
+}
+
+// ---------------------------------------------------------------- the Overview tiles
+
+/**
+ * What the Overview resident draws: the four values, and the caption under the one that can be
+ * withheld.
+ */
 export interface OverviewTiles {
   tokens: string
   cost: string
+  /** The words under the Cost value, naming the reason whenever there is no figure to show. */
+  costNote: string
   cache: string
   turns: string
 }
@@ -357,20 +451,32 @@ export interface OverviewTiles {
  * - **Cost** is an em dash whenever the rates resolve to nothing, which includes every model missing from
  *   the shipped table and every provider the user has not priced. That is the honest reading of "this
  *   session used 940k tokens": the usage is known and the price of it is not.
+ * - **Cost** is also an em dash whenever an engine ran the conversation, whatever the rates would have
+ *   resolved to: those tokens came from the engine's own provider, and pricing them with this build's
+ *   table would be a number invented from a coincidence of names. `sessionCost` is where that branch
+ *   lives, and the caption it returns with the dash names the reason.
  * - **Cache** is separately an em dash on a provider that never mentions caching, where tokens and cost
  *   are numbers: "none were cached" and "nobody looked" are different answers.
  * - **Turns** always renders its count. It is not a measurement of what was spent but of how much
  *   conversation there is, and a session with no measured usage still has the replies it had.
  */
-export function overviewTiles(input: { usage?: UsageCounters; rates: Rates | null; turns: number }): OverviewTiles {
+export function overviewTiles(input: {
+  usage?: UsageCounters
+  rates: Rates | null
+  turns: number
+  /** The engine this conversation runs, or absent for the Sam loop. */
+  engineId?: string
+}): OverviewTiles {
   const { usage, rates } = input
   const turns = Number.isFinite(input.turns) && input.turns > 0 ? Math.trunc(input.turns) : 0
 
   const percent = usage ? cachePercent(usage) : null
+  const cost = sessionCost({ usage, rates, engineId: input.engineId })
 
   return {
     tokens: usage ? compactTokens(usage.prompt + usage.completion) : '—',
-    cost: usage && rates ? formatCost(costMicros(usage, rates)) : '—',
+    cost: cost.value,
+    costNote: cost.note,
     cache: percent === null ? '—' : `${percent}%`,
     turns: String(turns),
   }

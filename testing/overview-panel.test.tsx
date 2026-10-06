@@ -69,7 +69,8 @@ const MEASURED = { prompt: 940_000, completion: 60_000, cached: 893_000, lastRep
 function session(
   usage?: typeof MEASURED,
   contextSnapshot?: ContextSnapshot,
-  model = 'deepseek-chat'
+  model = 'deepseek-chat',
+  engineId?: string
 ): ChatSessionsState['sessions'][number] {
   return {
     id: SESSION_ID,
@@ -80,6 +81,9 @@ function session(
     model,
     ...(usage !== undefined ? { usage } : {}),
     ...(contextSnapshot !== undefined ? { contextSnapshot } : {}),
+    // Written the way main holds it: present only on the conversation that names an engine, because
+    // absence is the Sam loop and a default written here would be a value the record never carries.
+    ...(engineId === undefined ? {} : { engineId }),
   }
 }
 
@@ -139,6 +143,20 @@ function fakeSessions(stub: BridgeStub, initial: ChatSessionsState): FakeMain {
 
 /** One provider's slice of the config store, as this suite seeds it and the workbench's stub takes it. */
 type StubbedProvider = { enabledModels: string[]; fetchedModels: Array<{ id: string }> } & Record<string, unknown>
+
+/**
+ * The one declaration the two cost tests below share, so the engine case and its Sam twin are priced
+ * from the same numbers and differ in exactly one field.
+ */
+function declaredRates(): Record<string, StubbedProvider> {
+  return {
+    deepseek: {
+      enabledModels: ['deepseek-chat'],
+      fetchedModels: [],
+      modelRates: { 'deepseek-chat': { inputRate: 1, cacheHitRate: 0.5, outputRate: 2 } },
+    },
+  }
+}
 
 /** The whole workbench over a folder, with a session list, some prices and a saved transcript. */
 function stubWorkbench(options: {
@@ -223,6 +241,13 @@ function panel(container: HTMLElement): HTMLElement {
 function tile(container: HTMLElement, id: string): HTMLElement {
   const found = panel(container).querySelector<HTMLElement>(`[data-slot="overview-${id}"]`)
   if (!found) throw new Error(`no ${id} tile in the docked panel`)
+  return found
+}
+
+/** One tile's caption, by the tile it belongs to — the words under the value. */
+function note(container: HTMLElement, id: string): HTMLElement {
+  const found = panel(container).querySelector<HTMLElement>(`[data-slot="overview-${id}-note"]`)
+  if (!found) throw new Error(`no ${id} tile caption in the docked panel`)
   return found
 }
 
@@ -385,6 +410,46 @@ describe('the Overview resident and its tiles', () => {
     expect(tile(container, 'cache').textContent).toBe('80%')
     // One reply, which is the one this run just made.
     expect(tile(container, 'turns').textContent).toBe('1')
+  })
+
+  it('leaves an engine session unpriced, and says why under the em dash', async () => {
+    // The defect this branch exists for. An engine conversation carries the provider's own counter, and
+    // its `providerId`/`model` name the Sam loop it is not running — an engine brings its own provider
+    // and its own prices — so pricing those tokens against this build's table draws a number invented
+    // out of a coincidence of names. The declaration below is the one the Sam twin prices at $0.6135,
+    // which is what makes this a claim about the branch rather than about a missing price.
+    stubWorkbench({
+      sessions: { sessions: [session(MEASURED, undefined, 'deepseek-chat', 'codex')], activeSessionId: SESSION_ID },
+      providers: declaredRates(),
+      transcript: saved(['user', 'assistant']),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    await waitFor(() => expect(tile(container, 'tokens').textContent).toBe('1M'))
+    expect(tile(container, 'cost').textContent).toBe(EM_DASH)
+    expect(note(container, 'cost').textContent).toBe('engine session: usage is not priced')
+    // The three tiles that measure what happened keep their true values: those tokens really were
+    // reported and that reply really happened, and only the tile that would have to invent a price
+    // withholds.
+    expect(tile(container, 'cache').textContent).toBe('95%')
+    expect(tile(container, 'turns').textContent).toBe('1')
+  })
+
+  it('prices a Sam session on the same numbers exactly as before', async () => {
+    // The twin of the test above, and the guard on it: one field differs — no `engineId` — and the tile
+    // draws the figure this suite has always asserted, with the caption it has always carried.
+    stubWorkbench({
+      sessions: { sessions: [session(MEASURED)], activeSessionId: SESSION_ID },
+      providers: declaredRates(),
+      transcript: saved(['user', 'assistant']),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    await waitFor(() => expect(tile(container, 'cost').textContent).toBe('$0.6135'))
+    expect(note(container, 'cost').textContent).toBe('at the rates this provider is priced with')
+    expect(tile(container, 'tokens').textContent).toBe('1M')
   })
 })
 

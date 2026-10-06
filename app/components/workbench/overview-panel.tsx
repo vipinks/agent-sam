@@ -27,6 +27,11 @@ import { PanelCollapseControl, PanelExpandControl } from './right-rail'
  * measurement is `overviewTiles`'s rather than this file's: an em dash is not a decorative zero, it is
  * the statement that nothing has been measured yet. See that function for why each boundary falls
  * where it does; all this file decides is where the strings sit.
+ *
+ * The one thing this file adds to that read is the conversation's `engineId`, forwarded as the record
+ * carries it: a conversation an engine ran has no price this build can compute, and the rule that
+ * withholds the figure has to be told which loop ran the turn rather than left to infer it from a
+ * provider name.
  */
 export function OverviewPanel() {
   const { atHome, transcript } = useChatSessionsContext()
@@ -44,6 +49,10 @@ export function OverviewPanel() {
   // has not broadcast yet — the round trip after a send creates one — reads as nothing measured yet,
   // which is exactly what it is.
   const usage = session?.usage
+  // The engine this conversation runs, absent for the Sam loop — the same field the row label and the
+  // transcript header read, passed through so the Cost tile can tell an engine's tokens from this
+  // build's own.
+  const engineId = session?.engineId
   const rates = session === undefined ? null : resolveRates({ model: session.model, modelRates: declaration })
 
   // The replies the transcript holds. Not the number of turns in the running stream: this is "how much
@@ -70,7 +79,7 @@ export function OverviewPanel() {
           </p>
         ) : (
           <>
-            <OverviewTileRow usage={usage} rates={rates} turns={turns} />
+            <OverviewTileRow usage={usage} rates={rates} turns={turns} engineId={engineId} />
             {/* Beneath the tiles rather than in Settings: the quick surface answers "what is this
                 conversation about to cost me", and the card is the elaboration of the same question.
                 The percent it is measured against is the preference, and that one is in Settings. */}
@@ -87,17 +96,19 @@ function OverviewTileRow({
   usage,
   rates,
   turns,
+  engineId,
 }: {
   usage: { prompt: number; completion: number; cached?: number } | undefined
   rates: { input: number; cacheHit: number; output: number } | null
   turns: number
+  engineId: string | undefined
 }) {
-  const tiles = overviewTiles({ usage, rates, turns })
+  const tiles = overviewTiles({ usage, rates, turns, engineId })
 
   return (
     <div data-slot="overview-tiles" className="grid grid-cols-2 gap-2">
       <Tile id="tokens" label="Tokens" value={tiles.tokens} note="prompt and completion, this session" />
-      <Tile id="cost" label="Cost" value={tiles.cost} note="at the rates this provider is priced with" />
+      <Tile id="cost" label="Cost" value={tiles.cost} note={tiles.costNote} />
       <Tile id="cache" label="Cache" value={tiles.cache} note="of the prompt, served from cache" />
       <Tile id="turns" label="Turns" value={tiles.turns} note="replies in this conversation" />
     </div>
@@ -109,7 +120,9 @@ function OverviewTileRow({
  *
  * The value carries the slot rather than the card, because the number is what a reader of this panel is
  * looking for and what a test can state exactly. `tabular-nums` so the four values do not shift sideways
- * as they change, which matters most while they are changing on their own during a run.
+ * as they change, which matters most while they are changing on their own during a run. The caption
+ * carries a slot of its own for the same reason the value does: it is the text a test has to read, and
+ * it is where the tile says in words what a withheld figure means.
  */
 function Tile({ id, label, value, note }: { id: string; label: string; value: string; note: string }) {
   return (
@@ -118,7 +131,9 @@ function Tile({ id, label, value, note }: { id: string; label: string; value: st
       <p data-slot={`overview-${id}`} className="mt-1 text-[19px] leading-tight font-semibold tabular-nums">
         {value}
       </p>
-      <p className="mt-0.5 text-[10.5px] leading-relaxed text-muted-foreground">{note}</p>
+      <p data-slot={`overview-${id}-note`} className="mt-0.5 text-[10.5px] leading-relaxed text-muted-foreground">
+        {note}
+      </p>
     </div>
   )
 }
