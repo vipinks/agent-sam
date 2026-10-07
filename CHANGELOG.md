@@ -36,7 +36,7 @@ coding assistant.
   tooltip and drawing nothing at all for a session with no project.
 - The v1.3.0 baseline is everything before this entry: Phases 1 through 69, which shipped under the
   standing versioning rule that a release names the work since the last one. This entry is v1.4.0 —
-  Phases 70 through 73.
+  Phases 70 through 75.
 
 <br>
 
