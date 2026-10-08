@@ -43,6 +43,7 @@ import {
   planSystemInjection,
 } from '../protocol/context'
 import { snapshotRequest, type ContextSnapshot } from '../protocol/context-window'
+import { EMPTY_ASSISTANT_MARKER, sanitizeOutboundHistory } from '../protocol/history'
 import {
   AUTO_CONTINUE_MAX,
   autoContinueNudge,
@@ -642,7 +643,8 @@ function wireTools(tools: readonly ToolDefinition[], names: McpToolNames): ToolD
 }
 
 /**
- * The history as the provider must see it: every MCP call named the way it was advertised.
+ * The history as the provider must see it: every MCP call named the way it was advertised, and no turn
+ * in it that a provider would refuse the whole request for.
  *
  * The loop holds identities, because that is what a call means, while the provider holds wire names,
  * because that is the vocabulary it was offered and the one it echoes back. Only the assistant turns that
@@ -650,10 +652,12 @@ function wireTools(tools: readonly ToolDefinition[], names: McpToolNames): ToolD
  * sides.
  *
  * Takes the resolved shape, and is called after the references have been resolved rather than before:
- * it is the last step before the body, so what it is handed is what goes out.
+ * it is the last step before the body, so what it is handed is what goes out — which is exactly why the
+ * legality rule is applied here rather than anywhere earlier. One step, before both dialect bodies are
+ * built from the result, so no dialect can be handed a history the other one would have had repaired.
  */
 function wireHistory(messages: readonly ChatMessage[], names: McpToolNames): ChatMessage[] {
-  return messages.map((message) =>
+  const wired = messages.map((message) =>
     message.tool_calls
       ? {
           ...message,
@@ -664,6 +668,8 @@ function wireHistory(messages: readonly ChatMessage[], names: McpToolNames): Cha
         }
       : message
   )
+
+  return sanitizeOutboundHistory(wired)
 }
 
 /**
@@ -1653,13 +1659,31 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // nearly every working turn.
     const calls = isReplyCutShort(cause) ? [] : resolveCalls(parsedCalls, mcpNames)
 
-    // The assistant turn is recorded either way: an OpenAI-compatible provider expects the turn
-    // that asked for tools to be present when its results are sent back.
-    history.push({
-      role: 'assistant',
-      content: assistantText,
-      ...(calls.length ? { tool_calls: calls } : {}),
-    })
+    // The assistant turn is recorded when it has something to record: an OpenAI-compatible provider
+    // expects the turn that asked for tools to be present when its results are sent back, so a reply that
+    // asked for something is written down whatever it said.
+    //
+    // A reply that ends with nothing spoken and nothing asked for has no such turn. Recording one anyway
+    // is what put an empty assistant message at a fixed position in every request that followed: the
+    // history is the loop's own, so the dead turn came back with each nudge and with every later resume,
+    // and a provider refuses the whole request rather than that one message. This is the write site for
+    // that shape. The one case that still needs a turn is the one where the message after it is the
+    // app's own nudge — both dialects refuse two turns of one role side by side — so the turn is written
+    // with the neutral marker instead, which says the turn happened without claiming the model said
+    // anything.
+    //
+    // The ending's own announcement is untouched by this and is not a substitute for it: a turn that
+    // dies still yields its notice, and a notice is a chunk the user reads rather than something the
+    // model is told the assistant said.
+    if (assistantText !== '' || calls.length > 0) {
+      history.push({
+        role: 'assistant',
+        content: assistantText,
+        ...(calls.length ? { tool_calls: calls } : {}),
+      })
+    } else if (history.at(-1)?.role === 'user') {
+      history.push({ role: 'assistant', content: EMPTY_ASSISTANT_MARKER })
+    }
 
     // A turn that died announces itself before it ends, and a turn that was cut off is over whatever
     // the model asked for: the calls it asked for in the same breath arrived alongside a reply the

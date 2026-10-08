@@ -37,6 +37,10 @@ const SUITES = [
   { name: 'turn end diagnosis', src: 'agent/turn-end-test.ts' },
   { name: 'plan-unfinished notice', src: 'agent/plan-unfinished-test.ts' },
   { name: 'bounded auto-continue', src: 'agent/auto-continue-test.ts' },
+  {
+    name: 'outbound history (empty assistant turns, stored shape, every ending)',
+    src: 'agent/outbound-history-test.ts',
+  },
   { name: 'workspace events', src: 'agent/events-test.ts' },
   { name: 'engine tests', src: 'llm/engine-test.ts' },
   { name: 'models engine', src: 'llm/models-test.ts' },
