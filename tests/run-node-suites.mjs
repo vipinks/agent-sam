@@ -139,6 +139,10 @@ const SUITES = [
     src: 'updates/updates-cache-test.ts',
   },
   {
+    name: 'update cache sweep after an install (up-to-date, locked installer, one deferred pass)',
+    src: 'updates/updates-cache-lock-test.ts',
+  },
+  {
     name: 'engine spawn law (allowlist, arg array, refusal codes, version probe)',
     src: 'engines/engine-spawn-test.ts',
   },

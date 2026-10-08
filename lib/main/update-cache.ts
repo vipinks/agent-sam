@@ -25,16 +25,25 @@ import type { UpdateState } from '@/conveyor/protocol/updates'
  *   baseline is `current.blockmap` beside it, and the completed download copies that baseline up to
  *   `<root>/current.blockmap` (`out/AppUpdater.js:586-599`). Those three names are what this module removes.
  *
- * The rule about when is the updater's state and not this module's: only `idle` is swept, because only
- * `idle` means no fetch is underway. With a download in flight the `pending` directory is a file being
- * written, and the sweep is not merely unnecessary — it would corrupt the update this launch is performing.
- * A launch starts `idle` and its first check is ten seconds away, so a packaged startup is exactly the
- * window this is for; anything else refuses.
+ * The rule about when is the updater's state and not this module's: `idle` and `up-to-date` are swept, and
+ * nothing else is, because those two are the states in which any fetch is over — a progress event retires
+ * `up-to-date`, and `available`/`downloading`/`ready` mean bytes are being written or waiting. With a
+ * download in flight the `pending` directory is a file being written, and the sweep is not merely
+ * unnecessary — it would corrupt the update this launch is performing.
  *
- * Every failure is swallowed. A locked file, a directory that cannot be read, a cache root that has never
- * existed: none of these are events, and the only user-visible consequence of a failed sweep is that nothing
- * changed. Nothing is ever created, so a machine whose updater has never run is left byte-for-byte as it
- * was — and nothing outside the resolved cache root is ever named.
+ * `up-to-date` is the state a successful install actually reaches, and that is why it is named here. The
+ * sweep runs at a launch's start, but a deferred pass (below) can land after the launch's first check has
+ * completed, and a check that finds nothing newer reports `update-not-available` — which is `up-to-date`.
+ * A gate that accepted only `idle` therefore refused a state it had no argument against, and on a launch
+ * whose retry ran late it refused the sweep that install's own startup had asked for.
+ *
+ * Every failure is swallowed, with one exception that is not a failure: a file the OS is holding. Windows
+ * keeps the setup exe locked for a moment after it has launched the app that replaced it — the installer is
+ * still closing — and `unlink` answers EPERM or EBUSY. That lock lifts on its own, so a lock buys exactly one
+ * deferred pass, scheduled through the caller's `defer`; anything else — a read-only directory, a path that
+ * vanished, a directory named like an installer — is the non-event described above and is never retried.
+ * Nothing is ever created, so a machine whose updater has never run is left byte-for-byte as it was — and
+ * nothing outside the resolved cache root is ever named.
  */
 
 /** What `app-update.yml` calls the cache directory, or null when the file says nothing usable. */
@@ -94,14 +103,63 @@ function appCacheRoot(): string {
 export interface UpdateCacheSweep {
   /** The updater's cache root. Injected so a suite can use a directory of its own. */
   cacheDir: string
-  /** The updater's state. Nothing is swept unless this is `idle`. */
-  state: UpdateState
+  /**
+   * The updater's state, read when the sweep is about to look.
+   *
+   * A function rather than a value because the deferred pass below runs later than the call that arranged
+   * it: the second look has to see the mirror as it is then, not as it was when the launch started. A
+   * download that began in between is exactly what this must not sweep through.
+   */
+  readState: () => UpdateState
+  /**
+   * How a deferred pass is scheduled, or absent to run one immediately. Injected because this module owns
+   * no clock: the app passes a `setTimeout`, and a suite passes a collector, so neither has to wait.
+   */
+  defer?: (run: () => void) => void
+}
+
+/**
+ * How long the single deferred pass waits for a lock to lift.
+ *
+ * The lock is the installer process finishing its own close, which is a matter of seconds — long enough that
+ * the app the setup exe started is already up. Past this the sweep has done its part and the leftover is a
+ * machine-state question rather than a startup one.
+ */
+export const UPDATE_CACHE_SWEEP_RETRY_MS = 5_000
+
+/** The errno codes that mean a live process holds the file rather than that the sweep may not touch it. */
+function isLockedError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'EPERM' || code === 'EBUSY'
 }
 
 /** Whether a file name is one of the downloaded installer artifacts this module removes. */
 function isInstallerArtifact(name: string): boolean {
   const lower = name.toLowerCase()
   return lower.endsWith('.exe') || lower.endsWith('.exe.blockmap') || lower === 'current.blockmap'
+}
+
+/**
+ * Whether a state means "nothing is being downloaded into this directory".
+ *
+ * The list is the module note's rule: `idle` because no check has run, and `up-to-date` because the check
+ * that did run came back with nothing to fetch. The remaining five all mean bytes are being written or
+ * waiting to be installed, which is the one thing a sweep must never touch.
+ */
+function isSweepableState(state: UpdateState): boolean {
+  return state === 'idle' || state === 'up-to-date'
+}
+
+/**
+ * Say what the deferred pass removed, when it removed anything.
+ *
+ * Warn level, and only for the pass that happens seconds after the launch rather than during it: the app's
+ * console is the only place a startup that cleaned up after an update can be told apart from one that did
+ * not, and the module's silence is otherwise total. Nothing is reported while a sweep fails, because a
+ * failure here is not an event. This is production code reached only through the scheduler above.
+ */
+function reportDeferredSweep(removed: string[]): void {
+  console.warn(`[updates] swept ${removed.length} leftover updater file(s)`)
 }
 
 /**
@@ -112,40 +170,64 @@ function isInstallerArtifact(name: string): boolean {
  * an installer somewhere deeper is left alone: the sweep's job is the files the downloader put exactly
  * where it puts them.
  *
+ * A file that could not be deleted never stops the others — the loop is best effort per file, which is the
+ * difference between a locked exe and a launch that throws. A file that could not be deleted *because it is
+ * held* is the one case worth a second attempt, and it gets exactly one: `pass` below is that attempt, run
+ * through `defer` if the caller supplied one, and it does not defer again.
+ *
  * The return value exists for the suite that proves the sweep, not for the app: nothing in the app is told
- * what was removed. A failure to remove one file never stops the others — the loop is best effort per file,
- * which is the difference between a locked exe and a launch that throws.
+ * what was removed. A deferred pass answers the same way, through the caller's own callback, because the
+ * paths it removes are the same kind of fact arriving later.
  */
-export function sweepDownloadedInstallers({ cacheDir, state }: UpdateCacheSweep): string[] {
-  if (state !== 'idle') return []
-  if (!existsSync(cacheDir)) return []
+export function sweepDownloadedInstallers({ cacheDir, readState, defer }: UpdateCacheSweep): string[] {
+  /** One look at the cache, under one reading of the mirror. `retryOnLock` is false on the second pass. */
+  const pass = (retryOnLock: boolean): string[] => {
+    if (!isSweepableState(readState())) return []
+    if (!existsSync(cacheDir)) return []
 
-  const removed: string[] = []
-  for (const directory of [cacheDir, join(cacheDir, 'pending')]) {
-    let entries: string[]
-    try {
-      entries = readdirSync(directory)
-    } catch {
-      // Unreadable or absent: the `pending` directory need not exist, and a root that exists but cannot be
-      // listed is the same non-event.
-      continue
-    }
+    const removed: string[] = []
+    let locked: string | null = null
 
-    for (const entry of entries) {
-      if (!isInstallerArtifact(entry)) continue
-
-      const path = join(directory, entry)
+    for (const directory of [cacheDir, join(cacheDir, 'pending')]) {
+      let entries: string[]
       try {
-        // Directories are skipped rather than attempted: `unlink` on one fails on every platform, and the
-        // one thing this sweep must never do is reach for a recursive removal inside a cache it does not own.
-        if (!statSync(path).isFile()) continue
-        unlinkSync(path)
-        removed.push(path)
+        entries = readdirSync(directory)
       } catch {
-        // Locked, read-only, or gone between the two calls. Swallowed by design: see the module note.
+        // Unreadable or absent: the `pending` directory need not exist, and a root that exists but cannot be
+        // listed is the same non-event.
+        continue
+      }
+
+      for (const entry of entries) {
+        if (!isInstallerArtifact(entry)) continue
+
+        const path = join(directory, entry)
+        try {
+          // Directories are skipped rather than attempted: `unlink` on one fails on every platform, and the
+          // one thing this sweep must never do is reach for a recursive removal inside a cache it does not own.
+          if (!statSync(path).isFile()) continue
+          unlinkSync(path)
+          removed.push(path)
+        } catch (error) {
+          // A held file is the exception the module note describes: the lock lifts, so it earns the one
+          // deferred pass — and only the first of them is remembered, since a second pass would only find
+          // the same lock with nothing left to learn from it.
+          if (retryOnLock && locked === null && isLockedError(error)) locked = path
+        }
       }
     }
+
+    if (locked !== null) {
+      const again = () => {
+        const late = pass(false)
+        if (late.length > 0) reportDeferredSweep(late)
+      }
+      if (defer) defer(again)
+      else again()
+    }
+
+    return removed
   }
 
-  return removed
+  return pass(true)
 }

@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { ConveyorError } from 'electron-conveyor/main'
-import { sweepDownloadedInstallers, updaterCacheDir } from '@/lib/main/update-cache'
+import { sweepDownloadedInstallers, UPDATE_CACHE_SWEEP_RETRY_MS, updaterCacheDir } from '@/lib/main/update-cache'
 import { command, defineModule } from '../init'
 import {
   DEFAULT_AUTO_DOWNLOAD,
@@ -226,15 +226,25 @@ export function installUpdateNow(): void {
  * Remove what a previous launch's update left in the updater's own cache directory.
  *
  * Read through the same mirror every other decision here is read through, so "is a download in flight" has
- * one answer in this process rather than two. The directory comes from `electron-updater`'s own config file,
- * and a build that cannot name it sweeps nothing rather than guessing — the whole point is to remove from the
+ * one answer in this process rather than two — and read *late*, as a function, because the sweep may ask
+ * again seconds after this call returns. That is the deferred pass: a Windows install leaves the setup exe
+ * held until the installer process has finished closing, and the second look must see the mirror as it is
+ * then, not as the launch found it. The directory comes from `electron-updater`'s own config file, and a
+ * build that cannot name it sweeps nothing rather than guessing — the whole point is to remove from the
  * directory the downloader writes to, not from one this app believes is the same.
+ *
+ * `setTimeout` is the app's clock and stays here: the sweep module owns no timer, so what it defers is the
+ * work rather than the waiting.
  */
 function sweepUpdaterCacheOnStartup(): void {
   const cacheDir = updaterCacheDir()
   if (cacheDir === null) return
 
-  sweepDownloadedInstallers({ cacheDir, state: statusSink?.read() ?? 'idle' })
+  sweepDownloadedInstallers({
+    cacheDir,
+    readState: () => statusSink?.read() ?? 'idle',
+    defer: (run) => setTimeout(run, UPDATE_CACHE_SWEEP_RETRY_MS),
+  })
 }
 
 /**
@@ -262,11 +272,11 @@ export function startUpdateSchedule(): void {
   // flow, so the updater's own handler finds nothing left to do.
   app.on('before-quit', installUpdateNow)
 
-  // What the last update left behind, removed — but only while nothing is downloading. This is the one
-  // moment that is true by construction: a launch starts `idle`, and the first check is ten seconds away, so
-  // the sweep can never race the fetch it would otherwise corrupt. Best effort and silent: the cache
-  // directory is `electron-updater`'s own, and a sweep that could not run is not an event anyone is told
-  // about (see `lib/main/update-cache.ts`).
+  // What the last update left behind, removed — but only while nothing is downloading. A launch starts
+  // `idle` and the first check is ten seconds away, so the first pass can never race the fetch it would
+  // otherwise corrupt — and the deferred pass re-reads the mirror before it looks, so the same is true of
+  // it however late it lands (see `lib/main/update-cache.ts`). Best effort and silent: the cache directory
+  // is `electron-updater`'s own, and a sweep that could not run is not an event anyone is told about.
   sweepUpdaterCacheOnStartup()
 
   setTimeout(() => void checkForUpdates(), UPDATES_FIRST_CHECK_DELAY_MS)

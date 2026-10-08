@@ -14,12 +14,15 @@
  *   outside the cache root is ever named, and the walk never descends past one level.
  * - **Never while a download is in flight.** A sweep is only for what a *previous* launch left behind: with
  *   a fetch underway the pending directory is a file being written, and deleting it would corrupt the update
- *   this launch is performing. The state is the rule's own, and only `idle` — the state a launch starts in,
- *   before its first check — is swept.
- * - **Best effort, and silent.** A read-only directory, a file locked by an antivirus scanner, a cache root
- *   that has never existed: none of these are events. A failure is swallowed here and reported nowhere in the
- *   UI, because the only user-visible consequence of a failed sweep is that nothing changed. The one thing it
- *   must not do is *create* anything — a sweep on a machine whose updater has never run leaves no trace.
+ *   this launch is performing. The state is the rule's own, and the two states in which no fetch is underway
+ *   — `idle`, where no check has run, and `up-to-date`, where the check that ran found nothing to fetch —
+ *   are the two that are swept.
+ * - **Best effort, and silent.** A read-only directory, a cache root that has never existed: neither is an
+ *   event, and a failure is swallowed here and reported nowhere in the UI, because the only user-visible
+ *   consequence of a failed sweep is that nothing changed. The one thing it must not do is *create*
+ *   anything — a sweep on a machine whose updater has never run leaves no trace. The one failure that is not
+ *   final is a file the OS is holding, which earns a single deferred pass; this suite passes no `defer`, so
+ *   that pass runs immediately and the whole sweep still ends inside the one call.
  *
  * Red note, recorded on the defective tree: this suite's first run failed to bundle, because the module it
  * names did not exist — the honest red for a removal that had never been written, rather than an
@@ -69,7 +72,7 @@ function present(path: string): boolean {
 function aPackagedStartupRemovesWhatAnUpdateLeftBehind() {
   const root = cacheAfterAnUpdate()
   try {
-    const removed = sweepDownloadedInstallers({ cacheDir: root, state: 'idle' })
+    const removed = sweepDownloadedInstallers({ cacheDir: root, readState: () => 'idle' })
 
     // The installer, its blockmap, and the differential baseline beside them: the three files whose only
     // purpose was the install that has already happened.
@@ -100,12 +103,19 @@ function aPackagedStartupRemovesWhatAnUpdateLeftBehind() {
   }
 }
 
-/** Nothing is swept while a download is in flight: the pending directory is a file being written. */
+/**
+ * Nothing is swept while the updater may be about to write here.
+ *
+ * `idle` and `up-to-date` are not in this list: those are the two states the sweep runs in, and the first
+ * case above covers what `idle` removes. What is left is every state in which a check is asking, an update
+ * has been found, bytes are being fetched, or a download is waiting to install — the ones where a delete
+ * would damage this launch's own update.
+ */
 function nothingIsSweptWhileADownloadIsInFlight() {
-  for (const state of ['available', 'downloading', 'ready', 'checking', 'up-to-date', 'error'] as const) {
+  for (const state of ['available', 'downloading', 'ready', 'checking', 'error'] as const) {
     const root = cacheAfterAnUpdate()
     try {
-      const removed = sweepDownloadedInstallers({ cacheDir: root, state })
+      const removed = sweepDownloadedInstallers({ cacheDir: root, readState: () => state })
 
       assert.equal(removed.length, 0, `${state}: nothing is removed`)
       assert.equal(present(join(root, 'pending', 'agent-sam-1.4.0-setup.exe')), true, `${state}: the installer stays`)
@@ -114,7 +124,7 @@ function nothingIsSweptWhileADownloadIsInFlight() {
     }
   }
 
-  results.push('no state but `idle` sweeps anything, so a download underway is never touched')
+  results.push('no state in which a check or a download is underway sweeps anything, so the fetch is never touched')
 }
 
 /** A cache root that has never existed is not a reason to make one. */
@@ -122,7 +132,7 @@ function anAbsentCacheDirectoryIsNoOp() {
   const root = join(mkdtempSync(join(tmpdir(), 'sam-ai-update-cache-')), 'never-run')
   const parent = join(root, '..')
   try {
-    const removed = sweepDownloadedInstallers({ cacheDir: root, state: 'idle' })
+    const removed = sweepDownloadedInstallers({ cacheDir: root, readState: () => 'idle' })
 
     assert.deepEqual(removed, [], 'nothing is reported')
     assert.equal(present(root), false, 'and nothing is created')
@@ -138,13 +148,22 @@ function anUnremovableArtifactIsSwallowed() {
   const root = cacheAfterAnUpdate()
   try {
     // A directory named like an installer: the walk sees the name, and cannot unlink it. The sweep has to
-    // come out the other side reporting what it did manage, rather than throwing into the app's startup.
+    // come out the other side reporting what it did manage, rather than throwing into the app's startup —
+    // and, since a directory is skipped rather than handed to `unlink`, without asking for a second pass.
     mkdirSync(join(root, 'pending', 'agent-sam-9.9.9-setup.exe'), { recursive: true })
 
-    const removed = sweepDownloadedInstallers({ cacheDir: root, state: 'idle' })
+    const deferred: Array<() => void> = []
+    const removed = sweepDownloadedInstallers({
+      cacheDir: root,
+      readState: () => 'idle',
+      defer: (run) => {
+        deferred.push(run)
+      },
+    })
 
     assert.ok(removed.length > 0, 'the rest of the sweep still happened')
     assert.equal(present(join(root, 'pending', 'agent-sam-9.9.9-setup.exe')), true, 'and the directory is still there')
+    assert.equal(deferred.length, 0, 'and a directory is not a lock: nothing is deferred for it')
 
     results.push('an artifact that cannot be removed is swallowed, and the rest of the sweep still runs')
   } finally {
