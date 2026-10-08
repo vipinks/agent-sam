@@ -6,6 +6,25 @@ coding assistant.
 
 <br>
 
+## 2026-10-09: v1.5.1 — The installer-cache sweep runs in the state an install reaches, and waits out the lock
+
+- **The startup sweep now runs in the state a completed install actually reaches.** Phase 80 lets the gate
+  accept `up-to-date` alongside `idle`, because `up-to-date` is precisely the mirror state the launch after an
+  install reports: the sweep runs at a launch's start, but its deferred pass can land after the launch's first
+  check has finished, and a check that finds nothing newer answers `update-not-available`, which reads as
+  `up-to-date`. A gate that admitted only `idle` refused a state it had no argument against, and on that
+  launch refused the very sweep the install's own startup had asked for.
+- **A sweep the OS is holding earns exactly one deferred pass.** Windows keeps the setup exe locked for a
+  moment after it has started the app that replaced it, and `unlink` answers `EPERM` or `EBUSY`; that lock
+  lifts on its own, so it buys one retry rather than being abandoned. Anything else — a read-only directory, a
+  path that vanished — stays the non-event it has always been and is never retried. Nothing is ever created,
+  so a machine whose updater has never run is left byte-for-byte as it was, and the 130MB setup exe is
+  reliably cleared after a successful update.
+- The v1.5.0 baseline is everything before this entry: Phases 1 through 79, which shipped under the standing
+  versioning rule that a release names the work since the last one. This entry is v1.5.1 — Phase 80.
+
+<br>
+
 ## 2026-10-08: v1.5.0 — The header announces an update, installs it silently, and clears the installer it ran
 
 - **The header now mentions an update, and it leads to the screen that can act on it.** Phase 78 draws a
