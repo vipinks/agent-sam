@@ -6,6 +6,28 @@ coding assistant.
 
 <br>
 
+## 2026-10-08: v1.5.0 — The header announces an update, installs it silently, and clears the installer it ran
+
+- **The header now mentions an update, and it leads to the screen that can act on it.** Phase 78 draws a
+  badge in the window chrome's right cluster for the three states the rule names — an update available,
+  one downloading, and one ready to install — and a press opens Settings _at_ the Updates rail entry
+  through the store's own deep link, so the notice and the action are one step apart. A check that found
+  nothing says nothing, and a failed check stays on the screen that can explain it and offer a retry
+  rather than nagging the title bar about something it cannot fix.
+- **Both install paths now run the installer without a wizard and come back up.** The Updates section's
+  Install-and-restart and the install performed on quit both call `quitAndInstall(true, true)`, so the
+  assisted NSIS installer runs silently and the app relaunches once it has finished.
+- **The installer that ran is cleared out of the updater's own cache.** A packaged startup sweeps the
+  downloaded setup, its `.blockmap` baseline and the cache's `current.blockmap` out of
+  electron-updater's pending directory — but only while the mirror is `idle`, because a download in
+  flight is a file being written, and a sweep that fails is not an event. Nothing is ever created, so a
+  machine whose updater has never run is left byte-for-byte as it was.
+- The v1.4.1 baseline is everything before this entry: Phases 1 through 77, which shipped under the
+  standing versioning rule that a release names the work since the last one. This entry is v1.5.0 —
+  Phase 78.
+
+<br>
+
 ## 2026-10-08: v1.4.1 — A silent assistant turn never reaches the wire
 
 - **The continue/resume provider-400 defect is fixed at the two ends of one fact.** Phase 76 puts the

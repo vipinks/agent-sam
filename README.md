@@ -212,9 +212,9 @@ npm run build:win
 
 That builds the app and then packages it with electron-builder. For Windows it produces two artifacts:
 
-- `agent-sam-1.4.1-setup.exe` — an NSIS installer, per-user, with the installation directory offered
+- `agent-sam-1.5.0-setup.exe` — an NSIS installer, per-user, with the installation directory offered
   rather than forced, and a desktop shortcut.
-- `agent-sam-1.4.1-win.zip` — the same app as a portable archive.
+- `Agent.Sam-1.5.0-win.zip` — the same app as a portable archive.
 
 macOS (`npm run build:mac`, a `.dmg`) and Linux (`npm run build:linux`, an AppImage) targets are
 configured alongside it; both are unverified this turn. The Windows build is **unsigned**, so
