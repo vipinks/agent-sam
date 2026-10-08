@@ -6,6 +6,27 @@ coding assistant.
 
 <br>
 
+## 2026-10-08: v1.4.1 — A silent assistant turn never reaches the wire
+
+- **The continue/resume provider-400 defect is fixed at the two ends of one fact.** Phase 76 puts the
+  rule in the shared outbound mapper: the history is sanitized before either dialect body is built, so
+  an assistant message that says nothing and asks for nothing is dropped from the request — and where
+  dropping it would leave two turns of one role side by side, which both dialects refuse, it stays and
+  carries a neutral marker saying the turn produced no content. A turn that carries `tool_calls` is
+  never a candidate, so no tool result is ever left answering a call that is no longer in the request.
+  The agent loop stops pushing zero-content assistant turns in the first place, while still recording
+  every turn that asked for something, because the provider expects the turn that asked for tools to be
+  present when its results come back. The repair is on the wire and never on disk: a stored transcript
+  is the user's record of what was said, so those turns are left exactly as they were written — no
+  transcript version moves, and old and new sessions are repaired alike. The wire-level regression suite
+  pins the messages array a run actually puts in a request body and was recorded red on the defective
+  tree: three failures, each naming an assistant message with empty content.
+- The v1.4.0 baseline is everything before this entry: Phases 1 through 75, which shipped under the
+  standing versioning rule that a release names the work since the last one. This entry is v1.4.1 —
+  Phase 76.
+
+<br>
+
 ## 2026-10-07: v1.4.0 — Command-line engines, an Engines rail entry and the consent shield
 
 - **A command-line engine is a first-class execution path beside the Sam loop.** Phase 70 carries the
