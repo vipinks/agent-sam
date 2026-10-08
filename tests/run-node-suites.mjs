@@ -127,6 +127,18 @@ const SUITES = [
   { name: 'section collapse (in flight, completion, manual toggle, purity)', src: 'ui/section-collapse-test.ts' },
   { name: 'update rules (status word, offers, error codes, purity)', src: 'updates/updates-rules-test.ts' },
   {
+    name: 'update install (silent args, background settings, wired events)',
+    src: 'updates/updates-install-test.ts',
+  },
+  {
+    name: 'update install on quit (silent args, once, only when ready)',
+    src: 'updates/updates-quit-test.ts',
+  },
+  {
+    name: 'update cache sweep (installers only, idle only, absent dir, failure)',
+    src: 'updates/updates-cache-test.ts',
+  },
+  {
     name: 'engine spawn law (allowlist, arg array, refusal codes, version probe)',
     src: 'engines/engine-spawn-test.ts',
   },
@@ -196,6 +208,11 @@ for (const suite of SUITES) {
         // can be reached.
         '--external:electron',
         '--external:electron-conveyor/main',
+        // Also external, for the same reason: the updater module is the one place this app wraps
+        // electron-updater, and the package cannot run outside a packaged build at all — it reads
+        // `app-update.yml` off `process.resourcesPath` and spawns the downloaded installer. Left external,
+        // the runtime `require` goes through the stub above, which records the install arguments.
+        '--external:electron-updater',
         // Also external, for a different reason: the workbook parser is a main-process dependency the
         // app itself externalizes (`externalizeDepsPlugin` in electron.vite.config.ts), and several
         // suites reach it transitively through `workspace.ts`. Inlining it would bundle two megabytes

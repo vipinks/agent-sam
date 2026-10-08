@@ -8,9 +8,30 @@
 // between cases.
 const path = require('path')
 
+// The app-level events a module may subscribe to. Recorded rather than dispatched, because there is no
+// Electron to dispatch them: a suite that is about what an app event does calls `__emit` itself.
+const appListeners = new Map()
+
 module.exports = {
   app: {
     getPath: () => process.env.SAM_TEST_USER_DATA || path.join(require('os').tmpdir(), 'sam-ai-sessions-test'),
+    getName: () => 'Agent Sam',
+    getVersion: () => process.env.SAM_TEST_APP_VERSION || '0.0.0-test',
+    // A getter rather than a value, for the late-resolution reason `getPath` above gives: a suite sets
+    // SAM_TEST_PACKAGED around the one case that needs a packaged build, and a captured boolean would
+    // pin every other suite to whatever the environment said when this module was first required.
+    get isPackaged() {
+      return process.env.SAM_TEST_PACKAGED === '1'
+    },
+    on(event, handler) {
+      const set = appListeners.get(event) ?? new Set()
+      set.add(handler)
+      appListeners.set(event, set)
+    },
+    /** Emit an app event to its listeners. Not an Electron API — a suite's own trigger. */
+    __emit(event, ...args) {
+      for (const handler of appListeners.get(event) ?? []) handler(...args)
+    },
   },
   safeStorage: {
     isEncryptionAvailable: () => false,

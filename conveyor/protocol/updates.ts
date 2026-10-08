@@ -167,3 +167,39 @@ export function updateAvailability(input: UpdateStatusInput): UpdateAvailability
 export function updateFailureCode(state: UpdateState): UpdateErrorCode {
   return state === 'downloading' ? UPDATES_DOWNLOAD_FAILED : UPDATES_CHECK_FAILED
 }
+
+/**
+ * The states an update exists in: the three the chrome is allowed to mention.
+ *
+ * `available` and `downloading` are one piece of news twice — the update has been found, and the app is
+ * fetching it — and `ready` is the other one, because the wait is over and the only thing left is a
+ * restart. The four that are absent are the ones with nothing to announce, and each for its own reason:
+ * `idle` has not asked yet, `checking` is asking, `up-to-date` is no update at all, and `error` is the
+ * Updates section's business. A mark in the title bar for a failure would be a permanent one, asking about
+ * something a user cannot act on from there.
+ */
+export const UPDATE_BADGE_STATES = ['available', 'downloading', 'ready'] as const
+
+/** What the chrome says about an update, and whether it says anything at all. */
+export interface UpdateBadge {
+  /** Whether the mark is drawn. */
+  present: boolean
+  /** The one sentence for the state — the tooltip and the control's own name. Empty while nothing is drawn. */
+  label: string
+}
+
+/**
+ * What the header says about the updater, from the same mirror the Updates section reads.
+ *
+ * Both versions travel in the sentence, because "an update is available" is not something a user can place:
+ * a version they have never seen means nothing next to one they are running. The words come from here rather
+ * than from the component for the reason every other word about the updater does — a badge with its own copy
+ * of the sentence would have to be right about the same state twice, and would be the first thing to go
+ * quiet the next time a state was added.
+ */
+export function updateBadge(state: UpdateState, from: string, to: string): UpdateBadge {
+  if (!(UPDATE_BADGE_STATES as readonly UpdateState[]).includes(state)) return { present: false, label: '' }
+
+  const subject = state === 'ready' ? 'Update ready to install' : 'New version available'
+  return { present: true, label: `${subject}: ${from} → ${to}` }
+}

@@ -7,6 +7,7 @@ import { useThemeStore } from './theme-store'
 import { MENUS } from './menu'
 import { TitlebarMenu } from './titlebar-menu'
 import { ControlButton } from './control-button'
+import { UpdateBadge } from './update-badge'
 import { BrightnessButton, ThemeButton } from './theme-controls'
 import { Separator } from '../components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
@@ -75,6 +76,7 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
         <ThemeToggle />
         <ThemeButton />
         <BrightnessButton />
+        <UpdateBadge />
         <TerminalPanelToggle />
         {!isMac && <WindowControls />}
       </div>

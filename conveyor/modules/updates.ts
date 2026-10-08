@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { ConveyorError } from 'electron-conveyor/main'
+import { sweepDownloadedInstallers, updaterCacheDir } from '@/lib/main/update-cache'
 import { command, defineModule } from '../init'
 import {
   DEFAULT_AUTO_DOWNLOAD,
@@ -83,6 +84,27 @@ let autoDownloadSource: () => boolean = () => DEFAULT_AUTO_DOWNLOAD
 export function setAutoDownloadSource(read: () => boolean): void {
   autoDownloadSource = read
 }
+
+/**
+ * What every install this app performs is performed with.
+ *
+ * `isSilent` is the whole of the first fact: electron-updater turns it into `/S`, and an assisted NSIS
+ * installer run with `/S` shows no pages at all — no wizard, no Next, no directory question. It is also the
+ * half that makes the assisted installer's own relaunch reachable: electron-builder's script starts the app
+ * after an update only when the run is *both* silent and force-run (`templates/nsis/installSection.nsh`, the
+ * `!else` branch taken by `oneClick: false`), so the second flag is what puts the user back in front of a
+ * window instead of leaving them with a silent install and nothing on screen.
+ *
+ * Both are decisions rather than options, and that is why they are named here rather than asked for by a
+ * caller: a surface's job is to say *install it*, and a surface that had to remember `/S` would be one that
+ * could forget it. The pair travels with the act, so the two ways in — the install a user asks for, and the
+ * one a quit performs — cannot install two different ways.
+ */
+export const UPDATES_INSTALL_IS_SILENT = true
+export const UPDATES_INSTALL_IS_FORCE_RUN_AFTER = true
+
+/** Whether this process has already asked for an install. Read and written by `installUpdateNow`. */
+let installRequested = false
 
 /** Whether the updater can do anything at all in this build. False in development and in unpackaged builds. */
 function isPackaged(): boolean {
@@ -178,6 +200,44 @@ async function checkForUpdates(): Promise<void> {
 }
 
 /**
+ * Install what has been downloaded: silently, and bringing the app back up.
+ *
+ * The guard is what makes this callable from more than one place. An install asks the app to quit, so the
+ * quit event that may have triggered it arrives again on the way out, and a second pass would spawn a
+ * second installer for the same build while the first is still running. electron-updater has a guard of its
+ * own for its own default install-on-quit, and a call that slips past it *resets* that guard — which is
+ * exactly how one click could become two installers. So the answer is kept here, before the updater is
+ * reached at all.
+ *
+ * Nothing is installed unless the mirror says an install is waiting. The mirror is the only thing that knows
+ * a download completed: `available`, `downloading` and everything before them have no file to install, and
+ * electron-updater would answer such a call by dispatching its own "no update filepath provided" error,
+ * which the mirror would then report as a failed *check* — a status line about the network for an act nobody
+ * performed.
+ */
+export function installUpdateNow(): void {
+  if (statusSink?.read() !== 'ready' || installRequested) return
+
+  installRequested = true
+  autoUpdater.quitAndInstall(UPDATES_INSTALL_IS_SILENT, UPDATES_INSTALL_IS_FORCE_RUN_AFTER)
+}
+
+/**
+ * Remove what a previous launch's update left in the updater's own cache directory.
+ *
+ * Read through the same mirror every other decision here is read through, so "is a download in flight" has
+ * one answer in this process rather than two. The directory comes from `electron-updater`'s own config file,
+ * and a build that cannot name it sweeps nothing rather than guessing — the whole point is to remove from the
+ * directory the downloader writes to, not from one this app believes is the same.
+ */
+function sweepUpdaterCacheOnStartup(): void {
+  const cacheDir = updaterCacheDir()
+  if (cacheDir === null) return
+
+  sweepDownloadedInstallers({ cacheDir, state: statusSink?.read() ?? 'idle' })
+}
+
+/**
  * Wire the updater and start the launch's check schedule.
  *
  * Called from the app-ready hook in `lib/main/main.ts`, which is the first moment electron-updater may be
@@ -195,6 +255,20 @@ export function startUpdateSchedule(): void {
 
   wireUpdater()
 
+  // The quit-time install, registered with the same condition the rest of this file is behind — and once,
+  // at the start, rather than when a download completes: a quit can arrive in the same turn as the download
+  // that made it worth performing. electron-updater's own install-on-quit is left exactly as it was
+  // (`autoInstallOnAppQuit` stays true); this handler runs first, and asking with the pair above claims the
+  // flow, so the updater's own handler finds nothing left to do.
+  app.on('before-quit', installUpdateNow)
+
+  // What the last update left behind, removed — but only while nothing is downloading. This is the one
+  // moment that is true by construction: a launch starts `idle`, and the first check is ten seconds away, so
+  // the sweep can never race the fetch it would otherwise corrupt. Best effort and silent: the cache
+  // directory is `electron-updater`'s own, and a sweep that could not run is not an event anyone is told
+  // about (see `lib/main/update-cache.ts`).
+  sweepUpdaterCacheOnStartup()
+
   setTimeout(() => void checkForUpdates(), UPDATES_FIRST_CHECK_DELAY_MS)
   setInterval(() => void checkForUpdates(), UPDATES_CHECK_INTERVAL_MS)
 }
@@ -205,9 +279,9 @@ export function startUpdateSchedule(): void {
  * Each refuses outside a packaged build with `UPDATES_DISABLED_IN_DEV` before touching the updater, and none of
  * them writes the mirror: the transitions come from the updater's own events, so what the surface reports is
  * what the updater did rather than what the call was asked to do. `download` is the manual half of the
- * auto-download preference, and `install` is the act the quit-time install already performs by default — the
- * two are offered so a later surface can let a user start a download the preference deferred, or install now
- * instead of at quit.
+ * auto-download preference, and `install` is the act the quit-time install performs — both routes reach
+ * `installUpdateNow`, so the button and the quit cannot install two different ways. Both install silently and
+ * bring the app back up; the pair is named once, at `UPDATES_INSTALL_IS_SILENT`.
  */
 export const updatesModule = defineModule({
   check: command(async () => {
@@ -222,6 +296,6 @@ export const updatesModule = defineModule({
 
   install: command(() => {
     requirePackaged()
-    autoUpdater.quitAndInstall()
+    installUpdateNow()
   }),
 })
