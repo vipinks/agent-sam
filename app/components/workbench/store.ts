@@ -81,6 +81,21 @@ interface WorkbenchState {
   /** Switch provider and model together — a provider's default model is not the previous one's. */
   setTarget: (target: { providerId: string; model: string }) => void
   /**
+   * The model each engine runs under, by engine id, as the header's own control holds it.
+   *
+   * Here rather than in main's engine preferences, and the reason is which process reads it: this choice travels
+   * to main on the turn itself, so a copy kept there would be a second answer to "which model ran" that nothing
+   * would keep in step with the answer the turn carried. The durable record of that fact is the conversation's
+   * own row, which is a later turn's business.
+   *
+   * An absent entry is the ordinary state and means the engine's own default — the same thing an empty string
+   * says out loud. Written nowhere: a launch starts every engine on its own default, and a value that only ever
+   * lived in this window cannot disagree with the copy main was handed.
+   */
+  engineModels: Record<string, string>
+  /** Record the model one engine runs under. The header's engine-model control is the only writer. */
+  setEngineModel: (engineId: string, model: string) => void
+  /**
    * The change the diff pane is showing, or null for the pane's empty state.
    *
    * Renderer-local rather than main-owned, for the same reason `selectedFile` is: it is which row the
@@ -479,6 +494,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     }
     set({ activeProviderId: providerId, activeModel: model })
   },
+  engineModels: {},
+  /**
+   * One engine's model, replaced without disturbing the others': two engines are two questions with two answers,
+   * and a map written whole would make choosing one engine's model clear the other's.
+   */
+  setEngineModel: (engineId, model) => set((state) => ({ engineModels: { ...state.engineModels, [engineId]: model } })),
   selectedChange: null,
   setSelectedChange: (selectedChange) => set({ selectedChange }),
   commitMessage: '',

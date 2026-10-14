@@ -235,6 +235,41 @@ export function engineLaunchArgs(engineId: EngineId, mode?: unknown): string[] {
 }
 
 /**
+ * How long a model id may be.
+ *
+ * The whole of what this app can check about a model id, and it is a length rather than a list on purpose: Codex
+ * publishes no catalogue this app can read, so a rule here about *which* ids exist would be a table of guesses
+ * that went stale with the next CLI release. What can be stated is that the value is a word a command line can
+ * carry — it travels as `-m <id>`, one argument among the flags above — and the engine's own answer is what
+ * judges the id itself.
+ *
+ * One constant rather than a number at each boundary: the turn input a renderer sends and the field a user types
+ * into are the same limit, and two numbers would drift apart.
+ */
+export const ENGINE_MODEL_MAX_LENGTH = 128
+
+/**
+ * The engines whose turn this app sets a model for.
+ *
+ * A list rather than a test written where the control is drawn, because two different things have to agree about
+ * it: the field that offers a model, and the runner that turns one into an argument. Codex is the one member and
+ * it is alone deliberately — `-m <id>` is what its own launch config offers, a word a caller states. The two ACP
+ * engines answer with a model *catalogue* on `session/new` instead (`tests/probes/acp-model-surface-probe.mjs`,
+ * Phase 82), so the choice they take is a selection from a list this app has to read rather than an id a user
+ * types: a free-text field drawn for them would collect a value no runner reads, while the turn quietly ran the
+ * engine's own default.
+ */
+export const ENGINE_MODEL_ENGINES: readonly EngineId[] = ['codex']
+
+/**
+ * Whether this app sets the model for one engine — and, when it does, that the id names an engine rather than
+ * merely being a string. An id this build does not ship answers `false`.
+ */
+export function engineTakesModel(engineId: string | null | undefined): engineId is EngineId {
+  return engineId !== null && engineId !== undefined && ENGINE_MODEL_ENGINES.includes(engineId as EngineId)
+}
+
+/**
  * Where each engine is installed on a machine whose `PATH` does not carry it.
  *
  * A template rather than a path: the real location is `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, and the

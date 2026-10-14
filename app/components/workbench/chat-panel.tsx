@@ -44,6 +44,7 @@ import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
 import { AgentActionCard } from './agent-action-card'
 import { EnginePicker } from './engine-picker'
+import { EngineModelPicker } from './engine-model-picker'
 import type { ToolStep } from './agent-session'
 import { MessageBubble } from './message-bubble'
 import { MentionPicker } from './mention-picker'
@@ -406,6 +407,10 @@ export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
   const activeModel = useWorkbenchStore((s) => s.activeModel)
   const setTarget = useWorkbenchStore((s) => s.setTarget)
+  // The model each engine runs under, as the header's own control holds it. Read here as well as there because a
+  // send has to carry it, and read as the whole map rather than one engine's value because the conversation a
+  // send belongs to is read from a ref at send time rather than from this render.
+  const engineModels = useWorkbenchStore((s) => s.engineModels)
   // The two window controls a command stands for, read from the store those controls themselves read:
   // `/terminal` and the title bar's glyph flip one flag, so the two cannot come to disagree.
   const toggleBottomPanel = useWorkbenchStore((s) => s.toggleBottomPanel)
@@ -1321,7 +1326,17 @@ export function ChatPanel() {
       const engineTurn =
         engineId === null || enginePrompt.trim() === ''
           ? null
-          : conveyor.engine.turn({ engineId, prompt: enginePrompt, cwd: rootPath ?? '', sessionId })
+          : conveyor.engine.turn({
+              engineId,
+              prompt: enginePrompt,
+              cwd: rootPath ?? '',
+              sessionId,
+              // The model the header's control holds for this engine, or the empty string for the engine's own
+              // default — which injects no flag, exactly as a build with no such control did. Read from the store
+              // here rather than kept in a ref beside the engine id: the control writes that store, and there is
+              // one answer to what a turn runs as.
+              model: engineModels[engineId] ?? '',
+            })
 
       await runStream(
         engineTurn ??
@@ -1366,7 +1381,17 @@ export function ChatPanel() {
       // chunks, and this is one save.
       sessionsRef.current.scheduleSave()
     },
-    [activeModel, activeProviderId, autoApprove, rootPath, runProvider, runStream, stickToBottom, updateMessages]
+    [
+      activeModel,
+      activeProviderId,
+      autoApprove,
+      engineModels,
+      rootPath,
+      runProvider,
+      runStream,
+      stickToBottom,
+      updateMessages,
+    ]
   )
 
   /**
@@ -1875,6 +1900,19 @@ export function ChatPanel() {
             </Tooltip>
           </TooltipProvider>
         )}
+
+        {/*
+          The engine's own model, in the slot a reader looks in for "the model", and drawn only while an engine
+          this app sets a model for is chosen: with the app's own loop the pair below is the whole answer, and
+          there would be no engine for a value here to belong to. The two are adjacent on purpose — when an engine
+          owns the conversation this is the live control and the pair below is the refused one, so the choice in
+          force sits where the question is asked.
+
+          The engine drawn here is the *effective* one, the same rule the picker above follows: the pending
+          choice while home, and the conversation's own once one exists. The control itself is what decides
+          whether this engine has a model to state.
+        */}
+        <EngineModelPicker engineId={atHome ? sessions.pendingEngineId : sessions.engineId} />
 
         {/*
           One control, two axes: the value is `provider::model`, so picking either changes both.

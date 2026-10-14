@@ -168,6 +168,10 @@ const SUITES = [
     src: 'engines/engine-preferences-test.ts',
   },
   {
+    name: 'engine turn input (optional engine model, its bound, refusals)',
+    src: 'engines/engine-turn-input-test.ts',
+  },
+  {
     name: 'codex child lifecycle (stdin closed at spawn, per-turn child, reap, silent exit, cancel)',
     src: 'engines/engine-lifecycle-test.ts',
   },

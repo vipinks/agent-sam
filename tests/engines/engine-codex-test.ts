@@ -307,6 +307,68 @@ async function cancellingTheTurnKillsTheChild() {
   results.push('cancel kills the Codex child through the spawn layer path, and draws no notice for it')
 }
 
+// ---------------------------------------------------------------- the chosen model
+
+/**
+ * The model the user chose is the pair `-m <id>`, immediately before the prompt.
+ *
+ * The claim is about what reached the OS rather than about what a control showed, which is why the spawn is
+ * recorded: a flag is only real if it is in the array the child was started with. The array is asserted to be
+ * unchanged *around* the pair as well, so a model cannot quietly rewrite the sandbox value it sits beside.
+ *
+ * "Nobody chose" is two spellings of one answer — an absent field and an empty one — and both are compared
+ * byte for byte against the shipped launch config rather than asserted to lack a `-m`. A build with no model
+ * control has to remain the argv of every turn that never chose a model, and a second spelling of the same
+ * flags would be a change to exactly those turns.
+ */
+async function theChosenModelTravelsImmediatelyBeforeThePrompt() {
+  const chosen = scriptedChild()
+  const spawn = recordingSpawn(chosen.child)
+  const turn = runCodexTurn(
+    { engineId: CODEX, prompt: 'a prompt', cwd: 'C:/work', model: 'gpt-5-codex' },
+    { spawnImpl: spawn.impl },
+    () => undefined
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+  chosen.feed([])
+  await turn
+
+  const args = [...spawn.calls[0].args]
+  assert.deepEqual(
+    args.slice(-3),
+    ['-m', 'gpt-5-codex', 'a prompt'],
+    'the model is the flag and the id, immediately before the prompt'
+  )
+  assert.deepEqual(args.slice(0, -3), [...ENGINE_LAUNCH_ARGS[CODEX]], 'and nothing else in the array moved')
+  assert.equal(args[args.indexOf('--sandbox') + 1], ENGINE_PERMISSION_MODES[CODEX], 'the sandbox value is untouched')
+  assert.equal(spawn.calls[0].shell, false, 'started without a shell, with a model id in the array')
+
+  // The array a chosen model produces still resolves through the law: the flag is one the spawn layer accepts,
+  // which is what keeps choosing a model from being the reason a turn cannot start at all.
+  assert.equal(resolveEngineSpawn({ engineId: CODEX, args }).ok, true, 'and the array resolves through the law')
+
+  for (const model of [undefined, '']) {
+    const plain = scriptedChild()
+    const plainSpawn = recordingSpawn(plain.child)
+    const plainTurn = runCodexTurn(
+      { engineId: CODEX, prompt: 'a prompt', cwd: 'C:/work', ...(model === undefined ? {} : { model }) },
+      { spawnImpl: plainSpawn.impl },
+      () => undefined
+    )
+    await new Promise((resolve) => setImmediate(resolve))
+    plain.feed([])
+    await plainTurn
+
+    assert.deepEqual(
+      [...plainSpawn.calls[0].args],
+      [...ENGINE_LAUNCH_ARGS[CODEX], 'a prompt'],
+      `${model === undefined ? 'an absent model' : 'an empty model'}: the argv of a build with no model control`
+    )
+  }
+
+  results.push('the chosen model is `-m <id>` before the prompt, and no choice is the shipped argv untouched')
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -321,6 +383,7 @@ async function main() {
   await step('cancel', cancelEscalatesOnceAndOnlyWhileItRuns)
   await step('turn', theCapturedRunBecomesTheTranscript)
   await step('cancel (turn)', cancellingTheTurnKillsTheChild)
+  await step('model', theChosenModelTravelsImmediatelyBeforeThePrompt)
 
   console.log('codex launch config: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)

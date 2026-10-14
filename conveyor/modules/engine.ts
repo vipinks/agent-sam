@@ -6,6 +6,7 @@ import {
   ENGINE_CONSENT_CODES,
   ENGINE_IDS,
   ENGINE_LABELS,
+  ENGINE_MODEL_MAX_LENGTH,
   ENGINE_PROBE_ARGS,
   ENGINE_SPAWN_CODES,
   enginePreference,
@@ -385,6 +386,29 @@ export async function refreshEngineStatus(): Promise<void> {
 }
 
 /**
+ * What one engine turn is, as the boundary that admits it.
+ *
+ * The four fields every engine turn has had, and the one this phase added: the model the user chose for the engine
+ * that owns the conversation. It is optional because not choosing is the ordinary state — and because a turn
+ * written by a build that had no such control has to remain a turn this build runs.
+ *
+ * The bound is the only rule the model gets here, and that is deliberate: there is no catalogue on this side to
+ * check an id against, so which ids exist is the engine's own answer, arriving legibly through the turn's error
+ * path. What this boundary owes is that what crosses is a word of a length a command line can carry rather than,
+ * say, an object.
+ *
+ * Exported because the shape of a turn is a fact about this app's own protocol rather than a private detail of
+ * this module's dispatch — and a suite stating it should not have to extract it from the registry.
+ */
+export const engineTurnInputSchema = z.object({
+  engineId: z.string().min(1),
+  prompt: z.string().min(1),
+  cwd: z.string(),
+  sessionId: z.string().min(1),
+  model: z.string().max(ENGINE_MODEL_MAX_LENGTH).optional(),
+})
+
+/**
  * The engine rail's whole IPC surface.
  *
  * One member: the write the shield offers when an engine asks. Everything the picker *reads* is state rather
@@ -432,99 +456,95 @@ export const engineModule = defineModule({
    * the failure it was, after the chunks it did produce, so the cause is stated in the one place the pane words
    * one and no turn is left claiming to be thinking.
    */
-  turn: stream(
-    z.object({
-      engineId: z.string().min(1),
-      prompt: z.string().min(1),
-      cwd: z.string(),
-      sessionId: z.string().min(1),
-    }),
-    async function* ({ input, signal }) {
-      const installed = installedBinaryFor(input.engineId)
-      // The mode is read here rather than sent with the turn, which is what keeps the choice a *setting*: the
-      // conversation does not carry it, a resumed turn runs under today's choice rather than the one that was
-      // current when it was written, and the pane that starts a turn needs to know nothing about sandboxes.
-      // The store is the only writer, and its schema accepts only the three traced values.
-      const preference = preferenceFor(input.engineId)
-      const queue: EngineTranscriptChunk[] = []
-      let wake: (() => void) | null = null
-      let finished = false
+  turn: stream(engineTurnInputSchema, async function* ({ input, signal }) {
+    const installed = installedBinaryFor(input.engineId)
+    // The mode is read here rather than sent with the turn, which is what keeps the choice a *setting*: the
+    // conversation does not carry it, a resumed turn runs under today's choice rather than the one that was
+    // current when it was written, and the pane that starts a turn needs to know nothing about sandboxes.
+    // The store is the only writer, and its schema accepts only the three traced values.
+    const preference = preferenceFor(input.engineId)
+    const queue: EngineTranscriptChunk[] = []
+    let wake: (() => void) | null = null
+    let finished = false
 
-      /**
-       * Hand the generator back its turn.
-       *
-       * The wait is taken before it is called, so one arrival cannot resolve two waits and leave a chunk in the
-       * queue with nobody watching for it — which would be a turn that appeared to stop mid-answer.
-       */
-      const notify = (): void => {
-        const waiting = wake
-        wake = null
-        waiting?.()
-      }
-
-      const turnInput = {
-        engineId: input.engineId,
-        prompt: input.prompt,
-        // An empty root means the conversation has no folder open, and the engine is given the app's own working
-        // directory rather than an empty string, which is not a directory a process can be started in.
-        cwd: input.cwd === '' ? process.cwd() : input.cwd,
-        permissionMode: preference.permissionMode,
-        signal,
-      }
-      const binary = installed === undefined ? {} : { binaryOverride: installed }
-      const onChunk = (chunk: EngineTranscriptChunk): void => {
-        queue.push(chunk)
-        notify()
-      }
-
-      // Which dialect this engine speaks is the stdin policy's answer rather than a second list of ids kept
-      // here: a config that states `transport-open` is one whose pipe *is* the protocol, and the ACP client is
-      // the only runner that speaks to a pipe. Its consent question is put to the same shield the exec path's
-      // cards go to, so an engine asking to write a file is asked about per call whichever dialect it arrived
-      // on — and an engine added later is routed by its own config rather than by a change here.
-      const turn =
-        engineStdinPolicy(input.engineId) === 'transport-open'
-          ? runAcpTurn(
-              turnInput,
-              {
-                ...binary,
-                onPermissionRequest: (request: AcpPermissionRequest) => askEngineConsent(input.engineId, request),
-              },
-              onChunk
-            )
-          : runCodexTurn(turnInput, binary, onChunk)
-
-      // A turn that never started is an ending rather than a stream that went quiet, and the ending the pane has
-      // for a run that failed is the turn's own error line — the one place it words a cause. So the failure is
-      // held here and raised after the queue has drained, which keeps its chunks in the order they arrived and
-      // still hands the pane the reason rather than a silence. The reason matters now that the ACP client keeps
-      // the engine's own words: an engine that answers `Authentication required` has said something the user can
-      // act on, and flattening it into a generic early ending stated a cause that was not the cause.
-      let failure: unknown = null
-      void turn
-        .then(() => undefined)
-        .catch((error: unknown) => {
-          console.warn('[engine] the turn failed', error)
-          failure = error
-        })
-        .finally(() => {
-          finished = true
-          notify()
-        })
-
-      for (;;) {
-        if (queue.length === 0) {
-          if (finished) {
-            if (failure !== null) throw failure
-            return
-          }
-          await new Promise<void>((resolve) => {
-            wake = resolve
-          })
-          continue
-        }
-        yield queue.shift() as EngineTranscriptChunk
-      }
+    /**
+     * Hand the generator back its turn.
+     *
+     * The wait is taken before it is called, so one arrival cannot resolve two waits and leave a chunk in the
+     * queue with nobody watching for it — which would be a turn that appeared to stop mid-answer.
+     */
+    const notify = (): void => {
+      const waiting = wake
+      wake = null
+      waiting?.()
     }
-  ),
+
+    const turnInput = {
+      engineId: input.engineId,
+      prompt: input.prompt,
+      // An empty root means the conversation has no folder open, and the engine is given the app's own working
+      // directory rather than an empty string, which is not a directory a process can be started in.
+      cwd: input.cwd === '' ? process.cwd() : input.cwd,
+      // The model this turn runs under, carried rather than looked up from a setting: it is the *turn* that runs
+      // it. The empty string is the absence of a choice, and it injects no flag — so an engine nobody chose a
+      // model for runs exactly as it did before this field existed.
+      model: input.model ?? '',
+      permissionMode: preference.permissionMode,
+      signal,
+    }
+    const binary = installed === undefined ? {} : { binaryOverride: installed }
+    const onChunk = (chunk: EngineTranscriptChunk): void => {
+      queue.push(chunk)
+      notify()
+    }
+
+    // Which dialect this engine speaks is the stdin policy's answer rather than a second list of ids kept
+    // here: a config that states `transport-open` is one whose pipe *is* the protocol, and the ACP client is
+    // the only runner that speaks to a pipe. Its consent question is put to the same shield the exec path's
+    // cards go to, so an engine asking to write a file is asked about per call whichever dialect it arrived
+    // on — and an engine added later is routed by its own config rather than by a change here.
+    const turn =
+      engineStdinPolicy(input.engineId) === 'transport-open'
+        ? runAcpTurn(
+            turnInput,
+            {
+              ...binary,
+              onPermissionRequest: (request: AcpPermissionRequest) => askEngineConsent(input.engineId, request),
+            },
+            onChunk
+          )
+        : runCodexTurn(turnInput, binary, onChunk)
+
+    // A turn that never started is an ending rather than a stream that went quiet, and the ending the pane has
+    // for a run that failed is the turn's own error line — the one place it words a cause. So the failure is
+    // held here and raised after the queue has drained, which keeps its chunks in the order they arrived and
+    // still hands the pane the reason rather than a silence. The reason matters now that the ACP client keeps
+    // the engine's own words: an engine that answers `Authentication required` has said something the user can
+    // act on, and flattening it into a generic early ending stated a cause that was not the cause.
+    let failure: unknown = null
+    void turn
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        console.warn('[engine] the turn failed', error)
+        failure = error
+      })
+      .finally(() => {
+        finished = true
+        notify()
+      })
+
+    for (;;) {
+      if (queue.length === 0) {
+        if (finished) {
+          if (failure !== null) throw failure
+          return
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve
+        })
+        continue
+      }
+      yield queue.shift() as EngineTranscriptChunk
+    }
+  }),
 })
