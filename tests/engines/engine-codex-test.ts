@@ -308,132 +308,77 @@ async function cancellingTheTurnKillsTheChild() {
   results.push('cancel kills the Codex child through the spawn layer path, and draws no notice for it')
 }
 
-// ---------------------------------------------------------------- the chosen model
+// ---------------------------------------------------------------- the model flag
 
 /**
- * The model the user chose is the pair `-m <id>`, immediately before the prompt.
+ * The argv carries no model flag, for any state the model control's store can hold.
  *
- * The claim is about what reached the OS rather than about what a control showed, which is why the spawn is
- * recorded: a flag is only real if it is in the array the child was started with. The array is asserted to be
- * unchanged *around* the pair as well, so a model cannot quietly rewrite the sandbox value it sits beside.
+ * This is the reversal of the phase that put a model control in the header, stated where it can be measured: this
+ * app names no model to Codex, so the array the OS is handed is the shipped launch config and the prompt — for an
+ * id stored under the engine, for an empty one, and for nothing stored at all alike. The engine runs the model its
+ * own configuration resolves: its default, or the one codex's own `config.toml` names outside this app.
  *
- * "Nobody chose" is two spellings of one answer — an absent field and an empty one — and both are compared
- * byte for byte against the shipped launch config rather than asserted to lack a `-m`. A build with no model
- * control has to remain the argv of every turn that never chose a model, and a second spelling of the same
- * flags would be a change to exactly those turns.
+ * The id is *handed to the runner* rather than left out, exactly as main hands it over on the turn input, and that
+ * is what makes this case a measurement of the removal rather than a restatement of it: a case that withheld the
+ * value would be green on either tree and would state nothing about the injection that went. The store state is the
+ * first half of the join the control used to complete — what the header's field writes, through the boundary that
+ * admits a turn, into the array a child is started with — so a flag reintroduced anywhere along it is red here.
+ *
+ * The whole array is compared rather than a slice, because the claim is byte-identity with what a build that had no
+ * model control shipped: a flag that displaced the sandbox value, or took its place, is a change to the argv of a
+ * turn nobody chose a model for.
  */
-async function theChosenModelTravelsImmediatelyBeforeThePrompt() {
-  const chosen = scriptedChild()
-  const spawn = recordingSpawn(chosen.child)
-  const turn = runCodexTurn(
-    { engineId: CODEX, prompt: 'a prompt', cwd: 'C:/work', model: 'gpt-5-codex' },
-    { spawnImpl: spawn.impl },
-    () => undefined
-  )
-  await new Promise((resolve) => setImmediate(resolve))
-  chosen.feed([])
-  await turn
+async function theArgvNeverCarriesAModelFlag() {
+  // The three states the control's store can be in: the id a user typed, the field a user cleared, and no key at
+  // all — which is every state a conversation that never saw the control travels in.
+  const storeStates: Record<string, string>[] = [{ [CODEX]: 'gpt-6-luna' }, { [CODEX]: '' }, {}]
 
-  const args = [...spawn.calls[0].args]
-  assert.deepEqual(
-    args.slice(-3),
-    ['-m', 'gpt-5-codex', 'a prompt'],
-    'the model is the flag and the id, immediately before the prompt'
-  )
-  assert.deepEqual(args.slice(0, -3), [...ENGINE_LAUNCH_ARGS[CODEX]], 'and nothing else in the array moved')
-  assert.equal(args[args.indexOf('--sandbox') + 1], ENGINE_PERMISSION_MODES[CODEX], 'the sandbox value is untouched')
-  assert.equal(spawn.calls[0].shell, false, 'started without a shell, with a model id in the array')
+  for (const engineModels of storeStates) {
+    // The turn the pane sends, built the way the pane builds it — the id under the engine of the conversation, and
+    // the empty string when nothing was chosen — then taken through the boundary that admits it.
+    const parsed = engineTurnInputSchema.safeParse({
+      engineId: CODEX,
+      prompt: 'a prompt',
+      cwd: 'C:/work',
+      sessionId: 'aaaaaaaa-1111-4111-8111-111111111111',
+      model: engineModels[CODEX] ?? '',
+    })
+    assert.equal(parsed.success, true, 'the boundary admits the turn, whatever the store holds for this engine')
+    if (!parsed.success) continue
 
-  // The array a chosen model produces still resolves through the law: the flag is one the spawn layer accepts,
-  // which is what keeps choosing a model from being the reason a turn cannot start at all.
-  assert.equal(resolveEngineSpawn({ engineId: CODEX, args }).ok, true, 'and the array resolves through the law')
-
-  for (const model of [undefined, '']) {
-    const plain = scriptedChild()
-    const plainSpawn = recordingSpawn(plain.child)
-    const plainTurn = runCodexTurn(
-      { engineId: CODEX, prompt: 'a prompt', cwd: 'C:/work', ...(model === undefined ? {} : { model }) },
-      { spawnImpl: plainSpawn.impl },
+    const child = scriptedChild()
+    const spawn = recordingSpawn(child.child)
+    const turn = runCodexTurn(
+      {
+        engineId: parsed.data.engineId,
+        prompt: parsed.data.prompt,
+        cwd: parsed.data.cwd,
+        // Handed over the way main hands it over — the value the header's field would have written — so what the
+        // case reads is the runner's own answer to a model being present on the turn at all.
+        model: parsed.data.model ?? '',
+      },
+      { spawnImpl: spawn.impl },
       () => undefined
     )
     await new Promise((resolve) => setImmediate(resolve))
-    plain.feed([])
-    await plainTurn
+    child.feed([])
+    await turn
 
+    const args = [...spawn.calls[0].args]
     assert.deepEqual(
-      [...plainSpawn.calls[0].args],
+      args,
       [...ENGINE_LAUNCH_ARGS[CODEX], 'a prompt'],
-      `${model === undefined ? 'an absent model' : 'an empty model'}: the argv of a build with no model control`
+      'the shipped launch config and the prompt, byte for byte, for every state the store can hold'
     )
+    assert.equal(args.includes('-m'), false, 'and no model flag anywhere in the array')
+    assert.equal(args[args.indexOf('--sandbox') + 1], ENGINE_PERMISSION_MODES[CODEX], 'the sandbox value untouched')
+    assert.equal(spawn.calls[0].shell, false, 'started without a shell, and with no model flag in the array')
+    // The array a turn nobody names a model for still resolves through the law, which is what keeps the absence of
+    // a flag from being the reason a turn cannot start at all.
+    assert.equal(resolveEngineSpawn({ engineId: CODEX, args }).ok, true, 'and the array resolves through the law')
   }
 
-  results.push('the chosen model is `-m <id>` before the prompt, and no choice is the shipped argv untouched')
-}
-
-/**
- * The join between the two halves of the lane: the store state the header's control writes, through the
- * module's own boundary, into the argv the OS is handed.
- *
- * Each side of it is measured somewhere already — the boundary accepts and refuses by its own suite, and the
- * runner's `-m` by the case above — and neither of those asks the question this phase turned out to be about:
- * whether the id under the chosen engine is the id that reaches a runner at all. A runner case hands `model`
- * over directly, so it can be green on a tree where no send ever puts one there; a boundary case stops at the
- * parsed payload. This case takes the state the control actually writes — a map from engine id to the id typed
- * into it — and follows it all the way, which is the only form in which "the value reaches the model that
- * answers" is a claim about arguments rather than about props.
- *
- * The pane's own read of that map is the DOM suite's `carries the model on the turn that creates the
- * conversation`: what is asserted here is the destination, so a change that dropped the id on the way — the
- * schema losing the field, the runner pushing it anywhere but immediately before the prompt — is red here.
- */
-async function theControlStateReachesTheArgv() {
-  // The store the control writes, keyed the way it keys it: one engine, one id under it.
-  const engineModels: Record<string, string> = { [CODEX]: 'gpt-6-luna' }
-  const chosen = engineModels[CODEX]
-
-  // The turn the pane sends, built the way the pane builds it — the id under the engine of the conversation,
-  // and the empty string when nothing was chosen — then taken through the boundary that admits it.
-  const parsed = engineTurnInputSchema.safeParse({
-    engineId: CODEX,
-    prompt: 'a prompt',
-    cwd: 'C:/work',
-    sessionId: 'aaaaaaaa-1111-4111-8111-111111111111',
-    model: engineModels[CODEX] ?? '',
-  })
-  assert.equal(parsed.success, true, 'the boundary admits the turn the control wrote')
-  if (!parsed.success) return
-  assert.equal(parsed.data.model, chosen, 'carrying the id the control holds, unchanged')
-
-  const child = scriptedChild()
-  const spawn = recordingSpawn(child.child)
-  const turn = runCodexTurn(
-    {
-      engineId: parsed.data.engineId,
-      prompt: parsed.data.prompt,
-      cwd: parsed.data.cwd,
-      ...(parsed.data.model === undefined ? {} : { model: parsed.data.model }),
-    },
-    { spawnImpl: spawn.impl },
-    () => undefined
-  )
-  await new Promise((resolve) => setImmediate(resolve))
-  child.feed([])
-  await turn
-
-  const args = [...spawn.calls[0].args]
-  assert.deepEqual(
-    args.slice(-3),
-    ['-m', chosen, 'a prompt'],
-    'the id the control holds is the flag and its value, immediately before the prompt'
-  )
-  assert.deepEqual(
-    args.slice(0, -3),
-    [...ENGINE_LAUNCH_ARGS[CODEX]],
-    'on the shipped launch config, nothing else moved'
-  )
-  assert.equal(spawn.calls[0].shell, false, 'started without a shell, with the id as one argument')
-
-  results.push('the state the model control writes is `-m <id>` immediately before the prompt in the argv')
+  results.push('the argv never carries a model flag, for any state the model control store can hold')
 }
 
 // ---------------------------------------------------------------- report
@@ -450,8 +395,7 @@ async function main() {
   await step('cancel', cancelEscalatesOnceAndOnlyWhileItRuns)
   await step('turn', theCapturedRunBecomesTheTranscript)
   await step('cancel (turn)', cancellingTheTurnKillsTheChild)
-  await step('model', theChosenModelTravelsImmediatelyBeforeThePrompt)
-  await step('model (control state to argv)', theControlStateReachesTheArgv)
+  await step('model flag (absent for every store state)', theArgvNeverCarriesAModelFlag)
 
   console.log('codex launch config: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)

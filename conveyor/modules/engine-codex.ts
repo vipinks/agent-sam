@@ -58,15 +58,6 @@ export interface CodexChild {
  */
 export const CODEX_STDIO: ['ignore', 'pipe', 'pipe'] = ['ignore', 'pipe', 'pipe']
 
-/**
- * The flag that names the model a Codex turn runs under.
- *
- * One word, and its value is the argument after it — which is why the two travel together as a pair: an id is
- * never concatenated onto the flag, because a model id is a word a caller stated and not a fragment of a command
- * line.
- */
-const CODEX_MODEL_FLAG = '-m'
-
 /** How a process is started. Arguments as an array, and no member here through which a shell could be asked for. */
 export type CodexSpawnImpl = (
   command: string,
@@ -188,12 +179,12 @@ export interface CodexTurnInput {
    */
   permissionMode?: unknown
   /**
-   * The model this turn runs under, or an empty string for the engine's own default.
+   * The model a caller named for this turn. Carried here, and not read: this runner names no model to the CLI.
    *
-   * Carried with the turn rather than looked up here: the choice is the header control's, and it is the turn the
-   * user sent that runs under it. An absent value and an empty one mean the same thing — no choice was made —
-   * and neither reaches the argv, so a conversation that never named a model runs exactly as it did before this
-   * field existed.
+   * The field belongs to the one turn-input shape every engine's turn crosses the boundary as, so it arrives with
+   * the rest of the turn — and it becomes no argument, because Codex resolves its own model from its own
+   * configuration, which is the whole of what a turn runs under this runner. `tests/engines/engine-codex-test.ts`
+   * states the absence over every state this field can be in.
    */
   model?: string
   /** Fires when the user cancels. The turn kills the child rather than leaving it running. */
@@ -220,10 +211,10 @@ export interface CodexTurnOutcome {
  * Run one turn, and stream its chunks as they arrive.
  *
  * The prompt is the last argument — an array, so a prompt containing spaces, quotes or a `;` is a string the
- * child receives and not a command line a shell interprets. The chosen model, when there is one, is the `-m
- * <id>` pair immediately before it — an array too, so an id is one argument and never a fragment of a command
- * line. The listeners are installed before this function returns, so a child that answers immediately cannot
- * answer into nothing.
+ * child receives and not a command line a shell interprets. Nothing else is appended to the shipped launch
+ * config, whatever the turn's input carries: the model a Codex turn runs is the one its own configuration
+ * resolves, so there is no flag this side could state it with. The listeners are installed before this function
+ * returns, so a child that answers immediately cannot answer into nothing.
  *
  * A cancel kills the child and ends the turn silently: the user stopped it, and a notice saying the stream
  * ended early would be reporting their own click back to them. A child that ends on its own is read through
@@ -237,11 +228,8 @@ export function runCodexTurn(
   // The sandbox value is the chosen mode's, and the mode is the only part of the array that a preference can
   // reach: the dialect verbs come from the protocol's table, so a setting cannot add a flag.
   const args = [...engineLaunchArgs(input.engineId as EngineId, input.permissionMode)]
-  // The chosen model, immediately before the prompt — and *only* when one was chosen, which is what keeps a turn
-  // nobody chose a model for the argv this app shipped, byte for byte. The pair is appended rather than pushed
-  // as an empty value: `-m` with nothing after it would be an argument the CLI has to make sense of.
-  const model = input.model ?? ''
-  if (model !== '') args.push(CODEX_MODEL_FLAG, model)
+  // The prompt, and nothing between the launch config and the prompt: the model this turn runs is Codex's own to
+  // resolve, so no flag is built here from `input.model` — see that field's note above.
   args.push(input.prompt)
   const resolution = resolveEngineSpawn({
     engineId: input.engineId,

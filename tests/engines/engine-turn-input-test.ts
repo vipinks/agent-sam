@@ -2,10 +2,10 @@
  * The engine turn input, as a boundary: the optional model, the bound it is held to, and what is refused.
  *
  * What a turn carries is the schema's business rather than the runner's, because the schema is the only thing
- * standing between a payload and the argv an OS is handed: the model the panel sends becomes `-m <id>`, so the
- * shape of that field has to be judged before any runner reads it. The four fields the turn has always had are
- * asserted to remain required in the same breath — a boundary that gained a field and lost one would be a turn
- * started with nothing to run.
+ * standing between a payload and the argv an OS is handed: a model id is a word of a length such an argument can
+ * carry, so the shape of that field is judged here rather than by a runner that might read it. The four fields the
+ * turn has always had are asserted to remain required in the same breath — a boundary that gained a field and lost
+ * one would be a turn started with nothing to run.
  *
  * What this deliberately does *not* assert is that an unknown model id is refused here. Codex publishes no
  * catalogue this app can read, so there is nothing on this side to check an id against; an id the CLI does not

@@ -1343,10 +1343,11 @@ export function ChatPanel() {
               prompt: enginePrompt,
               cwd: rootPath ?? '',
               sessionId,
-              // The model the header's control holds for this engine, or the empty string for the engine's own
-              // default — which injects no flag, exactly as a build with no such control did. Read from the store
-              // here rather than kept in a ref beside the engine id: the control writes that store, and there is
-              // one answer to what a turn runs as.
+              // The model the header's control holds for this engine, or the empty string while it holds none —
+              // which is every engine today, no catalogue being advertised and no control being drawn. Carried with
+              // the turn rather than kept in a ref beside the engine id: the control writes that store, so there is
+              // one answer to what a turn was asked to run as, and a runner that reads no model leaves the turn on
+              // the engine's own default.
               model: engineModels[engineId] ?? '',
             })
 
@@ -1938,15 +1939,14 @@ export function ChatPanel() {
         )}
 
         {/*
-          The engine's own model, in the slot a reader looks in for "the model", and drawn only while an engine
-          this app sets a model for is chosen: with the app's own loop the pair below is the whole answer, and
-          there would be no engine for a value here to belong to. The two are adjacent on purpose — when an engine
-          owns the conversation this is the live control and the pair below is the refused one, so the choice in
-          force sits where the question is asked.
+          The engine's own model, in the slot a reader looks in for "the model", and drawn only for an engine that
+          advertises a catalogue of models — which, today, no engine does, so the control draws nowhere and the pair
+          below is the only model control this row shows. It keeps its place and its order in the row for the engine
+          that does answer with a list, when this field becomes the search over that list.
 
-          The engine drawn here is the *effective* one, the same rule the picker above follows: the pending
-          choice while home, and the conversation's own once one exists. The control itself is what decides
-          whether this engine has a model to state.
+          The engine handed to it is the *effective* one, the same rule the picker above follows: the pending
+          choice while home, and the conversation's own once one exists. The control itself is what decides whether
+          this engine has a catalogue to be read.
         */}
         <EngineModelPicker engineId={atHome ? sessions.pendingEngineId : sessions.engineId} />
 

@@ -237,10 +237,10 @@ export function engineLaunchArgs(engineId: EngineId, mode?: unknown): string[] {
 /**
  * How long a model id may be.
  *
- * The whole of what this app can check about a model id, and it is a length rather than a list on purpose: Codex
- * publishes no catalogue this app can read, so a rule here about *which* ids exist would be a table of guesses
- * that went stale with the next CLI release. What can be stated is that the value is a word a command line can
- * carry — it travels as `-m <id>`, one argument among the flags above — and the engine's own answer is what
+ * The whole of what this app can check about a model id, and it is a length rather than a list on purpose: a
+ * catalogue is the engine's own to publish, so a rule here about *which* ids exist would be a table of guesses that
+ * went stale with the next CLI release. What can be stated is that the value is a word — one a spawn layer could
+ * carry as a single argument, and one a catalogue could be matched against — and the engine's own answer is what
  * judges the id itself.
  *
  * One constant rather than a number at each boundary: the turn input a renderer sends and the field a user types
@@ -249,21 +249,26 @@ export function engineLaunchArgs(engineId: EngineId, mode?: unknown): string[] {
 export const ENGINE_MODEL_MAX_LENGTH = 128
 
 /**
- * The engines whose turn this app sets a model for.
+ * The engines this app offers a model for, which is the engines that advertise a catalogue of their own.
  *
  * A list rather than a test written where the control is drawn, because two different things have to agree about
- * it: the field that offers a model, and the runner that turns one into an argument. Codex is the one member and
- * it is alone deliberately — `-m <id>` is what its own launch config offers, a word a caller states. The two ACP
- * engines answer with a model *catalogue* on `session/new` instead (`tests/probes/acp-model-surface-probe.mjs`,
- * Phase 82), so the choice they take is a selection from a list this app has to read rather than an id a user
- * types: a free-text field drawn for them would collect a value no runner reads, while the turn quietly ran the
- * engine's own default.
+ * it: the field that offers a choice, and whatever acts on it. What both need is a source of ids — a catalogue
+ * this app can read and offer as a selection — and the list is empty. Codex takes `-m <id>` and publishes nothing
+ * to read one from, so the model a Codex turn runs is the one its own configuration resolves: its default, or the
+ * model that configuration names. A free-text field drawn for it would collect a word nothing could judge and no
+ * runner acted on, while the turn quietly ran the default — which is the shape of promise that put this rule here
+ * rather than a test of taste.
+ *
+ * An engine whose session answers with a catalogue (`tests/probes/acp-model-surface-probe.mjs`, Phase 82) joins
+ * this list, and that is the whole of the rule: being on it is a claim that this app can offer a real choice
+ * rather than guess at one.
  */
-export const ENGINE_MODEL_ENGINES: readonly EngineId[] = ['codex']
+export const ENGINE_MODEL_ENGINES: readonly EngineId[] = []
 
 /**
- * Whether this app sets the model for one engine — and, when it does, that the id names an engine rather than
- * merely being a string. An id this build does not ship answers `false`.
+ * Whether this app offers a model choice for one engine — and, when it does, that the id names an engine rather
+ * than merely being a string. An id this build does not ship answers `false`, and while no engine advertises a
+ * catalogue, every id does.
  */
 export function engineTakesModel(engineId: string | null | undefined): engineId is EngineId {
   return engineId !== null && engineId !== undefined && ENGINE_MODEL_ENGINES.includes(engineId as EngineId)

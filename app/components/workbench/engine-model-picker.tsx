@@ -14,20 +14,17 @@ export const ENGINE_MODEL_LABEL = 'Engine model'
  * an engine owns the conversation, which is unchanged — so this is drawn *beside* it rather than replacing it,
  * and a reader can see both the choice in force and the one that has been taken over.
  *
- * Drawn, too, only for an engine this app sets a model for — `engineTakesModel`, which is Codex alone, and that
- * is not a narrowing of taste: the value travels to the runner as `-m <id>`, so for an engine whose runner reads
- * no such field the control would collect a word nothing acted on while the turn quietly ran the engine's own
- * default. An engine that takes its model from a catalogue of its own is a selection this app has to read, which
- * is a later turn's question rather than a field this one can answer.
+ * Drawn, too, only for an engine that advertises a model catalogue — `engineTakesModel`, whose set is empty, so this
+ * draws nowhere today. That is the rule rather than an accident: a field is a choice only where there is a source of
+ * ids to choose from, and an engine that publishes no catalogue resolves its own model — the value of a field here
+ * would be a word nothing judged and no runner read, while the turn quietly ran that engine's default. The control
+ * keeps its place in the row for the engine that does answer with a list: the field then becomes the search over it,
+ * which is a change to this component rather than a second control beside it.
  *
- * A free-text combobox with nothing to open, because that is what Codex offers: an id and no catalogue. So the
- * field *is* the whole control, and the only thing this side can check is the length the protocol states. Whether
- * the id names a model the CLI knows is the CLI's own answer, and it surfaces as the engine's refusal on the turn
- * that used it — through the same path every other engine error travels, with no second vocabulary written here.
- *
- * An empty field is not an error but the ordinary state: it leaves the engine on its own default, and the runner
- * injects no flag for it — so a conversation that never named a model runs exactly as it did before this control
- * existed. That is why the placeholder says so rather than the field arriving with a value nobody chose.
+ * A free-text combobox with nothing to open, which is the shape a catalogue is read in until there is a catalogue.
+ * An empty field is not an error but the ordinary state: it names no model, so the engine keeps its own — and that
+ * is what every turn does today, since nothing draws this field. That is why the placeholder says so rather than
+ * the field arriving with a value nobody chose.
  *
  * The value lives in the workbench store rather than in this component, because the send path reads the same
  * value at the moment the turn is started: one writer, one reader, and no draft that could disagree with the turn
@@ -37,14 +34,14 @@ export function EngineModelPicker({ engineId }: { engineId: string | null }) {
   const engineModels = useWorkbenchStore((s) => s.engineModels)
   const setEngineModel = useWorkbenchStore((s) => s.setEngineModel)
 
-  // Nothing at all until an engine this app sets a model for is chosen: there would be no engine for the value to
-  // belong to, and the row would carry a second control for a question nothing is asking.
+  // Nothing at all for an engine that advertises no catalogue, which is every engine today: there would be no ids
+  // to choose between, and the row would carry a control asking a question nothing can answer.
   if (!engineTakesModel(engineId)) return null
 
   return (
     <Input
-      // A combobox by role rather than a textbox, because that is what it is: the field is the control's whole
-      // surface, and the list one would open is empty — the engine publishes nothing to fill it with.
+      // A combobox by role rather than a textbox, because that is what it comes from: the field is the surface a
+      // catalogue is searched by, and the list it opens is that engine's own.
       role="combobox"
       aria-expanded={false}
       aria-label={ENGINE_MODEL_LABEL}
