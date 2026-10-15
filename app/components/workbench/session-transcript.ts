@@ -40,6 +40,15 @@ export interface TranscriptState {
    * has exactly one way to say "no engine", and it is not being there.
    */
   engineId?: string
+  /**
+   * The model this conversation's turns ran under, absent for one whose engine kept its own.
+   *
+   * Optional like its counterpart on the record, and for the same reason: a conversation that never named a
+   * model carries no key, and absence means the engine's own default — which a stored empty string could not
+   * say, because an engine handed no model and an engine handed `''` are two different turns. Nothing here
+   * resolves it to a value: what an engine chose for itself is not this app's to name.
+   */
+  engineModel?: string
 }
 
 /** How a turn's incompleteness is described on screen. */
@@ -125,6 +134,10 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // build wrote for it, and an empty string is never written to mean nothing — there is one spelling of
     // "no engine", and it is the key's absence.
     ...(state.engineId === undefined ? {} : { engineId: state.engineId }),
+    // And the model, on the same rule: written only when a turn actually carried one, so a conversation whose
+    // engine resolved its own model writes no key rather than a placeholder, and every transcript written
+    // before this key existed keeps the shape it was written with.
+    ...(state.engineModel === undefined ? {} : { engineModel: state.engineModel }),
   }
 }
 
@@ -191,6 +204,10 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // never a choice, so a control reading this must see that nothing was recorded rather than a value that
     // looks like one the user picked.
     ...(snapshot.engineId === undefined ? {} : { engineId: snapshot.engineId }),
+    // Carried back for the same reason and by the same rule: a reopened conversation whose turns ran a model
+    // still says what it ran, and one whose engine chose for itself carries no key at all rather than a value
+    // a reader would have to tell apart from a choice.
+    ...(snapshot.engineModel === undefined ? {} : { engineModel: snapshot.engineModel }),
   }
 }
 

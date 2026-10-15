@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { planStepSchema } from './plan'
 import { TURN_END_CAUSES } from './turn-end'
 import { imageAttachmentRefSchema } from './image-attachments'
+import { ENGINE_MODEL_MAX_LENGTH } from './engine'
 
 /**
  * The shape of a saved transcript, and its version.
@@ -237,6 +238,26 @@ export const transcriptSnapshotSchema = z.object({
    * an empty id is a second spelling of "no engine" and there is only one.
    */
   engineId: z.string().min(1).optional(),
+  /**
+   * The model this conversation's turns ran under, absent for a conversation whose engine kept its own.
+   *
+   * On the session rather than on the turn: a conversation has one model in force at a time — the header's
+   * control is a single field, and the next turn replaces what the last one ran — so a copy per turn would be
+   * the same word written into every turn of the file. What the field is for is a reopened conversation being
+   * able to say what it has been running, and that is a fact about the conversation rather than about one
+   * exchange in it.
+   *
+   * Absence is the engine's own default rather than a model, exactly as an absent `engineId` is the Sam loop:
+   * a conversation whose engine resolved its own model records nothing, because there is no id to record and
+   * the engine's choice is not this app's to name. An engine's default can change with the next CLI release,
+   * so the sentence "the default" would freeze a claim this app never measured.
+   *
+   * Optional, and it did not bump the version for the same reason `autoApprove` and `engineId` did not: a file
+   * written before this key existed simply has no key, an absent optional key is stripped rather than
+   * defaulted, so old files stay valid reads. Bounded by the spawn law's own length rather than by a number
+   * stated here, because the field a user types into and the value a turn is handed are held to one limit.
+   */
+  engineModel: z.string().min(1).max(ENGINE_MODEL_MAX_LENGTH).optional(),
 })
 
 export type TranscriptSnapshot = z.infer<typeof transcriptSnapshotSchema>

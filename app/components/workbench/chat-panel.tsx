@@ -1335,6 +1335,18 @@ export function ChatPanel() {
       // the engine keeps its own thread for the conversation, so re-sending the transcript would be telling it
       // twice about a history it already holds.
       const enginePrompt = [...turns].reverse().find((turn) => turn.role === 'user')?.content ?? ''
+      // What the header's control holds for this engine, read once: the turn below and the record the turn is
+      // written down with are the same value, so a store that moved between two reads could not make the app
+      // claim to have run a model it never handed over.
+      //
+      // The empty string is the ordinary state rather than an error — the field names no model, and an engine
+      // that advertises no catalogue draws no field at all — and it is what a runner reads as "your own
+      // default", which is why it is carried on the turn rather than kept in a ref beside the engine id.
+      const engineModel = engineId === null ? '' : (engineModels[engineId] ?? '')
+      // Written down before the run rather than after it: what a turn ran under is a fact about the turn that
+      // started, so a turn the engine never answered for still says which model it was given.
+      if (engineId !== null) sessionsRef.current.stampEngineModel(sessionId, engineModel)
+
       const engineTurn =
         engineId === null || enginePrompt.trim() === ''
           ? null
@@ -1343,12 +1355,7 @@ export function ChatPanel() {
               prompt: enginePrompt,
               cwd: rootPath ?? '',
               sessionId,
-              // The model the header's control holds for this engine, or the empty string while it holds none —
-              // which is every engine today, no catalogue being advertised and no control being drawn. Carried with
-              // the turn rather than kept in a ref beside the engine id: the control writes that store, so there is
-              // one answer to what a turn was asked to run as, and a runner that reads no model leaves the turn on
-              // the engine's own default.
-              model: engineModels[engineId] ?? '',
+              model: engineModel,
             })
 
       await runStream(

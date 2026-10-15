@@ -321,6 +321,16 @@ export interface ChatSessions {
    */
   stampRoot: (id: string) => void
   /**
+   * Record the model a turn of this conversation ran under, and the conversation it belongs to.
+   *
+   * Called where the turn is built rather than where the control is touched, because the value recorded has to
+   * be the one the runner was handed: a model typed into the field and never sent with records nothing, while
+   * the model a turn actually ran records itself. An empty value is not written at all — it is what the field
+   * holds when the user has chosen nothing, which is the engine's own default, and a stored empty string would
+   * be a second way to spell an absence the absent key already spells.
+   */
+  stampEngineModel: (id: string, model: string) => void
+  /**
    * Why the last selection did not happen, worded from its code, or null.
    *
    * Kept here rather than in the row that was clicked, and cleared by the next attempt: what a click
@@ -743,6 +753,34 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     [touchSession]
   )
 
+  /**
+   * Record the model a turn of this conversation ran under.
+   *
+   * Both records are written, and they are written for different reasons. The transcript carries it so the file
+   * says what this conversation has been running, beside the engine it runs as — which is what makes a reopened
+   * conversation's own file agree with its row. The session record carries it so the header's control can be put
+   * back when a conversation is reopened in a later process, which is the only place the value survives at all:
+   * the control's own value is window state and goes with the window, and that is the residual this closes.
+   *
+   * The mirror is consulted rather than the write being unconditional, and only to skip a write that would say
+   * what is already stored — the habit `stampRoot` above follows. A session the store has not broadcast back yet
+   * is not skipped, and that is the difference between the two: a folder stamp guessed for a brand-new row would
+   * be the folder the create already wrote, while a model skipped for one would never be recorded at all, because
+   * no later turn of a conversation that already ran it comes back to write it.
+   */
+  const stampEngineModel = useCallback(
+    (id: string, model: string) => {
+      if (model.trim() === '') return
+      const session = sessionsRef.current.find((s) => s.id === id)
+      if (session?.engineModel === model) return
+      // The transcript is the one on screen, and this turn is its own: a stamp for another conversation would put
+      // a model into a file that never ran under it.
+      if (activeIdRef.current === id) setTranscript({ ...transcriptRef.current, engineModel: model })
+      touchSession({ id, engineModel: model })
+    },
+    [setTranscript, touchSession]
+  )
+
   const createSession = useCallback(
     (buddyId: string | null = null) => {
       // `crypto.randomUUID` in the renderer is fine for an id: it only has to be unique and safe as a
@@ -807,7 +845,16 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // it. Leaving this unset would let a click on the new row try to load a file that cannot exist.
       hydratedIdRef.current = id
       setOpenId(id)
-      setTranscript({ turns: [], interrupted: false })
+      // The empty transcript the new conversation starts from, carrying the engine it was created as: the file
+      // has to say what this conversation runs under from its first write, because that is the record a reopened
+      // conversation is read from. Absent for a conversation on the Sam loop, which is the one spelling of "no
+      // engine" every transcript already uses. The model follows on the first turn, which is the first moment
+      // there is one to write.
+      setTranscript({
+        turns: [],
+        interrupted: false,
+        ...(chosenEngine === null ? {} : { engineId: chosenEngine }),
+      })
       // And the last thing a Buddy decides, after the empty transcript above has replaced whatever was
       // there: a Buddy that runs without asking is a conversation that starts already answered, and the
       // write has to come after the reset for that reason. Only ever written on — a Buddy declaring false
@@ -889,6 +936,18 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         // transcript can state.
         const loaded = rehydrateTranscript(snapshot)
         applyTranscript(id, pausesRef.current[id] ? loaded : reconcileOrphanedPauses(loaded))
+        // Put the model this conversation's turns last ran back into the header's control. The control's value is
+        // window state and does not survive a relaunch, so without this a reopened engine conversation shows an
+        // empty field while its turns ran a chosen model — and the transcript is no help here either: the record
+        // the list already holds is where the model is kept, and the file is read for the conversation itself.
+        //
+        // Only when the record names a model. A conversation whose engine resolved its own model leaves the
+        // window's value exactly as it stands, because a pick made there is a choice about the next turn rather
+        // than a claim about the last one — and the absent key is the engine's own default either way.
+        const row = sessionsRef.current.find((s) => s.id === id)
+        if (row?.engineId !== undefined && row.engineModel !== undefined) {
+          useWorkbenchStore.getState().setEngineModel(row.engineId, row.engineModel)
+        }
       } catch (err) {
         // Branched on the code, never the message text.
         const corrupt = err instanceof ConveyorError && err.code === 'SESSION_CORRUPT'
@@ -1139,6 +1198,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     streaming,
     setStreaming,
     stampRoot,
+    stampEngineModel,
     notice,
     error,
     openId,

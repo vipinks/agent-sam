@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { MAX_ACTIVE_SKILLS, MAX_SKILL_ID_CHARS } from '../protocol/skills'
+import { ENGINE_MODEL_MAX_LENGTH } from '../protocol/engine'
 import { MAX_BUDDY_ID_CHARS, MAX_BUDDY_MCP_IDS, MAX_BUDDY_ROLE_PROMPT_CHARS } from '../protocol/buddies'
 import { MAX_MCP_SERVER_ID_CHARS } from '../protocol/mcp-ids'
 import { contextSnapshotSchema, type ContextSnapshot } from '../protocol/context-window'
@@ -82,6 +83,24 @@ export interface ChatSession {
    * nothing before engines existed.
    */
   engineId?: string
+  /**
+   * The model this conversation's turns last ran, and absent for one whose engine kept its own.
+   *
+   * On the record rather than only in the window, because it is the one thing about a conversation's model that
+   * outlives the session: the header's control is renderer-local state, so a conversation reopened after a
+   * relaunch has nothing else to hydrate it from — which is what left every engine conversation opening with an
+   * empty field. Written at every turn start, whenever that turn carried a model.
+   *
+   * A record of what ran rather than a snapshot of a choice, and the two differ for a field the user may edit
+   * between turns: what is stored is the model the last turn was handed, so a reopened conversation shows the
+   * model its turns actually ran rather than one somebody picked and never sent with. Absence is the engine's
+   * own default, by the rule the engine id above follows — there is no id to write for a model the engine chose
+   * itself, and an engine's own default is not this app's to name.
+   *
+   * Optional and additive like `lastRoot`: an entry written before this key existed has no key, and one whose
+   * engine resolved its own model carries none either, which is what absence already says.
+   */
+  engineModel?: string
   /**
    * The role this conversation was created with, snapshotted at creation.
    *
@@ -221,6 +240,11 @@ export const chatSessionsStore = defineStore('chat-sessions', {
       title: z.string().min(1).optional(),
       providerId: z.string().min(1).optional(),
       model: z.string().min(1).optional(),
+      // The model this conversation's turns last ran, written when a turn carried one. Not a snapshot in the
+      // sense the engine id is: the header's control changes it between turns, and what a reopened conversation
+      // has to show is the model its turns actually ran. Bounded by the spawn law's own length — the same limit
+      // the field enforces — because this is where a renderer's payload crosses the boundary.
+      engineModel: z.string().min(1).max(ENGINE_MODEL_MAX_LENGTH).optional(),
       // Min one, so a blank path cannot become a project: the field's whole meaning is that it names
       // a folder, and absence is how "none" is spelled.
       lastRoot: z.string().min(1).optional(),
@@ -315,9 +339,10 @@ export const chatSessionsStore = defineStore('chat-sessions', {
      * `title` is only ever set by the caller when it should change — the first user message names a
      * session once, and later messages must not rename it. `lastRoot` is passed the same way and for
      * the same reason: the caller compares it against what is stored before asking, so a touch that
-     * says nothing about the project leaves the recorded one exactly as it was.
+     * says nothing about the project leaves the recorded one exactly as it was. `engineModel` is passed
+     * the third way of that pair: only when the turn about to run carried one.
      */
-    touchSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds }) => {
+    touchSession: (state, { id, title, providerId, model, lastRoot, activeSkillIds, engineModel }) => {
       const index = state.sessions.findIndex((s) => s.id === id)
       if (index === -1) return
       state.sessions = sortByRecency(
@@ -333,6 +358,11 @@ export const chatSessionsStore = defineStore('chat-sessions', {
                 ...(providerId !== undefined ? { providerId } : {}),
                 ...(model !== undefined ? { model } : {}),
                 ...(lastRoot !== undefined ? { lastRoot } : {}),
+                // The engine's own model, on the terms of the pair above and answering the opposite question:
+                // `model` is the Sam loop's half of what a request names, while this is what an engine turn was
+                // handed. Absent for an engine that resolved its own model, which the header reads as "nothing
+                // to show" and the engine reads as its default.
+                ...(engineModel !== undefined ? { engineModel } : {}),
                 // Unlike the create above, an empty list is written: it is the user turning the last
                 // skill off, and that is a change rather than the absence of one.
                 ...(activeSkillIds !== undefined ? { activeSkillIds: [...activeSkillIds] } : {}),
