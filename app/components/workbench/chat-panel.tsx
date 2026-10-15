@@ -1303,7 +1303,14 @@ export function ChatPanel() {
    * read again on a regenerate.
    */
   const runAgentTurn = useCallback(
-    async (turns: AgentTurn[], mentionPaths: readonly string[], sessionId: string, engineId: string | null) => {
+    async (
+      turns: AgentTurn[],
+      mentionPaths: readonly string[],
+      sessionId: string,
+      engineId: string | null,
+      rolePrompt: string | null,
+      mcpSubset: string[] | null
+    ) => {
       // A turn is this conversation being used in this window's folder, so its start is what the project
       // is recorded from — and only when that differs from the folder already stored.
       sessionsRef.current.stampRoot(sessionId)
@@ -1370,12 +1377,14 @@ export function ChatPanel() {
             // changes the next turn, and this is the next turn.
             activeSkillIds:
               sessionsRef.current.activeSkillIds.length > 0 ? [...sessionsRef.current.activeSkillIds] : undefined,
-            // And what this conversation runs as, read off the record through the ref for the same reason:
-            // a conversation created as a Buddy runs as it for every turn, not only its first. Both are
-            // left out rather than sent as null when there is nothing to say — a conversation created
-            // without a Buddy sends the request it always sent, key for key.
-            rolePrompt: sessionsRef.current.buddyRolePrompt ?? undefined,
-            mcpSubset: sessionsRef.current.buddyMcpSubset ?? undefined,
+            // And what this conversation runs as, handed in by the same caller that named the id and the
+            // engine, and for the same reason: on the send that creates a Buddy conversation the record
+            // carrying the role and the server list is written by that very send, so a read from here would
+            // answer for the window as it was before there was a conversation at all. Both are left out rather
+            // than sent as null when there is nothing to say — a conversation created without a Buddy sends
+            // the request it always sent, key for key.
+            rolePrompt: rolePrompt ?? undefined,
+            mcpSubset: mcpSubset ?? undefined,
           }),
         assistantTurn.id,
         sessionId
@@ -1450,7 +1459,12 @@ export function ChatPanel() {
       // it. This is what makes the composer work before the user has ever touched the session list. The
       // id comes back so the run knows which conversation it belongs to — a pause it asks for is a
       // question about that conversation, and the pane has to be able to say which one it is holding.
-      const { id: sessionId, engineId: conversationEngineId } = sessionsRef.current.ensureSession(text)
+      const {
+        id: sessionId,
+        engineId: conversationEngineId,
+        rolePrompt: conversationRolePrompt,
+        mcpSubset: conversationMcpSubset,
+      } = sessionsRef.current.ensureSession(text)
 
       // The images are stored before anything is dispatched, and the send is abandoned if one of them
       // cannot be. Two things rest on that order. The reference a transcript carries is the store's, so
@@ -1494,7 +1508,9 @@ export function ChatPanel() {
         [...messagesRef.current, startUserTurn(text, chips, imageRefs)],
         chips,
         sessionId,
-        conversationEngineId
+        conversationEngineId,
+        conversationRolePrompt,
+        conversationMcpSubset
       )
     },
     [isStreaming, pending, runAgentTurn, setChips, setDraft, setImages]
@@ -1562,9 +1578,17 @@ export function ChatPanel() {
         const kept = truncateFromTurn(messagesRef.current, turnId)
         updateMessages(kept)
         await sessionsRef.current.saveNow()
-        // A reply already on screen belongs to a conversation that exists, so its engine is the record's — read
-        // off the window here, where it is current, rather than handed over by a create as a first send's is.
-        await runAgentTurn(kept, lastAskMentions(kept), sessionsRef.current.openId ?? '', sessionsRef.current.engineId)
+        // A reply already on screen belongs to a conversation that exists, so its engine and its Buddy's role and
+        // server list are the record's — read off the window here, where they are current, rather than handed over
+        // by a create as a first send's are.
+        await runAgentTurn(
+          kept,
+          lastAskMentions(kept),
+          sessionsRef.current.openId ?? '',
+          sessionsRef.current.engineId,
+          sessionsRef.current.buddyRolePrompt,
+          sessionsRef.current.buddyMcpSubset
+        )
       })()
     },
     [isStreaming, pending, runAgentTurn, updateMessages]

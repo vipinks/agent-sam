@@ -164,15 +164,19 @@ function emptyComposer(): ComposerState {
 }
 
 /**
- * A conversation at the one moment it is created: its id, and the engine its record was written with.
+ * A conversation at the one moment it is created: its id, the engine its record was written with, and the Buddy
+ * snapshot its record was written with — the role it runs in and the servers it may use.
  *
- * Both are stated together because the send that creates a conversation is also the run that has to start under
- * it, and the record — which is where the engine lives from that moment on — is back in this window only after a
- * round trip. `null` is the Sam loop, which is what a conversation created without an engine runs as.
+ * All of them are stated together because the send that creates a conversation is also the run that has to start
+ * under them, and the record — which is where they live from that moment on — is back in this window only after a
+ * round trip. `null` is the Sam loop and the absence of a Buddy, which is what a conversation created without
+ * either runs as.
  */
 export interface CreatedSession {
   id: string
   engineId: string | null
+  rolePrompt: string | null
+  mcpSubset: string[] | null
 }
 
 export interface ChatSessions {
@@ -809,9 +813,16 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // write has to come after the reset for that reason. Only ever written on — a Buddy declaring false
       // is asking for the default, which is the absent key this transcript is already carrying.
       if (seed?.autoApprove === true) setTranscript({ ...transcriptRef.current, autoApprove: true })
-      // The engine is handed back with the id because it is the same moment's decision: the record carries it from
-      // here on, and the send that caused this create runs under it before that record ever comes back.
-      return { id, engineId: chosenEngine }
+      // The engine and the Buddy's own two are handed back with the id because they are the same moment's decision:
+      // the record carries them from here on, and the send that caused this create runs under them before that
+      // record ever comes back. Read from the seed rather than from the row that was just written for the same
+      // reason — the row is what this window sees a round trip later, and the seed is what was written.
+      return {
+        id,
+        engineId: chosenEngine,
+        rolePrompt: seed?.rolePrompt ?? null,
+        mcpSubset: seed?.mcpSubset === undefined ? null : [...seed.mcpSubset],
+      }
     },
     [addSession, model, providerId, setActive, setTranscript]
   )
@@ -1040,10 +1051,15 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         // An existing session: named here only if it is still untitled, which can only happen once.
         if (plan.title && activeId) touchSession({ id: activeId, title: plan.title })
         // A conversation that already exists runs as its own record says, which is a fact this render can read: the
-        // record was written before this send, not by it.
+        // record was written before this send, not by it. All of it is read the one way, off the row the pointer
+        // names, and the Buddy's two through the reader that strips what a provider must not be handed.
+        const record = sessionsRef.current.find((s) => s.id === activeId)
+        const buddy = readBuddySession(record)
         return {
           id: activeId as string,
-          engineId: sessionsRef.current.find((s) => s.id === activeId)?.engineId ?? null,
+          engineId: record?.engineId ?? null,
+          rolePrompt: buddy.rolePrompt,
+          mcpSubset: buddy.mcpSubset,
         }
       }
 
