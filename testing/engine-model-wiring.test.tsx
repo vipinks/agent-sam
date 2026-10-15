@@ -30,7 +30,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
-import { engineRows } from '@/conveyor/protocol/engine'
+import { ENGINE_LABELS, engineRows } from '@/conveyor/protocol/engine'
 import type { ChatSession } from '@/conveyor/stores/chat-sessions'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
@@ -141,12 +141,20 @@ function renderChat(): ReturnType<typeof render> {
 
 const engineModelControl = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: ENGINE_MODEL_NAME })
 const samModelPicker = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Provider and model' })
+const enginePicker = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Engine' })
 const composer = async (): Promise<HTMLTextAreaElement> =>
   (await screen.findByLabelText('Message')) as HTMLTextAreaElement
 
 /** Whether a control is disabled, as Radix states it. */
 function isDisabled(element: HTMLElement): boolean {
   return element.hasAttribute('disabled') || element.getAttribute('data-disabled') !== null
+}
+
+/** Open a Select from the keyboard, the one path Radix routes without consulting the pointer. */
+async function open(trigger: HTMLElement): Promise<void> {
+  trigger.focus()
+  await userEvent.keyboard('{Enter}')
+  await screen.findByRole('listbox')
 }
 
 /**
@@ -181,6 +189,44 @@ beforeEach(() => {
 })
 
 describe('the per-engine model control', () => {
+  it('carries the model on the turn that creates the conversation, with no blur of its own', async () => {
+    // The state Boss's run was in, and the state the two Codex sessions were made in: no conversation yet, the
+    // engine chosen while there is none to hold it, the id typed into the control, and the send as the commit.
+    //
+    // The claim is about the turn the pane starts, not about the control: a send is the one moment both choices
+    // have to travel under — the engine the conversation is created as, and the model that engine runs. A pane
+    // that read its own conversation back off a render is a pane whose first turn, the very one this send is
+    // starting, ran as something else.
+    //
+    // First in this file, and unmounted at the end: there is no automatic cleanup here, the cases below leave
+    // their pane standing, and a second one on screen would make this case's queries ambiguous.
+    const stub = stubScreen(null)
+    const view = renderChat()
+
+    await open(await enginePicker())
+    const codex = screen.getAllByRole('option').find((option) => option.textContent?.startsWith(ENGINE_LABELS.codex))
+    expect(codex).toBeDefined()
+    await userEvent.click(codex as HTMLElement)
+
+    // Typed and never blurred: nothing about this control commits on focus loss, because the send is the only
+    // thing that has to read it.
+    await userEvent.type(await engineModelControl(), MODEL)
+    expect(useWorkbenchStore.getState().engineModels[CODEX]).toBe(MODEL)
+
+    await userEvent.type(await composer(), 'which model are you{Enter}')
+
+    expect(await engineTurnInput(stub)).toMatchObject({
+      engineId: CODEX,
+      prompt: 'which model are you',
+      model: MODEL,
+    })
+    // And the engine path, stated the same way the case below states it: the app's own loop — the one that answers
+    // under the picker's `provider::model` rather than under the engine — was never asked for this turn.
+    expect(stub.calls.some((call) => String(call.method).startsWith('agent.chatWithTools'))).toBe(false)
+
+    view.unmount()
+  })
+
   it('is drawn in the header once an engine is chosen, where the model picker sits, and is live', async () => {
     stubScreen(ENGINE_SESSION)
     renderChat()

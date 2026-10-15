@@ -1303,7 +1303,7 @@ export function ChatPanel() {
    * read again on a regenerate.
    */
   const runAgentTurn = useCallback(
-    async (turns: AgentTurn[], mentionPaths: readonly string[], sessionId: string) => {
+    async (turns: AgentTurn[], mentionPaths: readonly string[], sessionId: string, engineId: string | null) => {
       // A turn is this conversation being used in this window's folder, so its start is what the project
       // is recorded from — and only when that differs from the folder already stored.
       sessionsRef.current.stampRoot(sessionId)
@@ -1318,10 +1318,15 @@ export function ChatPanel() {
       // every line after this is unchanged: one run path, two sources. The Sam loop is the `null` case, which is
       // what every conversation written before engines existed is.
       //
+      // Handed in by the caller rather than read off the window here, and that is the whole of why it is a
+      // parameter: the send that creates a conversation is the run this has to start under the engine that
+      // conversation was created as, and a record written by that same send is not yet back in this window. A
+      // read from here answered for the conversation the window was showing a moment ago — which, for the first
+      // message of an engine conversation, is no conversation at all.
+      //
       // The prompt is the last thing the user said, because that is what a non-interactive engine turn is given:
       // the engine keeps its own thread for the conversation, so re-sending the transcript would be telling it
       // twice about a history it already holds.
-      const engineId = sessionsRef.current.engineId
       const enginePrompt = [...turns].reverse().find((turn) => turn.role === 'user')?.content ?? ''
       const engineTurn =
         engineId === null || enginePrompt.trim() === ''
@@ -1445,7 +1450,7 @@ export function ChatPanel() {
       // it. This is what makes the composer work before the user has ever touched the session list. The
       // id comes back so the run knows which conversation it belongs to — a pause it asks for is a
       // question about that conversation, and the pane has to be able to say which one it is holding.
-      const sessionId = sessionsRef.current.ensureSession(text)
+      const { id: sessionId, engineId: conversationEngineId } = sessionsRef.current.ensureSession(text)
 
       // The images are stored before anything is dispatched, and the send is abandoned if one of them
       // cannot be. Two things rest on that order. The reference a transcript carries is the store's, so
@@ -1485,7 +1490,12 @@ export function ChatPanel() {
       // The message goes on the end of the transcript as it stands — after any truncation an edit made,
       // so a resend continues the conversation that is left rather than the one the removed turns
       // belonged to — and that whole list is what the run is handed.
-      await runAgentTurn([...messagesRef.current, startUserTurn(text, chips, imageRefs)], chips, sessionId)
+      await runAgentTurn(
+        [...messagesRef.current, startUserTurn(text, chips, imageRefs)],
+        chips,
+        sessionId,
+        conversationEngineId
+      )
     },
     [isStreaming, pending, runAgentTurn, setChips, setDraft, setImages]
   )
@@ -1552,7 +1562,9 @@ export function ChatPanel() {
         const kept = truncateFromTurn(messagesRef.current, turnId)
         updateMessages(kept)
         await sessionsRef.current.saveNow()
-        await runAgentTurn(kept, lastAskMentions(kept), sessionsRef.current.openId ?? '')
+        // A reply already on screen belongs to a conversation that exists, so its engine is the record's — read
+        // off the window here, where it is current, rather than handed over by a create as a first send's is.
+        await runAgentTurn(kept, lastAskMentions(kept), sessionsRef.current.openId ?? '', sessionsRef.current.engineId)
       })()
     },
     [isStreaming, pending, runAgentTurn, updateMessages]

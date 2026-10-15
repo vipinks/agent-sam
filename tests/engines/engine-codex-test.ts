@@ -32,6 +32,7 @@ import {
   type CodexChild,
   type CodexSpawnImpl,
 } from '../../conveyor/modules/engine-codex'
+import { engineTurnInputSchema } from '../../conveyor/modules/engine'
 import { codexTranscriptChunks, type EngineTranscriptChunk } from '../../conveyor/protocol/codex-turn'
 
 const results: string[] = []
@@ -369,6 +370,72 @@ async function theChosenModelTravelsImmediatelyBeforeThePrompt() {
   results.push('the chosen model is `-m <id>` before the prompt, and no choice is the shipped argv untouched')
 }
 
+/**
+ * The join between the two halves of the lane: the store state the header's control writes, through the
+ * module's own boundary, into the argv the OS is handed.
+ *
+ * Each side of it is measured somewhere already — the boundary accepts and refuses by its own suite, and the
+ * runner's `-m` by the case above — and neither of those asks the question this phase turned out to be about:
+ * whether the id under the chosen engine is the id that reaches a runner at all. A runner case hands `model`
+ * over directly, so it can be green on a tree where no send ever puts one there; a boundary case stops at the
+ * parsed payload. This case takes the state the control actually writes — a map from engine id to the id typed
+ * into it — and follows it all the way, which is the only form in which "the value reaches the model that
+ * answers" is a claim about arguments rather than about props.
+ *
+ * The pane's own read of that map is the DOM suite's `carries the model on the turn that creates the
+ * conversation`: what is asserted here is the destination, so a change that dropped the id on the way — the
+ * schema losing the field, the runner pushing it anywhere but immediately before the prompt — is red here.
+ */
+async function theControlStateReachesTheArgv() {
+  // The store the control writes, keyed the way it keys it: one engine, one id under it.
+  const engineModels: Record<string, string> = { [CODEX]: 'gpt-6-luna' }
+  const chosen = engineModels[CODEX]
+
+  // The turn the pane sends, built the way the pane builds it — the id under the engine of the conversation,
+  // and the empty string when nothing was chosen — then taken through the boundary that admits it.
+  const parsed = engineTurnInputSchema.safeParse({
+    engineId: CODEX,
+    prompt: 'a prompt',
+    cwd: 'C:/work',
+    sessionId: 'aaaaaaaa-1111-4111-8111-111111111111',
+    model: engineModels[CODEX] ?? '',
+  })
+  assert.equal(parsed.success, true, 'the boundary admits the turn the control wrote')
+  if (!parsed.success) return
+  assert.equal(parsed.data.model, chosen, 'carrying the id the control holds, unchanged')
+
+  const child = scriptedChild()
+  const spawn = recordingSpawn(child.child)
+  const turn = runCodexTurn(
+    {
+      engineId: parsed.data.engineId,
+      prompt: parsed.data.prompt,
+      cwd: parsed.data.cwd,
+      ...(parsed.data.model === undefined ? {} : { model: parsed.data.model }),
+    },
+    { spawnImpl: spawn.impl },
+    () => undefined
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+  child.feed([])
+  await turn
+
+  const args = [...spawn.calls[0].args]
+  assert.deepEqual(
+    args.slice(-3),
+    ['-m', chosen, 'a prompt'],
+    'the id the control holds is the flag and its value, immediately before the prompt'
+  )
+  assert.deepEqual(
+    args.slice(0, -3),
+    [...ENGINE_LAUNCH_ARGS[CODEX]],
+    'on the shipped launch config, nothing else moved'
+  )
+  assert.equal(spawn.calls[0].shell, false, 'started without a shell, with the id as one argument')
+
+  results.push('the state the model control writes is `-m <id>` immediately before the prompt in the argv')
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -384,6 +451,7 @@ async function main() {
   await step('turn', theCapturedRunBecomesTheTranscript)
   await step('cancel (turn)', cancellingTheTurnKillsTheChild)
   await step('model', theChosenModelTravelsImmediatelyBeforeThePrompt)
+  await step('model (control state to argv)', theControlStateReachesTheArgv)
 
   console.log('codex launch config: ' + results.length + ' passed')
   for (const r of results) console.log('  pass: ' + r)

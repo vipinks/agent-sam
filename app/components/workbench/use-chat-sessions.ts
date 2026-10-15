@@ -163,6 +163,18 @@ function emptyComposer(): ComposerState {
   return { text: '', mentionPaths: [], mentionNote: null, images: [], attachmentNote: null, heights: {} }
 }
 
+/**
+ * A conversation at the one moment it is created: its id, and the engine its record was written with.
+ *
+ * Both are stated together because the send that creates a conversation is also the run that has to start under
+ * it, and the record — which is where the engine lives from that moment on — is back in this window only after a
+ * round trip. `null` is the Sam loop, which is what a conversation created without an engine runs as.
+ */
+export interface CreatedSession {
+  id: string
+  engineId: string | null
+}
+
 export interface ChatSessions {
   /** The live transcript on screen. */
   transcript: TranscriptState
@@ -366,11 +378,19 @@ export interface ChatSessions {
    * has not been made means.
    */
   goHome: () => void
-  createSession: (buddyId?: string | null) => string
+  /** The conversation just created, and the engine its record was written with. */
+  createSession: (buddyId?: string | null) => CreatedSession
   openSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
-  /** Create-on-first-message. Returns the id the message belongs to. */
-  ensureSession: (firstMessage: string, buddyId?: string | null) => string
+  /**
+   * Create-on-first-message. Returns the conversation the message belongs to, and the engine it runs as.
+   *
+   * Both answers are returned rather than left to be read back, because the send that creates a conversation is
+   * the very one that has to run it: the record this call writes reaches this window a round trip later, so a
+   * reader that waited for it would be reading the window's *previous* conversation — which is a pane whose first
+   * turn ran as something else, and an engine whose model control never reached a runner.
+   */
+  ensureSession: (firstMessage: string, buddyId?: string | null) => CreatedSession
   /** Save now if there is anything to save. Used at turn boundaries and on blur. */
   saveNow: () => Promise<void>
   /** Queue the debounced post-turn save. */
@@ -789,7 +809,9 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // write has to come after the reset for that reason. Only ever written on — a Buddy declaring false
       // is asking for the default, which is the absent key this transcript is already carrying.
       if (seed?.autoApprove === true) setTranscript({ ...transcriptRef.current, autoApprove: true })
-      return id
+      // The engine is handed back with the id because it is the same moment's decision: the record carries it from
+      // here on, and the send that caused this create runs under it before that record ever comes back.
+      return { id, engineId: chosenEngine }
     },
     [addSession, model, providerId, setActive, setTranscript]
   )
@@ -1017,19 +1039,24 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       if (!plan.create) {
         // An existing session: named here only if it is still untitled, which can only happen once.
         if (plan.title && activeId) touchSession({ id: activeId, title: plan.title })
-        return activeId as string
+        // A conversation that already exists runs as its own record says, which is a fact this render can read: the
+        // record was written before this send, not by it.
+        return {
+          id: activeId as string,
+          engineId: sessionsRef.current.find((s) => s.id === activeId)?.engineId ?? null,
+        }
       }
 
       // The Buddy travels with the create and with nothing else: a conversation is created once, so the
       // role and the snapshot are written once, and a message in a conversation that already exists runs
       // as that conversation was created to run.
-      const id = createSession(buddyId)
-      if (plan.title) touchSession({ id, title: plan.title })
+      const created = createSession(buddyId)
+      if (plan.title) touchSession({ id: created.id, title: plan.title })
       // And the choice the user made before there was a conversation to make it on: with the chip set,
       // the record has to answer that the conversation on screen is already running that way — the
       // session was entered from the chip's own value, and re-reading it would say off.
       if (pendingApproval) setTranscript({ ...transcriptRef.current, autoApprove: true })
-      return id
+      return created
     },
     [createSession, setTranscript, touchSession]
   )
