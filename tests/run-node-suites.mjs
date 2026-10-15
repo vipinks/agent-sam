@@ -172,6 +172,10 @@ const SUITES = [
     src: 'engines/engine-turn-input-test.ts',
   },
   {
+    name: 'engine model catalogue (judged before set_model, unknown refused, current model always valid)',
+    src: 'engines/engine-model-catalogue-test.ts',
+  },
+  {
     name: 'codex child lifecycle (stdin closed at spawn, per-turn child, reap, silent exit, cancel)',
     src: 'engines/engine-lifecycle-test.ts',
   },

@@ -27,6 +27,13 @@
  *                `close()` can be proved to end the *tree* rather than one process. A vendor CLI is
  *                reached through a shim that starts the real binary, which is the measured shape this
  *                mode stands in for.
+ * - catalogue    `session/new` answers with a model advertisement — `models.currentModelId` plus
+ *                `models.availableModels[]`, the shape the Phase 82 probe recorded OpenCode sending — and
+ *                `session/set_model` is implemented, answering success for *any* id it is handed and
+ *                echoing the id it was told into the prose. The echo is what makes the claim assertable:
+ *                a suite reads what the agent was actually told rather than what the client meant to say.
+ *                The acceptance of a garbage id is deliberate and is the probe's own measured behaviour —
+ *                which is why validating the id is this app's job and not the engine's.
  * - stalled      answer `initialize`, then never answer `session/new`: an engine whose stateful calls go
  *                unanswered without ever closing, which is what the call budget is for.
  * - grandchild-stalled  start the child of its own first, then stall the prompt, so a cancel can be proved
@@ -65,6 +72,17 @@ function toolCallUpdate(sessionId, status) {
 }
 
 const SESSION_ID = 'fixture-session-1'
+
+/**
+ * The catalogue the `catalogue` mode advertises.
+ *
+ * `CURRENT` is deliberately *absent* from the id list, which is the shape the probe recorded for OpenCode:
+ * the session's own current model need not appear among the entries it advertises (the probe's
+ * `opencode/big-pickle`), so a rule that only consulted the list would refuse the model the session is
+ * already running.
+ */
+const CATALOGUE_CURRENT = 'opencode/big-pickle'
+const CATALOGUE_IDS = ['opencode/gpt-5', 'opencode/sonnet-4', 'opencode/gemini-3']
 
 /**
  * A child of this process, kept alive until something ends it.
@@ -136,7 +154,30 @@ async function handle(message) {
     // A stateful call that is never answered and never refused: the process stays alive and silent, which
     // is the shape a turn hangs in. Nothing closes, so nothing the client waits on ever settles.
     if (mode === 'stalled') return
+    if (mode === 'catalogue') {
+      success(message.id, {
+        sessionId: SESSION_ID,
+        models: {
+          currentModelId: CATALOGUE_CURRENT,
+          availableModels: CATALOGUE_IDS.map((modelId) => ({ modelId, name: modelId })),
+        },
+      })
+      return
+    }
     success(message.id, { sessionId: SESSION_ID })
+    return
+  }
+
+  if (message.method === 'session/set_model') {
+    // Only an agent that advertised a catalogue implements it; every other mode falls through to the
+    // protocol's own "no such method", which is what an engine without a catalogue answers.
+    if (mode !== 'catalogue') return
+    const told = message.params && message.params.modelId
+    success(message.id, {})
+    notify('session/update', {
+      sessionId: SESSION_ID,
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'model:' + told } },
+    })
     return
   }
 

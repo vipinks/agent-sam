@@ -22,7 +22,7 @@ import {
   type PendingEngineConsent,
   type StoredEnginePreference,
 } from '../protocol/engine'
-import type { AcpPermissionRequest } from '../protocol/acp'
+import type { AcpModelCatalogue, AcpPermissionRequest } from '../protocol/acp'
 import { installedBinaryFor, runCodexTurn } from './engine-codex'
 import { runAcpTurn } from './engine-acp-turn'
 import type { EngineTranscriptChunk } from '../protocol/codex-turn'
@@ -317,6 +317,23 @@ export function setEngineBinaryPathSink(sink: EngineBinaryPathSink | null): void
 }
 
 /**
+ * Where the catalogue an engine's session advertised is published. Installed by the router, which owns the store.
+ *
+ * A sink rather than a store import, for the reason the two above are: this module owns the turn, and the turn
+ * ends up in whatever holds the state — which is main's to arrange, once, rather than each module's to reach for.
+ */
+export interface EngineCatalogueSink {
+  record: (input: { engineId: string; catalogue: AcpModelCatalogue }) => void
+}
+
+let catalogueSink: EngineCatalogueSink | null = null
+
+/** Install the catalogue fan-out. Called once from `router.ts`, for the reason the sinks above are. */
+export function setEngineCatalogueSink(sink: EngineCatalogueSink | null): void {
+  catalogueSink = sink
+}
+
+/**
  * Save a path a user stated, or refuse with the code that says why.
  *
  * The *save* is the re-probe, and that is the whole design of this function: nothing is written until the
@@ -510,6 +527,10 @@ export const engineModule = defineModule({
             {
               ...binary,
               onPermissionRequest: (request: AcpPermissionRequest) => askEngineConsent(input.engineId, request),
+              // What the session advertised, published as state. The turn *judges* a chosen model against this
+              // same list, so nothing here is a second reading: the ids a reader is offered are the ids the turn
+              // accepted or refused against.
+              onCatalogue: (catalogue) => catalogueSink?.record({ engineId: input.engineId, catalogue }),
             },
             onChunk
           )

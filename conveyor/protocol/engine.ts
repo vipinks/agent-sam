@@ -252,23 +252,24 @@ export const ENGINE_MODEL_MAX_LENGTH = 128
  * The engines this app offers a model for, which is the engines that advertise a catalogue of their own.
  *
  * A list rather than a test written where the control is drawn, because two different things have to agree about
- * it: the field that offers a choice, and whatever acts on it. What both need is a source of ids — a catalogue
- * this app can read and offer as a selection — and the list is empty. Codex takes `-m <id>` and publishes nothing
- * to read one from, so the model a Codex turn runs is the one its own configuration resolves: its default, or the
- * model that configuration names. A free-text field drawn for it would collect a word nothing could judge and no
- * runner acted on, while the turn quietly ran the default — which is the shape of promise that put this rule here
- * rather than a test of taste.
+ * it: the field that offers a choice, and the runner that judges one. What both need is a source of ids — a
+ * catalogue this app can read and offer as a selection — and being on this list is exactly that claim.
  *
- * An engine whose session answers with a catalogue (`tests/probes/acp-model-surface-probe.mjs`, Phase 82) joins
- * this list, and that is the whole of the rule: being on it is a claim that this app can offer a real choice
- * rather than guess at one.
+ * OpenCode is the one, and the claim is the Phase 82 probe's (`tests/probes/acp-model-surface-probe.mjs`):
+ * `opencode acp` answers `session/new` with `models.availableModels[]` beside a `currentModelId`, and answers
+ * `session/set_model`, so there is a list to search and a call to make. Kimi is not on it: a session signed out
+ * advertises nothing, so there is no list to offer and the control is not drawn. Codex is not either — it takes
+ * `-m <id>` and publishes nothing to read one from, so the model a Codex turn runs is the one its own
+ * configuration resolves. A free-text field drawn for such an engine would collect a word nothing could judge and
+ * no runner acted on, while the turn quietly ran the default — which is the shape of promise that put this rule
+ * here rather than a test of taste.
  */
-export const ENGINE_MODEL_ENGINES: readonly EngineId[] = []
+export const ENGINE_MODEL_ENGINES: readonly EngineId[] = ['opencode']
 
 /**
  * Whether this app offers a model choice for one engine — and, when it does, that the id names an engine rather
- * than merely being a string. An id this build does not ship answers `false`, and while no engine advertises a
- * catalogue, every id does.
+ * than merely being a string. An id this build does not ship answers `false`, as does an engine that advertises no
+ * catalogue: the field is drawn for the engine whose session can answer with ids to choose between.
  */
 export function engineTakesModel(engineId: string | null | undefined): engineId is EngineId {
   return engineId !== null && engineId !== undefined && ENGINE_MODEL_ENGINES.includes(engineId as EngineId)

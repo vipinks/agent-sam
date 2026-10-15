@@ -16,6 +16,9 @@ import { updatePreferencesStore } from '@/conveyor/stores/update-preferences'
 import { engineConsentStore } from '@/conveyor/stores/engine-consent'
 import { engineStatusStore } from '@/conveyor/stores/engine-status'
 import { enginePreferencesStore } from '@/conveyor/stores/engine-preferences'
+// The catalogue an engine's last session advertised — the list the chat header's model control searches. Seeded
+// here because the control reads it on mount, and an unseeded store makes the mirror cache `undefined`.
+import { engineModelsStore } from '@/conveyor/stores/engine-models'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -344,6 +347,10 @@ const initialStates = new Map<string, unknown>([
   // state here the mirror would cache `undefined` and the section would throw on the selector that reads an
   // engine's record out of it.
   ['conveyor:store:engine-preferences', structuredClone(enginePreferencesStore.initialState)],
+  // The catalogue each engine's last session advertised, which the chat header's model control reads on every
+  // mount to draw the list it searches. Without a genuine initial state here the mirror would cache `undefined`
+  // for this store, and the control would throw on the selector that reads an engine's ids out of it.
+  ['conveyor:store:engine-models', structuredClone(engineModelsStore.initialState)],
 ])
 
 /**

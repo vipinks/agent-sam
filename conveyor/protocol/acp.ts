@@ -24,6 +24,10 @@ export const ACP_METHODS = {
   cancel: 'session/cancel',
   update: 'session/update',
   requestPermission: 'session/request_permission',
+  // The method that names the model a session runs. Its params are `sessionId` and `modelId`, which is the
+  // spelling the Phase 82 probe asked the installed CLIs for and recorded an answer to — the same evidence the
+  // catalogue's shape below rests on. Named here for the reason the rest are: no call site spells a method.
+  setModel: 'session/set_model',
 } as const
 
 /** The updates that carry something this app draws or records. Anything else is `other`. */
@@ -69,6 +73,15 @@ export const ACP_CODES = {
    * stated cause.
    */
   ACP_CALL_TIMEOUT: 'ACP_CALL_TIMEOUT',
+  /**
+   * A model was named that the session does not offer — in neither its catalogue nor its current model.
+   *
+   * This app's own code rather than the engine's, and that is the whole of why it exists: the probe measured
+   * `session/set_model` answering *success* for an id the engine does not know, so there is no refusal to carry
+   * upward. A turn that forwarded an unjudged word would change the session's model to something nothing
+   * resolves and would say nothing about it.
+   */
+  ACP_MODEL_UNKNOWN: 'ACP_MODEL_UNKNOWN',
 } as const
 
 export type AcpCode = (typeof ACP_CODES)[keyof typeof ACP_CODES]
@@ -272,6 +285,77 @@ export function acpPermissionCancelled(id: number): unknown {
  */
 export function acpOptionApproves(option: AcpPermissionOption): boolean {
   return option.kind === 'allow_once' || option.kind === 'allow_always'
+}
+
+// ---------------------------------------------------------------- the model catalogue
+
+/**
+ * What a session advertised about models, as this app reads it.
+ *
+ * The shape is the probe's recorded measurement of `opencode acp` rather than a guess: `session/new` answers
+ * `models.currentModelId` beside `models.availableModels[]`, whose entries carry `modelId` and a display name.
+ *
+ * The ids keep the agent's own order, deliberately: the list is what the engine offers, and the order it offered
+ * them in is part of what it said — this app has no reason to rearrange a catalogue it did not write.
+ *
+ * `currentModelId` is a statement of its own rather than an entry in `ids`, and the two need not agree: the probe
+ * recorded an OpenCode session whose current model was absent from the entries it advertised, which is why
+ * `acpModelIsAdvertised` below reads both.
+ */
+export interface AcpModelCatalogue {
+  ids: string[]
+  currentModelId: string | null
+}
+
+/**
+ * Read the model advertisement out of a `session/new` result.
+ *
+ * An engine that advertises nothing answers without a `models` member at all — which is what a Kimi session does
+ * while signed out — and that absence is an empty catalogue rather than an error: the session opened, and it
+ * simply has no list to offer. An entry is read by `modelId`, the field OpenCode sends, with `id` accepted as
+ * well because a catalogue whose entry names itself is the same statement in the flat form the probe also looked
+ * for.
+ *
+ * Nothing is invented. An entry that names no id is dropped rather than guessed at, a repeated id is kept once so
+ * a list drawn from this is a list of choices, and a `currentModelId` that is not a string is `null` rather than
+ * the word `undefined`.
+ */
+export function acpModelCatalogue(result: unknown): AcpModelCatalogue {
+  const answer = (result ?? {}) as { models?: unknown }
+  const models = answer.models as { currentModelId?: unknown; availableModels?: unknown } | null | undefined
+  if (models === null || models === undefined || typeof models !== 'object') {
+    return { ids: [], currentModelId: null }
+  }
+
+  const rows = Array.isArray(models.availableModels) ? models.availableModels : []
+  const ids: string[] = []
+  for (const row of rows) {
+    const entry = (row ?? {}) as { modelId?: unknown; id?: unknown }
+    const id = typeof entry.modelId === 'string' ? entry.modelId : typeof entry.id === 'string' ? entry.id : null
+    if (id === null || id === '' || ids.includes(id)) continue
+    ids.push(id)
+  }
+
+  return {
+    ids,
+    currentModelId: typeof models.currentModelId === 'string' ? models.currentModelId : null,
+  }
+}
+
+/**
+ * Whether a model the user chose is one this session may run.
+ *
+ * Two ways to be valid, and the second is the one that matters: the id is one the catalogue offers, or it is the
+ * model the session is already running. The second is not a convenience — the probe recorded a session whose
+ * current model was absent from the entries it advertised, so a rule that consulted only the list would refuse to
+ * set the model already in force.
+ *
+ * An empty id is not valid, and is not meant to be: an absent choice is not a choice, and a caller with nothing to
+ * set does not ask this question at all.
+ */
+export function acpModelIsAdvertised(catalogue: AcpModelCatalogue, modelId: string): boolean {
+  if (modelId === '') return false
+  return catalogue.ids.includes(modelId) || catalogue.currentModelId === modelId
 }
 
 // ---------------------------------------------------------------- the event stream

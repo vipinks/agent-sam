@@ -27,6 +27,7 @@ import { updatesModule, setUpdateStatusSink, setAutoDownloadSource } from './mod
 import {
   engineModule,
   setEngineBinaryPathSink,
+  setEngineCatalogueSink,
   setEngineConsentSink,
   setEnginePreferenceSource,
   setEngineStatusSink,
@@ -44,6 +45,7 @@ import { updateStatusStore } from './stores/update-status'
 import { engineConsentStore } from './stores/engine-consent'
 import { enginePreferencesStore } from './stores/engine-preferences'
 import { engineStatusStore } from './stores/engine-status'
+import { engineModelsStore } from './stores/engine-models'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -91,6 +93,7 @@ export const router = createRouter(
       engineConsentStore,
       enginePreferencesStore,
       engineStatusStore,
+      engineModelsStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
@@ -335,6 +338,18 @@ setEngineBinaryPathSink({
  */
 setEngineStatusSink({
   record: (rows) => router.stores['engine-status'].dispatch('record', { rows }),
+})
+
+/**
+ * Publish the catalogue an engine's session advertised, as the turn that read it observes it.
+ *
+ * Wired here rather than read by the header's control, and for the reason the rows above are wired here: the only
+ * way to read an engine's catalogue is to open a session with it, which is a process. A turn already opens one, so
+ * the turn is where the advertisement is read — and this sink is what makes it *state*, so the control is drawn
+ * from a list somebody actually read rather than from a second session opened to answer the same question.
+ */
+setEngineCatalogueSink({
+  record: ({ engineId, catalogue }) => router.stores['engine-models'].dispatch('record', { engineId, catalogue }),
 })
 
 void refreshEngineStatus().catch((error: unknown) => {

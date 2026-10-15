@@ -11,6 +11,7 @@ import {
   acpEvent,
   acpFailure,
   acpKind,
+  acpModelCatalogue,
   acpPermissionAnswer,
   acpPermissionCancelled,
   acpPermissionRequest,
@@ -20,6 +21,7 @@ import {
   encodeAcpMessage,
   parseAcpChunk,
   type AcpEvent,
+  type AcpModelCatalogue,
   type AcpPermissionRequest,
 } from '../protocol/acp'
 
@@ -214,8 +216,21 @@ export function killAcpTree(
 export interface AcpClient {
   /** The agent's session id, held here so a prompt is addressed without the caller carrying it. */
   readonly sessionId: string | null
+  /**
+   * What the session advertised about models — the list the header's control offers, and the ids a chosen model
+   * is judged against. Empty until a session is opened, which is the honest answer rather than a guess.
+   */
+  readonly models: AcpModelCatalogue
   initialize(): Promise<AcpInitializeResult>
   newSession(): Promise<string>
+  /**
+   * Name the model this session runs, by the id a catalogue offered.
+   *
+   * The id is not judged here. The engine does not judge it either — the probe measured `session/set_model`
+   * answering *success* for an id it does not know — so the judgement is the runner's, made against this client's
+   * own `models` before this is called. What this does is the call, addressed by the session it belongs to.
+   */
+  setModel(modelId: string): Promise<void>
   prompt(text: string): Promise<AcpPromptResult>
   close(): void
 }
@@ -248,6 +263,10 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
   let sessionId: string | null = null
   let initialized = false
   let closed = false
+  // What the last session advertised, held here rather than returned once: two readers want it — the turn, which
+  // judges a chosen id against it, and the header's control, which is drawn from it — and a catalogue handed back
+  // from `newSession()` would leave the second one reading a value nobody kept.
+  let catalogue: AcpModelCatalogue = { ids: [], currentModelId: null }
   const waiting = new Map<number, Waiting>()
 
   const callBoundMs = deps.callBoundMs ?? ACP_CALL_BOUND_MS
@@ -414,6 +433,10 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
       return sessionId
     },
 
+    get models() {
+      return catalogue
+    },
+
     async initialize(): Promise<AcpInitializeResult> {
       let result: unknown
       try {
@@ -458,7 +481,15 @@ export function createAcpClient(deps: AcpClientDeps): AcpClient {
       })
       const answer = (result ?? {}) as { sessionId?: unknown }
       sessionId = typeof answer.sessionId === 'string' ? answer.sessionId : ''
+      // The advertisement is read off the same result, and read here rather than by the caller: the shape is the
+      // protocol's, so the protocol's own parser is what reads it, and a caller is handed ids rather than a payload.
+      catalogue = acpModelCatalogue(result)
       return sessionId
+    },
+
+    async setModel(modelId: string): Promise<void> {
+      const open = requireSession()
+      await call(ACP_METHODS.setModel, { sessionId: open, modelId })
     },
 
     async prompt(text: string): Promise<AcpPromptResult> {

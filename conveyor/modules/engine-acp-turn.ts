@@ -1,5 +1,5 @@
 import { ConveyorError } from 'electron-conveyor/main'
-import { ACP_CODES, type AcpPermissionRequest } from '../protocol/acp'
+import { ACP_CODES, acpModelIsAdvertised, type AcpModelCatalogue, type AcpPermissionRequest } from '../protocol/acp'
 import { acpTranscriptChunks } from '../protocol/acp-turn'
 import {
   ENGINE_SPAWN_CODES,
@@ -37,6 +37,14 @@ export interface AcpTurnInput {
   cwd: string
   /** Carried but unused by this dialect: `kimi acp` takes no argument, so no mode becomes a flag. */
   permissionMode?: unknown
+  /**
+   * The model this turn was asked to run, or absent for the engine's own.
+   *
+   * Judged here rather than forwarded: the engine accepts any word it is handed — the probe measured
+   * `session/set_model` answering *success* for an id it does not know — so an unread id would become the
+   * session's model and nothing would say so.
+   */
+  model?: string
   /** Fires when the user cancels. The turn closes the client, which kills the child rather than orphaning it. */
   signal?: AbortSignal
 }
@@ -64,6 +72,13 @@ export interface AcpTurnDeps {
   killTree?: (pid: number | undefined) => void
   /** Put one permission question to whoever can answer it, and answer with the option id they picked. */
   onPermissionRequest: (request: AcpPermissionRequest) => Promise<string>
+  /**
+   * The catalogue the session opened with, reported once per turn.
+   *
+   * Left out in the suites that do not read it. Supplied in the app, where it is what feeds the header's model
+   * control: the ids a turn judged a choice against and the ids a reader is offered are the same list, read once.
+   */
+  onCatalogue?: (catalogue: AcpModelCatalogue) => void
   /** A line that was not JSON, reported rather than swallowed. */
   onMalformedLine?: (line: string) => void
 }
@@ -156,6 +171,22 @@ export async function runAcpTurn(
     }
 
     await client.newSession()
+    // Published before anything acts on it: the advertisement is what a chosen id is judged against, and it is
+    // also the list the header's control is drawn from — so a reader sees the ids the judgement used.
+    deps.onCatalogue?.(client.models)
+
+    // The chosen model, judged *before* the engine is told anything, because the engine will not judge it.
+    // `acpModelIsAdvertised` reads the catalogue and the session's own current model: the latter is always valid,
+    // since the probe recorded a session whose current model was absent from the entries it advertised, and a
+    // rule that consulted only the list would refuse to set the model already in force.
+    const chosen = input.model ?? ''
+    if (chosen !== '') {
+      if (!acpModelIsAdvertised(client.models, chosen)) {
+        throw new ConveyorError(ACP_CODES.ACP_MODEL_UNKNOWN, `This session does not offer the model '${chosen}'.`)
+      }
+      await client.setModel(chosen)
+    }
+
     const result = await client.prompt(input.prompt)
     if (cancelled) return { stopReason: result.stopReason, cancelled: true }
 
