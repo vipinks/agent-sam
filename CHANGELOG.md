@@ -6,6 +6,55 @@ coding assistant.
 
 <br>
 
+## 2026-10-15: v1.6.0 — A conversation's first turn runs the engine it was created as, and the model control waits for a catalogue
+
+- **The model control waits for a catalogue.** The rule was stated the wrong way round: no engine here
+  publishes a list of valid ids to choose from, and a field whose value no runner acts on is a promise nothing
+  keeps while the turn quietly runs the engine's own default. `engineTakesModel` now answers true only for an
+  engine that advertises a model list, `ENGINE_MODEL_ENGINES` is empty, and the per-engine control draws
+  nowhere, for any engine and at home — Codex runs on the model its own configuration resolves.
+  `CODEX_MODEL_FLAG` and the argv push are gone, and the Codex array is the shipped launch config plus the
+  prompt for every state the turn's model field can hold. The field itself stays on the turn, so one input
+  shape crosses the boundary for every engine, and the control and its store slot keep their place for the
+  engine that answers with a catalogue.
+- **OpenCode gets a searchable model picker.** OpenCode is the engine that does advertise a list — its session
+  sends 1367 ids — so the header's control is drawn for it and is now the search over that list: typing filters
+  the advertised ids, and a pick records the model in the workbench store, from where it rides the turn input's
+  `model` field. The ACP client reads the advertisement off `session/new` and holds it as `AcpClient.models`;
+  `setModel` sends `session/set_model` with `{ sessionId, modelId }`; and the runner validates the chosen id
+  against the catalogue _before_ the engine is told anything, because the Phase 82 probe measured
+  `session/set_model` answering success for a garbage id, which makes a client-side check the whole of the
+  defence. The session's own `currentModelId` is always a valid choice, even when the catalogue omits it.
+- **The send that creates an engine conversation runs as that engine.** Phase 84 fixes the hop the engine read
+  was lost at. The pane read the conversation's engine off the value of the last render, which is `null` on the
+  send that creates the conversation, because the record carrying that engine is written by that same send and
+  reaches this window a round trip later — so `conveyor.engine.turn` was never built, the per-engine model
+  control's value reached no runner at all, and the app's own loop answered under the header's
+  `provider::model`. The create now hands back what it wrote, `CreatedSession { id, engineId }`, and the run
+  takes the engine as a parameter, so the first turn of a codex conversation actually runs under codex.
+- **The send that creates a buddy conversation carries its role and server ceiling.** The same render-value read
+  was feeding the buddy's role prompt and MCP subset off `null` on a creating send, so the create now hands
+  those back as parameters, and a buddy conversation's first turn actually runs under its chosen Buddy's role
+  and server list.
+- **Transcripts and sessions record their engine and its model.** A transcript said nothing about the engine
+  that wrote it — none of the 62 stored files named one — and the per-engine model pick was renderer-local, so
+  a reopened conversation showed an empty field while its turns ran a chosen model. The transcript record gains
+  `engineId` at creation and `engineModel` on any turn that carried one, both optional-additive, so
+  `TRANSCRIPT_VERSION` stays 3 and the existing files are untouched; the chat-sessions record gains
+  `engineModel`, written at a turn start from the value the runner is handed; and the header control hydrates
+  that value when a conversation opens, which is the only place it survives a relaunch.
+- **Two tracked probes land in the probe suite.** `tests/probes/codex-model-flag-probe.mjs` reads
+  `codex exec --help` verbatim for the model flag's own shape and then records the engine's own refusal for an
+  impossible id, and `tests/probes/acp-model-surface-probe.mjs` measures the ACP model surface for kimi and
+  opencode by asking initialize, `session/new`, and each candidate `set_model` spelling and recording every
+  frame. Both spawn installed binaries and can talk to the network through a signed-in one, so neither is a
+  seat inside the six gates: `tests/run-probes.mjs` is the registration site that names them, runs them with
+  node, and exits non-zero on a probe's own failure.
+- The v1.5.1 baseline is everything before this entry: Phases 1 through 81, which shipped under the standing
+  versioning rule that a release names the work since the last one. This entry is v1.6.0 — Phases 82 through 88.
+
+<br>
+
 ## 2026-10-09: v1.5.1 — The installer-cache sweep runs in the state an install reaches, and waits out the lock
 
 - **The startup sweep now runs in the state a completed install actually reaches.** Phase 80 lets the gate
