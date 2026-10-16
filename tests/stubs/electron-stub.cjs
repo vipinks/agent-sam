@@ -12,6 +12,11 @@ const path = require('path')
 // Electron to dispatch them: a suite that is about what an app event does calls `__emit` itself.
 const appListeners = new Map()
 
+// The file-manager hand-off an explorer row's "Show in folder" performs. Recorded rather than
+// performed, because there is no Electron here to open a window with — and recorded rather than a
+// no-op so a suite can claim what the OS was handed, which is the whole of what that command does.
+const shownInFolder = []
+
 module.exports = {
   app: {
     getPath: () => process.env.SAM_TEST_USER_DATA || path.join(require('os').tmpdir(), 'sam-ai-sessions-test'),
@@ -50,6 +55,13 @@ module.exports = {
       return path ? { canceled: false, filePath: path } : { canceled: true, filePath: undefined }
     },
   },
-  shell: { openExternal: async () => undefined },
+  shell: {
+    openExternal: async () => undefined,
+    showItemInFolder: (fullPath) => {
+      shownInFolder.push(fullPath)
+    },
+    /** Every path handed to the file manager, in order. A suite's own accessor, not an Electron API. */
+    __shownInFolder: () => shownInFolder.slice(),
+  },
   BrowserWindow: class {},
 }

@@ -1,5 +1,5 @@
 import { basename, dirname, join, resolve } from 'path'
-import { mkdir, readFile as readFileFromDisk, readdir, stat, writeFile as writeFileToDisk } from 'fs/promises'
+import { mkdir, readFile as readFileFromDisk, readdir, rm, stat, writeFile as writeFileToDisk } from 'fs/promises'
 import { dialog, shell } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
@@ -8,12 +8,14 @@ import { resolveWorkspacePath } from './workspace-paths'
 import { notifyWorkspaceChanged, workspaceChangedSchema } from '../events'
 import { decideWrite, WRITE_CONFLICT } from '../protocol/write-guard'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
+import { PATH_DELETE_FAILED, PATH_GONE, ROOT_UNREMOVABLE, removalRefusal } from '../protocol/path-actions'
 import { IMAGE_TOO_LARGE, imageKindForPath, imageOverCap } from '../protocol/image'
 import { SPREADSHEET_TOO_LARGE, spreadsheetKindForPath, spreadsheetOverCap } from '../protocol/spreadsheet'
 import {
   DOCUMENT_TOO_LARGE,
   DOCUMENT_UNSUPPORTED,
   PDF_BYTES_INVALID,
+  documentHandoffKind,
   documentOverCap,
   looksLikePdf,
   previewKind,
@@ -533,8 +535,10 @@ export const workspaceModule = defineModule({
    * file this action exists for, since nothing in the app can draw it.
    */
   openDocument: command(z.object({ path: z.string().min(1) }), async ({ input }) => {
-    const kind = previewKind(input.path)
-    if (kind !== 'pdf' && kind !== 'docx' && kind !== 'doc') {
+    // The kinds this hand-off accepts, read from the shared rule rather than listed again: the
+    // explorer's row menu offers this same action, and both sides ask `documentHandoffKind`, so an item
+    // that cannot be taken and a refusal cannot disagree about which names are documents.
+    if (documentHandoffKind(input.path) === null) {
       throw new ConveyorError(DOCUMENT_UNSUPPORTED, `${basename(input.path)} is not a document this viewer opens.`)
     }
 
@@ -543,6 +547,89 @@ export const workspaceModule = defineModule({
     if (failure) {
       throw new ConveyorError('OPEN_FAILED', failure)
     }
+
+    return { path: input.path }
+  }),
+
+  /**
+   * Remove one entry from the open folder, for the explorer row's own menu.
+   *
+   * The act's cost is the row going off the disk — not to the trash — so the menu asks first and names
+   * the path, and this command is what runs after that answer. `recursive` is what makes a folder row
+   * mean the folder with what is inside it; the alternative, refusing anything but an empty folder,
+   * would leave the row working exactly once.
+   *
+   * Containment is `resolveWorkspacePath`'s, the rule every write-side act here is held to: the row's
+   * path is absolute and was listed by main, but a removal is the one act in this module whose mistakes
+   * cannot be written over, so it is resolved against the open folder and refused outside it.
+   *
+   * Existence is asked of the disk rather than taken from the row: the listing a row was drawn from may
+   * be minutes old, and the entity may have been deleted outside the app in between. The refusal is
+   * `PATH_GONE` rather than a success, so the caller is told there was nothing to do instead of being
+   * told it did something.
+   *
+   * The change is announced as `removed` and not as `written`: the renderer refetches the listings for
+   * any change, and a kind of its own is what lets the tree tell "this path is gone" from "this path has
+   * new bytes" without being told twice.
+   */
+  deletePath: command(z.object({ path: z.string().min(1), rootPath: z.string().min(1) }), async ({ input }) => {
+    const target = resolveWorkspacePath(input.rootPath, input.path)
+    const root = resolve(input.rootPath)
+
+    let exists = true
+    try {
+      await stat(target)
+    } catch {
+      exists = false
+    }
+
+    const refusal = removalRefusal({ target, root, exists })
+    if (refusal === ROOT_UNREMOVABLE) {
+      throw new ConveyorError(ROOT_UNREMOVABLE, 'The open folder cannot be removed from its own tree.')
+    }
+    if (refusal === PATH_GONE) {
+      throw new ConveyorError(PATH_GONE, `${basename(target)} is no longer there, so there is nothing to delete.`)
+    }
+
+    try {
+      await rm(target, { recursive: true })
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      throw new ConveyorError(PATH_DELETE_FAILED, `Could not delete ${basename(target)}. ${reason}`)
+    }
+
+    notifyWorkspaceChanged({ kind: 'removed', path: target })
+
+    return { path: target }
+  }),
+
+  /**
+   * Show one path in the OS's own file manager, with the entry itself selected.
+   *
+   * `shell.showItemInFolder` is the same call on every platform electron ships for: Windows opens
+   * Explorer on the containing folder with the row selected, macOS does the same in Finder, and a Linux
+   * desktop gets it from its own file manager. There is no per-platform branch to write, which is why
+   * this is one call rather than three.
+   *
+   * The path is not workspace-contained, and that is the trust level `readFile` and `openDocument`
+   * already have: it is an absolute path main itself listed for this window, and pointing a file manager
+   * at a folder is not a way to run anything. What this does *not* do is refuse silently — the call
+   * reports nothing at all, because a refusal is a window that never appears — so the one answer this
+   * command can give is the existence check in front of it, and a row whose path has gone is told so
+   * rather than handed to a file manager that would open somewhere else.
+   */
+  revealPath: command(z.object({ path: z.string().min(1) }), async ({ input }) => {
+    let exists = true
+    try {
+      await stat(input.path)
+    } catch {
+      exists = false
+    }
+    if (!exists) {
+      throw new ConveyorError(PATH_GONE, `${basename(input.path)} is no longer there, so there is nothing to show.`)
+    }
+
+    shell.showItemInFolder(input.path)
 
     return { path: input.path }
   }),

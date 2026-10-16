@@ -12,9 +12,12 @@ import { z } from 'zod'
  * mutation of its own to invalidate from. Main pushes, the renderer invalidates.
  */
 
-/** What changed. `path` is absolute and only meaningful for `written`. */
+/**
+ * What changed. `path` is absolute, and is carried by the two kinds that name one path: `written` and
+ * `removed`. `command-exited` has none, because a command can have moved anything at all.
+ */
 export const workspaceChangedSchema = z.object({
-  kind: z.enum(['written', 'command-exited']),
+  kind: z.enum(['written', 'removed', 'command-exited']),
   path: z.string().optional(),
 })
 

@@ -18,6 +18,7 @@ import { Button } from '../ui/button'
 import { PaneHeader } from './pane-header'
 import { activityById, DrawerClose } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
+import { ExplorerRowMenu, rowRefusalMessage, type RowMenuRequest } from './explorer-row-menu'
 import { RootSwitcher } from './root-switcher'
 import { rootErrorMessage } from './recent-roots'
 import { useRootSwitch } from './use-root-switch'
@@ -52,6 +53,8 @@ export function ExplorerPanel() {
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
   const setEditorDirty = useWorkbenchStore((s) => s.setEditorDirty)
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null)
+  const [rowMenu, setRowMenu] = useState<RowMenuRequest | null>(null)
+  const [rowRefusal, setRowRefusal] = useState<string | null>(null)
 
   /**
    * The dialog and the switch it feeds, from the one place that owns the call.
@@ -106,6 +109,17 @@ export function ExplorerPanel() {
     void runSwitch(path)
   }
 
+  /**
+   * Ask for a row's menu, clearing whatever the last one had to say.
+   *
+   * The refusal is dropped on the next right-click rather than left standing: it was about one row, and
+   * a message about the row you have just moved on from is worse than no message.
+   */
+  const openRowMenu = (request: RowMenuRequest) => {
+    setRowRefusal(null)
+    setRowMenu(request)
+  }
+
   /** The open folder's own dialog, as before — with the picked path routed through the same switch. */
   const onOpenFolder = async () => {
     const picked = await rootSwitch.chooseFolder()
@@ -149,6 +163,15 @@ export function ExplorerPanel() {
         </p>
       )}
 
+      {/*
+        A refused row act, reported against the tree that is still on screen rather than inside the menu
+        that raised it: the menu is gone by the time the answer arrives, and what a user needs to read is
+        that nothing happened and what is there now.
+      */}
+      {rowRefusal !== null && (
+        <p className="shrink-0 border-b border-border px-3 py-1.5 text-[12px] text-destructive">{rowRefusal}</p>
+      )}
+
       {rootPath === null ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <FolderTree className="size-6 text-muted-foreground/40" />
@@ -186,7 +209,13 @@ export function ExplorerPanel() {
             </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-auto py-1">
-              <TreeLevel entries={root.data} depth={0} isLoading={root.isLoading} error={root.error} />
+              <TreeLevel
+                entries={root.data}
+                depth={0}
+                isLoading={root.isLoading}
+                error={root.error}
+                onRowMenu={openRowMenu}
+              />
             </div>
           )}
         </div>
@@ -228,6 +257,24 @@ export function ExplorerPanel() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/*
+        The row's own menu, rendered only while a folder is open: every act it offers is addressed at a
+        path under that folder, and the removal is resolved against it. The refusal handler is where the
+        re-read lives — a removal that worked is announced by main's own change event, but a refusal
+        announces nothing at all, so the pane has to ask the folder what is there now.
+      */}
+      {rowMenu !== null && rootPath !== null && (
+        <ExplorerRowMenu
+          request={rowMenu}
+          rootPath={rootPath}
+          onDone={() => setRowMenu(null)}
+          onRefused={(code) => {
+            setRowRefusal(rowRefusalMessage(code))
+            void conveyor.workspace.listDirectory.invalidate()
+          }}
+        />
+      )}
     </div>
   )
 }

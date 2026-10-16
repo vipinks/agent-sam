@@ -108,6 +108,21 @@ export function previewKind(fileName: string): PreviewKind {
   return 'other'
 }
 
+/**
+ * The kind main's document hand-off accepts for a name, or `null` for everything else.
+ *
+ * The rule `openDocument` refuses under, and the same one the explorer's row menu offers that action
+ * under — read rather than restated, because a menu that offered the hand-off for a text file would be
+ * an item whose only possible answer is a refusal. `.doc` is included deliberately, and is the kind the
+ * hand-off exists for: nothing in the app can draw the legacy container, so its owner is the answer.
+ */
+export function documentHandoffKind(fileName: string): 'pdf' | 'docx' | 'doc' | null {
+  const kind = previewKind(fileName)
+  if (kind === 'pdf' || kind === 'docx' || kind === 'doc') return kind
+
+  return null
+}
+
 /** The four bytes every pdf starts with: `%PDF`. */
 const PDF_SIGNATURE = [0x25, 0x50, 0x44, 0x46]
 

@@ -127,6 +127,12 @@ const MANIFEST: Record<string, Record<string, string>> = {
     // and a viewer whose read never ran would render its loading state forever.
     readDocument: 'query',
     openDocument: 'command',
+    // The explorer row's own two acts: removing a path from disk, and showing one in the OS's file
+    // manager. Both commands, like the row's hand-off above them, and listed for the reason every entry
+    // here is — a member missing from this map is dispatched by the client's Proxy as something else
+    // rather than failing loudly, so a menu suite could not reach either one.
+    deletePath: 'command',
+    revealPath: 'command',
   },
   terminal: { execute: 'stream', shell: 'query' },
   // The PTY: one shell per folder, owned by main. Its four commands are the pane's whole write side,

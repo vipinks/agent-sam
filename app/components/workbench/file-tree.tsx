@@ -5,6 +5,7 @@ import { ConveyorError } from 'electron-conveyor/react'
 import { CODE_RESIDENT, doubleClickDocksViewer } from '@/conveyor/protocol/dock'
 import { cn } from '@/lib/utils'
 import { useWorkbenchStore } from './store'
+import type { RowMenuRequest } from './explorer-row-menu'
 
 /** A directory child, derived from the router type — no main-only code is imported to get it. */
 export type FileTreeEntry = Awaited<ReturnType<typeof conveyor.workspace.listDirectory>>[number]
@@ -29,19 +30,44 @@ export function listErrorMessage(error: unknown) {
 }
 
 /**
+ * Ask for one row's menu, at the pointer this gesture happened at.
+ *
+ * The listing's own fields are handed over with the position rather than a row object: what the menu
+ * needs about the row is exactly what main listed, and building a second shape for it here would be a
+ * place for the two to disagree.
+ *
+ * The browser's own menu is suppressed — this is the app's answer for a row, and letting both draw would
+ * put the platform's items beside these for the same gesture.
+ */
+function askForRowMenu(
+  event: React.MouseEvent<HTMLButtonElement>,
+  entry: FileTreeEntry,
+  onRowMenu: (request: RowMenuRequest) => void
+): void {
+  event.preventDefault()
+  onRowMenu({ ...entry, x: event.clientX, y: event.clientY })
+}
+
+/**
  * One listing level. Each directory renders its own `TreeDirectory` only while expanded, so the
  * query for a folder runs when it is first opened — the tree is never walked up front.
+ *
+ * `onRowMenu` is asked for by both kinds of row and is what makes a right-click a first-class gesture
+ * here: the row reports which entity it is and where the pointer was, and the panel that owns the
+ * workspace decides what may be done to it.
  */
 export function TreeLevel({
   entries,
   depth,
   isLoading,
   error,
+  onRowMenu,
 }: {
   entries: FileTreeEntry[] | undefined
   depth: number
   isLoading: boolean
   error: unknown
+  onRowMenu: (request: RowMenuRequest) => void
 }) {
   if (isLoading) {
     return (
@@ -66,7 +92,11 @@ export function TreeLevel({
     <ul>
       {entries.map((entry) => (
         <li key={entry.path}>
-          {entry.isDirectory ? <DirectoryNode entry={entry} depth={depth} /> : <FileNode entry={entry} depth={depth} />}
+          {entry.isDirectory ? (
+            <DirectoryNode entry={entry} depth={depth} onRowMenu={onRowMenu} />
+          ) : (
+            <FileNode entry={entry} depth={depth} onRowMenu={onRowMenu} />
+          )}
         </li>
       ))}
     </ul>
@@ -78,7 +108,15 @@ export function TreeLevel({
  * fires — until the folder is expanded for the first time. Once it has run, the result lives in the
  * query cache, so collapsing and reopening is instant and silent.
  */
-function DirectoryNode({ entry, depth }: { entry: FileTreeEntry; depth: number }) {
+function DirectoryNode({
+  entry,
+  depth,
+  onRowMenu,
+}: {
+  entry: FileTreeEntry
+  depth: number
+  onRowMenu: (request: RowMenuRequest) => void
+}) {
   // Becomes true on the first expand and stays true, which is what keeps the fetched listing
   // cached across collapse/expand cycles instead of re-requesting it.
   const [hasExpanded, setHasExpanded] = useState(false)
@@ -103,6 +141,7 @@ function DirectoryNode({ entry, depth }: { entry: FileTreeEntry; depth: number }
         type="button"
         aria-expanded={isOpen}
         onClick={toggle}
+        onContextMenu={(event) => askForRowMenu(event, entry, onRowMenu)}
         className={cn(
           'flex w-full items-center gap-1.5 py-1 pr-2 text-left text-[12.5px] transition-colors hover:bg-accent',
           indentClass(depth)
@@ -116,14 +155,28 @@ function DirectoryNode({ entry, depth }: { entry: FileTreeEntry; depth: number }
       </button>
 
       {expanded && (
-        <TreeLevel entries={listing.data} depth={depth + 1} isLoading={listing.isLoading} error={listing.error} />
+        <TreeLevel
+          entries={listing.data}
+          depth={depth + 1}
+          isLoading={listing.isLoading}
+          error={listing.error}
+          onRowMenu={onRowMenu}
+        />
       )}
     </div>
   )
 }
 
 /** A leaf. Selecting it is what the code viewer reads. */
-function FileNode({ entry, depth }: { entry: FileTreeEntry; depth: number }) {
+function FileNode({
+  entry,
+  depth,
+  onRowMenu,
+}: {
+  entry: FileTreeEntry
+  depth: number
+  onRowMenu: (request: RowMenuRequest) => void
+}) {
   const selectedFile = useWorkbenchStore((s) => s.selectedFile)
   const setSelectedFile = useWorkbenchStore((s) => s.setSelectedFile)
   const setSelectedChange = useWorkbenchStore((s) => s.setSelectedChange)
@@ -163,6 +216,7 @@ function FileNode({ entry, depth }: { entry: FileTreeEntry; depth: number }) {
       aria-current={isSelected ? 'true' : undefined}
       onClick={select}
       onDoubleClick={openBeside}
+      onContextMenu={(event) => askForRowMenu(event, entry, onRowMenu)}
       className={cn(
         'flex w-full items-center gap-1.5 py-1 pr-2 text-left text-[12.5px] transition-colors',
         indentClass(depth),
