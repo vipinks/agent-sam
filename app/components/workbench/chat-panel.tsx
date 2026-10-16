@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
+  ArrowDown,
+  ArrowUp,
   MessageSquare,
   Folder,
   ImagePlus,
@@ -108,6 +110,20 @@ import {
 import { RESUME_MESSAGE } from '@/conveyor/protocol/turn-end'
 import { useWorkbenchStore } from './store'
 import { useThemeStore } from '@/app/shell/theme-store'
+
+/**
+ * How many pixels from an end of the transcript still count as being *at* that end.
+ *
+ * One number for both ends, because it answers one question — is the transcript at an edge? — that the
+ * two jump controls both read. Deliberately not zero: a fractional offset from a zoomed device pixel, a
+ * programmatic scroll that has not landed yet, and a row measured since the last scroll each leave a few
+ * pixels of slack, and a control that vanished over four of them would flicker exactly as the reader
+ * reached the end of a conversation.
+ *
+ * The run's own pin does not read it. A live turn carries the container to the bottom on every flushed
+ * chunk whatever the reader was doing, which is the behavior this constant is not for and does not change.
+ */
+const EDGE_SLACK_PX = 48
 
 /**
  * Why an attach attempt did not add a chip, in the user's terms.
@@ -691,6 +707,76 @@ export function ChatPanel() {
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * Which ends of the transcript are somewhere to go, as the two jump controls read it.
+   *
+   * Both true to start with, which is the state of a transcript with nothing to scroll: a conversation
+   * that has drawn nothing yet is at its top and at its bottom at once, so no control is offered on it
+   * and an empty one needs no case of its own.
+   */
+  const [atEdge, setAtEdge] = useState({ top: true, bottom: true })
+
+  /**
+   * Read the transcript's own geometry, and record which ends it is at.
+   *
+   * Called from the container's scroll event — which is the reader's own scroll, and the browser's for a
+   * programmatic one — and from each place this pane moves the container itself, so a click on a control
+   * is answered with the controls already in their new state rather than a frame later.
+   *
+   * The state is replaced only when it changed, so a drag that stays inside one region is not a render
+   * per pixel of it.
+   */
+  const syncEdges = useCallback(() => {
+    const box = scrollRef.current
+    if (!box) return
+    const top = box.scrollTop <= EDGE_SLACK_PX
+    const bottom = box.scrollHeight - box.clientHeight - box.scrollTop <= EDGE_SLACK_PX
+    setAtEdge((was) => (was.top === top && was.bottom === bottom ? was : { top, bottom }))
+  }, [])
+
+  /**
+   * Move the transcript to one end of the conversation, in one step.
+   *
+   * A plain assignment rather than a smooth scroll: the reader asked to be at the end, and an animation
+   * is a wait between the click and what it asked for.
+   */
+  const jumpToEdge = useCallback(
+    (edge: 'top' | 'bottom') => {
+      const box = scrollRef.current
+      if (!box) return
+      box.scrollTop = edge === 'top' ? 0 : box.scrollHeight - box.clientHeight
+      syncEdges()
+    },
+    [syncEdges]
+  )
+
+  /**
+   * Land a conversation that has just been opened on its last message.
+   *
+   * A load is a one-shot event and not a stream, so this does not go through the run's own pin: it puts
+   * the container at its bottom, which is the same move the jump-to-bottom control makes. Keyed on the
+   * conversation on screen, so a row click opens at the newest turn while the transcript the reader is
+   * already in is left wherever they had scrolled it — a chunk arriving, or a turn landing, is not a load
+   * and must not move them.
+   *
+   * Two frames, because the roster reaches the container in two steps: the first scrolls against the row
+   * heights the virtualizer estimated, and the second against the ones it measured while the first was
+   * being painted. The estimate is not the size on a transcript of long answers, so one pass lands near
+   * the end and the second lands on it.
+   */
+  useEffect(() => {
+    if (sessions.openId === null) return
+    let settle = 0
+    const land = requestAnimationFrame(() => {
+      jumpToEdge('bottom')
+      settle = requestAnimationFrame(() => jumpToEdge('bottom'))
+    })
+    return () => {
+      cancelAnimationFrame(land)
+      cancelAnimationFrame(settle)
+    }
+  }, [sessions.openId, jumpToEdge])
   // Mirrored so the stream callback reads the latest transcript without being re-created, which is
   // what keeps the run from restarting on every chunk.
   const messagesRef = useRef<AgentTurn[]>(messages)
@@ -2107,51 +2193,91 @@ export function ChatPanel() {
       {atHome ? (
         <HomeHero />
       ) : (
-        <div ref={scrollRef} data-slot="chat-transcript" className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-          {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-              <MessageSquare className="size-6 text-muted-foreground/40" />
-              <p className="text-[13px] font-medium">Start a conversation</p>
-              <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-                Answers stream in here, and the agent shows every file it reads and command it runs.
-              </p>
-            </div>
-          ) : (
-            // Virtualized: the transcript can grow without bound while the DOM stays small.
-            <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-              {virtualizer.getVirtualItems().map((item) => (
-                <div
-                  key={messages[item.index].id}
-                  ref={virtualizer.measureElement}
-                  data-index={item.index}
-                  className="absolute top-0 left-0 w-full"
-                  style={{ transform: `translateY(${item.start}px)` }}
-                >
-                  {/* The controls that act on the transcript are unavailable while the conversation is
+        // The transcript's own box, so the jump controls can be placed against the region they move
+        // rather than inside it. A control drawn inside the scroll container travels with the content it
+        // is meant to leave behind, and the container is the one element in the pane whose box has to
+        // stay exactly what the virtualizer measured.
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={scrollRef}
+            data-slot="chat-transcript"
+            onScroll={syncEdges}
+            // The pane's own `flex-1` and `min-h-0` are on the box above, so the scroll region keeps the
+            // height it had as the pane's flex child — it is now the full height of that box instead.
+            className="h-full overflow-y-auto overflow-x-hidden"
+          >
+            {messages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
+                <MessageSquare className="size-6 text-muted-foreground/40" />
+                <p className="text-[13px] font-medium">Start a conversation</p>
+                <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
+                  Answers stream in here, and the agent shows every file it reads and command it runs.
+                </p>
+              </div>
+            ) : (
+              // Virtualized: the transcript can grow without bound while the DOM stays small.
+              <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+                {virtualizer.getVirtualItems().map((item) => (
+                  <div
+                    key={messages[item.index].id}
+                    ref={virtualizer.measureElement}
+                    data-index={item.index}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${item.start}px)` }}
+                  >
+                    {/* The controls that act on the transcript are unavailable while the conversation is
                     moving: a run in flight is producing the turn an edit or a regenerate would write
                     again — and the version a pager would walk to is the one being written — while a
                     paused decision belongs to a turn that has not ended. All of it is a fact about the
                     pane, so it is the pane that decides. */}
-                  <MessageBubble
-                    message={messages[item.index]}
-                    canEdit={editAllowed}
-                    // The conversation these turns belong to, which is where a turn's images are stored:
-                    // a chip asks that folder for its bytes, so a message sent in this session and a
-                    // message restored from its file are read the same way.
-                    sessionId={sessions.openId ?? undefined}
-                    // Which side the user's own bubble sits on and how large the message text is painted:
-                    // two values of the store's, passed down as they are, so a bubble's own memo sees a
-                    // primitive change rather than a new object.
-                    alignment={appearanceAlignment}
-                    fontPreset={appearanceFontPreset}
-                    onResend={reviseUserMessage}
-                    onRegenerate={regenerateReply}
-                    onApprove={() => void decide(true)}
-                    onDeny={() => void decide(false)}
-                  />
-                </div>
-              ))}
-            </div>
+                    <MessageBubble
+                      message={messages[item.index]}
+                      canEdit={editAllowed}
+                      // The conversation these turns belong to, which is where a turn's images are stored:
+                      // a chip asks that folder for its bytes, so a message sent in this session and a
+                      // message restored from its file are read the same way.
+                      sessionId={sessions.openId ?? undefined}
+                      // Which side the user's own bubble sits on and how large the message text is painted:
+                      // two values of the store's, passed down as they are, so a bubble's own memo sees a
+                      // primitive change rather than a new object.
+                      alignment={appearanceAlignment}
+                      fontPreset={appearanceFontPreset}
+                      onResend={reviseUserMessage}
+                      onRegenerate={regenerateReply}
+                      onApprove={() => void decide(true)}
+                      onDeny={() => void decide(false)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/*
+            A control per edge rather than one per "in the middle": the top arrow is drawn whenever the
+            top is somewhere to go, the bottom arrow whenever the bottom is. At either end that leaves
+            exactly the control that still does something, and a transcript with nothing to scroll — a
+            conversation that has not drawn a turn yet — offers neither.
+          */}
+          {!atEdge.top && (
+            <button
+              type="button"
+              aria-label="Jump to the top of the conversation"
+              onClick={() => jumpToEdge('top')}
+              className="absolute top-2 left-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <ArrowUp className="size-3.5" />
+            </button>
+          )}
+          {!atEdge.bottom && (
+            <button
+              type="button"
+              aria-label="Jump to the bottom of the conversation"
+              onClick={() => jumpToEdge('bottom')}
+              className="absolute bottom-2 left-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <ArrowDown className="size-3.5" />
+            </button>
           )}
         </div>
       )}
