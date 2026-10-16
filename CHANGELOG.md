@@ -6,7 +6,7 @@ coding assistant.
 
 <br>
 
-## 2026-10-16: edited and regenerated messages keep their previous versions
+## 2026-10-16: v1.7.0 — Edited and regenerated messages keep every version, a conversation moves between projects, and the explorer row answers right-click
 
 - **An edit and a regenerate rewrite in place, and what was there is kept beside what is.** Both used to cut: an
   edit removed the edited message and every turn that followed it and sent the words again, and a regenerate did
@@ -31,6 +31,56 @@ coding assistant.
   reader that has never heard of these keys shows the live message, which is what it showed before. An array is
   written only when a message has been through more than one version, and a save that changes nothing commits no
   version at all.
+- **A session opens at its last message, and the transcript's edges carry a way back.** Opening a conversation
+  used to leave the pane at the top, which on a long one showed the oldest words first; it now lands at the
+  bottom, by the same move the jump control makes, and the landing is keyed on the open session's id, so a
+  conversation opened after another lands at its own bottom rather than wherever the last one was left. The
+  transcript then draws a control per edge rather than one for "in the middle" — the top arrow whenever the top is
+  somewhere to go, the bottom arrow whenever the bottom is — so a transcript sitting at a midpoint offers both, a
+  transcript at either end offers only the control that still does something, and one that has not drawn a turn yet
+  offers neither. `EDGE_SLACK_PX` is how close to an edge counts as being at it, slack rather than zero because a
+  fractional offset from a zoomed device pixel otherwise reads as "not at the bottom" and draws a control nothing
+  needs.
+- **A conversation can be moved into another project.** A row's existing action surface — the one beside rename —
+  gains Move, which lists the folders the app remembers minus the row's own project, with the open folder first.
+  Main checks the destination before anything is written: a folder that is not there, or that cannot be read, is
+  refused under `WORKSPACE_MISSING`, the code a folder switch already refuses under, and the session, its
+  transcript and the store are left exactly as they were. The destination is handed back resolved, so a row's new
+  project is one spelling of the folder, which is what the recents comparison and the project grouping both rest
+  on. **No file is renamed, because there is nothing to rename:** a transcript lives at
+  `userData/sessions/<id>.json` — one directory for every project, named by the session id alone — and a snapshot
+  records nothing about the folder a conversation happened in, so a moved transcript is already where it belongs
+  and the disk half of a move is the destination check. Moving the _open_ conversation also switches the window's
+  folder, for the reason the per-turn project stamp exists: a turn run in the old folder would record that folder,
+  and the move would be undone by the next message.
+- **An explorer row answers right-click.** A file or folder row now offers Delete, Show in folder and Open in
+  default app, from a menu opened at the pointer rather than anchored to the row — a tree is a stack of rows of the
+  same width, so an anchored menu would draw in the same place for every row and say nothing about which one was
+  clicked. Delete asks first, naming the row and the cost, and refuses under `PATH_GONE` when nothing is on disk at
+  that path any more, at which point the explorer reads the folder again rather than keeping a row that is not
+  there; Show in folder is `shell.showItemInFolder`, the OS's own file manager with the row selected; and Open in
+  default app is offered only for the names the document hand-off accepts, read off that command's own rule rather
+  than restated, because an item whose only possible answer is a refusal is worse than no item. The open folder
+  itself heads the tree as a path line rather than a row, so it cannot be right-clicked at all, and the removal
+  refuses it under `ROOT_UNREMOVABLE` for a caller that names it. Nothing in the menu is a new capability except
+  the two the trace found missing entirely: the removal and the file-manager hand-off had no boundary in the app
+  before.
+- **The title bar's controls explain themselves, and a contrast control sits beside brightness.** Every icon in
+  the right cluster now wears one tooltip shape from a single `ControlTooltip` — the mode toggle, the brightness
+  control, the terminal toggle, the view actions, the window controls and the update badge — with one placement
+  (bottom, centred) and one delay, stated in that module rather than inherited from the primitive's default, so a
+  change to that default cannot quietly stagger every hover in the row. The mode toggle names the mode the window
+  is in instead of repeating "Toggle theme", and the terminal toggle's native title moved into the same shape, so
+  one control has one description. Contrast joins brightness as its twin: a `contrast` slot in the theme
+  preference beside `themeId` and `brightness`, each setter writing all three so nothing can drop a half, and the
+  engine applies it the way it applies brightness — as a multiplier on the document's own custom properties, never
+  as a filter — so each surface's distance from the page is multiplied while the ink stays where the theme put it.
+  Zero is the identity on a 0–100 slider, which is why a window that never touches the control renders exactly
+  what it rendered before; the terminal follows on the route it already followed the brightness, and the
+  brightness control now wears the sun glyph, leaving the contrast mark to the control it names.
+- The v1.6.0 baseline is everything before this entry: Phases 1 through 88, which shipped under the standing
+  versioning rule that a release names the work since the last one. This entry is v1.7.0 — the five Phase 90
+  commits, which are the work described above.
 
 <br>
 
