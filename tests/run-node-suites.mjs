@@ -185,6 +185,10 @@ const SUITES = [
   },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
   {
+    name: 'transcript versions (additive-optional arrays, live version, re-run history)',
+    src: 'sessions/transcript-versions-test.ts',
+  },
+  {
     name: 'session row (engine name, Sam pair, unnamed engine)',
     src: 'sessions/session-row-test.ts',
   },

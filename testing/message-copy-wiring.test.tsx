@@ -141,6 +141,24 @@ describe('copy on a message bubble', () => {
     expect(copied).not.toContain(PLAN_TEXT)
   })
 
+  it('copies the version that is live while a previous one is on screen', async () => {
+    const { user, writeText } = withClipboard()
+    // A message the user has rewritten: the words it used to have are parked behind the pager.
+    const revised: AgentTurn = { ...userTurn(), userVersions: [{ content: 'Rename the lexer' }] }
+    render(<MessageBubble message={revised} canEdit />)
+
+    // Walked back to what the message used to say...
+    await user.click(screen.getByRole('button', { name: 'Previous version' }))
+    expect(screen.getByText('1/2')).toBeTruthy()
+    expect(screen.getByText('Rename the lexer')).toBeTruthy()
+
+    // ...and the copy still takes the message as it stands. A previous version is a thing this pane can
+    // show and nothing else reads: the clipboard is what the message *is*.
+    await user.click(screen.getByRole('button', { name: 'Copy message' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    expect(writeText).toHaveBeenCalledWith(USER_TEXT)
+  })
+
   it('confirms the copy on the button, then clears the confirmation', async () => {
     const { writeText } = withClipboard()
     vi.useFakeTimers()

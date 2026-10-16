@@ -5,6 +5,7 @@ import {
   type TranscriptTurn,
 } from '@/conveyor/protocol/transcript'
 import { isInterrupted, isUndecidedPause, LOST_PAUSE_CODE, type AgentTurn } from './agent-session'
+import type { MessageVersion } from '@/conveyor/protocol/message-versions'
 
 /**
  * Turning the live transcript into something that can be saved, and back.
@@ -68,6 +69,24 @@ function detectInterrupted(turns: AgentTurn[]): boolean {
 }
 
 /**
+ * Frozen into a snapshot: a version entry, copied.
+ *
+ * Copied for the reason the plan and the image references are — a version is a record of what a message
+ * was, and a later edit to the live turn must not be able to reach back into it. The chips inside an
+ * entry are copied one level down as well, because they are arrays themselves: a shallow copy would leave
+ * the stored version holding the live message's own array, which is the same mistake with an extra step.
+ */
+function copyMessageVersion(version: MessageVersion): MessageVersion {
+  return {
+    content: version.content,
+    ...(version.mentionPaths && version.mentionPaths.length > 0 ? { mentionPaths: [...version.mentionPaths] } : {}),
+    ...(version.imageRefs && version.imageRefs.length > 0
+      ? { imageRefs: version.imageRefs.map((image) => ({ ...image })) }
+      : {}),
+  }
+}
+
+/**
  * Freeze the live transcript into a snapshot.
  *
  * Interruption is derived rather than trusted from the caller: a stale flag left over from a
@@ -93,6 +112,15 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     // written, and the chips a reopened conversation draws must be the chips that were stored.
     ...(turn.imageRefs !== undefined && turn.imageRefs.length > 0
       ? { imageRefs: turn.imageRefs.map((image) => ({ ...image })) }
+      : {}),
+    // The versions this message has been through, written only when there are any: a message that has
+    // never been rewritten carries no key, so its turn is stored byte for byte as it was before versions
+    // existed — the same rule every optional field here follows.
+    ...(turn.userVersions !== undefined && turn.userVersions.length > 0
+      ? { userVersions: turn.userVersions.map(copyMessageVersion) }
+      : {}),
+    ...(turn.replyVersions !== undefined && turn.replyVersions.length > 0
+      ? { replyVersions: turn.replyVersions.map(copyMessageVersion) }
       : {}),
     // The plan as the turn ended with it. Written only when there is one, so an ordinary conversation
     // carries no key — the same reason the instructions record is conditional — and copied rather than
@@ -166,6 +194,15 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     // the pointer. Absent for every turn that attached no image, which is almost all of them.
     ...(turn.imageRefs !== undefined && turn.imageRefs.length > 0
       ? { imageRefs: turn.imageRefs.map((image) => ({ ...image })) }
+      : {}),
+    // Carried back so a conversation reopened from disk still offers the versions its messages have been
+    // through, which is the whole of what the pager walks. Absent for every turn that has never been
+    // rewritten, which is almost all of them.
+    ...(turn.userVersions !== undefined && turn.userVersions.length > 0
+      ? { userVersions: turn.userVersions.map(copyMessageVersion) }
+      : {}),
+    ...(turn.replyVersions !== undefined && turn.replyVersions.length > 0
+      ? { replyVersions: turn.replyVersions.map(copyMessageVersion) }
       : {}),
     // Carried back so a reopened conversation shows the checklist its turn was working from. It was
     // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is

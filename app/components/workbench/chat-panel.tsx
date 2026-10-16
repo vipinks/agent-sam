@@ -87,7 +87,7 @@ import {
   type ComposerCommandToken,
 } from '@/conveyor/protocol/composer-commands'
 import { MAX_ACTIVE_SKILLS, offeredSkills, scopeSkills, type SkillListing } from '@/conveyor/protocol/skills'
-import { truncateFromTurn } from '@/conveyor/protocol/truncate'
+import { runHistoryFor } from '@/conveyor/protocol/truncate'
 import { rootFolderName } from '@/conveyor/protocol/root-name'
 import {
   ABANDONED_PAUSE_CODE,
@@ -98,6 +98,8 @@ import {
   endTurn,
   noteContextSkip,
   resolveDecision,
+  restartReplyTurn,
+  reviseUserTurn,
   startAssistantTurn,
   startUserTurn,
   toHistory,
@@ -1287,37 +1289,55 @@ export function ChatPanel() {
   )
 
   /**
-   * Drive one agent turn on a history that is already settled.
+   * Drive one agent turn, over a transcript and the history it is answering from.
    *
-   * The one entry every run starts through. A message sent from the composer and a reply regenerated
-   * differ in what they hand over and in nothing else: both need the same turn opened, the same stream
+   * The one entry every run starts through. A message sent from the composer, an edited message and a
+   * regenerated reply differ in what they hand over and in nothing else: all three need the same stream
    * driven to its end, the same plan reconciled when it ends and the same save at the boundary. A second
-   * copy of that for the regenerate would be a second place for the payload to drift, and it is the run
-   * the user gets that would differ.
+   * copy of that for the rewritten cases would be a second place for the payload to drift, and it is the
+   * run the user gets that would differ.
    *
-   * The turns are the transcript this run continues from, already carrying the message it is answering
-   * — a new one for a send, the one the discarded reply answered for a regenerate. The provider-shaped
-   * history is read from them, text-only: the agent owns the history with its tool turns and hands it
-   * back on a pause, so rebuilding that here would be a second source of truth. `mentionPaths` goes out
-   * exactly as a send carries it, which is what lets a file attached to the message being answered be
-   * read again on a regenerate.
+   * Two lists, because rewriting in place has made them different things. `turns` is the transcript this
+   * run writes into, and it is what the pane renders: every message the conversation has, including the
+   * ones after the turn being written again, which nothing removes any more. `history` is what the model
+   * is handed — the turns up to the question being answered, which is the turns before the target plus the
+   * target's own message when the target is that question. The provider-shaped history is read from that
+   * second list, text-only: the agent owns the history with its tool turns and hands it back on a pause,
+   * so rebuilding it here would be a second source of truth. `mentionPaths` goes out exactly as a send
+   * carries it, which is what lets a file attached to the message being answered be read again.
+   *
+   * `rewrittenTurnId` is the third difference between the three: a send starts a fresh turn at the end of
+   * the transcript, while an edit and a regenerate fill a turn that is already there — the same turn, under
+   * the same id, which is what every following chunk addresses and what leaves the rest of the transcript
+   * where it was.
    */
   const runAgentTurn = useCallback(
     async (
       turns: AgentTurn[],
+      history: AgentTurn[],
       mentionPaths: readonly string[],
       sessionId: string,
       engineId: string | null,
       rolePrompt: string | null,
-      mcpSubset: string[] | null
+      mcpSubset: string[] | null,
+      rewrittenTurnId?: string
     ) => {
       // A turn is this conversation being used in this window's folder, so its start is what the project
       // is recorded from — and only when that differs from the folder already stored.
       sessionsRef.current.stampRoot(sessionId)
 
-      const assistantTurn = startAssistantTurn()
-      streamingTurnIdRef.current = assistantTurn.id
-      updateMessages([...turns, assistantTurn])
+      // The turn this run fills. A send starts one at the end of the transcript; a rewrite fills the turn
+      // the user acted on, which already sits in the transcript with its prose parked and its previous
+      // versions beside it.
+      let turnId = rewrittenTurnId ?? ''
+      if (rewrittenTurnId === undefined) {
+        const assistantTurn = startAssistantTurn()
+        turnId = assistantTurn.id
+        updateMessages([...turns, assistantTurn])
+      } else {
+        updateMessages(turns)
+      }
+      streamingTurnIdRef.current = turnId
       requestAnimationFrame(stickToBottom)
 
       // What this conversation runs as decides where the turn is spoken. A conversation that named an engine
@@ -1331,10 +1351,11 @@ export function ChatPanel() {
       // read from here answered for the conversation the window was showing a moment ago — which, for the first
       // message of an engine conversation, is no conversation at all.
       //
-      // The prompt is the last thing the user said, because that is what a non-interactive engine turn is given:
-      // the engine keeps its own thread for the conversation, so re-sending the transcript would be telling it
-      // twice about a history it already holds.
-      const enginePrompt = [...turns].reverse().find((turn) => turn.role === 'user')?.content ?? ''
+      // The prompt is the last thing the user said in the history this run continues from, because that
+      // is what a non-interactive engine turn is given: the engine keeps its own thread for the
+      // conversation, so re-sending the transcript would be telling it twice about a history it already
+      // holds — and the history, not the transcript, is the conversation this run is answering from.
+      const enginePrompt = [...history].reverse().find((turn) => turn.role === 'user')?.content ?? ''
       // What the header's control holds for this engine, read once: the turn below and the record the turn is
       // written down with are the same value, so a store that moved between two reads could not make the app
       // claim to have run a model it never handed over.
@@ -1366,7 +1387,7 @@ export function ChatPanel() {
             // The descriptor of a provider the user added, when this is one. Absent for a built-in, whose
             // route main already knows by id.
             provider: runProvider,
-            messages: toHistory(turns),
+            messages: toHistory(history),
             workspaceRoot: rootPath,
             autoApprove,
             // The conversation this turn belongs to, which is where a stored image's bytes live: a
@@ -1394,7 +1415,7 @@ export function ChatPanel() {
             rolePrompt: rolePrompt ?? undefined,
             mcpSubset: mcpSubset ?? undefined,
           }),
-        assistantTurn.id,
+        turnId,
         sessionId
       )
 
@@ -1431,42 +1452,39 @@ export function ChatPanel() {
     [setDraft]
   )
 
+  /**
+   * Send what is in the composer, over the transcript as it stands.
+   *
+   * The one path a new message takes. Rewriting a message that is already in the conversation does not go
+   * through here: an edit revises its own turn and writes its reply again, and neither of those appends
+   * anything, so there is nothing the composer's road has to say about it.
+   *
+   * Sending with no session open is normal: a session is created for the message, and named from it. This
+   * is what makes the composer work before the user has ever touched the session list. The id comes back so
+   * the run knows which conversation it belongs to — a pause it asks for is a question about that
+   * conversation, and the pane has to be able to say which one it is holding.
+   *
+   * The images are stored before anything is dispatched, and the send is abandoned if one of them cannot
+   * be. Two things rest on that order. The reference a transcript carries is the store's, so an image has to
+   * be written before the turn that names it can be built. And a send that stored two of three images and
+   * then dispatched anyway would put a message in the conversation saying something the model was never
+   * given — so a failure here returns with the draft exactly as the user left it, chips and all, and
+   * nothing partial is dispatched.
+   *
+   * Awaited one at a time and in attach order, which is what makes the references' order the user's rather
+   * than the store's.
+   */
   const sendText = useCallback(
-    async (
-      raw: string,
-      options: {
-        mentionPaths?: readonly string[]
-        images?: readonly DraftAttachment[]
-        /**
-         * References this message already carried, kept in front of the ones being stored now.
-         *
-         * A resend passes the images the message was sent with: an edit rewrites the words, and the
-         * pictures are not the editor's to drop. They are already in the store, so they are not written
-         * again — the message the user sees afterwards shows the same references it did before.
-         */
-        imageRefs?: readonly ImageAttachmentRef[]
-        keepComposer?: boolean
-      } = {}
-    ) => {
+    async (raw: string, options: { mentionPaths?: readonly string[]; images?: readonly DraftAttachment[] } = {}) => {
       const text = raw.trim()
       if (!text || isStreaming || pending) return
 
-      // The chips as they stand: the payload and the transcript both read this one list, so what is
-      // sent and what the bubble shows afterwards cannot disagree. An edit passes its own, because the
-      // chips it changed belong to the message being sent again rather than to the composer.
+      // The chips as they stand: the payload and the transcript both read this one list, so what is sent
+      // and what the bubble shows afterwards cannot disagree.
       const chips = options.mentionPaths ?? mentionPathsRef.current
-      // The images for the same reason, and an edit passes references rather than bytes: the draft's own
-      // images come out of the composer, and a message being sent again brings the ones it already had.
+      // The images for the same reason, out of the composer.
       const images = options.images ?? draftImagesRef.current
-      const keptRefs = options.imageRefs ?? []
-      // A resend did not come from the composer, so it must not empty it: the user's half-written next
-      // message is still theirs, and the chips in it were never part of the send that just happened.
-      const fromComposer = options.keepComposer !== true
 
-      // Sending with no session open is normal: a session is created for the message, and named from
-      // it. This is what makes the composer work before the user has ever touched the session list. The
-      // id comes back so the run knows which conversation it belongs to — a pause it asks for is a
-      // question about that conversation, and the pane has to be able to say which one it is holding.
       const {
         id: sessionId,
         engineId: conversationEngineId,
@@ -1474,15 +1492,6 @@ export function ChatPanel() {
         mcpSubset: conversationMcpSubset,
       } = sessionsRef.current.ensureSession(text)
 
-      // The images are stored before anything is dispatched, and the send is abandoned if one of them
-      // cannot be. Two things rest on that order. The reference a transcript carries is the store's, so
-      // an image has to be written before the turn that names it can be built. And a send that stored
-      // two of three images and then dispatched anyway would put a message in the conversation saying
-      // something the model was never given — so a failure here returns with the draft exactly as the
-      // user left it, chips and all, and nothing partial is dispatched.
-      //
-      // Awaited one at a time and in attach order, which is what makes the references' order the user's
-      // rather than the store's.
       const storedRefs: ImageAttachmentRef[] = []
       try {
         for (const request of attachmentSaveRequests(sessionId, images)) {
@@ -1493,27 +1502,24 @@ export function ChatPanel() {
         return
       }
 
-      // The message's own images first, then the ones just stored: the order the user would describe it
-      // in, and the order main resolves them in when it builds the parts.
-      const imageRefs: ImageAttachmentRef[] = [...keptRefs, ...storedRefs]
+      setDraft('')
+      // The chips belonged to that message. Main reads the paths from the payload, so clearing here cannot
+      // take them away from the send that is starting — only from the next one.
+      setChips([])
+      // The images go with them, and so do their object URLs: the chips stop rendering, and the effect that
+      // made each URL revokes it on the way out.
+      setImages([])
+      setMention({ token: null, dismissed: false })
+      sessionsRef.current.setComposer({ mentionNote: null, attachmentNote: null })
 
-      if (fromComposer) {
-        setDraft('')
-        // The chips belonged to that message. Main reads the paths from the payload, so clearing here
-        // cannot take them away from the send that is starting — only from the next one.
-        setChips([])
-        // The images go with them, and so do their object URLs: the chips stop rendering, and the effect
-        // that made each URL revokes it on the way out.
-        setImages([])
-        setMention({ token: null, dismissed: false })
-        sessionsRef.current.setComposer({ mentionNote: null, attachmentNote: null })
-      }
-
-      // The message goes on the end of the transcript as it stands — after any truncation an edit made,
-      // so a resend continues the conversation that is left rather than the one the removed turns
-      // belonged to — and that whole list is what the run is handed.
+      // The message goes on the end of the transcript as it stands, and that whole list is the history the
+      // run is handed: a send continues the conversation the user is looking at, which is the one thing
+      // that separates it from a rewrite.
+      const asked = startUserTurn(text, chips, storedRefs)
+      const next = [...messagesRef.current, asked]
       await runAgentTurn(
-        [...messagesRef.current, startUserTurn(text, chips, imageRefs)],
+        next,
+        next,
         chips,
         sessionId,
         conversationEngineId,
@@ -1530,50 +1536,79 @@ export function ChatPanel() {
   }, [draft, sendText])
 
   /**
-   * Send an edited message again, in place of everything that followed it.
+   * Rewrite a message the user already sent, in place, and write its reply again.
    *
-   * The cut first, then the save, then the send, in that order and awaited: what the user asked for is
-   * a conversation in which the removed turns never happened, so the file is written before the new
-   * message can fail. The send itself is the ordinary one — same function the composer calls — with the
-   * edited text and the chips the editor was left with, which is what keeps an edited message from
-   * being a second kind of message with its own way of being sent.
+   * Nothing is removed, which is the whole of the difference from what this used to do. The turn keeps
+   * its id and its place, the words and chips it had are kept beside the new ones, and the reply it was
+   * answered with is written again where it stands — so every turn after it is left exactly as it was, and
+   * the only things that change about the conversation are the message the user chose to change and the
+   * answer to that message.
    *
-   * The message keeps its images. They are read off the turn before the cut removes it, and they go in
-   * front of whatever the composer is holding: the editor has no image controls, so a resend that left
-   * them out would quietly rewrite the message into one that said less than the user's did — and the
-   * draft's images follow because they are what the user is looking at while they edit.
+   * The save comes before the run, awaited, for the reason it always did: the version the user just
+   * replaced has to be on disk before anything else can fail, or the words they wanted to keep would be
+   * the ones that went missing.
    *
-   * The pane is the only thing that can do this: it holds both the transcript and the send path, and an
-   * edit that cut the transcript without knowing how to send would leave the user with a message gone.
+   * The history the run is handed ends at this message, and it carries the version in force rather than
+   * any of the ones parked behind it — which is why it is read off the turn instead of assembled here. The
+   * reply that follows is left out of it, because that reply is what is being written again, and so is
+   * everything after that. That last part is the divergence an in-place rewrite accepts: a later reply
+   * stays what it was, written from the older words, and the pane shows that rather than pretending the
+   * conversation was re-derived.
+   *
+   * The message keeps its images. The editor has no image controls, and nothing here is a send from the
+   * composer, so the references the message already carried are the references it has.
+   *
+   * Only a user's own message is revised, and the role is checked rather than the id trusted: the control
+   * lives on user bubbles, and an id that names anything else here is a stale one.
    */
-  const resendEditedMessage = useCallback(
+  const reviseUserMessage = useCallback(
     (turnId: string, text: string, chips: readonly string[]) => {
       void (async () => {
-        const original = messagesRef.current.find((turn) => turn.id === turnId)
-        const keptRefs = original?.imageRefs ?? []
-        updateMessages(truncateFromTurn(messagesRef.current, turnId))
+        if (isStreaming || pending) return
+        const target = messagesRef.current.find((turn) => turn.id === turnId)
+        if (!target || target.role !== 'user') return
+
+        const revised = reviseUserTurn(messagesRef.current, turnId, text, chips)
+        // The message is answered, so the reply that answered it is written again. A message with no reply
+        // after it yet has nothing to write again, and the run starts one at the end as a send would.
+        const following = revised[revised.findIndex((turn) => turn.id === turnId) + 1]
+        const answered = following && following.role === 'assistant' ? restartReplyTurn(revised, following.id) : revised
+        updateMessages(answered)
         await sessionsRef.current.saveNow()
-        await sendText(text, { mentionPaths: chips, imageRefs: keptRefs, keepComposer: true })
+        // The conversation's engine, and its Buddy's role and server list, are the record's: read off the
+        // window here, where they are current, rather than handed over by a create as a first send's are.
+        // The chips are the ones the editor was left with, which is also what the revised turn carries.
+        await runAgentTurn(
+          answered,
+          runHistoryFor(answered, turnId),
+          chips,
+          sessionsRef.current.openId ?? '',
+          sessionsRef.current.engineId,
+          sessionsRef.current.buddyRolePrompt,
+          sessionsRef.current.buddyMcpSubset,
+          following && following.role === 'assistant' ? following.id : undefined
+        )
       })()
     },
-    [sendText, updateMessages]
+    [isStreaming, pending, runAgentTurn, updateMessages]
   )
 
   /**
-   * Answer the message again, in place of the reply being regenerated.
+   * Answer the message again, writing the reply where it stands.
    *
-   * The cut first, then the save, then the run, in the same order and for the same reason a resend does
-   * it: what the user asked for is a conversation in which the discarded turn never happened, so the
-   * record is written before the new run can fail.
+   * The reply keeps its place and its id, and the answer it is replacing is kept as a previous version
+   * beside the new one — the same rule the edit follows, on the other half of the pair. Everything after
+   * it stays exactly as it was.
    *
-   * Nothing is sent on the user's behalf. The turns the cut left already end with the message that reply
-   * was answering, so the run continues that conversation — appending a copy of the message would put
-   * words in the user's mouth, and a regenerate is not a new question.
+   * The save comes before the run, in the same order and for the same reason the edit does it: the answer
+   * the user is replacing has to be on disk before the run that replaces it can fail.
    *
-   * The cut is at the reply itself rather than after it, by the same rule that counted the turns in the
-   * dialog: the reply is what is being replaced, and it goes with everything written in answer to it.
+   * Nothing is sent on the user's behalf. The history ends with the message this reply was answering — the
+   * reply itself is left out, because it is what is being written again — so the run continues that
+   * conversation. Appending a copy of the question would put words in the user's mouth, and a regenerate
+   * is not a new question.
    *
-   * Only a reply is regenerated, and the pane checks the id rather than trusting it: the control lives on
+   * Only a reply is regenerated, and the role is checked rather than the id trusted: the control lives on
    * agent bubbles, and an id that names anything else here is a stale one.
    */
   const regenerateReply = useCallback(
@@ -1583,19 +1618,24 @@ export function ChatPanel() {
         const target = messagesRef.current.find((turn) => turn.id === turnId)
         if (!target || target.role !== 'assistant') return
 
-        const kept = truncateFromTurn(messagesRef.current, turnId)
-        updateMessages(kept)
+        const rewritten = restartReplyTurn(messagesRef.current, turnId)
+        updateMessages(rewritten)
         await sessionsRef.current.saveNow()
+        // The turns up to the question this reply answered: the reply being written again is not part of
+        // the history it is written from, and neither is anything that followed it.
+        const history = runHistoryFor(rewritten, turnId)
         // A reply already on screen belongs to a conversation that exists, so its engine and its Buddy's role and
         // server list are the record's — read off the window here, where they are current, rather than handed over
         // by a create as a first send's are.
         await runAgentTurn(
-          kept,
-          lastAskMentions(kept),
+          rewritten,
+          history,
+          lastAskMentions(history),
           sessionsRef.current.openId ?? '',
           sessionsRef.current.engineId,
           sessionsRef.current.buddyRolePrompt,
-          sessionsRef.current.buddyMcpSubset
+          sessionsRef.current.buddyMcpSubset,
+          turnId
         )
       })()
     },
@@ -2087,14 +2127,14 @@ export function ChatPanel() {
                   className="absolute top-0 left-0 w-full"
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
-                  {/* The controls that would cut the transcript are unavailable while the conversation is
-                    moving: a run in flight is producing the turns an edit or a regenerate would remove, and
-                    a paused decision belongs to a turn that has not ended. Both are facts about the pane, so
-                    it is the pane that decides. */}
+                  {/* The controls that act on the transcript are unavailable while the conversation is
+                    moving: a run in flight is producing the turn an edit or a regenerate would write
+                    again — and the version a pager would walk to is the one being written — while a
+                    paused decision belongs to a turn that has not ended. All of it is a fact about the
+                    pane, so it is the pane that decides. */}
                   <MessageBubble
                     message={messages[item.index]}
                     canEdit={editAllowed}
-                    laterTurns={messages.length - item.index - 1}
                     // The conversation these turns belong to, which is where a turn's images are stored:
                     // a chip asks that folder for its bytes, so a message sent in this session and a
                     // message restored from its file are read the same way.
@@ -2104,7 +2144,7 @@ export function ChatPanel() {
                     // primitive change rather than a new object.
                     alignment={appearanceAlignment}
                     fontPreset={appearanceFontPreset}
-                    onResend={resendEditedMessage}
+                    onResend={reviseUserMessage}
                     onRegenerate={regenerateReply}
                     onApprove={() => void decide(true)}
                     onDeny={() => void decide(false)}

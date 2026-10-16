@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider, useChatSessionsContext } from '@/app/components/workbench/chat-sessions-context'
@@ -256,19 +256,19 @@ describe('the consent setting across a turn', () => {
     const { stub, sent, transcripts } = renderChat({ files: { [FIRST_ID]: snapshot(answeredWithMore(), true) } })
 
     await waitFor(() => expect(isOn()).toBe(true))
-    // The first reply, so the cut it asks about is a real one. Two replies are on screen, so this picks
-    // the earlier one rather than letting the role query be ambiguous.
+    // The first reply: two replies are on screen, so this picks the earlier one rather than letting the
+    // role query be ambiguous.
     const regenerate = (await screen.findAllByRole('button', { name: 'Regenerate reply' }))[0]
     await userEvent.click(regenerate!)
-    await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Regenerate' }))
 
-    // The run that answers the message again carries the setting, and the cut that preceded it did not
-    // take the record's flag with it.
+    // Nothing is asked first any more — a reply written again in place removes nothing, so the click is
+    // the whole of the interaction. The run that answers the message again carries the setting, and the
+    // save that preceded it did not take the record's flag with it.
     await waitFor(() => expect(sent.length).toBe(1))
     expect(sent[0]?.autoApprove).toBe(true)
     expect(isOn()).toBe(true)
-    // The cut wrote a record on its way past, so the file is read here as well as after the run: that
-    // write is the one that used to arrive without the key.
+    // That save wrote a record on its way past — the reply parked as a previous version — so the file is
+    // read here as well as after the run: it is the write that used to arrive without the key.
     expect(transcripts.files[FIRST_ID]?.autoApprove).toBe(true)
 
     await finishRun(stub, await streamChannel(stub))
@@ -286,10 +286,9 @@ describe('the consent setting across a turn', () => {
     await userEvent.clear(field)
     await userEvent.type(field, 'delete the dist folder instead')
     await userEvent.click(screen.getByRole('button', { name: 'Save and resend' }))
-    await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Resend' }))
 
-    // The resend runs through the ordinary send path, and the cut it made before sending is the thing
-    // that used to leave the record carrying turns and no flag.
+    // The edit revises the message in place and re-runs its reply, and the save it makes before that run
+    // is the thing that used to leave the record carrying turns and no flag.
     await waitFor(() => expect(sent.length).toBe(1))
     const payload = sent[0] as { messages: { role: string; content: string }[]; autoApprove?: boolean }
     expect(payload.messages[payload.messages.length - 1]?.content).toBe('delete the dist folder instead')

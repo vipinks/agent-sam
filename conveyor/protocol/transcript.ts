@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { planStepSchema } from './plan'
 import { TURN_END_CAUSES } from './turn-end'
 import { imageAttachmentRefSchema } from './image-attachments'
+import { messageVersionSchema } from './message-versions'
 import { ENGINE_MODEL_MAX_LENGTH } from './engine'
 
 /**
@@ -124,6 +125,28 @@ const turnSchema = z.object({
    * way to say "no images" — which is the absence.
    */
   imageRefs: z.array(imageAttachmentRefSchema).optional(),
+  /**
+   * The versions this message has been through, newest last, and the ones the bubble can walk back to.
+   *
+   * One array per role, because a turn is one message: a user's turn carries `userVersions`, a reply
+   * carries `replyVersions`, and the version in force is the turn's own `content` and `mentionPaths` —
+   * never an entry here. An edit commits a new user version and a regenerate commits a new reply one, and
+   * in both cases what the message said before is kept rather than dropped, which is the whole point: the
+   * words a user rewrote and the answer a user replaced are things they can still read.
+   *
+   * Each entry carries the text *and* the chips that version was carrying, because an edit can remove a
+   * file as well as change a sentence, and a version shown with the wrong chips would be a message that
+   * never existed. See `protocol/message-versions`, which owns the shape and the rule that reads it.
+   *
+   * Optional and additive, and it does *not* bump the version, by the rule every optional field here
+   * follows: a file written before a message could be rewritten simply has no key, an absent optional key
+   * is stripped rather than defaulted, and the message it describes is its content. `TRANSCRIPT_VERSION`
+   * moved only when a reader would otherwise get a stored state *wrong*; a reader that does not know
+   * these keys loses the archive and shows the live message, which is what every such reader did before.
+   */
+  userVersions: z.array(messageVersionSchema).optional(),
+  /** The same, for a reply: the answers this turn used to be. */
+  replyVersions: z.array(messageVersionSchema).optional(),
   /**
    * The plan the model had declared when this turn ended, if it had one.
    *

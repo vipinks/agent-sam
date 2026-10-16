@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MessageBubble } from '@/app/components/workbench/message-bubble'
 import type { AgentTurn } from '@/app/components/workbench/agent-session'
@@ -125,60 +125,18 @@ describe('the editor a bubble opens', () => {
     expect(onResend).not.toHaveBeenCalled()
   })
 
-  it('sends without asking when nothing follows the message', async () => {
+  it('commits without asking, whatever follows the message', async () => {
     const user = userEvent.setup()
     const onResend = vi.fn()
-    render(<MessageBubble message={userTurn()} canEdit laterTurns={0} onResend={onResend} />)
+    render(<MessageBubble message={userTurn()} canEdit onResend={onResend} />)
 
     await rewrite(user, 'and the readme')
     await user.click(screen.getByRole('button', { name: 'Save and resend' }))
 
-    // Nothing to remove, so nothing to confirm: a dialog with nothing to say would be noise the user
-    // learns to click through.
+    // Nothing is asked, because nothing is removed: the dialog that used to name the turns an edit
+    // would take with it has no answer left to give. The click commits, and what it commits is a
+    // message with a second version.
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(onResend).toHaveBeenCalledWith(TURN_ID, 'and the readme', CHIPS)
-  })
-})
-
-describe('the confirmation before a resend', () => {
-  it('names how many later turns the edit will remove', async () => {
-    const user = userEvent.setup()
-    const onResend = vi.fn()
-    render(<MessageBubble message={userTurn()} canEdit laterTurns={2} onResend={onResend} />)
-
-    await rewrite(user, 'refactor the lexer, and keep the tokens split')
-    await user.click(screen.getByRole('button', { name: 'Save and resend' }))
-
-    const dialog = await screen.findByRole('alertdialog')
-    expect(within(dialog).getByText('2 later turns will be removed from this conversation.')).toBeTruthy()
-    // Asked, not done: the click that reaches this dialog has not sent anything.
-    expect(onResend).not.toHaveBeenCalled()
-  })
-
-  it('names a single later turn in the singular', async () => {
-    const user = userEvent.setup()
-    render(<MessageBubble message={userTurn()} canEdit laterTurns={1} onResend={vi.fn()} />)
-
-    await rewrite(user, 'refactor the lexer, and keep the tokens split')
-    await user.click(screen.getByRole('button', { name: 'Save and resend' }))
-
-    const dialog = await screen.findByRole('alertdialog')
-    expect(within(dialog).getByText('One later turn will be removed from this conversation.')).toBeTruthy()
-  })
-
-  it('keeps the edit when the confirmation is dismissed', async () => {
-    const user = userEvent.setup()
-    const onResend = vi.fn()
-    render(<MessageBubble message={userTurn()} canEdit laterTurns={2} onResend={onResend} />)
-
-    await rewrite(user, 'refactor the lexer, and keep the tokens split')
-    await user.click(screen.getByRole('button', { name: 'Save and resend' }))
-    const dialog = await screen.findByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
-
-    // Backing out of the confirmation is not the same as abandoning the edit: what the user typed is
-    // still there to save, which is why the editor survives the dialog.
-    expect(editor().value).toBe('refactor the lexer, and keep the tokens split')
-    expect(onResend).not.toHaveBeenCalled()
   })
 })

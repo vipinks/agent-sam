@@ -155,14 +155,53 @@ describe('the row a bubble carries at its bottom', () => {
   it('regenerates from the row through the handler the reply always called', async () => {
     const user = userEvent.setup()
     const onRegenerate = vi.fn()
-    render(<MessageBubble message={agentTurn()} canEdit laterTurns={0} onRegenerate={onRegenerate} />)
+    render(<MessageBubble message={agentTurn()} canEdit onRegenerate={onRegenerate} />)
 
     await user.click(within(actionsOn(AGENT_TEXT)).getByRole('button', { name: 'Regenerate reply' }))
 
-    // The reply's own id, and nothing asked first: nothing follows this one, so there is nothing the
-    // cut would remove.
+    // The reply's own id, and nothing asked first: a rewrite in place removes nothing, so there is
+    // nothing a dialog could name and nothing it could warn about.
     expect(onRegenerate).toHaveBeenCalledWith(REPLY_ID)
     expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('draws the version pager only for a message that has been through more than one', async () => {
+    const user = userEvent.setup()
+    // The same message, with the words it used to have parked beside it.
+    const revised: AgentTurn = { ...userTurn(), userVersions: [{ content: 'rename the lexer' }] }
+    render(
+      <>
+        <MessageBubble message={revised} canEdit onResend={vi.fn()} />
+        <MessageBubble message={agentTurn()} canEdit onRegenerate={vi.fn()} />
+      </>
+    )
+
+    // The revised message is at 2/2 and offers the walk; the reply, which has never been rewritten,
+    // offers nothing — there is no second version for a control to reach.
+    const row = actionsOn(USER_TEXT)
+    expect(within(row).getByText('2/2')).toBeTruthy()
+    expect(within(row).getByRole('button', { name: 'Previous version' })).toBeTruthy()
+    expect(within(actionsOn(AGENT_TEXT)).queryByText('2/2')).toBeNull()
+    expect(within(actionsOn(AGENT_TEXT)).queryByRole('button', { name: 'Previous version' })).toBeNull()
+
+    // Walking back swaps the message for the version it used to be, and the walk forward brings it
+    // back with its chips.
+    await user.click(within(row).getByRole('button', { name: 'Previous version' }))
+    expect(within(row).getByText('1/2')).toBeTruthy()
+    expect(screen.getByText('rename the lexer')).toBeTruthy()
+    await user.click(within(row).getByRole('button', { name: 'Next version' }))
+    expect(within(row).getByText('2/2')).toBeTruthy()
+    expect(screen.getByText(USER_TEXT)).toBeTruthy()
+  })
+
+  it('draws no pager while the pane says the conversation is moving', () => {
+    // The verdict the pane passes down when a run is in flight: the version a pager would walk to is
+    // the one being written, so there is nothing to offer yet.
+    const revised: AgentTurn = { ...agentTurn(), replyVersions: [{ content: 'The lexer is renamed.' }] }
+    render(<MessageBubble message={revised} />)
+
+    expect(screen.queryByText('2/2')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Previous version' })).toBeNull()
   })
 })
 

@@ -3,6 +3,7 @@ import type { FileDiff } from '@/conveyor/protocol/diff'
 import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
+import { liveMessageVersion, saysTheSameVersion, type MessageVersion } from '@/conveyor/protocol/message-versions'
 import {
   AUTO_CONTINUE_MAX,
   planUnfinishedNotice,
@@ -130,6 +131,22 @@ export interface AgentTurn {
    * as it was before images existed.
    */
   imageRefs?: ImageAttachmentRef[]
+  /**
+   * The versions this message has been through, and the ones the bubble can walk back to.
+   *
+   * One array per role, because a turn is one message: a user's own carries `userVersions`, a reply
+   * carries `replyVersions`, and the version in force is the turn's own `content` and `mentionPaths` —
+   * never an entry in either array. An edit commits a new user version and a regenerate commits a new
+   * reply one; what the message said before is kept rather than dropped, which is what makes the words a
+   * user rewrote and the answer a user replaced still readable.
+   *
+   * Written only when a message has been through more than one version, so an ordinary conversation is
+   * the same object it was before rewriting existed. See `protocol/message-versions` for the rule that
+   * reads them.
+   */
+  userVersions?: MessageVersion[]
+  /** The same, for a reply: the answers this turn used to be. */
+  replyVersions?: MessageVersion[]
   /**
    * Files this turn's message attached that could not be included, in the order they were reported.
    *
@@ -870,6 +887,76 @@ export function startUserTurn(
     // chose, and nothing here sorts or keys it.
     ...(imageRefs && imageRefs.length > 0 ? { imageRefs: imageRefs.map((ref) => ({ ...ref })) } : {}),
   }
+}
+
+/**
+ * Revise a user message in place, keeping the words it had as a previous version.
+ *
+ * The turn keeps its id and its place, which is what lets the reply it was answered with be written
+ * again where it stands instead of at the end of a shortened conversation. What the message said before —
+ * its text, and the chips it was carrying at the time — is appended to `userVersions` rather than
+ * dropped, so the version the user replaced is still there to read.
+ *
+ * The images are deliberately untouched: the editor has no image controls, so a message being revised
+ * keeps the references it had. A version entry carries them because an archive is a record of a whole
+ * message; nothing here can change them, so nothing here has an opinion about them.
+ *
+ * A save that changes nothing commits no version at all, which `saysTheSameVersion` decides. The
+ * alternative is a pager offering a walk between two identical messages, which is a control with nothing
+ * to show.
+ */
+export function reviseUserTurn(
+  turns: AgentTurn[],
+  turnId: string,
+  text: string,
+  mentionPaths: readonly string[]
+): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => {
+    if (turn.role !== 'user') return turn
+
+    const previous = liveMessageVersion(turn)
+    const revised = withMessage(turn, text, mentionPaths)
+    if (saysTheSameVersion(previous, liveMessageVersion(revised))) return revised
+    return { ...revised, userVersions: [...(turn.userVersions ?? []), previous] }
+  })
+}
+
+/** The turn's message fields replaced, with the chips key present only when there are chips. */
+function withMessage(turn: AgentTurn, text: string, mentionPaths: readonly string[]): AgentTurn {
+  const next: AgentTurn = { ...turn, content: text }
+  // Deleted rather than emptied: absence is how "no chips" is spelled in this app, and an editor that
+  // removed the last one has to be able to say so rather than leaving an empty array behind.
+  delete next.mentionPaths
+  if (mentionPaths.length > 0) next.mentionPaths = [...mentionPaths]
+  return next
+}
+
+/**
+ * The reply turn ready to be written again: its prose parked as a previous version, and nothing else of
+ * the answer left behind.
+ *
+ * Exactly the turn a run starts on, under the id the turn already had — which is the whole of what
+ * "written in place" means, and what leaves every later turn where it was. The prose goes to
+ * `replyVersions`; the cards, the plan, the seams and the ending go nowhere, because they are the work of
+ * the answer being replaced and nothing else can be done with them: a card is not a thing a pager can
+ * show on its own, and a checklist claiming work that is being written again would describe a turn that
+ * no longer exists. A reply that said nothing has nothing to park, so it is left with the archive it had.
+ */
+export function restartReplyTurn(turns: AgentTurn[], turnId: string): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => {
+    if (turn.role !== 'assistant') return turn
+
+    const previous = liveMessageVersion(turn)
+    const archived = previous.content === '' ? (turn.replyVersions ?? []) : [...(turn.replyVersions ?? []), previous]
+
+    return {
+      id: turn.id,
+      role: 'assistant',
+      content: '',
+      steps: [],
+      ...(archived.length > 0 ? { replyVersions: archived } : {}),
+    }
+  })
 }
 
 /**

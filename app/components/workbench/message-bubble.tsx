@@ -1,17 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, Copy, Pencil, RefreshCw, TriangleAlert } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Copy, Pencil, RefreshCw, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '../ui/alert-dialog'
 import { Textarea } from '../ui/textarea'
 import { AutoContinueMark } from './auto-continue-mark'
 import { AgentActionCard } from './agent-action-card'
@@ -26,6 +16,7 @@ import {
 import { MentionChipRow } from './mention-chip'
 import { AttachmentRefChipRow } from './attachment-chip'
 import { contextNoticeText } from './mentions'
+import { messageVersions } from '@/conveyor/protocol/message-versions'
 import type { AgentTurn } from './agent-session'
 
 /**
@@ -121,7 +112,6 @@ export const MessageBubble = memo(function MessageBubble({
   onApprove,
   onDeny,
   canEdit,
-  laterTurns,
   onResend,
   onRegenerate,
   sessionId,
@@ -135,26 +125,24 @@ export const MessageBubble = memo(function MessageBubble({
    * Whether the controls that act on a message are available at all right now.
    *
    * The pane decides this rather than the bubble, because it is a fact about the conversation: a run
-   * in flight or a decision waiting is producing the very turns an edit or a regenerate would remove.
-   * Defaulted off, so a bubble rendered on its own — as the copy tests do — offers no control whose
-   * effect it cannot perform.
+   * in flight is producing the very turn an edit or a regenerate writes again, and the version a pager
+   * would walk to is the one being written, while a decision waiting belongs to a turn that has not
+   * ended. Defaulted off, so a bubble rendered on its own — as the copy tests do — offers no control
+   * whose effect it cannot perform.
    */
   canEdit?: boolean
-  /** How many turns follow this one, which is how many an edit or a regenerate would remove. */
-  laterTurns?: number
   /**
    * Send this message again, with the words and the files it ended up with.
    *
-   * The id rather than the turn itself: the replacement is built by the pane's ordinary send path, and
-   * a bubble holding a stale copy of its own turn could not describe it.
+   * The id as well as the text: the pane revises the turn that id names and writes its reply again, and
+   * a bubble holding a stale copy of its own turn could not describe what it is replacing.
    */
   onResend?: (turnId: string, text: string, mentionPaths: string[]) => void
   /**
-   * Answer this reply again, from the history that led to it.
+   * Answer this reply again, writing it where it stands.
    *
-   * The id for the same reason a resend takes one: the replacement is built by the pane's ordinary run
-   * out of the turns left after the cut, and a bubble holding its own copy of the turn could not
-   * describe what is being replaced.
+   * The id for the same reason a resend takes one: the pane writes the turn that id names again, and a
+   * bubble holding its own copy of the turn could not describe what is being replaced.
    */
   onRegenerate?: (turnId: string) => void
   /**
@@ -201,30 +189,18 @@ export const MessageBubble = memo(function MessageBubble({
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState('')
   const [editChips, setEditChips] = useState<string[]>([])
-  const [confirming, setConfirming] = useState(false)
-  /**
-   * The regenerate confirmation, kept apart from the editor's.
-   *
-   * Two questions with two answers: the editor's asks about text the user has just rewritten, this one
-   * about a reply they asked to replace. One flag for both would let a cancel of either dismiss the
-   * other, and there is no editor here for a cancel to return to.
-   */
-  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false)
 
   const startEditing = () => {
     setEditText(message.content)
     setEditChips(message.mentionPaths ? [...message.mentionPaths] : [])
-    setConfirming(false)
     setEditing(true)
   }
 
   const stopEditing = () => {
     setEditing(false)
-    setConfirming(false)
   }
 
   const resend = () => {
-    setConfirming(false)
     setEditing(false)
     onResend?.(message.id, editText.trim(), editChips)
   }
@@ -233,39 +209,40 @@ export const MessageBubble = memo(function MessageBubble({
     // An emptied message is not a message. The editor stays open rather than sending whitespace or
     // closing on a click that did nothing.
     if (editText.trim() === '') return
-    // Nothing follows it, so there is nothing to remove and nothing to ask about. Otherwise the count
-    // is named once, before anything is cut.
-    if ((laterTurns ?? 0) > 0) {
-      setConfirming(true)
-      return
-    }
+    // Nothing is asked first, because nothing is removed: the message keeps its place, its old words
+    // are kept as a previous version beside the new ones, and the turn the edit is answered with is
+    // written again where it stands.
     resend()
   }
 
-  /** Replace this reply with a fresh run over the question it answered. */
+  /** Write this reply again, in the place it already holds. */
   const regenerate = () => {
-    setConfirmingRegenerate(false)
     onRegenerate?.(message.id)
   }
 
-  const askToRegenerate = () => {
-    // The same rule the editor follows, and for the same reason: with nothing after this reply there is
-    // nothing to remove, so there is nothing to ask about. Otherwise the count is named once, before
-    // anything is cut.
-    if ((laterTurns ?? 0) > 0) {
-      setConfirmingRegenerate(true)
-      return
-    }
-    regenerate()
-  }
+  /*
+   * The versions this message has been through, and which of them is on screen.
+   *
+   * Derived rather than stored, so the live message is the only place its current text lives: a turn
+   * that has never been rewritten reads as the one version it has, and a turn that has been reads its
+   * archive followed by the version in force. `viewed` is which one the user walked to, null meaning
+   * the newest — which is what a bubble shows, and what it returns to whenever a run adds a version.
+   */
+  const versions = messageVersions(message)
+  const [viewed, setViewed] = useState<number | null>(null)
+  useEffect(() => setViewed(null), [versions.length])
+  const version = Math.min(viewed ?? versions.length, versions.length)
+  const shown = versions[version - 1]
+  const showingNewest = version === versions.length
 
   /*
    * What the copy button takes, and the whole of it.
    *
-   * `content` is the turn's own text: what the user sent, or the narration the assistant's chunks
-   * were assembled into. Everything else a turn carries sits in its own field — tool cards in
-   * `steps`, the plan in `plan`, the ending in `endNotice` — so a copy is the words, never a
-   * rendering of the widgets that happened to sit among them.
+   * `content` is the turn's own text — the version in force, never a version parked behind the pager:
+   * a previous version is a thing this pane can show and nothing outside it can read, so the clipboard
+   * gets the message as the conversation holds it. Everything else a turn carries sits in its own field
+   * — tool cards in `steps`, the plan in `plan`, the ending in `endNotice` — so a copy is the words,
+   * never a rendering of the widgets that happened to sit among them.
    */
   const copyButton = <CopyMessageButton value={message.content} label={isUser ? 'Copy message' : 'Copy reply'} />
 
@@ -353,25 +330,29 @@ export const MessageBubble = memo(function MessageBubble({
               </>
             ) : (
               <>
-                {/* What this message attached, above it: the files are what the sentence is about, and a
-                  reopened conversation shows them again from the paths that were stored with it. Not
-                  removable here — the message has been sent, so the chips are a record, not a control. */}
-                {message.mentionPaths && message.mentionPaths.length > 0 && (
-                  <MentionChipRow paths={message.mentionPaths} className="mb-2" />
+                {/* What this version attached, above it: the files are what the sentence is about, and a
+                  reopened conversation shows them again from the paths that were stored with it. Read
+                  from the version on screen rather than from the turn, so walking back to a message the
+                  user has since rewritten shows the files it named *then* — an edit that removed one is
+                  part of what changed, and a reader shown the old words with the new chips would be
+                  shown a message that never existed. Not removable here — the message has been sent, so
+                  the chips are a record, not a control. */}
+                {shown.mentionPaths && shown.mentionPaths.length > 0 && (
+                  <MentionChipRow paths={shown.mentionPaths} className="mb-2" />
                 )}
-                {/* The images this message carried, above it and beside the files: both are what the
+                {/* The images this version carried, above it and beside the files: both are what the
                   sentence is about. Thumbnails read from the conversation's store, one read per chip — so
                   a reopened conversation shows its pictures again, and a chip whose bytes are gone or
                   over the cap says so in place of one. */}
-                {message.imageRefs && message.imageRefs.length > 0 && (
-                  <AttachmentRefChipRow images={message.imageRefs} sessionId={sessionId} className="mb-2" />
+                {shown.imageRefs && shown.imageRefs.length > 0 && (
+                  <AttachmentRefChipRow images={shown.imageRefs} sessionId={sessionId} className="mb-2" />
                 )}
                 {/* A user's message is literal text: never parsed as markdown, which would eat their
                   angle brackets and asterisks. */}
-                <p className="break-words whitespace-pre-wrap">{message.content}</p>
+                <p className="break-words whitespace-pre-wrap">{shown.content}</p>
               </>
             )
-          ) : (
+          ) : showingNewest ? (
             <>
               {/* Files this send named that could not be included. Above the answer because they are
                 about the question, and a warning the user reads after the reply is a warning too late
@@ -389,6 +370,14 @@ export const MessageBubble = memo(function MessageBubble({
                 text it cut off and the work that resumed it. */}
               {blocks.length > 0 && <div className="mb-2 space-y-1.5">{blocks}</div>}
             </>
+          ) : (
+            <>
+              {/* A previous answer is its words and nothing else. The cards, the checklist and the seams
+                belong to the answer that replaced it — they are the work of the turn as it stands, and a
+                pager cannot show one of them on its own — so walking back reads the answer that was, as
+                the answer that was. */}
+              <MarkdownContent content={shown.content} />
+            </>
           )}
 
           {message.error && (
@@ -398,10 +387,12 @@ export const MessageBubble = memo(function MessageBubble({
         {/*
           The controls that act on this message, at the bottom of its bubble and in one row.
 
-          The set each kind carries is unchanged; where it is drawn is what moved. Copy sits on both,
-          because both have words; edit sits on the user's own, because only their message is theirs
-          to rewrite; regenerate sits on a reply, and only with a callback behind it — a bubble that
-          cannot reach the pane offers no control whose effect it cannot perform.
+          The set each kind carries is unchanged; where it is drawn is what moved, and one control is
+          new. Copy sits on both, because both have words; edit sits on the user's own, because only
+          their message is theirs to rewrite; regenerate sits on a reply, and only with a callback
+          behind it — a bubble that cannot reach the pane offers no control whose effect it cannot
+          perform; and the pager sits on both, because a rewritten message is a rewritten message
+          whichever side it is on.
 
           Hidden at rest and revealed by the bubble's own hover or by the keyboard arriving inside it:
           `opacity-0` rather than `hidden`, so the controls stay in the tab order, and `focus-within`
@@ -419,55 +410,15 @@ export const MessageBubble = memo(function MessageBubble({
           {isUser && copyButton}
           {/* And the reply's half: the copy beside it, then the control that writes the reply again. */}
           {!isUser && copyButton}
-          {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={askToRegenerate} />}
+          {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={regenerate} />}
+          {/* And the walk back through the versions, on whichever side this message is. Only when the
+              message has been through more than one, and only while the pane says the conversation is
+              settled: a version still being written has nothing to walk to yet. */}
+          {canEdit && versions.length > 1 && (
+            <VersionPager version={version} total={versions.length} onWalk={setViewed} />
+          )}
         </div>
       </div>
-
-      {/*
-        The confirmation, raised once before anything is cut, and only when there is something to cut.
-
-        It is asked because the removal is not visible in the act: the message is edited in place, and
-        the answers that went with it disappear at the same moment — so the count is the only warning
-        the user gets, and it is named before the click rather than after it.
-      */}
-      {confirming && (
-        <AlertDialog open onOpenChange={(open) => (!open ? setConfirming(false) : undefined)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Resend this message?</AlertDialogTitle>
-              <AlertDialogDescription>{removedTurnsText(laterTurns ?? 0)}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction aria-label="Resend" onClick={resend}>
-                Resend
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
-
-      {/*
-        The same question for a reply, and the same sentence counting the answer: what follows this
-        reply was written in answer to it, so replacing it removes those turns — and that removal is not
-        visible in the act, which is why the count is named before the click rather than after it.
-      */}
-      {confirmingRegenerate && (
-        <AlertDialog open onOpenChange={(open) => (!open ? setConfirmingRegenerate(false) : undefined)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Regenerate this reply?</AlertDialogTitle>
-              <AlertDialogDescription>{removedTurnsText(laterTurns ?? 0)}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction aria-label="Regenerate" onClick={regenerate}>
-                Regenerate
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
     </div>
   )
 })
@@ -476,18 +427,52 @@ export const MessageBubble = memo(function MessageBubble({
 const COPIED_MS = 1500
 
 /**
- * How many later turns a cut would remove, in a sentence.
+ * The walk back through a message's versions: an arrow, which of them is on screen, and an arrow.
  *
- * One is spelled out because "1 later turns" is the kind of sentence a user distrusts a dialog for,
- * and the count is the whole of what these dialogs have to say. The number is the length of the cut
- * rather than a promise about it: the same rule that counts here is the one the send applies. Written
- * once for both dialogs — a resend and a regenerate remove the same turns for the same reason, so a
- * second sentence would only be a second chance to count differently.
+ * Drawn only for a message that has more than one. Each arrow is disabled at the end it would go past
+ * rather than hidden, so the control's box is the same at every position: an arrow that disappeared at
+ * 1/2 would move the count it sits beside, and the count is the thing being read. `n/m` is the count and
+ * nothing else — where a message sits in its own history is not a fact about the conversation, and the
+ * newest version is the message.
+ *
+ * The label names the direction and the message is the thing the focus has just arrived next to, which
+ * is the convention the copy and edit controls follow: two of these can be on screen at once, and
+ * "Previous version" is what distinguishes the one being focused.
  */
-function removedTurnsText(laterTurns: number): string {
-  return laterTurns === 1
-    ? 'One later turn will be removed from this conversation.'
-    : `${laterTurns} later turns will be removed from this conversation.`
+function VersionPager({
+  version,
+  total,
+  onWalk,
+}: {
+  version: number
+  total: number
+  onWalk: (version: number) => void
+}) {
+  return (
+    <div data-slot="message-versions" className="flex items-center">
+      <button
+        type="button"
+        aria-label="Previous version"
+        disabled={version <= 1}
+        onClick={() => onWalk(version - 1)}
+        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      >
+        <ChevronLeft className="size-3.5" />
+      </button>
+      <span className="px-0.5 text-[11px] text-muted-foreground">
+        {version}/{total}
+      </span>
+      <button
+        type="button"
+        aria-label="Next version"
+        disabled={version >= total}
+        onClick={() => onWalk(version + 1)}
+        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      >
+        <ChevronRight className="size-3.5" />
+      </button>
+    </div>
+  )
 }
 
 /**

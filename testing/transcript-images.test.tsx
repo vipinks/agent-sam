@@ -291,8 +291,8 @@ describe('a transcript drawing the images a turn carried', () => {
   })
 })
 
-describe('sending a turn again with its images', () => {
-  it('resends the message’s own images and then the draft’s, in that order', async () => {
+describe('a turn that carries images, rewritten', () => {
+  it('keeps the message’s own images, and leaves the draft’s alone', async () => {
     const stub = stubBridge()
     renderChat()
     await openTranscript()
@@ -301,24 +301,23 @@ describe('sending a turn again with its images', () => {
     fireEvent.drop(await composer(), { dataTransfer: { files: [imageFile('next.png')] } })
     await waitFor(() => expect(draftChips().length).toBe(1))
 
-    // The edit: the message's own words are replaced and it is sent again.
+    // The edit: the message's own words are replaced, in place, and its reply is written again.
     await userEvent.click(screen.getByLabelText('Edit message'))
     const editor = screen.getByLabelText('Edit message text')
     await userEvent.clear(editor)
     await userEvent.type(editor, 'look at these two instead')
     await userEvent.click(screen.getByLabelText('Save and resend'))
-    // The reply that followed this message goes away with the resend, so the count is confirmed first.
-    await userEvent.click(await screen.findByLabelText('Resend'))
 
     await waitFor(() => expect(dispatchedMessages(stub).length).toBeGreaterThan(0))
     const turn = lastUserTurn(stub)
     expect(turn.content).toBe('look at these two instead')
-    // The message keeps the images it was sent with, and takes the one waiting in the draft after them.
-    expect((turn.images ?? []).map((image) => image.id)).toEqual([FIRST_IMAGE.id, SECOND_IMAGE.id, DRAFT_STORED.id])
-    // The draft's image was stored before it was named, like any other send's.
-    const saves = stub.callsTo('attachments').filter((call) => call.method === 'save')
-    expect(saves.length).toBe(1)
-    expect((saves[0].args[0] as { name: string }).name).toBe('next.png')
+    // The message keeps the images it was sent with, and nothing else. An edit is not a send from the
+    // composer, so the image waiting in the draft is not part of it: it stays where the user is still
+    // building their next message.
+    expect((turn.images ?? []).map((image) => image.id)).toEqual([FIRST_IMAGE.id, SECOND_IMAGE.id])
+    expect(draftChips().length).toBe(1)
+    // And nothing was stored for it: a draft that is not being sent is not written down either.
+    expect(stub.callsTo('attachments').filter((call) => call.method === 'save').length).toBe(0)
   })
 
   it('regenerates from a history whose image turn still names its images', async () => {

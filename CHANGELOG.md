@@ -6,6 +6,34 @@ coding assistant.
 
 <br>
 
+## 2026-10-16: edited and regenerated messages keep their previous versions
+
+- **An edit and a regenerate rewrite in place, and what was there is kept beside what is.** Both used to cut: an
+  edit removed the edited message and every turn that followed it and sent the words again, and a regenerate did
+  the same from the reply it was standing on. Neither removes anything now. The turn keeps its id and its place,
+  and the message it used to be — its text, and the chips it was carrying at that moment — is kept as a previous
+  version beside the new one, reachable from the message's own action row: a left arrow, the count, a right
+  arrow, drawn whenever a message has been through more than one version, on the user's own bubble and on a reply
+  alike. A turn with no versions reads as the single version it is, so an ordinary conversation is unchanged.
+- **Nothing is asked first, because nothing is removed.** The confirmation dialog is retired from both paths: the
+  count it named was the only warning a user got about a removal they could not watch happen, and there is no
+  removal left to warn about. Editing a message still re-runs the reply that answered it, as a new reply version,
+  and a message with no reply yet still gets one.
+- **The divergence this accepts is that a later reply stays what it was.** With nothing dropped, a conversation
+  rewritten in its middle keeps answers that were written from the older words, and the pane shows them rather
+  than re-deriving them: a run for a rewritten turn is handed the turns up to the question it is answering and
+  nothing after it, while the transcript on screen keeps every turn. Every reader that only wants a message's
+  text — the export, the search, the clipboard, the provider payload — takes the version in force, never one parked
+  behind the pager.
+- **The record grows two optional-additive arrays.** `userVersions` on a user's message and `replyVersions` on a
+  reply, each holding the versions that are not live, oldest first, each entry carrying the text and the chips
+  that version had. `TRANSCRIPT_VERSION` stays 3: an absent optional key is stripped rather than defaulted, and a
+  reader that has never heard of these keys shows the live message, which is what it showed before. An array is
+  written only when a message has been through more than one version, and a save that changes nothing commits no
+  version at all.
+
+<br>
+
 ## 2026-10-15: v1.6.0 — A conversation's first turn runs the engine it was created as, and the model control waits for a catalogue
 
 - **The model control waits for a catalogue.** The rule was stated the wrong way round: no engine here
