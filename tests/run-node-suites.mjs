@@ -69,6 +69,7 @@ const SUITES = [
   { name: 'session search rules', src: 'sessions/session-search-test.ts' },
   { name: 'session export renderer', src: 'sessions/session-export-test.ts' },
   { name: 'session commands (search, export)', src: 'sessions/session-commands-test.ts' },
+  { name: 'session move (project field, refusals, transcript untouched)', src: 'sessions/session-move-test.ts' },
   { name: 'project instructions', src: 'sessions/project-instructions-test.ts' },
   { name: 'mention rules', src: 'mentions/mentions-test.ts' },
   { name: 'mention files', src: 'mentions/mentions-files-test.ts' },

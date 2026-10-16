@@ -253,6 +253,7 @@ function SessionRail() {
       onRename={() => {}}
       onExport={() => {}}
       onDelete={() => {}}
+      onMove={() => {}}
       error={null}
       notice={null}
     />

@@ -17,7 +17,7 @@ import {
   setTerminalScrollbackSource,
 } from './modules/terminal-pty'
 import { agentModule, setContextSnapshotSink } from './modules/agent'
-import { sessionsModule, sweepOrphanedTranscripts } from './modules/sessions'
+import { sessionsModule, setSessionMoveSink, sweepOrphanedTranscripts } from './modules/sessions'
 import { imageAttachmentsModule, sweepAttachmentFolders } from './modules/image-attachments'
 import { mentionsModule } from './modules/mentions'
 import { skillsModule, setSkillPruneSink } from './modules/skills'
@@ -215,6 +215,25 @@ setCustomProviderIds(() => router.stores['provider-config'].getState().customPro
 setSkillPruneSink((skillId) => router.stores['chat-sessions'].dispatch('dropSkill', { id: skillId }))
 
 /**
+ * Give the sessions module the session store, so a move lands on the row it named.
+ *
+ * Installed here for the same reason as the sink above: the store does not exist until `createRouter` has
+ * returned, and `sessions.ts` is imported *by* this file. Dispatched rather than written, because the
+ * project a conversation belongs to is session state and the store is the only thing that owns one — and
+ * because a move has to reach every window, which only a store change is broadcast to: that is what makes
+ * the row leave its group and land under the destination's.
+ *
+ * `touchSession` is the action, rather than a write of this file's own, because it is already the one
+ * place a record's project is stamped; the timestamp it stamps is what puts the destination group at the
+ * top of the list, a move being activity like any other. The command hands this sink an id and a folder
+ * and nothing else crosses: nothing on the disk is involved — one sessions directory holds every
+ * project's conversations — so there is no file for this to move and no path for the renderer to see.
+ */
+setSessionMoveSink(({ id, destination }) =>
+  router.stores['chat-sessions'].dispatch('touchSession', { id, lastRoot: destination })
+)
+
+/**
  * Give the agent loop the session store, so a request it measures lands on the conversation it was built for.
  *
  * Installed here for the same reason as the sinks above: the store does not exist until `createRouter` has
@@ -235,7 +254,7 @@ setContextSnapshotSink(({ sessionId, snapshot }) =>
 /**
  * End the shell of a folder the user has stopped being offered.
  *
- * Installed here for the same reason as the three sinks above: the store does not exist until
+ * Installed here for the same reason as the sinks above: the store does not exist until
  * `createRouter` has returned, and this module is imported *by* this file, so reaching for the router
  * from inside it would close the cycle. The roots are read through a function and changes arrive
  * through the store's own subscription rather than being handed over as a list, because the list a

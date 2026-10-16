@@ -191,6 +191,7 @@ function renderList(): void {
         onRename={() => {}}
         onExport={() => {}}
         onDelete={() => {}}
+        onMove={() => {}}
         error={null}
         notice={null}
       />

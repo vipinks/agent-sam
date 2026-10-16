@@ -89,6 +89,10 @@ const MANIFEST: Record<string, Record<string, string>> = {
     transcriptVersion: 'query',
     searchSessions: 'query',
     exportSession: 'command',
+    // The move's own member. A command, because the destination is checked against the disk in main before
+    // the row's project is written — so a suite about the move cannot reach the check without this line,
+    // and an unlisted member would be refused by the client's manifest before any handler ran.
+    moveSession: 'command',
   },
   agent: { chatWithTools: 'stream', resume: 'stream' },
   settings: {

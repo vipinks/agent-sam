@@ -187,6 +187,9 @@ function WorkbenchLayout() {
           onCreate={() => sessions.goHome()}
           onOpen={(id) => void sessions.openSession(id)}
           onRename={sessions.renameSession}
+          // The move is the session layer's, and so is the sentence when it is refused: the destination
+          // has to be a folder that exists, and moving the open conversation takes the window with it.
+          onMove={(id, destination) => void sessions.moveSession(id, destination)}
           onExport={runSessionExport}
           onDelete={(id) => void sessions.deleteSession(id)}
           error={sessions.error}

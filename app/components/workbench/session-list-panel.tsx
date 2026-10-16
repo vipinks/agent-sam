@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, CircleAlert, Download, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  Download,
+  FolderInput,
+  MessageSquare,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
 import { chatSessionsStore, type ChatSession } from '@/conveyor/stores/chat-sessions'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { SEARCH_MIN_TERM } from '@/conveyor/protocol/search'
 import { sessionRowLabel } from '@/conveyor/protocol/session-row'
+import { rootTail } from '@/conveyor/protocol/recent-roots'
 import type { ExportFormat } from '@/conveyor/protocol/export'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
@@ -30,6 +41,7 @@ import { isSearchable, planVisibleSessions, snippetsFor } from './session-search
 import {
   groupSessionsByRoot,
   isGroupCollapsed,
+  moveTargets,
   planGroupCollapse,
   sessionGroupKey,
   sessionGroupLabel,
@@ -61,6 +73,7 @@ export function SessionListPanel({
   onRename,
   onExport,
   onDelete,
+  onMove,
   error,
   notice,
 }: {
@@ -76,6 +89,14 @@ export function SessionListPanel({
   onRename: (id: string, title: string) => void
   onExport: (id: string, format: ExportFormat, title: string) => void
   onDelete: (id: string) => void
+  /**
+   * The move was asked for: this conversation into that folder.
+   *
+   * Both halves travel, because the panel can check neither. Whether the folder is still there is main's
+   * answer, and whether this conversation may leave its project is the session layer's decision: a move of
+   * the open conversation takes the window with it, so a turn still running here refuses it.
+   */
+  onMove: (id: string, destination: string) => void
   /** The session whose transcript failed to load, if any. */
   error: SessionError | null
   /**
@@ -134,6 +155,10 @@ export function SessionListPanel({
   // The folder this window is showing: the group the list leads with, and the one a conversation
   // started from this panel belongs to.
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath)
+  // The folders the app remembers, for the destinations a row may be moved into. The same list the recents
+  // menu draws, read here rather than copied, so the two surfaces cannot disagree about which folders the
+  // user has.
+  const recentRoots = useConveyorStore(workspaceStore, (s) => s.recentRoots)
   // The groups the user has put away, and their writer. Read from the settings slice rather than held
   // here, because a preference about how someone works outlives the component that was on screen when
   // they set it.
@@ -285,6 +310,15 @@ export function SessionListPanel({
                       // answered and the stored pair for one that runs the Sam loop.
                       const metaLabel = sessionRowLabel(session)
                       const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
+                      // Where this row may be moved to, decided by the rule rather than by the menu: the
+                      // remembered folders minus this row's own project, with the open folder first. A row
+                      // with nowhere to go draws no control at all, because a menu with nothing in it is a
+                      // dead end rather than an offer.
+                      const targets = moveTargets({
+                        recentRoots,
+                        currentRoot: rootPath,
+                        sessionRoot: session.lastRoot,
+                      })
 
                       return (
                         <li key={session.id}>
@@ -354,6 +388,16 @@ export function SessionListPanel({
                                 >
                                   <Pencil />
                                 </IconButton>
+
+                                {/* Offered beside the pencil, on the row's own action surface, and only
+                                    when there is somewhere to move to. */}
+                                {targets.length > 0 && (
+                                  <MoveButton
+                                    title={session.title}
+                                    targets={targets}
+                                    onMove={(destination) => onMove(session.id, destination)}
+                                  />
+                                )}
 
                                 <ExportButton
                                   title={session.title}
@@ -547,6 +591,100 @@ function ExportMenu({
           className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-accent"
         >
           {format === 'markdown' ? 'Markdown (.md)' : 'JSON (.json)'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The move control: one folder icon, and the project to file the conversation under chosen from it.
+ *
+ * Built the way the export control beside it is — a button and an absolutely positioned menu, dismissed
+ * on an outside click or Escape — rather than as a dialog, because the destinations are a short list and
+ * the choice is one click. It lives on the row's own action surface, where renaming already is, so the
+ * row itself gains no new affordance.
+ *
+ * The list is the rule's (`moveTargets`), not this control's: the remembered folders minus the row's own
+ * project, with the open folder first. A row with nowhere to go draws no control at all — which is the
+ * same rule reading as an empty menu, reported as nothing rather than as an offer that cannot be taken.
+ */
+function MoveButton({
+  title,
+  targets,
+  onMove,
+}: {
+  title: string
+  targets: string[]
+  onMove: (destination: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const wrapper = useRef<HTMLDivElement>(null)
+
+  return (
+    <div ref={wrapper} className="relative">
+      <IconButton
+        label={`Move ${title}`}
+        tooltip="Move to project"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((was) => !was)}
+      >
+        <FolderInput />
+      </IconButton>
+
+      {open && (
+        <MoveMenu
+          targets={targets}
+          onClose={() => setOpen(false)}
+          onPick={(destination) => {
+            setOpen(false)
+            onMove(destination)
+          }}
+          wrapper={wrapper}
+        />
+      )}
+    </div>
+  )
+}
+
+/** The folders one row may be moved into, as a menu anchored to the move button. */
+function MoveMenu({
+  targets,
+  onPick,
+  onClose,
+  wrapper,
+}: {
+  targets: string[]
+  onPick: (destination: string) => void
+  onClose: () => void
+  wrapper: React.RefObject<HTMLDivElement | null>
+}) {
+  const menu = useRef<HTMLDivElement>(null)
+
+  // Open state owns the listeners, so they exist exactly while the menu does.
+  useMenuDismiss(menu, wrapper, onClose)
+
+  return (
+    <div
+      ref={menu}
+      role="menu"
+      aria-label="Move to project"
+      className="absolute top-full right-0 z-50 mt-1 w-48 rounded-md border border-border bg-popover p-1 shadow-lg"
+    >
+      {targets.map((destination) => (
+        <button
+          key={destination}
+          type="button"
+          role="menuitem"
+          // The whole path on the item, so the segment it shows is never the only spelling of the folder
+          // on offer.
+          title={destination}
+          onClick={() => onPick(destination)}
+          className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-accent"
+        >
+          {/* The last segment, the way a group header names a folder. */}
+          <span className="truncate">{rootTail(destination)}</span>
         </button>
       ))}
     </div>

@@ -292,3 +292,74 @@ export function planGroupCollapse(input: {
 
   return input.collapsed ? [...without, key] : without
 }
+
+/**
+ * The folders one row may be moved into.
+ *
+ * The remembered list is the same one the Recents menu draws — the store's own `recentRoots`, ordered
+ * and capped by main — because a destination is a folder the user has worked in, and a list of movable
+ * projects kept anywhere else would be a second answer to which folders exist.
+ *
+ * The open folder leads, for the reason the group order puts it first: it is where the user is, and
+ * therefore the project a conversation is most often being filed into. It is offered even when the list
+ * has forgotten it — the list stops at eight, so a folder can be open and not remembered.
+ *
+ * The row's own project is absent, and that absence is a rule rather than an omission: a move to where a
+ * conversation already is is not a move, and a menu offering it would be offering nothing. A row with no
+ * project has no own folder to leave out, so it may be moved anywhere — which is the one way to give a
+ * conversation a project without sending it a message.
+ *
+ * One folder is offered once, compared by the store's own rule, so a differently-cased spelling of the
+ * open folder cannot appear beside it.
+ */
+export function moveTargets(input: {
+  /** The folders the app remembers, most recent first. */
+  recentRoots: readonly string[]
+  /** The folder this window is showing, or null when none is open. */
+  currentRoot: string | null
+  /** The row's own project, or undefined when it has none. */
+  sessionRoot: string | undefined
+}): string[] {
+  const { recentRoots, currentRoot, sessionRoot } = input
+  const ordered = currentRoot === null ? [...recentRoots] : [currentRoot, ...recentRoots]
+  const targets: string[] = []
+
+  for (const candidate of ordered) {
+    if (sessionRoot !== undefined && sameRoot(candidate, sessionRoot)) continue
+    if (targets.some((existing) => sameRoot(existing, candidate))) continue
+    targets.push(candidate)
+  }
+
+  return targets
+}
+
+/**
+ * Why a move did not happen, worded from its code.
+ *
+ * Branched on the code and never on a sentence someone else wrote: `WORKSPACE_MISSING` comes from main,
+ * the two refusals are this window's own, and an unrecognised code still has to say something true — that
+ * the conversation did not move.
+ *
+ * The missing destination is named, because it is the one thing the user can act on: it is the folder
+ * that is no longer there. The row is named as well, since the list holds several conversations and "that
+ * folder is gone" is not by itself an answer to what stayed put.
+ *
+ * The two refusals are the ones a session click is refused under, and deliberately so: the hazard is the
+ * same one — a workspace moved out from under a turn that has not ended — and a second pair of codes for
+ * it would be a second spelling of one rule. They are two sentences because they ask different things of
+ * the user: wait, or answer the card.
+ */
+export function moveNotice(code: string, context: { path: string; title: string }): string {
+  const { path, title } = context
+
+  switch (code) {
+    case WORKSPACE_MISSING:
+      return `${path} is no longer there, so “${title}” stayed where it was.`
+    case SELECT_REFUSED_TURN:
+      return `A turn is still running here. Let it finish, then move “${title}”.`
+    case SELECT_REFUSED_DECISION:
+      return `“${title}” is waiting on your decision, and moving it would move the workspace out from under it.`
+    default:
+      return `“${title}” could not be moved, so it stayed where it was.`
+  }
+}

@@ -28,6 +28,7 @@ describe('store protocol', () => {
             onRename={() => {}}
             onExport={() => {}}
             onDelete={() => {}}
+            onMove={() => {}}
             error={null}
             notice={null}
           />
@@ -69,6 +70,7 @@ describe('store protocol', () => {
             onRename={() => {}}
             onExport={() => {}}
             onDelete={() => {}}
+            onMove={() => {}}
             error={null}
             notice={null}
           />

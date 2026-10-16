@@ -71,6 +71,7 @@ function renderPanel(
           onRename={onRename}
           onExport={onExport}
           onDelete={vi.fn()}
+          onMove={vi.fn()}
           error={null}
           notice={null}
         />
@@ -215,6 +216,7 @@ describe('session search wiring', () => {
             onRename={vi.fn()}
             onExport={vi.fn()}
             onDelete={vi.fn()}
+            onMove={vi.fn()}
             error={null}
             notice={null}
           />
@@ -264,6 +266,7 @@ describe('session search wiring', () => {
             onRename={vi.fn()}
             onExport={vi.fn()}
             onDelete={vi.fn()}
+            onMove={vi.fn()}
             error={null}
             notice={null}
           />
@@ -313,6 +316,7 @@ describe('session search wiring', () => {
             onRename={vi.fn()}
             onExport={vi.fn()}
             onDelete={vi.fn()}
+            onMove={vi.fn()}
             error={null}
             notice={null}
           />

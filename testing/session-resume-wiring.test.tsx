@@ -124,6 +124,7 @@ function renderPanel(onOpen = vi.fn()) {
           onRename={vi.fn()}
           onExport={vi.fn()}
           onDelete={vi.fn()}
+          onMove={vi.fn()}
           error={null}
           notice={null}
         />

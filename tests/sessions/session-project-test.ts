@@ -19,6 +19,8 @@ import { backdateStore, createStoreHarness } from './chat-sessions-store-harness
 import {
   groupSessionsByRoot,
   isGroupCollapsed,
+  moveNotice,
+  moveTargets,
   planGroupCollapse,
   planRootStamp,
   planSelectRoot,
@@ -405,6 +407,73 @@ function aConversationIsCreatedInTheFolderItWasStartedIn() {
   results.push('create: a conversation created in a folder belongs to it from its first moment')
 }
 
+// ---------------------------------------------------------------- moving between projects
+
+function aMoveOffersEveryRememberedFolderExceptTheRowsOwn() {
+  const targets = moveTargets({ recentRoots: [SAM, NOTES, ARCHIVE], currentRoot: SAM, sessionRoot: SAM })
+
+  // The open folder is the row's own project, so it is absent — a move to where the conversation already
+  // is is not a move — and the other two are offered in the list's own order.
+  assert.deepEqual(targets, [NOTES, ARCHIVE])
+  results.push('move targets: the row’s own project is absent from the destinations')
+}
+
+function theOpenFolderIsOfferedFirstWhenItIsSomewhereElse() {
+  // The row lives in NOTES; the window is showing SAM. Both are destinations, and the window's folder is
+  // offered first because it is the one the user is in.
+  assert.deepEqual(moveTargets({ recentRoots: [SAM, NOTES, ARCHIVE], currentRoot: SAM, sessionRoot: NOTES }), [
+    SAM,
+    ARCHIVE,
+  ])
+
+  // And the open folder is offered even when the remembered list has never held it — the list is capped at
+  // eight, so a folder can be open and not remembered.
+  assert.deepEqual(moveTargets({ recentRoots: [NOTES, ARCHIVE], currentRoot: SAM, sessionRoot: NOTES }), [SAM, ARCHIVE])
+  results.push('move targets: the open folder is offered first, and offered even when the list forgot it')
+}
+
+function aRowWithNoProjectMayBeMovedAnywhere() {
+  assert.deepEqual(moveTargets({ recentRoots: [SAM, NOTES], currentRoot: SAM, sessionRoot: undefined }), [SAM, NOTES])
+  // With no folder open either, the remembered list is the whole answer rather than an empty menu.
+  assert.deepEqual(moveTargets({ recentRoots: [NOTES], currentRoot: null, sessionRoot: undefined }), [NOTES])
+  results.push('move targets: a row with no project may be moved anywhere the list remembers')
+}
+
+function oneFolderIsOfferedOnceHoweverItIsSpelled() {
+  const targets = moveTargets({
+    recentRoots: ['C:/work/notes', 'C:/Work/SAM-AI', 'c:/WORK/notes'],
+    currentRoot: 'C:/work/NOTES',
+    sessionRoot: SAM.toUpperCase(),
+  })
+
+  // One folder, one entry: the open folder is not offered twice because the list spells it another way,
+  // and the row's own project is excluded however its case arrived.
+  assert.deepEqual(targets, ['C:/work/NOTES'], 'the first spelling wins, and the row’s own folder is gone')
+  results.push('move targets: one folder is one destination, whatever case it is spelled in')
+}
+
+function aRefusedMoveSaysWhichFolderIsGone() {
+  const notice = moveNotice(WORKSPACE_MISSING, { path: ARCHIVE, title: 'the parser work' })
+
+  assert.ok(notice.includes(ARCHIVE), 'the notice names the folder that is not there')
+  assert.ok(notice.includes('the parser work'), 'and the conversation that stayed where it was')
+  assert.ok(!notice.includes(WORKSPACE_MISSING), 'a code is not a sentence to show')
+  results.push('move notice: a folder that is gone is named, and so is the row that stayed put')
+}
+
+function aGuardedMoveIsSaidInTheMoveSOwnTerms() {
+  const streaming = moveNotice(SELECT_REFUSED_TURN, { path: NOTES, title: 'the parser work' })
+  const pending = moveNotice(SELECT_REFUSED_DECISION, { path: NOTES, title: 'the parser work' })
+  const unknown = moveNotice('SOMETHING_ELSE', { path: NOTES, title: 'the parser work' })
+
+  // The two refusals ask for different things of the user — wait, or answer the card — so they are two
+  // sentences; and an unrecognised failure still says the conversation did not move.
+  assert.ok(/turn/i.test(streaming) && !/decision/i.test(streaming))
+  assert.ok(/decision/i.test(pending))
+  assert.ok(unknown.includes('the parser work') && !unknown.includes('SOMETHING_ELSE'))
+  results.push('move notice: the guards are worded for the move, and an unknown code still says nothing moved')
+}
+
 // ---------------------------------------------------------------- harness
 
 function main(): void {
@@ -430,6 +499,12 @@ function main(): void {
   step('groups: collapse', aCollapseIsWrittenUnderTheProjectAndIsTheProjectsOwn)
   step('search: collapsed group', aSearchLooksInsideACollapsedGroupAndLeavesItShut)
   step('create: in the open folder', aConversationIsCreatedInTheFolderItWasStartedIn)
+  step('move targets: own project absent', aMoveOffersEveryRememberedFolderExceptTheRowsOwn)
+  step('move targets: open folder first', theOpenFolderIsOfferedFirstWhenItIsSomewhereElse)
+  step('move targets: no project', aRowWithNoProjectMayBeMovedAnywhere)
+  step('move targets: one folder', oneFolderIsOfferedOnceHoweverItIsSpelled)
+  step('move notice: gone folder', aRefusedMoveSaysWhichFolderIsGone)
+  step('move notice: guards', aGuardedMoveIsSaidInTheMoveSOwnTerms)
 
   console.log(`session project: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)

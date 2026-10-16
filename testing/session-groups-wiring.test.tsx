@@ -191,6 +191,7 @@ function Rail({ notice = null }: { notice?: string | null }) {
       onRename={() => {}}
       onExport={() => {}}
       onDelete={() => {}}
+      onMove={() => {}}
       error={null}
       notice={notice}
     />
@@ -349,6 +350,7 @@ describe('the conversation list, grouped by project', () => {
             onRename={() => {}}
             onExport={() => {}}
             onDelete={() => {}}
+            onMove={() => {}}
             error={null}
             notice={null}
           />

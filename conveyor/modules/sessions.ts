@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'fs/promises'
-import { basename, join } from 'path'
+import { basename, join, resolve } from 'path'
 import { app, dialog } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
@@ -21,6 +21,7 @@ import { exportFileName, renderExport } from '../protocol/export'
 import { recordedInstructions } from '../protocol/context'
 import { exportTitle } from '../protocol/session-title'
 import { IMAGE_ATTACH_NOT_FOUND } from '../protocol/image-attachments'
+import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 import { deleteSessionAttachments } from './image-attachments'
 
 /**
@@ -257,6 +258,54 @@ async function writeExportFile(path: string, contents: string): Promise<void> {
   }
 }
 
+/**
+ * Resolve a destination folder, refusing anything that is not a folder that exists.
+ *
+ * The same check a folder switch makes, and deliberately under the same code: `WORKSPACE_MISSING` is what
+ * the renderer branches on to name the folder that is gone, and a move whose destination cannot be found
+ * is that situation, not a different one.
+ *
+ * Resolved before it is checked, so what reaches the store is one spelling of the folder — which is what
+ * the recents comparison and the project grouping both rest on.
+ */
+async function resolveFolder(destination: string): Promise<string> {
+  const path = resolve(destination)
+
+  let isDirectory = false
+  try {
+    isDirectory = (await stat(path)).isDirectory()
+  } catch {
+    // Unreadable is the same outcome as gone: neither can hold a conversation, and neither is worth
+    // different wording.
+    isDirectory = false
+  }
+
+  if (!isDirectory) {
+    throw new ConveyorError(WORKSPACE_MISSING, `${path} is not a folder that exists.`)
+  }
+
+  return path
+}
+
+/**
+ * Where a move's record write goes.
+ *
+ * A sink rather than a store call because this module is imported *by* `router.ts`: reaching for the
+ * router from inside it would close the cycle, and the store does not exist until `createRouter` has
+ * returned. Installed once, by the router, right after the stores are registered.
+ *
+ * The transcript is deliberately not part of a move. A transcript lives at `userData/sessions/<id>.json` —
+ * one directory for every project, named by the session id alone — and a snapshot records nothing about
+ * the folder a conversation happened in. There is no project-owned path for a move to rename into, so the
+ * disk half of a move is the destination check its command makes.
+ */
+let sessionMoveSink: ((payload: { id: string; destination: string }) => void) | null = null
+
+/** Install the sink, or clear it with `null`. Called once, by the router, after the stores exist. */
+export function setSessionMoveSink(next: ((payload: { id: string; destination: string }) => void) | null): void {
+  sessionMoveSink = next
+}
+
 export const sessionsModule = defineModule({
   /** Persist one transcript. Called at turn boundaries, not per token. */
   saveTranscript: command(z.object({ id: idSchema, snapshot: transcriptSnapshotSchema }), async ({ input }) => {
@@ -297,6 +346,30 @@ export const sessionsModule = defineModule({
       const reason = err instanceof Error ? err.message : String(err)
       throw new ConveyorError('SESSION_DELETE_FAILED', `Could not delete this conversation. ${reason}`)
     }
+  }),
+
+  /**
+   * Move one conversation into another project.
+   *
+   * Exactly one thing is checked and one thing is written. The destination is checked first — a folder
+   * that is not there is refused under `WORKSPACE_MISSING`, leaving the session, its transcript and the
+   * store exactly as they were — and then the record's project is written where every window can see it.
+   *
+   * That write is the sink's rather than this module's: the store belongs to the router, and reaching for
+   * it from here would close an import cycle. What is deliberately *not* here is a file rename, because
+   * there is nothing to rename: this app holds one transcript per session in a single sessions directory
+   * (`transcriptPath` above), shared by every project, and a transcript records the conversation rather
+   * than the folder it happened in. Moving a session therefore changes which project its row belongs to
+   * and nothing on the disk.
+   *
+   * The folder is handed back resolved, the way a switch hands one back, so the row's new project is the
+   * spelling the store compares folders by rather than whichever spelling the menu was holding.
+   */
+  moveSession: command(z.object({ id: idSchema, destination: z.string().min(1) }), async ({ input }) => {
+    const destination = await resolveFolder(input.destination)
+    sessionMoveSink?.({ id: input.id, destination })
+
+    return { path: destination }
   }),
 
   /** An empty snapshot, so the renderer never constructs one from a literal. */

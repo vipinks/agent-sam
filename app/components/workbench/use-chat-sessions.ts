@@ -15,10 +15,11 @@ import type { DraftAttachment } from './attachments'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
-import { planRootStamp, planSelectRoot, planSessionSwitch, selectNotice } from './session-project'
+import { planRootStamp, planSelectRoot, planSessionSwitch, moveNotice, selectNotice } from './session-project'
 import { useWorkbenchStore } from './store'
 import type { PlanStep } from '@/conveyor/protocol/plan'
 import { applySkillToggle } from '@/conveyor/protocol/skills'
+import { sameRoot } from '@/conveyor/protocol/recent-roots'
 import { buddySessionSeed, readBuddySession, resolveBuddy } from '@/conveyor/protocol/buddies'
 
 /**
@@ -413,6 +414,15 @@ export interface ChatSessions {
   maybeTitle: (id: string, firstMessage: string) => void
   /** Rename a session to a title the user typed. Blank and unchanged titles are refused. */
   renameSession: (id: string, title: string) => void
+  /**
+   * Move a conversation into another project, and take the open one's folder with it.
+   *
+   * The destination is checked by main before anything is written — a folder that is not there is
+   * refused, and the row stays where it was — and a move of the conversation that is open also switches
+   * the folder, because a turn run here would otherwise stamp the row back into the folder it left. Both
+   * refusals are said in this window's own words, from their codes.
+   */
+  moveSession: (id: string, destination: string) => Promise<void>
   /**
    * Record what one reply cost, against the conversation it belongs to.
    *
@@ -1169,6 +1179,79 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     [touchSession]
   )
 
+  /**
+   * Move a conversation into another project.
+   *
+   * Three decisions, in the order they have to be made.
+   *
+   * The destination must be a change: a folder the row already belongs to is not a move, and that is
+   * `moveTargets`'s rule as well — this is the guard for a menu that was stale by the time the click
+   * landed, so a write that says what the store already says never reaches it.
+   *
+   * The move is then refused or allowed by the same rule a session click is, and for the same reason: a
+   * move of the *open* conversation takes the window with it, because otherwise the next turn would record
+   * the folder the window is still showing and undo the move — and moving the workspace under a turn that
+   * has not ended is what that rule exists to prevent. A move of any other row changes no folder, so it is
+   * allowed while a turn is running here, which is the ordinary case a user filing history into projects.
+   *
+   * Main is then asked, and it is the only thing that can refuse for a reason this window cannot see: the
+   * destination has to be a folder that exists. A refusal is reported from its code and nothing is touched.
+   *
+   * What is deliberately not here is a transcript: a move neither reads nor writes one, because a session's
+   * transcript lives in one directory for every project. The conversation stays open on the turns already
+   * on screen, and nothing about it is reloaded.
+   */
+  const moveSession = useCallback(
+    async (id: string, destination: string) => {
+      const session = sessionsRef.current.find((s) => s.id === id)
+      if (!session) return
+      if (session.lastRoot !== undefined && sameRoot(session.lastRoot, destination)) return
+
+      // Whether this move is also a folder switch: only for the conversation that is open, and only when
+      // the folder it is being moved to is not the one already showing.
+      const project = planSelectRoot({ sessionLastRoot: destination, currentRoot: rootPathRef.current })
+      const movesRoot = id === activeIdRef.current && project.switchTo !== null
+      setNotice(null)
+
+      const refusal = planSessionSwitch({
+        streaming: streamingRef.current,
+        pendingDecision: Object.keys(pausesRef.current).length > 0,
+        movesRoot,
+      })
+      if (refusal !== null) {
+        setNotice(moveNotice(refusal, { path: destination, title: session.title }))
+        return
+      }
+
+      let moved: { path: string }
+      try {
+        moved = await conveyor.sessions.moveSession({ id, destination })
+      } catch (err) {
+        // Branched on the code, never on the message text.
+        const code = err instanceof ConveyorError ? err.code : 'UNKNOWN'
+        setNotice(moveNotice(code, { path: destination, title: session.title }))
+        return
+      }
+
+      if (!movesRoot) return
+
+      // The open conversation follows the project it now belongs to, so the next turn's stamp agrees with
+      // the record instead of contradicting it. The viewer is released for the reason a folder switch
+      // releases it: a file opened in the folder that is no longer open has no business staying on screen.
+      try {
+        const opened = await conveyor.workspace.openRoot({ path: moved.path })
+        setRootPath(opened.path)
+        releaseViewer()
+      } catch (err) {
+        // The move itself stands — the record is already written — so what failed here is opening a folder,
+        // and that is what this sentence is about.
+        const code = err instanceof ConveyorError ? err.code : 'UNKNOWN'
+        setNotice(selectNotice(code, { path: destination, currentRoot: rootPathRef.current }))
+      }
+    },
+    [setNotice, setRootPath]
+  )
+
   return {
     transcript,
     setTurns,
@@ -1215,6 +1298,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     scheduleSave,
     maybeTitle,
     renameSession,
+    moveSession,
     recordUsage,
   }
 }
