@@ -101,6 +101,11 @@ function brightnessHandle(): HTMLElement {
   return screen.getByRole('slider', { name: 'Brightness' })
 }
 
+/** The contrast slider's handle, once its popover is open. */
+function contrastHandle(): HTMLElement {
+  return screen.getByRole('slider', { name: 'Contrast' })
+}
+
 /** Step the handle the way a keyboard does, which is the path a DOM test can drive deterministically. */
 function nudge(handle: HTMLElement, key: 'ArrowRight' | 'ArrowLeft', times: number): void {
   for (let i = 0; i < times; i += 1) fireEvent.keyDown(handle, { key })
@@ -115,7 +120,7 @@ beforeEach(() => {
   // The titlebar's own controls ask main for the window's capabilities on mount, so the stub answers
   // that call — otherwise the rejection is reported as an unhandled error rather than as a failure.
   setActiveStub(createBridgeStub({ init: () => ({ platform: 'win32', minimizable: true, maximizable: true }) }))
-  useWorkbenchStore.setState({ themeId: 'crimson', brightness: BRIGHTNESS_DEFAULT })
+  useWorkbenchStore.setState({ themeId: 'crimson', brightness: BRIGHTNESS_DEFAULT, contrast: 0 })
   useThemeStore.setState({ theme: 'light' })
 })
 
@@ -170,7 +175,7 @@ describe('the theme chooser', () => {
     )
     // And the choice is the one a restart would read back.
     const stored = JSON.parse(localStorage.getItem('sam-ai-theme-preference') ?? '{}') as Record<string, unknown>
-    expect(stored).toEqual({ themeId: 'ocean', brightness: BRIGHTNESS_DEFAULT })
+    expect(stored).toEqual({ themeId: 'ocean', brightness: BRIGHTNESS_DEFAULT, contrast: 0 })
   })
 
   it('names the current theme on its button, and follows the store when the theme changes', async () => {
@@ -228,7 +233,7 @@ describe('the brightness control', () => {
     )
     // Live-applied while the handle moves, and persisted as it moves: a restart must not lose it.
     const stored = JSON.parse(localStorage.getItem('sam-ai-theme-preference') ?? '{}') as Record<string, unknown>
-    expect(stored).toEqual({ themeId: 'crimson', brightness: 8 })
+    expect(stored).toEqual({ themeId: 'crimson', brightness: 8, contrast: 0 })
 
     nudge(brightnessHandle(), 'ArrowLeft', 20)
 
@@ -254,7 +259,7 @@ describe('the brightness control', () => {
     expect(document.querySelector('[data-slot="brightness-value"]')?.textContent).toBe('0')
     expectSameVars(inlineVars(), themeVarsFor('crimson', 'light', BRIGHTNESS_DEFAULT), 'after resetting')
     const stored = JSON.parse(localStorage.getItem('sam-ai-theme-preference') ?? '{}') as Record<string, unknown>
-    expect(stored).toEqual({ themeId: 'crimson', brightness: BRIGHTNESS_DEFAULT })
+    expect(stored).toEqual({ themeId: 'crimson', brightness: BRIGHTNESS_DEFAULT, contrast: 0 })
   })
 })
 
@@ -290,5 +295,175 @@ describe('the mode toggle beside them', () => {
     const tones = swatchTones('ocean')
     expect(rgbOf(tones.surface), 'the dark surface').toEqual(rgbOf(themeById('ocean').swatch.dark))
     expect(rgbOf(tones.accent), 'the dark brand tone').toEqual(rgbOf(themeById('ocean').tokens.dark.primary))
+  })
+})
+
+/**
+ * The row's tooltips, and the contrast control beside the brightness one.
+ *
+ * Both halves are chrome, which is why they are here rather than in the suites that own the arithmetic:
+ * `theme-rules.test.ts` holds the contrast range to the readability floor and `theme-contrast-test.ts`
+ * holds the slot and the map, and what can only be seen in a document is that every icon in the row
+ * carries the same tooltip shape, and that the contrast control sits where the brightness control does
+ * and writes the store the same way.
+ *
+ * The row is enumerated rather than sampled. A tooltip is a thing a control either has or does not have,
+ * so the assertion that matters is the one about the row's whole inventory — a glyph added without one
+ * fails as a name that was never reached, which is the shape of defect this case exists for.
+ */
+
+/** Every open tooltip in the document, as elements, in the order they were mounted. */
+function openTooltips(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"]:not([data-state="closed"])'))
+}
+
+/**
+ * Focus a control, and hold the tooltip it opens to the row's one shape: the words, the placement, the
+ * primitive, and the trigger being the icon itself.
+ *
+ * jsdom can see all four of those and cannot see the fifth — the delay, because the shape's delay is one
+ * constant in `ControlTooltip` and Radix keeps it in a timer rather than in the document. So the delay
+ * is uniform by construction, and everything about the shape a document can be asked about is asserted
+ * here: a control given a tooltip of its own — another component, the other side, a description wedged
+ * between the icon and its hover — fails this rather than passing as "has a tooltip".
+ */
+async function expectTooltip(name: string, tooltip: string): Promise<void> {
+  const button = screen.getByRole('button', { name })
+  act(() => button.blur())
+  act(() => button.focus())
+
+  await waitFor(() => expect(openTooltipText(), `${name}: a tooltip`).toContain(tooltip))
+
+  const content = openTooltips().find((node) => (node.textContent ?? '').trim() === tooltip)
+  expect(content, `${name}: an open tooltip reading ${tooltip}`).toBeTruthy()
+  expect(content?.getAttribute('data-side'), `${name}: placed below the icon`).toBe('bottom')
+  expect(content?.getAttribute('data-slot'), `${name}: drawn by the app's tooltip primitive`).toBe('tooltip-content')
+  // The trigger is the icon button itself rather than a wrapper around it: the description hangs on the
+  // control a reader reaches, which is what makes the hover reachable from the control.
+  expect(button.getAttribute('aria-describedby'), `${name}: the trigger is the icon`).toBe(content?.id)
+
+  act(() => button.blur())
+}
+
+/**
+ * The row's icon controls, in the order the row draws them, with the words each hover produces.
+ *
+ * The names are the controls' own accessible names, which is how a reader reaches them and how this
+ * suite finds them; the wording is what the hover says. The mode toggle is not here: its tooltip names
+ * the mode the window is in, so it has its own case rather than a table entry that is true half the
+ * time.
+ */
+const ROW_ICONS = [
+  { name: 'Zoom In', tooltip: 'Zoom In' },
+  { name: 'Zoom Out', tooltip: 'Zoom Out' },
+  { name: 'Actual Size', tooltip: 'Actual Size' },
+  { name: 'Toggle Fullscreen', tooltip: 'Toggle Fullscreen (F11)' },
+  { name: 'Theme: Crimson', tooltip: 'Theme: Crimson' },
+  { name: 'Brightness', tooltip: 'Brightness' },
+  { name: 'Contrast', tooltip: 'Contrast' },
+  { name: 'Terminal panel', tooltip: 'Show the terminal panel' },
+  { name: 'Minimize', tooltip: 'Minimize' },
+  { name: 'Maximize', tooltip: 'Maximize' },
+  { name: 'Close', tooltip: 'Close' },
+] as const
+
+/** Every button in the row's own cluster, by the name it is reached by. */
+function clusterNames(): string[] {
+  const header = screen.getByRole('button', { name: 'Close' }).closest('header')
+  const cluster = header?.lastElementChild
+  return Array.from(cluster?.querySelectorAll('button') ?? []).map((button) => button.getAttribute('aria-label') ?? '')
+}
+
+describe('the tooltips on the row', () => {
+  it('carries one on every icon in the row, in the row’s one shape', async () => {
+    renderChrome()
+
+    for (const { name, tooltip } of ROW_ICONS) await expectTooltip(name, tooltip)
+
+    // And nothing in the row was left out of that: the controls reached above are the cluster's whole
+    // inventory, so a glyph added without a tooltip lands here as a name no hover produced.
+    expect(clusterNames().sort()).toEqual([...ROW_ICONS.map((icon) => icon.name), 'Toggle theme'].sort())
+  })
+
+  it('names the mode the window is in on the mode toggle, and follows a flip', async () => {
+    renderChrome()
+
+    await expectTooltip('Toggle theme', 'Light mode')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Toggle theme' }))
+
+    expect(useThemeStore.getState().theme, 'the flip reached the shell').toBe('dark')
+    await expectTooltip('Toggle theme', 'Dark mode')
+  })
+})
+
+describe('the contrast control', () => {
+  it('sits beside the brightness control, where the two are chosen together', () => {
+    renderChrome()
+
+    const brightness = screen.getByRole('button', { name: 'Brightness' })
+    const contrast = screen.getByRole('button', { name: 'Contrast' })
+
+    expect(brightness.nextElementSibling, 'the contrast control is the brightness control’s neighbour').toBe(contrast)
+  })
+
+  it('opens into a slider over the whole range, on the theme’s own contrast', async () => {
+    renderChrome()
+
+    expect(screen.queryByRole('slider', { name: 'Contrast' }), 'nothing is open until it is pressed').toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Contrast' }))
+
+    const handle = contrastHandle()
+    expect(handle.getAttribute('aria-valuemin')).toBe('0')
+    expect(handle.getAttribute('aria-valuemax')).toBe('100')
+    expect(handle.getAttribute('aria-valuenow')).toBe('0')
+    expect(handle.getAttribute('aria-valuetext')).toBe("0%, the theme's own contrast")
+  })
+
+  it('moves the contrast, and the document’s surfaces with it', async () => {
+    renderChrome()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Contrast' }))
+    nudge(contrastHandle(), 'ArrowRight', 25)
+
+    expect(useWorkbenchStore.getState().contrast).toBe(25)
+    expect(contrastHandle().getAttribute('aria-valuenow')).toBe('25')
+    expect(contrastHandle().getAttribute('aria-valuetext')).toBe('25% more contrast')
+    expect(document.querySelector('[data-slot="contrast-value"]')?.textContent).toBe('25%')
+
+    // The page's own surfaces are what a contrast step is about, and the ink is not: the same split the
+    // brightness control makes, for the same reason — the ink is what has to stay readable on the
+    // result, so what moves is everything drawn under it.
+    const applied = inlineVars()
+    expect(rgbOf(applied.border), 'the border followed the contrast').toEqual(
+      rgbOf(themeVarsFor('crimson', 'light', 0, 25).border)
+    )
+    expect(rgbOf(applied.border), 'and the border actually moved').not.toEqual(
+      rgbOf(themeVarsFor('crimson', 'light', 0, 0).border)
+    )
+    expect(applied.foreground, 'the ink is left where the theme put it').toBe(
+      themeVarsFor('crimson', 'light', 0, 25).foreground
+    )
+
+    // Persisted as it moves, beside the theme and the brightness it is chosen with.
+    const stored = JSON.parse(localStorage.getItem('sam-ai-theme-preference') ?? '{}') as Record<string, unknown>
+    expect(stored).toEqual({ themeId: 'crimson', brightness: 0, contrast: 25 })
+  })
+
+  it('resets to the theme’s own contrast, and says so', async () => {
+    renderChrome()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Contrast' }))
+    nudge(contrastHandle(), 'ArrowRight', 30)
+    expect(useWorkbenchStore.getState().contrast).toBe(30)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset' }))
+
+    expect(useWorkbenchStore.getState().contrast).toBe(0)
+    expect(contrastHandle().getAttribute('aria-valuenow')).toBe('0')
+    expect(contrastHandle().getAttribute('aria-valuetext')).toBe("0%, the theme's own contrast")
+    expect(document.querySelector('[data-slot="contrast-value"]')?.textContent).toBe('0%')
+    expectSameVars(inlineVars(), themeVarsFor('crimson', 'light', 0, 0), 'after resetting the contrast')
   })
 })

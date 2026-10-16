@@ -3,7 +3,7 @@ import { useConveyorStore } from 'electron-conveyor/react'
 import { updateBadge } from '@/conveyor/protocol/updates'
 import { updateStatusStore } from '@/conveyor/stores/update-status'
 import { ControlButton } from './control-button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
+import { ControlTooltip } from './control-tooltip'
 import { useWorkbenchStore } from '../components/workbench/store'
 
 /**
@@ -52,25 +52,20 @@ export function UpdateBadge() {
   if (!badge.present || availableVersion === null) return null
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ControlButton
-            data-slot="update-badge"
-            label={badge.label}
-            className="relative"
-            onClick={() => openSettingsAt('updates')}
-          >
-            <CircleArrowUp className="size-4" />
-            <span
-              data-slot="update-badge-dot"
-              aria-hidden
-              className="absolute top-2 right-2 size-1.5 rounded-full bg-amber-500"
-            />
-          </ControlButton>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{badge.label}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <ControlTooltip label={badge.label}>
+      <ControlButton
+        data-slot="update-badge"
+        label={badge.label}
+        className="relative"
+        onClick={() => openSettingsAt('updates')}
+      >
+        <CircleArrowUp className="size-4" />
+        <span
+          data-slot="update-badge-dot"
+          aria-hidden
+          className="absolute top-2 right-2 size-1.5 rounded-full bg-amber-500"
+        />
+      </ControlButton>
+    </ControlTooltip>
   )
 }

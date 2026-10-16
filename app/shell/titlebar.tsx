@@ -7,10 +7,10 @@ import { useThemeStore } from './theme-store'
 import { MENUS } from './menu'
 import { TitlebarMenu } from './titlebar-menu'
 import { ControlButton } from './control-button'
+import { ControlTooltip } from './control-tooltip'
 import { UpdateBadge } from './update-badge'
-import { BrightnessButton, ThemeButton } from './theme-controls'
+import { BrightnessButton, ContrastButton, ThemeButton } from './theme-controls'
 import { Separator } from '../components/ui/separator'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import { useWorkbenchStore } from '../components/workbench/store'
 
 /**
@@ -18,9 +18,15 @@ import { useWorkbenchStore } from '../components/workbench/store'
  * window.css). A conveyor consumer itself: the menu + controls call the window/web modules. macOS
  * keeps its native inset traffic lights; win32/linux render these controls.
  *
- * The theme chooser and the brightness control sit beside the light/dark toggle, in that order: the
- * three of them are one subject — what the window looks like — and the toggle is the one that decides
- * which mode the other two are chosen for.
+ * The theme chooser, the brightness control and the contrast control sit beside the light/dark toggle, in
+ * that order: the four of them are one subject — what the window looks like — and the toggle is the one that
+ * decides which mode the other three are chosen for.
+ *
+ * Every icon in that cluster carries the same tooltip, from `ControlTooltip`: one component, one placement,
+ * one delay. A row of glyphs is read by hovering along it, and a row whose hovers each arrived on their own
+ * terms would be a row nobody could learn. The window controls at the end are in it for the same reason — the
+ * smallest glyphs in the bar are the ones a label helps most — and their words are the ones every window
+ * manager already uses.
  *
  * The bottom terminal panel's toggle comes after them, behind a vertical divider, because it is the
  * row's one control that is not about how the window looks: the divider is what says so, and nothing
@@ -76,6 +82,7 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
         <ThemeToggle />
         <ThemeButton />
         <BrightnessButton />
+        <ContrastButton />
         <UpdateBadge />
         <TerminalPanelToggle />
         {!isMac && <WindowControls />}
@@ -101,16 +108,38 @@ function viewActionTooltip(label: string): string {
 /** One view action: the row's own square control, under a tooltip that names it and its accelerator. */
 function ViewAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ControlButton label={label} onClick={onClick}>
-            {children}
-          </ControlButton>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{viewActionTooltip(label)}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <ControlTooltip label={viewActionTooltip(label)}>
+      <ControlButton label={label} onClick={onClick}>
+        {children}
+      </ControlButton>
+    </ControlTooltip>
+  )
+}
+
+/**
+ * One window control: the row's square button, under the row's tooltip for the same action.
+ *
+ * The three are the OS's own minimise, maximise and close, and the words are the ones a title bar has used
+ * for them for decades: the row's smallest glyphs are the ones a hover helps most, and the words are already
+ * the words a reader knows.
+ */
+function WindowControl({
+  label,
+  onClick,
+  destructive,
+  children,
+}: {
+  label: string
+  onClick: () => void
+  destructive?: boolean
+  children: ReactNode
+}) {
+  return (
+    <ControlTooltip label={label}>
+      <ControlButton label={label} onClick={onClick} destructive={destructive}>
+        {children}
+      </ControlButton>
+    </ControlTooltip>
   )
 }
 
@@ -142,14 +171,25 @@ function ViewActions() {
   )
 }
 
+/**
+ * The mode the window is in, and the one control in the row whose tooltip is not its own name.
+ *
+ * The toggle has no label to borrow: "Toggle theme" says what pressing does, and a hover that repeated it
+ * would say nothing a reader had not already read on the button. What a reader wants to know before pressing
+ * is which mode they are looking at, so the tooltip names the mode — and follows it, because a sentence that
+ * named the other mode after a flip would be the one thing a tooltip must never be. The accessible name stays
+ * "Toggle theme": a screen reader gets the control and the state, in that order.
+ */
 function ThemeToggle() {
   const theme = useThemeStore((s) => s.theme)
   const toggle = useThemeStore((s) => s.toggle)
   const Icon = theme === 'dark' ? Sun : Moon
   return (
-    <ControlButton label="Toggle theme" onClick={toggle}>
-      <Icon className="size-4" />
-    </ControlButton>
+    <ControlTooltip label={theme === 'dark' ? 'Dark mode' : 'Light mode'}>
+      <ControlButton label="Toggle theme" onClick={toggle}>
+        <Icon className="size-4" />
+      </ControlButton>
+    </ControlTooltip>
   )
 }
 
@@ -169,6 +209,10 @@ function ThemeToggle() {
  * Ctrl+` is the same toggle for a reader who is typing, and it is what the chord means in the editors
  * this app sits beside. It is taken before the shell underneath sees it, which is the point: a chord
  * that reached the shell would be a chord that opened a panel *and* typed at a prompt.
+ * The hover sentence is the `title` this control used to carry, moved into the row's tooltip. A native
+ * `title` and a tooltip on one control arrive at different moments, in different styling, after different
+ * delays — two descriptions of one thing rather than one — so the sentence travels with the shape the rest of
+ * the row wears, and the control keeps only its own name.
  */
 function TerminalPanelToggle() {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
@@ -197,18 +241,19 @@ function TerminalPanelToggle() {
   return (
     <div className="flex items-center">
       <Separator orientation="vertical" className="mx-1.5 h-5" />
-      <ControlButton
-        label="Terminal panel"
-        aria-pressed={bottomPanelOpen}
-        title={bottomPanelOpen ? 'Hide the terminal panel' : 'Show the terminal panel'}
-        onClick={toggleBottomPanel}
-        // Drawn the way the rail draws a docked resident, and with the hover treatment restated so the
-        // pressed state stays pressed under the pointer: the control's own hover class would otherwise
-        // be the last word while a reader is pointing at it.
-        className={bottomPanelOpen ? 'bg-brand-soft text-brand hover:bg-brand-soft hover:text-brand' : undefined}
-      >
-        <SquareTerminal className="size-4" />
-      </ControlButton>
+      <ControlTooltip label={bottomPanelOpen ? 'Hide the terminal panel' : 'Show the terminal panel'}>
+        <ControlButton
+          label="Terminal panel"
+          aria-pressed={bottomPanelOpen}
+          onClick={toggleBottomPanel}
+          // Drawn the way the rail draws a docked resident, and with the hover treatment restated so the
+          // pressed state stays pressed under the pointer: the control's own hover class would otherwise
+          // be the last word while a reader is pointing at it.
+          className={bottomPanelOpen ? 'bg-brand-soft text-brand hover:bg-brand-soft hover:text-brand' : undefined}
+        >
+          <SquareTerminal className="size-4" />
+        </ControlButton>
+      </ControlTooltip>
     </div>
   )
 }
@@ -221,18 +266,18 @@ function WindowControls() {
   return (
     <div className="flex">
       {minimizable && (
-        <ControlButton label="Minimize" onClick={() => conveyor.window.minimize()}>
+        <WindowControl label="Minimize" onClick={() => conveyor.window.minimize()}>
           <Minus className="size-4" />
-        </ControlButton>
+        </WindowControl>
       )}
       {maximizable && (
-        <ControlButton label="Maximize" onClick={() => conveyor.window.maximizeToggle()}>
+        <WindowControl label="Maximize" onClick={() => conveyor.window.maximizeToggle()}>
           {isMaximized ? <Copy className="size-3.5" /> : <Square className="size-3.5" />}
-        </ControlButton>
+        </WindowControl>
       )}
-      <ControlButton label="Close" onClick={() => conveyor.window.close()} destructive>
+      <WindowControl label="Close" onClick={() => conveyor.window.close()} destructive>
         <X className="size-4" />
-      </ControlButton>
+      </WindowControl>
     </div>
   )
 }

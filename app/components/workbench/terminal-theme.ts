@@ -1,5 +1,5 @@
 import type { ITheme } from '@xterm/xterm'
-import { ensureReadable, resolveThemeVars, type ThemeVars } from './theme-engine'
+import { CONTRAST_DEFAULT, ensureReadable, resolveThemeVars, type ThemeVars } from './theme-engine'
 import type { ThemeMode, ThemeVariable } from './themes'
 
 /**
@@ -112,12 +112,18 @@ export function terminalTheme(vars: ThemeVars): ITheme {
 }
 
 /**
- * The same theme, for a theme id and mode.
+ * The same theme, for a theme id, mode, brightness and contrast.
  *
- * This is the form the pane calls: the three arguments are the three the document's own variables are
- * resolved from, so a theme switch, a mode flip and a brightness step all reach the terminal by the one
- * route they reach the stylesheet — the terminal cannot be left behind by a change it did not hear.
+ * This is the form the pane calls: the four arguments are the four the document's own variables are
+ * resolved from, so a theme switch, a mode flip, a brightness step and a contrast step all reach the
+ * terminal by the one route they reach the stylesheet — the terminal cannot be left behind by a change it
+ * did not hear.
  */
-export function terminalThemeFor(themeId: string, mode: ThemeMode, brightness: number): ITheme {
-  return terminalTheme(ensureReadable(resolveThemeVars(themeId, mode, brightness)).vars)
+export function terminalThemeFor(
+  themeId: string,
+  mode: ThemeMode,
+  brightness: number,
+  contrast: number = CONTRAST_DEFAULT
+): ITheme {
+  return terminalTheme(ensureReadable(resolveThemeVars(themeId, mode, brightness, contrast)).vars)
 }

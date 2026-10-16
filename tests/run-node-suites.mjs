@@ -54,6 +54,10 @@ const SUITES = [
   { name: 'terminal module', src: 'llm/terminal-test.ts' },
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
   { name: 'terminal theme mapping', src: 'ui/terminal-theme-test.ts' },
+  {
+    name: 'theme contrast (slot, preference, resolved map, floor across the range)',
+    src: 'ui/theme-contrast-test.ts',
+  },
   { name: 'terminal pty sessions', src: 'terminal/terminal-pty-test.ts' },
   { name: 'terminal preferences (bounds + store)', src: 'terminal/terminal-preferences-test.ts' },
   { name: 'terminal wire (chunk framing)', src: 'terminal/terminal-wire-test.ts' },

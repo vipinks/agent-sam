@@ -188,7 +188,7 @@ describe('the theme preference', () => {
     act(() => useWorkbenchStore.getState().setBrightness(BRIGHTNESS_MAX))
 
     const stored = JSON.parse(localStorage.getItem('sam-ai-theme-preference') ?? '{}') as Record<string, unknown>
-    expect(stored).toEqual({ themeId: 'amber', brightness: BRIGHTNESS_MAX })
+    expect(stored).toEqual({ themeId: 'amber', brightness: BRIGHTNESS_MAX, contrast: 0 })
     // The slice that was already persisted is untouched: the theme preference was added beside it.
     expect(JSON.parse(localStorage.getItem('sam-ai-chat-target') ?? '{}')).toEqual({
       providerId: 'anthropic',
@@ -203,6 +203,7 @@ describe('the theme preference', () => {
     expect(JSON.parse(localStorage.getItem('sam-ai-theme-preference') ?? '{}')).toEqual({
       themeId: DEFAULT_THEME_ID,
       brightness: BRIGHTNESS_MAX,
+      contrast: 0,
     })
   })
 })

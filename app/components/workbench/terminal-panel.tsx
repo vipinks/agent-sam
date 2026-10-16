@@ -38,6 +38,7 @@ export function TerminalPanel() {
   const mode = useThemeStore((state) => state.theme)
   const themeId = useWorkbenchStore((state) => state.themeId)
   const brightness = useWorkbenchStore((state) => state.brightness)
+  const contrast = useWorkbenchStore((state) => state.contrast)
   const fontSize = useConveyorStore(terminalPreferencesStore, (s) => s.fontSize)
 
   const host = terminalHost()
@@ -45,13 +46,13 @@ export function TerminalPanel() {
   const paneRef = useRef<HTMLDivElement>(null)
 
   // The colours first, and in a layout effect: the terminal is built on the first attach, and a theme
-  // applied in a passive effect would be a frame of the previous palette on a switch. The three
-  // dependencies are the three `theme-apply.ts` resolves the document's own variables from, so a
-  // theme, a mode flip and a brightness step all reach the terminal by the route they reach the
-  // stylesheet — there is no fourth place for a theme to be decided.
+  // applied in a passive effect would be a frame of the previous palette on a switch. The four
+  // dependencies are the four `theme-apply.ts` resolves the document's own variables from, so a theme, a
+  // mode flip, a brightness step and a contrast step all reach the terminal by the route they reach the
+  // stylesheet — there is no fifth place for a theme to be decided.
   useLayoutEffect(() => {
-    host.setTheme(terminalThemeFor(themeId, mode, brightness))
-  }, [host, themeId, mode, brightness])
+    host.setTheme(terminalThemeFor(themeId, mode, brightness, contrast))
+  }, [host, themeId, mode, brightness, contrast])
 
   // The size before the terminal is built, and on every re-bind. Declared ahead of the attach effect
   // for the reason the colours are: the instance is constructed *inside* that effect, so a size applied

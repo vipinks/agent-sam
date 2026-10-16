@@ -1,7 +1,7 @@
 import { useLayoutEffect } from 'react'
 import { useThemeStore } from '@/app/shell'
 import { THEME_VARIABLES, type ThemeMode } from './themes'
-import { ensureReadable, resolveThemeVars, type ThemeVars } from './theme-engine'
+import { CONTRAST_DEFAULT, ensureReadable, resolveThemeVars, type ThemeVars } from './theme-engine'
 import { useWorkbenchStore } from './store'
 
 /**
@@ -20,13 +20,19 @@ import { useWorkbenchStore } from './store'
  * brightness 0 is pixel-identical to today checkable by comparing the two.
  *
  * Mode is *read*, never decided: `useThemeStore` remains the source of the `.dark` class, and this file
- * does not touch that class. The engine follows the same theme, the same window and the same brightness
- * the mode toggle does, so a flip to dark re-resolves rather than leaving light values behind.
+ * does not touch that class. The engine follows the same theme, the same window, the same brightness and
+ * the same contrast the mode toggle does, so a flip to dark re-resolves rather than leaving light values
+ * behind.
  */
 
-/** The variables to set for a theme, mode and brightness, after the readability pass has had its say. */
-export function themeVarsFor(themeId: string, mode: ThemeMode, brightness: number): ThemeVars {
-  return ensureReadable(resolveThemeVars(themeId, mode, brightness)).vars
+/** The variables to set for a theme, mode, brightness and contrast, after the readability pass has had its say. */
+export function themeVarsFor(
+  themeId: string,
+  mode: ThemeMode,
+  brightness: number,
+  contrast: number = CONTRAST_DEFAULT
+): ThemeVars {
+  return ensureReadable(resolveThemeVars(themeId, mode, brightness, contrast)).vars
 }
 
 /** Every property name this module sets, so applying and clearing are the same list. */
@@ -53,11 +59,11 @@ export function clearThemeVars(): void {
 /**
  * Apply the current theme and keep it applied.
  *
- * Re-resolving on theme, mode or brightness is not an optimisation to skip: the resolved values depend
- * on all three, and any one of them changing while the others stay put is still a different document.
- * A layout effect rather than a passive one for the same reason the shell's `.dark` toggle uses one —
- * the variables have to be set in the same frame the class is, or a mode flip paints one frame with the
- * other mode's colours.
+ * Re-resolving on theme, mode, brightness or contrast is not an optimisation to skip: the resolved values
+ * depend on all four, and any one of them changing while the others stay put is still a different
+ * document. A layout effect rather than a passive one for the same reason the shell's `.dark` toggle uses
+ * one — the variables have to be set in the same frame the class is, or a mode flip paints one frame with
+ * the other mode's colours.
  *
  * The dependencies are the store's own values rather than the resolved map, because the map is a fresh
  * object on every render and comparing it would apply on every paint.
@@ -66,8 +72,9 @@ export function useThemeApplication(): void {
   const mode = useThemeStore((state) => state.theme)
   const themeId = useWorkbenchStore((state) => state.themeId)
   const brightness = useWorkbenchStore((state) => state.brightness)
+  const contrast = useWorkbenchStore((state) => state.contrast)
 
   useLayoutEffect(() => {
-    applyThemeVars(themeVarsFor(themeId, mode, brightness))
-  }, [themeId, mode, brightness])
+    applyThemeVars(themeVarsFor(themeId, mode, brightness, contrast))
+  }, [themeId, mode, brightness, contrast])
 }

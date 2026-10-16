@@ -33,17 +33,31 @@ export const BRIGHTNESS_MIN = -20
 export const BRIGHTNESS_MAX = 20
 export const BRIGHTNESS_DEFAULT = 0
 
+/**
+ * Contrast is a multiplier on how far each surface sits from the page it is drawn on, as a percentage.
+ *
+ * A hundred doubles every surface's distance from the background, and the default — zero — is the theme's
+ * own values, which is the same shape brightness has: the bottom of the range is the identity. Bounded at
+ * twice because past that a palette is stretched towards the ends of the ladder rather than adjusted, and a
+ * surface already at 0 or 100 stops being a value anybody chose.
+ */
+export const CONTRAST_MIN = 0
+export const CONTRAST_MAX = 100
+export const CONTRAST_DEFAULT = 0
+
 /** The WCAG AA floor for body text, and the number every pair in the contrast suite is held to. */
 export const MIN_CONTRAST = 4.5
 
 /**
- * The variables brightness moves: the surfaces a theme is *made of*, plus the borders drawn on them.
+ * The variables brightness and contrast move: the surfaces a theme is *made of*, plus the borders drawn
+ * on them.
  *
- * Foregrounds are deliberately absent. A brightness step is about how bright the page is, and the ink
- * on it is what has to stay readable on the result — moving both ends together would move the whole
- * pair and change nothing about the contrast between them. The semantic accents (brand, destructive,
- * success, the syntax hues) are absent for a different reason: their jobs are fixed by meaning, so a
- * brighter page must not quietly turn "deleted" into a different red.
+ * Foregrounds are deliberately absent, and for contrast they are absent a second time. A brightness step is
+ * about how bright the page is, and a contrast step is about how far the surfaces have moved off it; the ink
+ * on them is what has to stay readable on the result, so moving the ink with them would change the pair
+ * rather than the separation between them. The semantic accents (brand, destructive, success, the syntax
+ * hues) are absent for a different reason: their jobs are fixed by meaning, so a brighter or a more
+ * separated page must not quietly turn "deleted" into a different red.
  */
 export const SURFACE_VARIABLES = [
   'background',
@@ -162,6 +176,28 @@ export function clampBrightness(value: unknown): number {
 }
 
 /**
+ * A contrast value as the store may have stored it: any number inside the range, and the default for
+ * anything else — a missing key, a string, a `NaN` from an older record.
+ *
+ * The same shape as `clampBrightness` and for the same reason: a preference this engine cannot read is not
+ * a reason to refuse to open, and a value off the end of the range is a value the control never offered.
+ */
+export function clampContrast(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return CONTRAST_DEFAULT
+  return Math.min(CONTRAST_MAX, Math.max(CONTRAST_MIN, value))
+}
+
+/**
+ * A contrast value as the multiplier it is: one at the bottom of the range.
+ *
+ * Spelled as a function rather than as a division at each call site so the identity is a consequence of the
+ * range — its bottom multiplies by exactly one — rather than a special case every caller has to remember.
+ */
+export function contrastScale(contrast: number): number {
+  return 1 + clampContrast(contrast) / 100
+}
+
+/**
  * The same colour, `deltaPoints` further up or down the lightness ladder, clamped to 0..100.
  *
  * A delta of zero returns the input unchanged, and so does a value the engine cannot read: the one
@@ -172,6 +208,23 @@ export function adjustLightness(value: string, deltaPoints: number): string {
   const hsl = parseHsl(value)
   if (!hsl || !Number.isFinite(deltaPoints) || deltaPoints === 0) return value
   return formatHsl({ ...hsl, l: Math.min(100, Math.max(0, hsl.l + deltaPoints)) })
+}
+
+/**
+ * The same colour with its distance from the page multiplied — how a contrast step moves a surface.
+ *
+ * The page is the anchor rather than the surface family's own mean, and that is the decision this function
+ * is: the page is the one tone the window is mostly made of and the one the ink is drawn on, so a contrast
+ * step reads as "everything built on the page has moved further off it" while the page itself stays where
+ * the theme put it. A scale of one returns the input unchanged, which is what makes the default contrast
+ * the theme's own values; the clamp is the end of the ladder, and a surface already at 0 or 100 has nowhere
+ * further to go.
+ */
+export function spreadFromBackground(value: string, background: string, scale: number): string {
+  const hsl = parseHsl(value)
+  const page = parseHsl(background)
+  if (!hsl || !page || !Number.isFinite(scale) || scale === 1) return value
+  return formatHsl({ ...hsl, l: Math.min(100, Math.max(0, page.l + (hsl.l - page.l) * scale)) })
 }
 
 /** The channels of an HSL colour, clamped into the gamut a screen can paint — what a browser shows. */
@@ -254,8 +307,8 @@ export function contrastRatio(foreground: string, background: string): number {
 }
 
 /**
- * A theme's variables for one mode at one brightness: the registry's map, with the surface family
- * shifted by the delta and everything else left exactly as authored.
+ * A theme's variables for one mode at one brightness and one contrast: the registry's map, with the surface
+ * family shifted by the delta, spread off the page by the multiplier, and everything else left as authored.
  *
  * An id the registry does not know resolves to the default theme rather than throwing, and a variable
  * the chosen theme does not set is filled from that same default theme. The first is what the persisted
@@ -263,18 +316,36 @@ export function contrastRatio(foreground: string, background: string): number {
  * removed, has to open the app rather than break it. The second is the same promise one level down — a
  * hole in a theme would otherwise leave a custom property unset and one corner of the window inheriting
  * whichever palette the stylesheet happened to declare.
+ *
+ * Both controls default to the identity, so a caller that names neither resolves the theme's own values —
+ * which is what keeps a window that has never touched either control pixel-identical to the stylesheet.
  */
-export function resolveThemeVars(themeId: string, mode: ThemeMode, brightness: number): ThemeVars {
+export function resolveThemeVars(
+  themeId: string,
+  mode: ThemeMode,
+  brightness: number,
+  contrast: number = CONTRAST_DEFAULT
+): ThemeVars {
   const theme = themeById(themeId)
   const fallback = themeById(DEFAULT_THEME_ID)
   const pick = (name: ThemeVariable): string => theme.tokens[mode][name] ?? fallback.tokens[mode][name]
 
   const delta = clampBrightness(brightness)
+  const scale = contrastScale(contrast)
   const shifted = new Set<string>(SURFACE_VARIABLES)
   const vars = {} as ThemeVars
   for (const name of THEME_VARIABLES) {
     vars[name] = shifted.has(name) ? adjustLightness(pick(name), delta) : pick(name)
   }
+
+  // The spread is measured from the page the surfaces were resolved onto, after the brightness delta has had
+  // its say: a delta moves every tone and a multiplier moves each one off a page that moved with it, so the
+  // two controls compose in either order rather than the second overwriting the first.
+  if (scale !== 1) {
+    const page = vars.background
+    for (const name of SURFACE_VARIABLES) vars[name] = spreadFromBackground(vars[name], page, scale)
+  }
+
   return vars
 }
 
