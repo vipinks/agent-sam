@@ -339,9 +339,9 @@ export function SessionListPanel({
                         <li key={session.id}>
                           <div
                             className={cn(
-                              // The actions are drawn from this background, so the two states that show
-                              // them must be solid: the selected tint alone is translucent over the
-                              // panel, and would let the title read through the icons.
+                              // The states that reveal the actions paint the same solid accent the plate
+                              // carries, so the row's own colour agrees with the plate laid over it. The
+                              // selected tint alone is 13% coral and is never what the plate shows.
                               'group relative flex items-start gap-2 py-2 pr-3 pl-8 transition-colors hover:bg-accent focus-within:bg-accent',
                               isActive && 'bg-brand-soft'
                             )}
@@ -395,8 +395,8 @@ export function SessionListPanel({
                             {/* Row actions. Hidden until hover, but revealed on focus as well so they are
                       reachable by keyboard rather than being a pointer-only affordance. */}
                             {editingId !== session.id && (
-                              <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 bg-inherit opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                                {/* The cluster's own left edge, carrying the row colour out to
+                              <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 bg-accent opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                {/* The cluster's own left edge, carrying the plate colour out to
                                     transparent so the title's last glyph dissolves into the icons
                                     instead of stopping against a hard boundary. */}
                                 <span

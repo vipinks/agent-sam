@@ -142,13 +142,31 @@ describe('the session row aligns under its project and its actions', () => {
     expect(tokens(title)).toContain('truncate')
   })
 
-  it('paints the cluster from the row state it covers', async () => {
+  it('paints the cluster from the opaque token, not from inheritance', async () => {
     renderPanel()
     await screen.findByText('project work')
 
-    // Transparent would let the title's tail show through the icons; inheriting the row's own
-    // background covers it in the resting, hovered and selected tints alike, in both themes.
-    expect(tokens(clusterFor('project work'))).toContain('bg-inherit')
+    // A borrowed background is only as opaque as the row's current state; the plate carries the
+    // solid token itself, so no resting tint or transparent ancestor can thin it.
+    const cluster = tokens(clusterFor('project work'))
+    expect(cluster).toContain('bg-accent')
+    expect(cluster).not.toContain('bg-inherit')
+  })
+
+  it("agrees with the row's two opaque states and with the fade's end", async () => {
+    renderPanel(PROJECT_ID)
+    await screen.findByText('project work')
+
+    // One token, four declarations: the plate, the two row states that reveal it, and the gradient
+    // the fade resolves to must name the same colour, so the plate and the fade cannot drift apart.
+    const row = tokens(rowFor('project work'))
+    const strip = (prefix: string) => (token: string) => (token.startsWith(prefix) ? token.slice(prefix.length) : null)
+    const fade = tokens(clusterFor('project work').firstElementChild as HTMLElement)
+
+    expect(row.map(strip('hover:bg-')).filter(Boolean)).toEqual(['accent'])
+    expect(row.map(strip('focus-within:bg-')).filter(Boolean)).toEqual(['accent'])
+    expect(fade.map(strip('to-')).filter(Boolean)).toEqual(['accent'])
+    expect(tokens(clusterFor('project work'))).toContain('bg-accent')
   })
 })
 
@@ -176,16 +194,27 @@ describe('the action cluster hides the title beneath it opaquely', () => {
     expect(row).toContain('focus-within:bg-accent')
   })
 
-  it('keeps the cluster inheriting that background, out of the title flow', async () => {
+  it('keeps the cluster painting that background itself, out of the title flow', async () => {
     renderPanel()
     await screen.findByText('project work')
 
     const cluster = tokens(clusterFor('project work'))
-    expect(cluster).toContain('bg-inherit')
+    expect(cluster).toContain('bg-accent')
+    expect(cluster).not.toContain('bg-inherit')
     expect(cluster).toContain('absolute')
     expect(cluster).toContain('right-3')
     expect(cluster).toContain('top-1/2')
     expect(cluster).toContain('-translate-y-1/2')
+  })
+
+  it('keeps the plate opaque on the selected row rather than taking its tint', async () => {
+    renderPanel(PROJECT_ID)
+    await screen.findByText('project work')
+
+    // The selected tint is 13% coral; the plate must not inherit it, in either theme.
+    expect(tokens(rowFor('project work'))).toContain('bg-brand-soft')
+    expect(tokens(clusterFor('project work'))).toContain('bg-accent')
+    expect(tokens(clusterFor('project work'))).not.toContain('bg-inherit')
   })
 
   it('fades the title into the cluster along its left edge', async () => {
