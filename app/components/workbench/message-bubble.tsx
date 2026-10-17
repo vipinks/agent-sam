@@ -16,8 +16,7 @@ import {
 import { MentionChipRow } from './mention-chip'
 import { AttachmentRefChipRow } from './attachment-chip'
 import { contextNoticeText } from './mentions'
-import { messageVersions } from '@/conveyor/protocol/message-versions'
-import type { AgentTurn } from './agent-session'
+import { branchCount, branchPosition, type AgentTurn } from './agent-session'
 
 /**
  * The turn's blocks in the order they happened: its cards, its prose, and the seams between them.
@@ -114,6 +113,7 @@ export const MessageBubble = memo(function MessageBubble({
   canEdit,
   onResend,
   onRegenerate,
+  onCheckoutBranch,
   sessionId,
   alignment = DEFAULT_BUBBLE_ALIGNMENT,
   fontPreset = DEFAULT_FONT_PRESET,
@@ -125,9 +125,9 @@ export const MessageBubble = memo(function MessageBubble({
    * Whether the controls that act on a message are available at all right now.
    *
    * The pane decides this rather than the bubble, because it is a fact about the conversation: a run
-   * in flight is producing the very turn an edit or a regenerate writes again, and the version a pager
-   * would walk to is the one being written, while a decision waiting belongs to a turn that has not
-   * ended. Defaulted off, so a bubble rendered on its own — as the copy tests do — offers no control
+   * in flight is producing the very turn an edit or a regenerate writes again, and the trail a branch
+   * switch would check out is the one being written, while a decision waiting belongs to a turn that has
+   * not ended. Defaulted off, so a bubble rendered on its own — as the copy tests do — offers no control
    * whose effect it cannot perform.
    */
   canEdit?: boolean
@@ -145,6 +145,14 @@ export const MessageBubble = memo(function MessageBubble({
    * bubble holding its own copy of the turn could not describe what is being replaced.
    */
   onRegenerate?: (turnId: string) => void
+  /**
+   * Move the conversation to one of the trails parked at this turn.
+   *
+   * The position, and the turn whose branch point it is: the whole trail from that turn onward is what
+   * changes, so the pane — which holds the transcript — is what acts, and the bubble only says which
+   * position was asked for. Absent for a bubble rendered on its own, which has no trail to move.
+   */
+  onCheckoutBranch?: (turnId: string, position: number) => void
   /**
    * The conversation this message belongs to, which is where its images are stored.
    *
@@ -209,9 +217,9 @@ export const MessageBubble = memo(function MessageBubble({
     // An emptied message is not a message. The editor stays open rather than sending whitespace or
     // closing on a click that did nothing.
     if (editText.trim() === '') return
-    // Nothing is asked first, because nothing is removed: the message keeps its place, its old words
-    // are kept as a previous version beside the new ones, and the turn the edit is answered with is
-    // written again where it stands.
+    // Nothing is asked first, because nothing is removed: the message keeps its place, the words and
+    // the answer it had are parked as a branch, and the reply the edit is answered with is written
+    // from nothing where it stands.
     resend()
   }
 
@@ -220,29 +228,25 @@ export const MessageBubble = memo(function MessageBubble({
     onRegenerate?.(message.id)
   }
 
-  /*
-   * The versions this message has been through, and which of them is on screen.
+  /**
+   * The branch point this turn holds, when it holds one.
    *
-   * Derived rather than stored, so the live message is the only place its current text lives: a turn
-   * that has never been rewritten reads as the one version it has, and a turn that has been reads its
-   * archive followed by the version in force. `viewed` is which one the user walked to, null meaning
-   * the newest — which is what a bubble shows, and what it returns to whenever a run adds a version.
+   * Derived rather than stored, like everything else a bubble draws: a turn nothing branched at has one
+   * trail and no switcher, and a branch point reads its position and its count off its own fields. The
+   * switcher moves the pane rather than this bubble — the whole trail from this turn onward is what
+   * changes — so nothing here is state, and nothing here survives a re-render it should not.
    */
-  const versions = messageVersions(message)
-  const [viewed, setViewed] = useState<number | null>(null)
-  useEffect(() => setViewed(null), [versions.length])
-  const version = Math.min(viewed ?? versions.length, versions.length)
-  const shown = versions[version - 1]
-  const showingNewest = version === versions.length
+  const branches = branchCount(message)
+  const branch = branchPosition(message)
 
   /*
    * What the copy button takes, and the whole of it.
    *
-   * `content` is the turn's own text — the version in force, never a version parked behind the pager:
-   * a previous version is a thing this pane can show and nothing outside it can read, so the clipboard
-   * gets the message as the conversation holds it. Everything else a turn carries sits in its own field
-   * — tool cards in `steps`, the plan in `plan`, the ending in `endNotice` — so a copy is the words,
-   * never a rendering of the widgets that happened to sit among them.
+   * `content` is the turn's own text — the version in force, never one of the trails parked in a branch:
+   * a parked branch is a conversation this pane can check out and nothing outside it reads, so the
+   * clipboard gets the message as the checked-out trail holds it. Everything else a turn carries sits in
+   * its own field — tool cards in `steps`, the plan in `plan`, the ending in `endNotice` — so a copy is
+   * the words, never a rendering of the widgets that happened to sit among them.
    */
   const copyButton = <CopyMessageButton value={message.content} label={isUser ? 'Copy message' : 'Copy reply'} />
 
@@ -330,29 +334,25 @@ export const MessageBubble = memo(function MessageBubble({
               </>
             ) : (
               <>
-                {/* What this version attached, above it: the files are what the sentence is about, and a
-                  reopened conversation shows them again from the paths that were stored with it. Read
-                  from the version on screen rather than from the turn, so walking back to a message the
-                  user has since rewritten shows the files it named *then* — an edit that removed one is
-                  part of what changed, and a reader shown the old words with the new chips would be
-                  shown a message that never existed. Not removable here — the message has been sent, so
-                  the chips are a record, not a control. */}
-                {shown.mentionPaths && shown.mentionPaths.length > 0 && (
-                  <MentionChipRow paths={shown.mentionPaths} className="mb-2" />
+                {/* What this message attached, above it: the files are what the sentence is about, and a
+                  reopened conversation shows them again from the paths that were stored with it. Not
+                  removable here — the message has been sent, so the chips are a record, not a control. */}
+                {message.mentionPaths && message.mentionPaths.length > 0 && (
+                  <MentionChipRow paths={message.mentionPaths} className="mb-2" />
                 )}
-                {/* The images this version carried, above it and beside the files: both are what the
-                  sentence is about. Thumbnails read from the conversation's store, one read per chip — so
-                  a reopened conversation shows its pictures again, and a chip whose bytes are gone or
-                  over the cap says so in place of one. */}
-                {shown.imageRefs && shown.imageRefs.length > 0 && (
-                  <AttachmentRefChipRow images={shown.imageRefs} sessionId={sessionId} className="mb-2" />
+                {/* The images it carried, above it and beside the files: both are what the sentence is
+                  about. Thumbnails read from the conversation's store, one read per chip — so a reopened
+                  conversation shows its pictures again, and a chip whose bytes are gone or over the cap
+                  says so in place of one. */}
+                {message.imageRefs && message.imageRefs.length > 0 && (
+                  <AttachmentRefChipRow images={message.imageRefs} sessionId={sessionId} className="mb-2" />
                 )}
                 {/* A user's message is literal text: never parsed as markdown, which would eat their
                   angle brackets and asterisks. */}
-                <p className="break-words whitespace-pre-wrap">{shown.content}</p>
+                <p className="break-words whitespace-pre-wrap">{message.content}</p>
               </>
             )
-          ) : showingNewest ? (
+          ) : (
             <>
               {/* Files this send named that could not be included. Above the answer because they are
                 about the question, and a warning the user reads after the reply is a warning too late
@@ -370,14 +370,6 @@ export const MessageBubble = memo(function MessageBubble({
                 text it cut off and the work that resumed it. */}
               {blocks.length > 0 && <div className="mb-2 space-y-1.5">{blocks}</div>}
             </>
-          ) : (
-            <>
-              {/* A previous answer is its words and nothing else. The cards, the checklist and the seams
-                belong to the answer that replaced it — they are the work of the turn as it stands, and a
-                pager cannot show one of them on its own — so walking back reads the answer that was, as
-                the answer that was. */}
-              <MarkdownContent content={shown.content} />
-            </>
           )}
 
           {message.error && (
@@ -391,8 +383,8 @@ export const MessageBubble = memo(function MessageBubble({
           new. Copy sits on both, because both have words; edit sits on the user's own, because only
           their message is theirs to rewrite; regenerate sits on a reply, and only with a callback
           behind it — a bubble that cannot reach the pane offers no control whose effect it cannot
-          perform; and the pager sits on both, because a rewritten message is a rewritten message
-          whichever side it is on.
+          perform; and the branch switcher sits on the turn that is a branch point, because checking a
+          branch out moves the whole trail from that turn rather than one message's words.
 
           Hidden at rest and revealed by the bubble's own hover or by the keyboard arriving inside it:
           `opacity-0` rather than `hidden`, so the controls stay in the tab order, and `focus-within`
@@ -411,11 +403,12 @@ export const MessageBubble = memo(function MessageBubble({
           {/* And the reply's half: the copy beside it, then the control that writes the reply again. */}
           {!isUser && copyButton}
           {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={regenerate} />}
-          {/* And the walk back through the versions, on whichever side this message is. Only when the
-              message has been through more than one, and only while the pane says the conversation is
-              settled: a version still being written has nothing to walk to yet. */}
-          {canEdit && versions.length > 1 && (
-            <VersionPager version={version} total={versions.length} onWalk={setViewed} />
+          {/* And the branch switcher, at the turn the rewrite branched at. One control for the pair,
+              because checking a branch out moves the whole trail from here rather than a bubble's words;
+              drawn only when there is more than one branch, and only while the pane says the conversation
+              is settled: a trail still being written has nothing to switch to yet. */}
+          {canEdit && onCheckoutBranch && branches > 1 && (
+            <BranchSwitcher branch={branch} total={branches} onWalk={(next) => onCheckoutBranch(message.id, next)} />
           )}
         </div>
       </div>
@@ -427,46 +420,47 @@ export const MessageBubble = memo(function MessageBubble({
 const COPIED_MS = 1500
 
 /**
- * The walk back through a message's versions: an arrow, which of them is on screen, and an arrow.
+ * The branch switcher: an arrow, which branch the pane is on, and an arrow.
  *
- * Drawn only for a message that has more than one. Each arrow is disabled at the end it would go past
- * rather than hidden, so the control's box is the same at every position: an arrow that disappeared at
- * 1/2 would move the count it sits beside, and the count is the thing being read. `n/m` is the count and
- * nothing else — where a message sits in its own history is not a fact about the conversation, and the
- * newest version is the message.
+ * Drawn only for a turn that is a branch point — a turn with one trail has nothing to switch to. Each
+ * arrow is disabled at the end it would go past rather than hidden, so the control's box is the same at
+ * every position: an arrow that disappeared at 1/2 would move the count it sits beside, and the count is
+ * the thing being read. `n/m` is the branches this position has held, oldest first, with the one on
+ * screen wherever it was created — so walking back to 1 and forward to 2 returns to the same two
+ * conversations, in the same order, however many times it is used.
  *
- * The label names the direction and the message is the thing the focus has just arrived next to, which
- * is the convention the copy and edit controls follow: two of these can be on screen at once, and
- * "Previous version" is what distinguishes the one being focused.
+ * The label names the direction and the turn is the thing the focus has just arrived next to, which is
+ * the convention the copy and edit controls follow: two of these can be on screen at once, and
+ * "Previous branch" is what distinguishes the one being focused.
  */
-function VersionPager({
-  version,
+function BranchSwitcher({
+  branch,
   total,
   onWalk,
 }: {
-  version: number
+  branch: number
   total: number
-  onWalk: (version: number) => void
+  onWalk: (branch: number) => void
 }) {
   return (
-    <div data-slot="message-versions" className="flex items-center">
+    <div data-slot="branch-switcher" className="flex items-center">
       <button
         type="button"
-        aria-label="Previous version"
-        disabled={version <= 1}
-        onClick={() => onWalk(version - 1)}
+        aria-label="Previous branch"
+        disabled={branch <= 1}
+        onClick={() => onWalk(branch - 1)}
         className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
       >
         <ChevronLeft className="size-3.5" />
       </button>
       <span className="px-0.5 text-[11px] text-muted-foreground">
-        {version}/{total}
+        {branch}/{total}
       </span>
       <button
         type="button"
-        aria-label="Next version"
-        disabled={version >= total}
-        onClick={() => onWalk(version + 1)}
+        aria-label="Next branch"
+        disabled={branch >= total}
+        onClick={() => onWalk(branch + 1)}
         className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
       >
         <ChevronRight className="size-3.5" />

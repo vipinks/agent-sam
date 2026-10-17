@@ -152,9 +152,9 @@ function editButtons(): HTMLElement[] {
 /**
  * The bubble a message's own text sits in, which is the row its controls belong to.
  *
- * Scoped rather than asked of the whole screen because one edit can leave more than one message with
- * versions: the message the user rewrote keeps its old words, and the reply written again keeps the
- * answer it replaced — so two pagers can be on screen, and "the pager says 2/2" is a claim about one.
+ * Scoped rather than asked of the whole screen because more than one turn can be a branch point in one
+ * conversation: the switcher a claim is about is the one on the turn that was rewritten, and "this turn
+ * says 2/2" has to mean that turn rather than whichever one the query found first.
  */
 function bubbleOf(text: string): HTMLElement {
   const row = screen.getByText(text).closest('[data-slot="message-row"]')
@@ -286,7 +286,7 @@ describe('the inline editor', () => {
 })
 
 describe('editing a sent message', () => {
-  it('keeps the words it had as a previous version, re-runs its reply, and drops nothing', async () => {
+  it('parks the words it had as a branch, re-runs its reply, and keeps everything it parked', async () => {
     const { stub, sent, transcripts } = renderChat()
     await loaded()
 
@@ -304,9 +304,9 @@ describe('editing a sent message', () => {
     expect(payload.messages[payload.messages.length - 1].content).toBe(EDITED_TEXT)
     expect(payload.mentionPaths).toEqual(['src/tokens.ts'])
 
-    // Every later turn is still in the conversation: the reply to the edited message is being written
-    // again where it stood, and the message after it was not touched at all.
-    expect(screen.getByText(AFTER_TEXT)).toBeTruthy()
+    // The tail the edit replaced is not on screen: the message after the old answer was written from
+    // words this edit changed, so it is parked with them rather than shown beside the new answer.
+    expect(screen.queryByText(AFTER_TEXT)).toBeNull()
     // That reply's own work is being written again from nothing, so the card and the checklist of the
     // answer that was are gone until the new answer brings its own.
     expect(screen.queryByText('Reading src/lexer.ts')).toBeNull()
@@ -314,8 +314,8 @@ describe('editing a sent message', () => {
     // And the messages before it are untouched.
     expect(screen.getByText(QUESTION)).toBeTruthy()
 
-    // A run in flight withdraws the controls that act on the transcript, and the pager with them: the
-    // version it would walk to is the one being written.
+    // A run in flight withdraws the controls that act on the transcript, and the branch switcher with
+    // them: a trail still being written has no position to switch to.
     await waitFor(() => expect(editButtons().length).toBe(0))
     expect(screen.queryByText('2/2')).toBeNull()
 
@@ -324,29 +324,43 @@ describe('editing a sent message', () => {
     stub.emit(channel, { type: 'end' })
     await waitFor(() => expect(screen.getByText('Tokens split.')).toBeTruthy())
 
-    // Two versions of the message now, with the newest on screen and the chips it is sent with. The
-    // reply that was written again carries its own pair, which is the other half of the same rule.
+    // The branch point is the edited question, and the switcher is drawn once, there: the reply written
+    // again answers the new words and has no second trail of its own to offer.
     const row = bubbleOf(EDITED_TEXT)
     await waitFor(() => expect(within(row).getByText('2/2')).toBeTruthy())
-    expect(within(bubbleOf('Tokens split.')).getByText('2/2')).toBeTruthy()
+    expect(within(bubbleOf('Tokens split.')).queryByText('2/2')).toBeNull()
     expect(screen.queryByTitle('src/lexer.ts')).toBeNull()
+    expect(screen.queryByText('The lexer is rewritten.')).toBeNull()
 
-    // Walking back shows the words this message used to have, and the chips it carried then.
-    await userEvent.click(within(row).getByRole('button', { name: 'Previous version' }))
-    expect(within(row).getByText('1/2')).toBeTruthy()
-    expect(screen.getByText(EDITED_TARGET)).toBeTruthy()
-    expect(screen.getByTitle('src/lexer.ts')).toBeTruthy()
-
-    // And the record keeps all of it: both versions of the message, and every turn the conversation
-    // had — the reply written again, and the message that followed it. The file is still the version
-    // this build reads, because the arrays are additive.
+    // And the record keeps both trails: the checked-out one ends at the re-run reply, and the tail the
+    // edit replaced is parked behind it, whole — question, answer, and the turn after them. The file is
+    // still the version this build reads, because a branch point is optional and additive.
     const stored = transcripts.files[SESSION_ID]
-    expect(stored.turns.map((turn) => turn.id)).toEqual(['user-1', 'assistant-2', 'user-3', 'assistant-4', 'user-5'])
+    expect(stored.turns.map((turn) => turn.id)).toEqual(['user-1', 'assistant-2', 'user-3', 'assistant-4'])
     const edited = stored.turns[2]
     expect(edited.content).toBe(EDITED_TEXT)
     expect(edited.mentionPaths).toEqual(['src/tokens.ts'])
-    expect(edited.userVersions).toEqual([{ content: EDITED_TARGET, mentionPaths: ['src/lexer.ts', 'src/tokens.ts'] }])
+    expect(edited.branch).toBe(1)
+    const parkedTurns = edited.branchPoints?.[0]?.turns ?? []
+    expect(parkedTurns.map((turn) => turn.id)).toEqual(['user-3', 'assistant-4', 'user-5'])
+    expect(parkedTurns.map((turn) => turn.content)).toEqual([EDITED_TARGET, 'The lexer is rewritten.', AFTER_TEXT])
+    expect(parkedTurns[0].mentionPaths).toEqual(['src/lexer.ts', 'src/tokens.ts'])
     expect(stored.version).toBe(TRANSCRIPT_VERSION)
+
+    // Walking back to 1 checks out the whole trail the edit parked: the words this message used to have,
+    // the chips it carried then, the answer they were given, and the message after that answer.
+    await userEvent.click(within(row).getByRole('button', { name: 'Previous branch' }))
+    const parked = bubbleOf(EDITED_TARGET)
+    expect(within(parked).getByText('1/2')).toBeTruthy()
+    expect(screen.getByTitle('src/lexer.ts')).toBeTruthy()
+    expect(screen.getByText('The lexer is rewritten.')).toBeTruthy()
+    expect(screen.getByText(AFTER_TEXT)).toBeTruthy()
+    expect(screen.queryByText('Tokens split.')).toBeNull()
+
+    // And the save that follows a walk records the branch that is now checked out: what the file holds
+    // is what the pane shows, which is the whole point of parking a tail rather than keeping it aside.
+    const walked = transcripts.files[SESSION_ID]
+    expect(walked.turns.map((turn) => turn.id)).toEqual(['user-1', 'assistant-2', 'user-3', 'assistant-4', 'user-5'])
   })
 
   it('leaves the conversation untouched when the editor is cancelled', async () => {
@@ -366,7 +380,7 @@ describe('editing a sent message', () => {
     // proves this reply was not cut.
     expect(screen.getByText('Reading src/lexer.ts')).toBeTruthy()
     expect(stub.methodsOn('agent')).not.toContain('chatWithTools')
-    // One version of the message, so there is nothing for a pager to walk to.
+    // One trail at that message, so there is nothing for a branch switcher to reach.
     expect(screen.queryByText('2/2')).toBeNull()
   })
 

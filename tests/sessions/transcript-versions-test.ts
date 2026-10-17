@@ -1,18 +1,21 @@
 /**
- * Verifies the versions a message has been through, as the record keeps them.
+ * Verifies the branch model a rewritten message produces, as the record keeps it.
  *
- * An edit and a regenerate used to cut the transcript back and send it again, so the words a message
- * used to have were gone the moment the user changed them. They are kept now, beside the live message
- * rather than in place of it, and this suite holds the three things that only the record can settle:
- * the version arrays are optional-additive, so a file written before them reads as the single version
- * it is; a version-less turn is one version and nothing else; and every reader of a message's text —
- * the export, the search — reads the version that is live, never the ones parked beside it.
+ * A conversation used to keep the versions a message had been through beside it: two arrays, one per
+ * role, walked by a pager on the message itself. They are gone. An edit and a regenerate are branch
+ * points now, and what they park is not a message but a tail — the question, the answer, and every turn
+ * after them — so checking a branch out moves the whole conversation from that turn onward instead of
+ * swapping one bubble's words.
  *
- * The history a re-run is handed is pinned here too, through the rule the panel itself asks: the turns
- * before the target, with the target's *active* question when the target is that question, and with the
- * reply being written again left out. That claim belongs on the record rather than in the pane, because
- * the pane's transcript now deliberately disagrees with it — nothing is dropped, and what the model is
- * given is still the conversation up to the question it is answering.
+ * This suite holds the four things only the record can settle: the arrays an older build wrote are
+ * dropped on the way in, with the live message left as the one version; a turn with no branch points is
+ * a single trail; the checked-out trail is the snapshot's `turns`, so the export and the search read it
+ * and the parked tails stay unread; and a branch point parks exactly the tail it replaced. The last case
+ * is the send: a new message appends to the checked-out trail and never into a parked one.
+ *
+ * The history a re-run is handed is pinned here too, through the rule the panel itself asks. It is
+ * unchanged by the branch model, and that is the point of keeping it: a run for a rewritten turn is
+ * handed the conversation up to the question it is answering — not the trail it can now switch to.
  */
 import { strict as assert } from 'node:assert'
 import {
@@ -23,32 +26,54 @@ import {
 import { renderExport } from '../../conveyor/protocol/export'
 import { conversationText } from '../../conveyor/protocol/search'
 import { runHistoryFor } from '../../conveyor/protocol/truncate'
+import { reviseUserTurn, restartReplyTurn, type AgentTurn } from '../../app/components/workbench/agent-session'
 
 const results: string[] = []
 
 const QUESTION = 'set up the parser'
 const SECOND_QUESTION = 'also update the docs'
 const EDITED_QUESTION = 'refactor the lexer, and keep the tokens split'
+const LATER_QUESTION = 'and the readme?'
 const FIRST_CHIPS = ['src/lexer.ts', 'src/tokens.ts']
 const SECOND_CHIPS = ['src/tokens.ts']
 const ANSWER = 'Set up.'
 const REWRITTEN = 'Tokens split.'
 const DISCARDED_ANSWER = 'The lexer is rewritten.'
 
+/** The conversation as it stands: two exchanges, the second of them unanswered. */
+function conversation(): AgentTurn[] {
+  return [
+    { id: 'user-1', role: 'user', content: QUESTION, steps: [], mentionPaths: [...FIRST_CHIPS] },
+    { id: 'assistant-2', role: 'assistant', content: ANSWER, steps: [] },
+    { id: 'user-3', role: 'user', content: SECOND_QUESTION, steps: [], mentionPaths: [...SECOND_CHIPS] },
+    { id: 'assistant-4', role: 'assistant', content: DISCARDED_ANSWER, steps: [] },
+    { id: 'user-5', role: 'user', content: LATER_QUESTION, steps: [] },
+  ]
+}
+
+function snapshotOf(turns: AgentTurn[]): TranscriptSnapshot {
+  return { version: TRANSCRIPT_VERSION, turns, interrupted: false }
+}
+
 /**
- * A conversation a user has edited and regenerated in: the reply to the first question was written
- * again, and the second question carries a second version of itself.
+ * What an older build wrote for a rewritten message: the arrays this build no longer has a key for.
  *
- * The parked text is deliberately unlike the live text, in both places — not a prefix of it, not a
- * phrase of it. A reader that read a version array by mistake, and a suite that asserted on a value
- * both versions happen to share, would both look correct otherwise.
+ * Deliberately a stored file rather than a typed value — the point is that it is data from a build
+ * that predates the branch model, so it carries keys this app's types do not name.
  */
-function versionedSnapshot(): TranscriptSnapshot {
+function legacyStoredFile(): unknown {
   return {
     version: TRANSCRIPT_VERSION,
     interrupted: false,
     turns: [
-      { id: 'user-1', role: 'user', content: QUESTION, steps: [] },
+      {
+        id: 'user-1',
+        role: 'user',
+        content: EDITED_QUESTION,
+        steps: [],
+        mentionPaths: [...SECOND_CHIPS],
+        userVersions: [{ content: SECOND_QUESTION, mentionPaths: [...FIRST_CHIPS] }],
+      },
       {
         id: 'assistant-2',
         role: 'assistant',
@@ -56,27 +81,6 @@ function versionedSnapshot(): TranscriptSnapshot {
         steps: [],
         replyVersions: [{ content: ANSWER }],
       },
-      {
-        id: 'user-3',
-        role: 'user',
-        content: EDITED_QUESTION,
-        steps: [],
-        mentionPaths: [...SECOND_CHIPS],
-        userVersions: [{ content: SECOND_QUESTION, mentionPaths: [...FIRST_CHIPS] }],
-      },
-      { id: 'assistant-4', role: 'assistant', content: DISCARDED_ANSWER, steps: [] },
-    ],
-  }
-}
-
-/** The same conversation with no version arrays anywhere, as every stored file today is. */
-function versionlessSnapshot(): TranscriptSnapshot {
-  return {
-    version: TRANSCRIPT_VERSION,
-    interrupted: false,
-    turns: [
-      { id: 'user-1', role: 'user', content: QUESTION, steps: [], mentionPaths: [...FIRST_CHIPS] },
-      { id: 'assistant-2', role: 'assistant', content: ANSWER, steps: [] },
     ],
   }
 }
@@ -86,112 +90,180 @@ function step(label: string, fn: () => void): void {
   fn()
 }
 
-// ---------------------------------------------------------------- the shape on disk
+// ---------------------------------------------------------------- what an older file reads as
 
-function theArraysAreOptionalAdditive() {
-  const parsed = transcriptSnapshotSchema.parse(versionedSnapshot())
+function theOldArraysAreDropped() {
+  const parsed = transcriptSnapshotSchema.parse(legacyStoredFile())
 
-  assert.deepEqual(
-    parsed.turns[2].userVersions,
-    [{ content: SECOND_QUESTION, mentionPaths: FIRST_CHIPS }],
-    'the versions a message has been through must survive a read'
+  // The version that was live is the message, and the ones parked beside it are gone: a branch model
+  // has one trail, and a message that was rewritten before it existed has nothing to switch to.
+  assert.equal(parsed.turns[0].content, EDITED_QUESTION, 'the message reads as the version that was in force')
+  assert.deepEqual(parsed.turns[0].mentionPaths, SECOND_CHIPS, 'with the chips that version was carrying')
+  assert.equal(parsed.turns[1].content, REWRITTEN, 'and a rewritten reply reads as the answer it stands on')
+  assert.equal(
+    (parsed.turns[0] as unknown as Record<string, unknown>).userVersions,
+    undefined,
+    'the archive an older build wrote is not read back as a branch point'
   )
-  assert.deepEqual(parsed.turns[1].replyVersions, [{ content: ANSWER }], 'a rewritten reply keeps the one it replaced')
-  assert.equal(parsed.turns[2].content, EDITED_QUESTION, 'and the message itself is the version that is live')
-  assert.deepEqual(parsed.turns[2].mentionPaths, SECOND_CHIPS, 'the live chips, not the parked ones')
-  // The arrays are additive and optional, so the version does not move: a file written before them has
-  // no key, an absent optional key is stripped rather than defaulted, and both read as the conversation
-  // they are. A bump here would make every stored transcript a file this build refuses.
-  assert.equal(TRANSCRIPT_VERSION, 3, 'the version does not move for an additive-optional key')
+  assert.equal(
+    (parsed.turns[1] as unknown as Record<string, unknown>).replyVersions,
+    undefined,
+    'and neither is the reply archive'
+  )
+  // Nothing about the stored shape moved: the keys above were stripped, not migrated into a new one.
+  assert.equal(TRANSCRIPT_VERSION, 3, 'the version does not move for a key this build dropped')
 
-  results.push('the version arrays are optional-additive and survive a read')
+  results.push('an older file reads as its most recent version, with the parked ones lost')
 }
 
-function aVersionlessTurnIsOneVersion() {
-  const parsed = transcriptSnapshotSchema.parse(versionlessSnapshot())
+function anUnbranchedTurnIsOneTrail() {
+  const parsed = transcriptSnapshotSchema.parse(snapshotOf(conversation()))
 
-  // Absence is not an empty archive: a turn that has never been revised carries no array at all, and
-  // the message it shows is its content and the chips it holds. There is no second version to walk to,
-  // which is what the pane draws no pager for.
-  assert.equal(parsed.turns[0].userVersions, undefined, 'a turn written before versions has no archive')
-  assert.equal(parsed.turns[0].content, QUESTION, 'and reads as the one version it is')
-  assert.deepEqual(parsed.turns[0].mentionPaths, FIRST_CHIPS, 'with the chips that version was sent with')
+  assert.equal(parsed.turns.length, 5, 'a file with no branch points reads as the conversation it is')
+  assert.equal(parsed.turns[2].branchPoints, undefined, 'a turn nothing branched at carries no parked tail')
+  assert.equal(parsed.turns[2].branch, undefined, 'and no position to be read off it')
 
-  results.push('a version-less turn reads as a single version')
+  results.push('a turn with no branch points is a single trail')
 }
 
 // ---------------------------------------------------------------- what the readers see
 
-function exportCarriesTheLiveVersion() {
-  const rendered = renderExport(versionedSnapshot(), {
+function theReadersReadTheCheckedOutTrail() {
+  // The checked-out trail already carries the rewrite; the parked tail is the conversation as it was.
+  const rewritten = reviseUserTurn(conversation(), 'user-3', EDITED_QUESTION, SECOND_CHIPS)
+  const snapshot = snapshotOf(rewritten)
+
+  const rendered = renderExport(snapshot, {
     title: 'a conversation',
     format: 'markdown',
     instructionsFile: null,
     instructionsTruncated: false,
   })
+  assert.ok(rendered.includes(EDITED_QUESTION), 'the export carries the checked-out question')
+  assert.ok(!rendered.includes(SECOND_QUESTION), 'and nothing from the tail parked behind it')
+  assert.ok(!rendered.includes(DISCARDED_ANSWER), 'not even the answer the rewrite replaced')
 
-  assert.ok(rendered.includes(EDITED_QUESTION), 'the export carries the question as it stands')
-  assert.ok(rendered.includes(REWRITTEN), 'and the reply as it stands')
-  assert.ok(!rendered.includes(SECOND_QUESTION), 'a previous version of a message is not the message')
-  assert.ok(!rendered.includes(ANSWER), 'and neither is the reply a regenerate replaced')
+  const text = conversationText(snapshot)
+  assert.ok(text.includes(EDITED_QUESTION), 'search reads the checked-out trail')
+  assert.ok(!text.includes(SECOND_QUESTION), 'and never a parked one')
 
-  results.push('the export carries the live version and nothing parked behind it')
+  results.push('the export and the search read the checked-out trail only')
 }
 
-function searchReadsTheLiveVersion() {
-  const text = conversationText(versionedSnapshot())
+// ---------------------------------------------------------------- what a rewrite parks
 
-  assert.ok(text.includes(EDITED_QUESTION), 'search reads the question as it stands')
-  assert.ok(!text.includes(SECOND_QUESTION), 'and never a previous version of it')
+function anEditParksTheOldTail() {
+  const revised = reviseUserTurn(conversation(), 'user-3', EDITED_QUESTION, SECOND_CHIPS)
 
-  results.push('search reads the live version only')
+  // The checked-out trail is the edited question and the reply it is being re-run for. Everything from
+  // the edit onward — the words it used to say, the answer it was given, the message after that — is
+  // parked as one branch, so checking it out is what shows it.
+  assert.deepEqual(
+    revised.map((turn) => turn.id),
+    ['user-1', 'assistant-2', 'user-3', 'assistant-4'],
+    'the checked-out trail ends at the re-run reply'
+  )
+  const head = revised[2]
+  assert.deepEqual(head.content, EDITED_QUESTION, 'and the question at the branch point is the one just written')
+  assert.deepEqual(head.mentionPaths, SECOND_CHIPS, 'carrying the chips the edit left on it')
+  assert.equal(head.branchPoints?.length, 1, 'the tail it replaced is parked as one branch')
+  assert.deepEqual(
+    head.branchPoints?.[0]?.turns.map((turn) => turn.id),
+    ['user-3', 'assistant-4', 'user-5'],
+    'and the parked tail is the whole conversation from the edit onward'
+  )
+  assert.equal(head.branchPoints?.[0]?.turns[0]?.content, SECOND_QUESTION, 'which keeps the words it was written from')
+  assert.equal(head.branch, 1, 'the checked-out trail is the newest branch')
+
+  results.push('an edit parks the old tail and checks out the edited question with its re-run reply')
+}
+
+function aRegenerateParksTheOldTail() {
+  const rewritten = restartReplyTurn(conversation(), 'assistant-2')
+
+  // A regenerate branches at the reply: the question is untouched and stays in the checked-out trail,
+  // and the reply being written again is parked with everything after it.
+  assert.deepEqual(
+    rewritten.map((turn) => turn.id),
+    ['user-1', 'assistant-2'],
+    'the trail ends at the reply being re-run'
+  )
+  const head = rewritten[1]
+  assert.equal(head.role, 'assistant', 'the branch point is the reply')
+  assert.equal(head.content, '', 'which is being written from nothing')
+  assert.equal(head.branchPoints?.length, 1, 'the answer it replaced is parked as one branch')
+  assert.deepEqual(
+    head.branchPoints?.[0]?.turns.map((turn) => turn.id),
+    ['assistant-2', 'user-3', 'assistant-4', 'user-5'],
+    'and the parked tail is the reply and every turn after it'
+  )
+  assert.equal(head.branchPoints?.[0]?.turns[0]?.content, ANSWER, 'the answer it used to be is kept')
+  assert.equal(head.branch, 1, 'the checked-out trail is the newest branch')
+
+  results.push('a regenerate parks the old tail and checks out the same question with its re-run reply')
+}
+
+// ---------------------------------------------------------------- where a send lands
+
+function aSendAppendsToTheCheckedOutTrail() {
+  const revised = reviseUserTurn(conversation(), 'user-3', EDITED_QUESTION, SECOND_CHIPS)
+  const parked = revised[2].branchPoints?.[0]?.turns ?? []
+
+  const sent = [...revised, { id: 'user-9', role: 'user' as const, content: LATER_QUESTION, steps: [] }]
+
+  assert.equal(sent[sent.length - 1].id, 'user-9', 'a send lands at the end of the checked-out trail')
+  assert.ok(!parked.some((turn) => turn.id === 'user-9'), 'and never inside a parked one, which is a tail nobody is on')
+  assert.deepEqual(
+    revised[2].branchPoints?.[0]?.turns.map((turn) => turn.id),
+    ['user-3', 'assistant-4', 'user-5'],
+    'the parked tail is unchanged by a send'
+  )
+  assert.equal(revised[2].branch, 1, 'and the checked-out trail is still the one the send extended')
+
+  results.push('a new send appends to the checked-out trail, not to a parked one')
 }
 
 // ---------------------------------------------------------------- what a re-run is handed
 
-function aRerunsHistoryEndsAtTheActiveQuestion() {
-  const turns = versionedSnapshot().turns
+function aRerunsHistoryEndsAtTheTarget() {
+  const revised = reviseUserTurn(conversation(), 'user-3', EDITED_QUESTION, SECOND_CHIPS)
 
-  // Regenerating the first reply: the reply is what is being written again, so it is not part of the
-  // history it is written from, and neither is anything that followed it.
+  // Editing the second question: the turns before it, plus the question itself. The reply being
+  // written is left out — it is what the run is filling — and the parked tail is not part of any
+  // history: it is a branch the user can check out, not the conversation being answered.
   assert.deepEqual(
-    runHistoryFor(turns, 'assistant-2').map((turn) => turn.id),
+    runHistoryFor(revised, 'user-3').map((turn) => turn.id),
+    ['user-1', 'assistant-2', 'user-3'],
+    "a re-run's history ends at the question it answers"
+  )
+  assert.deepEqual(
+    runHistoryFor(revised, 'user-3').map((turn) => turn.content),
+    [QUESTION, ANSWER, EDITED_QUESTION],
+    'and it carries the question as it now stands'
+  )
+
+  const rewritten = restartReplyTurn(conversation(), 'assistant-2')
+  assert.deepEqual(
+    runHistoryFor(rewritten, 'assistant-2').map((turn) => turn.id),
     ['user-1'],
     'a regenerated reply continues from the turns before it'
   )
 
-  // Editing the second question: the turns before it, plus that question itself. The reply it is being
-  // re-run for is left out — it is what is being written — and so is the turn after it, which is the
-  // divergence an in-place rewrite accepts and the reason nothing has to be dropped.
-  const history = runHistoryFor(turns, 'user-3')
-  assert.deepEqual(
-    history.map((turn) => turn.id),
-    ['user-1', 'assistant-2', 'user-3'],
-    "a re-run's history is the turns before the target plus the target itself"
-  )
-  assert.deepEqual(
-    history.map((turn) => ({ role: turn.role, content: turn.content })),
-    [
-      { role: 'user', content: QUESTION },
-      { role: 'assistant', content: REWRITTEN },
-      { role: 'user', content: EDITED_QUESTION },
-    ],
-    'and the question it carries is the version in force, never one parked behind the pager'
-  )
-
-  results.push("a re-run's history ends at the target's active question, with the versioned reply excluded")
+  results.push("a re-run's history is the checked-out trail up to the turn it answers")
 }
 
 // ---------------------------------------------------------------- harness
 
 function main(): void {
-  step('the shape on disk', theArraysAreOptionalAdditive)
-  step('a version-less turn', aVersionlessTurnIsOneVersion)
-  step('the export', exportCarriesTheLiveVersion)
-  step('the search', searchReadsTheLiveVersion)
-  step('a re-run history', aRerunsHistoryEndsAtTheActiveQuestion)
+  step('an older file', theOldArraysAreDropped)
+  step('an unbranched turn', anUnbranchedTurnIsOneTrail)
+  step('the readers', theReadersReadTheCheckedOutTrail)
+  step('an edit', anEditParksTheOldTail)
+  step('a regenerate', aRegenerateParksTheOldTail)
+  step('a send', aSendAppendsToTheCheckedOutTrail)
+  step('a re-run history', aRerunsHistoryEndsAtTheTarget)
 
-  console.log(`transcript versions: ${results.length} passed`)
+  console.log(`transcript branches: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)
 }
 

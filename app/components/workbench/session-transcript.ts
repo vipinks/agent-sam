@@ -5,7 +5,6 @@ import {
   type TranscriptTurn,
 } from '@/conveyor/protocol/transcript'
 import { isInterrupted, isUndecidedPause, LOST_PAUSE_CODE, type AgentTurn } from './agent-session'
-import type { MessageVersion } from '@/conveyor/protocol/message-versions'
 
 /**
  * Turning the live transcript into something that can be saved, and back.
@@ -69,32 +68,16 @@ function detectInterrupted(turns: AgentTurn[]): boolean {
 }
 
 /**
- * Frozen into a snapshot: a version entry, copied.
+ * Frozen into a snapshot: one turn, with the tails parked at it frozen too.
  *
- * Copied for the reason the plan and the image references are — a version is a record of what a message
- * was, and a later edit to the live turn must not be able to reach back into it. The chips inside an
- * entry are copied one level down as well, because they are arrays themselves: a shallow copy would leave
- * the stored version holding the live message's own array, which is the same mistake with an extra step.
+ * Recursive because a branch point holds whole turns and those turns can be branch points of their
+ * own: a transcript that parked a tail by writing live objects down would store whatever the caller's
+ * array happened to hold a moment later, and one that stopped at the first level would lose the
+ * branches inside a parked tail. Each optional field is written only when it is there, so a turn that
+ * nothing has happened to is the same object it was before any of these keys existed.
  */
-function copyMessageVersion(version: MessageVersion): MessageVersion {
+function freezeTurn(turn: AgentTurn): TranscriptTurn {
   return {
-    content: version.content,
-    ...(version.mentionPaths && version.mentionPaths.length > 0 ? { mentionPaths: [...version.mentionPaths] } : {}),
-    ...(version.imageRefs && version.imageRefs.length > 0
-      ? { imageRefs: version.imageRefs.map((image) => ({ ...image })) }
-      : {}),
-  }
-}
-
-/**
- * Freeze the live transcript into a snapshot.
- *
- * Interruption is derived rather than trusted from the caller: a stale flag left over from a
- * previous load would otherwise mark a conversation the user has since continued.
- */
-export function serializeTranscript(state: TranscriptState): TranscriptSnapshot {
-  const interrupted = detectInterrupted(state.turns)
-  const turns = state.turns.map((turn) => ({
     id: turn.id,
     role: turn.role,
     content: turn.content,
@@ -113,15 +96,14 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
     ...(turn.imageRefs !== undefined && turn.imageRefs.length > 0
       ? { imageRefs: turn.imageRefs.map((image) => ({ ...image })) }
       : {}),
-    // The versions this message has been through, written only when there are any: a message that has
-    // never been rewritten carries no key, so its turn is stored byte for byte as it was before versions
-    // existed — the same rule every optional field here follows.
-    ...(turn.userVersions !== undefined && turn.userVersions.length > 0
-      ? { userVersions: turn.userVersions.map(copyMessageVersion) }
+    // The trails parked at this turn, written only when it is a branch point: an ordinary conversation
+    // carries no key, so a turn that never branched is stored byte for byte as it was before branches
+    // existed. The parked turns are frozen by this same function, which is what makes a branch a record
+    // rather than a live array a later edit could reach into.
+    ...(turn.branchPoints !== undefined && turn.branchPoints.length > 0
+      ? { branchPoints: turn.branchPoints.map((tail) => ({ turns: tail.turns.map(freezeTurn) })) }
       : {}),
-    ...(turn.replyVersions !== undefined && turn.replyVersions.length > 0
-      ? { replyVersions: turn.replyVersions.map(copyMessageVersion) }
-      : {}),
+    ...(turn.branch !== undefined ? { branch: turn.branch } : {}),
     // The plan as the turn ended with it. Written only when there is one, so an ordinary conversation
     // carries no key — the same reason the instructions record is conditional — and copied rather than
     // referenced so a later edit to the live turn cannot reach back into what was just written.
@@ -146,7 +128,18 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
           },
         }
       : {}),
-  }))
+  }
+}
+
+/**
+ * Freeze the live transcript into a snapshot.
+ *
+ * Interruption is derived rather than trusted from the caller: a stale flag left over from a
+ * previous load would otherwise mark a conversation the user has since continued.
+ */
+export function serializeTranscript(state: TranscriptState): TranscriptSnapshot {
+  const interrupted = detectInterrupted(state.turns)
+  const turns = state.turns.map(freezeTurn)
 
   return {
     version: TRANSCRIPT_VERSION,
@@ -170,15 +163,14 @@ export function serializeTranscript(state: TranscriptState): TranscriptSnapshot 
 }
 
 /**
- * Rebuild the live transcript from a snapshot.
+ * Thawed from a snapshot: one turn, with the tails parked at it thawed too.
  *
- * `null` — a session that has never been saved — becomes an empty conversation, which is what
- * opening a fresh session should look like.
+ * The mirror of `freezeTurn`, and recursive for the same reason. Nothing is defaulted: a key that is
+ * not in the file is not in the live turn either, so an ordinary conversation opens as exactly the
+ * turns it was saved with.
  */
-export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): TranscriptState {
-  if (!snapshot) return { turns: [], interrupted: false }
-
-  const turns: AgentTurn[] = snapshot.turns.map((turn: TranscriptTurn) => ({
+function thawTurn(turn: TranscriptTurn): AgentTurn {
+  return {
     id: turn.id,
     role: turn.role,
     content: turn.content,
@@ -195,15 +187,14 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
     ...(turn.imageRefs !== undefined && turn.imageRefs.length > 0
       ? { imageRefs: turn.imageRefs.map((image) => ({ ...image })) }
       : {}),
-    // Carried back so a conversation reopened from disk still offers the versions its messages have been
-    // through, which is the whole of what the pager walks. Absent for every turn that has never been
-    // rewritten, which is almost all of them.
-    ...(turn.userVersions !== undefined && turn.userVersions.length > 0
-      ? { userVersions: turn.userVersions.map(copyMessageVersion) }
+    // Carried back so a conversation reopened from disk still offers the branches its turns were
+    // rewritten into: the switcher is drawn from the turn that holds the position, and checking one out
+    // moves the trail the pane shows. Absent for every turn nothing branched at, which is almost all of
+    // them.
+    ...(turn.branchPoints !== undefined && turn.branchPoints.length > 0
+      ? { branchPoints: turn.branchPoints.map((tail) => ({ turns: tail.turns.map(thawTurn) })) }
       : {}),
-    ...(turn.replyVersions !== undefined && turn.replyVersions.length > 0
-      ? { replyVersions: turn.replyVersions.map(copyMessageVersion) }
-      : {}),
+    ...(turn.branch !== undefined ? { branch: turn.branch } : {}),
     // Carried back so a reopened conversation shows the checklist its turn was working from. It was
     // reconciled on the way out, so nothing here claims to be running — the turn is over, and that is
     // a fact about the file rather than something the reader has to work out.
@@ -227,7 +218,19 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
           },
         }
       : {}),
-  }))
+  }
+}
+
+/**
+ * Rebuild the live transcript from a snapshot.
+ *
+ * `null` — a session that has never been saved — becomes an empty conversation, which is what
+ * opening a fresh session should look like.
+ */
+export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): TranscriptState {
+  if (!snapshot) return { turns: [], interrupted: false }
+
+  const turns: AgentTurn[] = snapshot.turns.map(thawTurn)
 
   return {
     turns,

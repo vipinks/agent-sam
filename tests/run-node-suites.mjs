@@ -195,7 +195,7 @@ const SUITES = [
   },
   { name: 'session engine (additive-optional engineId, Sam default)', src: 'sessions/session-engine-test.ts' },
   {
-    name: 'transcript versions (additive-optional arrays, live version, re-run history)',
+    name: 'transcript branches (parked tails, checked-out trail, legacy read, re-run history)',
     src: 'sessions/transcript-versions-test.ts',
   },
   {

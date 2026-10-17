@@ -2,7 +2,6 @@ import { z } from 'zod'
 import { planStepSchema } from './plan'
 import { TURN_END_CAUSES } from './turn-end'
 import { imageAttachmentRefSchema } from './image-attachments'
-import { messageVersionSchema } from './message-versions'
 import { ENGINE_MODEL_MAX_LENGTH } from './engine'
 
 /**
@@ -74,7 +73,7 @@ const toolStepSchema = z.object({
   via: z.string().optional(),
 })
 
-const turnSchema = z.object({
+const turnBaseSchema = z.object({
   id: z.string(),
   role: z.enum(['user', 'assistant']),
   content: z.string(),
@@ -125,28 +124,6 @@ const turnSchema = z.object({
    * way to say "no images" — which is the absence.
    */
   imageRefs: z.array(imageAttachmentRefSchema).optional(),
-  /**
-   * The versions this message has been through, newest last, and the ones the bubble can walk back to.
-   *
-   * One array per role, because a turn is one message: a user's turn carries `userVersions`, a reply
-   * carries `replyVersions`, and the version in force is the turn's own `content` and `mentionPaths` —
-   * never an entry here. An edit commits a new user version and a regenerate commits a new reply one, and
-   * in both cases what the message said before is kept rather than dropped, which is the whole point: the
-   * words a user rewrote and the answer a user replaced are things they can still read.
-   *
-   * Each entry carries the text *and* the chips that version was carrying, because an edit can remove a
-   * file as well as change a sentence, and a version shown with the wrong chips would be a message that
-   * never existed. See `protocol/message-versions`, which owns the shape and the rule that reads it.
-   *
-   * Optional and additive, and it does *not* bump the version, by the rule every optional field here
-   * follows: a file written before a message could be rewritten simply has no key, an absent optional key
-   * is stripped rather than defaulted, and the message it describes is its content. `TRANSCRIPT_VERSION`
-   * moved only when a reader would otherwise get a stored state *wrong*; a reader that does not know
-   * these keys loses the archive and shows the live message, which is what every such reader did before.
-   */
-  userVersions: z.array(messageVersionSchema).optional(),
-  /** The same, for a reply: the answers this turn used to be. */
-  replyVersions: z.array(messageVersionSchema).optional(),
   /**
    * The plan the model had declared when this turn ended, if it had one.
    *
@@ -223,6 +200,60 @@ const turnSchema = z.object({
 })
 
 /**
+ * One parked trail: the turn records a branch point replaced, from that turn onward.
+ *
+ * Stored as the records themselves rather than as a diff or a reference, because a branch is a whole
+ * conversation and not a delta: the words it was written from, the cards its answers drew, the plan
+ * they were working on. Checking it out puts these records back in place, which is why the tail keeps
+ * the ending it had instead of being re-derived from words it no longer holds.
+ *
+ * A tail's own head carries no branch metadata — the branch point is a position in the conversation,
+ * and the position's switcher is drawn from the checked-out turn. What sits inside here is what a
+ * nested branch looks like from the outside: a trail that was itself a branch point, which reads as
+ * one when it is checked out.
+ */
+export interface TranscriptTail {
+  turns: TranscriptTurn[]
+}
+
+/**
+ * A turn, which may be a branch point.
+ *
+ * `turns` is the checked-out trail and nothing else, so every reader of a conversation — the pane, the
+ * export, the search, the re-run's history — reads the branch the user is on without knowing branches
+ * exist. `branchPoints` is what the turns that are *not* on screen are parked in, and `branch` says
+ * which of the trails is the one in force: the parked ones in creation order, with the checked-out one
+ * inserted at that index, so a walk is a change of index and never a reordering of history.
+ *
+ * Both are optional and additive. A turn nothing branched at carries neither key and is the single
+ * trail it always was; a file written before branches existed has a plain `turns` array, which is the
+ * checked-out trail by definition.
+ *
+ * The two version arrays this shape used to carry — `userVersions` on a question and `replyVersions`
+ * on a reply — are gone, and `TRANSCRIPT_VERSION` did not move for their going. A stored file that
+ * still carries them is read by this schema with the keys stripped, because an unknown key is not a
+ * field: it reads as the version that was live at the branch point, and the ones parked behind it are
+ * lost. That is the migration, and it is a read rather than a rewrite — no file on disk is touched.
+ */
+export type TranscriptTurn = z.infer<typeof turnBaseSchema> & {
+  branchPoints?: TranscriptTail[]
+  branch?: number
+}
+
+/**
+ * The turn as it is read and written, branch points and all.
+ *
+ * Lazy because a parked tail holds turns and a turn may be a branch point: the shape is recursive by
+ * construction, and nesting it is what lets a tail be switched to without flattening what it holds.
+ */
+export const turnSchema: z.ZodType<TranscriptTurn> = z.lazy(() =>
+  turnBaseSchema.extend({
+    branchPoints: z.array(z.object({ turns: z.array(turnSchema) })).optional(),
+    branch: z.number().int().nonnegative().optional(),
+  })
+)
+
+/**
  * A serialisable agent-session reducer state.
  *
  * `interrupted` records that a turn was cut off — by a restart, or by a window closed mid-run. It is
@@ -285,7 +316,6 @@ export const transcriptSnapshotSchema = z.object({
 
 export type TranscriptSnapshot = z.infer<typeof transcriptSnapshotSchema>
 export type TranscriptToolStep = z.infer<typeof toolStepSchema>
-export type TranscriptTurn = z.infer<typeof turnSchema>
 
 /** An empty transcript, for a session that has never been saved. */
 export function emptySnapshot(): TranscriptSnapshot {

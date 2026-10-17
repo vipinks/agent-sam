@@ -3,7 +3,7 @@ import type { FileDiff } from '@/conveyor/protocol/diff'
 import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
-import { liveMessageVersion, saysTheSameVersion, type MessageVersion } from '@/conveyor/protocol/message-versions'
+import { liveMessageVersion, saysTheSameVersion } from '@/conveyor/protocol/message-versions'
 import {
   AUTO_CONTINUE_MAX,
   planUnfinishedNotice,
@@ -97,6 +97,17 @@ export interface ToolStep {
   via?: string
 }
 
+/**
+ * One parked trail: the turn records a branch point replaced, from that turn onward.
+ *
+ * The live model's counterpart of the record's `TranscriptTail`, and structurally the same for the
+ * same reason the turns themselves are: a snapshot is handed straight to the reducer, and a second
+ * shape to keep in step would be a translation layer with nothing to translate.
+ */
+export interface BranchTail {
+  turns: AgentTurn[]
+}
+
 /** A transcript turn. Assistant turns carry both their prose and any tool steps interleaved after it. */
 export interface AgentTurn {
   id: string
@@ -132,21 +143,25 @@ export interface AgentTurn {
    */
   imageRefs?: ImageAttachmentRef[]
   /**
-   * The versions this message has been through, and the ones the bubble can walk back to.
+   * The trails this turn's position has held, when it is a branch point.
    *
-   * One array per role, because a turn is one message: a user's own carries `userVersions`, a reply
-   * carries `replyVersions`, and the version in force is the turn's own `content` and `mentionPaths` —
-   * never an entry in either array. An edit commits a new user version and a regenerate commits a new
-   * reply one; what the message said before is kept rather than dropped, which is what makes the words a
-   * user rewrote and the answer a user replaced still readable.
+   * An edit and a regenerate park the tail they replace — the question, its answer, and every turn
+   * after them — rather than overwriting it, and this array is where the trails that are *not* on
+   * screen live, in creation order. `turns` stays the checked-out trail, so every reader of a
+   * conversation reads one branch without having to know there are others.
    *
-   * Written only when a message has been through more than one version, so an ordinary conversation is
-   * the same object it was before rewriting existed. See `protocol/message-versions` for the rule that
-   * reads them.
+   * Written only when a turn is a branch point, so an ordinary conversation is the same object it was
+   * before rewriting branched.
    */
-  userVersions?: MessageVersion[]
-  /** The same, for a reply: the answers this turn used to be. */
-  replyVersions?: MessageVersion[]
+  branchPoints?: BranchTail[]
+  /**
+   * Which of those trails is checked out: an index into the parked tails with this turn's own trail
+   * inserted at that position, counting from zero.
+   *
+   * Present only beside `branchPoints`. A walk changes this number and nothing else about the history,
+   * which is what keeps a branch's position its own rather than letting "newest" mean "on screen".
+   */
+  branch?: number
   /**
    * Files this turn's message attached that could not be included, in the order they were reported.
    *
@@ -890,20 +905,23 @@ export function startUserTurn(
 }
 
 /**
- * Revise a user message in place, keeping the words it had as a previous version.
+ * Revise a user message, branching at it.
  *
- * The turn keeps its id and its place, which is what lets the reply it was answered with be written
- * again where it stands instead of at the end of a shortened conversation. What the message said before —
- * its text, and the chips it was carrying at the time — is appended to `userVersions` rather than
- * dropped, so the version the user replaced is still there to read.
+ * The turn keeps its id and its place — which is what leaves the reply it was answered with addressable
+ * under the id it already had — and the tail it stood at the head of is parked rather than cut. The
+ * words it used to say, the answer they were given, and every turn after that are one branch, so the
+ * user can read them by checking the branch out instead of watching them disappear.
+ *
+ * The checked-out trail this returns is the edited question plus the reply being written again for it,
+ * and nothing after that reply: those later turns are answers to the words that were replaced, and
+ * showing them beside a new answer would be the divergence this model exists to remove.
  *
  * The images are deliberately untouched: the editor has no image controls, so a message being revised
- * keeps the references it had. A version entry carries them because an archive is a record of a whole
- * message; nothing here can change them, so nothing here has an opinion about them.
+ * keeps the references it had.
  *
- * A save that changes nothing commits no version at all, which `saysTheSameVersion` decides. The
- * alternative is a pager offering a walk between two identical messages, which is a control with nothing
- * to show.
+ * A save that changes nothing opens no branch at all, which `saysTheSameVersion` decides. The
+ * alternative is a switcher offering a walk between two identical conversations, which is a control
+ * with nothing to show.
  */
 export function reviseUserTurn(
   turns: AgentTurn[],
@@ -911,14 +929,22 @@ export function reviseUserTurn(
   text: string,
   mentionPaths: readonly string[]
 ): AgentTurn[] {
-  return replaceTurn(turns, turnId, (turn) => {
-    if (turn.role !== 'user') return turn
+  const index = turns.findIndex((turn) => turn.id === turnId)
+  if (index === -1) return turns
 
-    const previous = liveMessageVersion(turn)
-    const revised = withMessage(turn, text, mentionPaths)
-    if (saysTheSameVersion(previous, liveMessageVersion(revised))) return revised
-    return { ...revised, userVersions: [...(turn.userVersions ?? []), previous] }
-  })
+  const turn = turns[index]
+  if (turn.role !== 'user') return turns
+
+  const revised = withMessage(stripBranch(turn), text, mentionPaths)
+  if (saysTheSameVersion(liveMessageVersion(turn), liveMessageVersion(revised))) return turns
+
+  const head = branchFrom(turn, revised, turns.slice(index))
+  const trail = [...turns.slice(0, index), head]
+  // The reply that answered the old question is parked with it, so the new trail ends with the reply
+  // this one is being written again — under the id that reply already had, which is what the run fills.
+  const answered = turns[index + 1]
+  if (answered && answered.role === 'assistant') trail.push(restartedReply(answered))
+  return trail
 }
 
 /** The turn's message fields replaced, with the chips key present only when there are chips. */
@@ -932,31 +958,110 @@ function withMessage(turn: AgentTurn, text: string, mentionPaths: readonly strin
 }
 
 /**
- * The reply turn ready to be written again: its prose parked as a previous version, and nothing else of
- * the answer left behind.
+ * Answer a reply again, branching at it.
  *
- * Exactly the turn a run starts on, under the id the turn already had — which is the whole of what
- * "written in place" means, and what leaves every later turn where it was. The prose goes to
- * `replyVersions`; the cards, the plan, the seams and the ending go nowhere, because they are the work of
- * the answer being replaced and nothing else can be done with them: a card is not a thing a pager can
- * show on its own, and a checklist claiming work that is being written again would describe a turn that
- * no longer exists. A reply that said nothing has nothing to park, so it is left with the archive it had.
+ * The reply keeps its id and its place, and the tail it stood at the head of is parked: the answer it
+ * used to be and every turn written after it, which were written from a conversation this run is
+ * replacing. The checked-out trail is the same question plus a reply being written from nothing, so
+ * nothing after the branch point is shown as if it had been derived from the new answer.
  */
 export function restartReplyTurn(turns: AgentTurn[], turnId: string): AgentTurn[] {
-  return replaceTurn(turns, turnId, (turn) => {
-    if (turn.role !== 'assistant') return turn
+  const index = turns.findIndex((turn) => turn.id === turnId)
+  if (index === -1) return turns
 
-    const previous = liveMessageVersion(turn)
-    const archived = previous.content === '' ? (turn.replyVersions ?? []) : [...(turn.replyVersions ?? []), previous]
+  const turn = turns[index]
+  if (turn.role !== 'assistant') return turns
 
-    return {
-      id: turn.id,
-      role: 'assistant',
-      content: '',
-      steps: [],
-      ...(archived.length > 0 ? { replyVersions: archived } : {}),
-    }
-  })
+  const head = branchFrom(turn, restartedReply(turn), turns.slice(index))
+  return [...turns.slice(0, index), head]
+}
+
+/**
+ * Check out one of the trails parked at a branch point, and hand back the whole trail that results.
+ *
+ * A walk moves the conversation, not a bubble: the trail from the branch point onward is replaced by
+ * the one checked out, so the question, the answer, and the turns after them all change together. The
+ * position walked away from is parked where it was created, which is what keeps `1` meaning the same
+ * trail however many times the switcher is used.
+ *
+ * Out of range, absent, or already checked out: nothing moves, and the transcript is returned as it
+ * is rather than rebuilt around a branch that is not there.
+ */
+export function checkoutBranch(turns: AgentTurn[], turnId: string, position: number): AgentTurn[] {
+  const index = turns.findIndex((turn) => turn.id === turnId)
+  if (index === -1) return turns
+
+  const head = turns[index]
+  if (position - 1 === (head.branch ?? 0)) return turns
+
+  const trails = trailsAt(head, turns.slice(index))
+  const target = trails[position - 1]
+  if (!target || target.length === 0) return turns
+
+  // Every other trail stays where it was created, including the one just left — which is the whole of
+  // what makes this a walk rather than a swap: the order is creation's, and only the index moves.
+  const parked = trails.filter((_, at) => at !== position - 1).map((trail) => ({ turns: trail }))
+  const nextHead = withBranch(target[0], parked, position - 1)
+  return [...turns.slice(0, index), nextHead, ...target.slice(1)]
+}
+
+/** How many trails this turn's position has held, the checked-out one included. */
+export function branchCount(turn: AgentTurn): number {
+  return (turn.branchPoints?.length ?? 0) + 1
+}
+
+/** Which of them is on screen, counting from one. */
+export function branchPosition(turn: AgentTurn): number {
+  return (turn.branch ?? 0) + 1
+}
+
+/**
+ * The turn as the checked-out head of a new branch.
+ *
+ * The trail being replaced keeps the position it was created at, and the new one is created last — so
+ * after a rewrite the pane shows the highest number, and walking back reaches every trail that came
+ * before it in the order they were made.
+ */
+function branchFrom(previous: AgentTurn, head: AgentTurn, live: AgentTurn[]): AgentTurn {
+  const parked = trailsAt(previous, live).map((trail) => ({ turns: trail }))
+  return withBranch(head, parked, parked.length)
+}
+
+/** The trails a branch point holds, in creation order, with the checked-out one at its own position. */
+function trailsAt(head: AgentTurn, live: AgentTurn[]): AgentTurn[][] {
+  const parked = (head.branchPoints ?? []).map((tail) => tail.turns)
+  const at = Math.min(head.branch ?? 0, parked.length)
+  return [...parked.slice(0, at), tailOf(live), ...parked.slice(at)]
+}
+
+/**
+ * A trail as it is parked: its head carries no branch metadata of its own.
+ *
+ * The branch point is a position in the conversation, and the switcher is drawn from the turn that
+ * holds the position — so a parked copy of that turn carrying its own list would duplicate the same
+ * trails one level down every time it was branched again, which is how a transcript grows by squaring
+ * rather than by branching.
+ */
+function tailOf(live: AgentTurn[]): AgentTurn[] {
+  return [stripBranch(live[0]), ...live.slice(1)]
+}
+
+/** The turn with no branch metadata: what a parked copy holds. */
+function stripBranch(turn: AgentTurn): AgentTurn {
+  const next = { ...turn }
+  delete next.branchPoints
+  delete next.branch
+  return next
+}
+
+/** The turn as a branch point, or the turn itself when there is nothing to switch to. */
+function withBranch(turn: AgentTurn, branchPoints: BranchTail[], branch: number): AgentTurn {
+  return branchPoints.length > 0 ? { ...turn, branchPoints, branch } : turn
+}
+
+/** The reply turn ready to be written again: a run's starting shape, under the id it already had. */
+function restartedReply(turn: AgentTurn): AgentTurn {
+  return { id: turn.id, role: 'assistant', content: '', steps: [] }
 }
 
 /**

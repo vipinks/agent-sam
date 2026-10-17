@@ -3,15 +3,15 @@
  *
  * Editing a message and regenerating a reply both used to cut the transcript: everything after the turn
  * being acted on was removed, because it had been an answer to words the user was about to change. They
- * are rewritten in place now — the turn keeps its place and its id, what it said before is kept as a
- * previous version beside the new one, and nothing after it is removed.
+ * are branch points now — the turn keeps its place and its id, the tail it stood at the head of is parked
+ * as a branch rather than removed, and the trail that is checked out ends at the reply being written again.
  *
- * What the model is handed is still the conversation up to the question being answered, and that is what
- * this rule is: a prefix, never a cut. A reply written again has to be written from the history it was
- * written from the first time, or the run would answer a question nobody asked; and the turns after the
- * target are left out for the same reason, which is the divergence an in-place rewrite costs and accepts.
- * Later replies stay exactly as they are — written from the older words — and the pane shows that rather
- * than pretending otherwise.
+ * What the model is handed is the conversation up to the question being answered, and that is what this
+ * rule is: a prefix, never a cut. A reply written again has to be written from the history it was written
+ * from the first time, or the run would answer a question nobody asked. The turns after the target are
+ * left out for that same reason, and they are also not on screen: what followed the old answer was written
+ * from a conversation that is no longer checked out, so leaving it beside the new answer would be the
+ * divergence the branch model removes rather than an accepted cost.
  *
  * Generic over anything carrying an `id`, so the live turns and the stored ones read through it
  * unchanged: the renderer's `AgentTurn` and the record's turn are structurally the same, and the rule has
@@ -47,13 +47,14 @@ export function truncateFromTurn<T extends { id: string }>(turns: readonly T[], 
  *
  * The halves differ because the turns acted on differ. A message the user edited *is* what the model is
  * asked — the words just written are the question — so it is included, and what is included is the
- * version in force: the turn's own `content` and `mentionPaths`, never a version parked behind it. A
- * reply being rewritten is the answer, so it is left out and its question is the last thing in the
- * result either way.
+ * question as it now stands: the turn's own `content` and `mentionPaths`, never a parked branch's. A
+ * reply being rewritten is the answer, so it is left out and its question is the last thing in the result
+ * either way.
  *
- * Everything after the target is left out, which is the one thing this rule and the transcript on screen
- * deliberately disagree about: the transcript keeps every later turn, and the history is the context this
- * run is answering from rather than a description of the conversation as it now stands.
+ * Everything after the target is left out, which is what the trail that is checked out does too: the
+ * turns after a branch point belong to the branch it replaced, and this rule and the pane agree about
+ * where the conversation ends. The transcript's own `turns` array is that trail, so this rule reads the
+ * branch the user is on without knowing branches exist.
  *
  * An id that is not in the transcript returns the transcript as it is, for the reason the cut above does:
  * a stale id arrives from a row that has since been re-rendered, and a prefix returned for it would

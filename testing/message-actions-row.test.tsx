@@ -165,43 +165,48 @@ describe('the row a bubble carries at its bottom', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
-  it('draws the version pager only for a message that has been through more than one', async () => {
+  it('draws the branch switcher only at a turn that is a branch point', async () => {
     const user = userEvent.setup()
-    // The same message, with the words it used to have parked beside it.
-    const revised: AgentTurn = { ...userTurn(), userVersions: [{ content: 'rename the lexer' }] }
+    const onCheckoutBranch = vi.fn()
+    // The same message, with the conversation it used to be part of parked beside it.
+    const revised: AgentTurn = {
+      ...userTurn(),
+      branchPoints: [{ turns: [{ ...userTurn(), content: 'rename the lexer' }] }],
+      branch: 1,
+    }
     render(
       <>
-        <MessageBubble message={revised} canEdit onResend={vi.fn()} />
+        <MessageBubble message={revised} canEdit onResend={vi.fn()} onCheckoutBranch={onCheckoutBranch} />
         <MessageBubble message={agentTurn()} canEdit onRegenerate={vi.fn()} />
       </>
     )
 
-    // The revised message is at 2/2 and offers the walk; the reply, which has never been rewritten,
-    // offers nothing — there is no second version for a control to reach.
+    // The rewrite is at 2/2 and offers the switch; the reply, which stands on one trail, offers nothing —
+    // there is no second branch for a control to reach.
     const row = actionsOn(USER_TEXT)
     expect(within(row).getByText('2/2')).toBeTruthy()
-    expect(within(row).getByRole('button', { name: 'Previous version' })).toBeTruthy()
+    expect(within(row).getByRole('button', { name: 'Previous branch' })).toBeTruthy()
     expect(within(actionsOn(AGENT_TEXT)).queryByText('2/2')).toBeNull()
-    expect(within(actionsOn(AGENT_TEXT)).queryByRole('button', { name: 'Previous version' })).toBeNull()
+    expect(within(actionsOn(AGENT_TEXT)).queryByRole('button', { name: 'Previous branch' })).toBeNull()
 
-    // Walking back swaps the message for the version it used to be, and the walk forward brings it
-    // back with its chips.
-    await user.click(within(row).getByRole('button', { name: 'Previous version' }))
-    expect(within(row).getByText('1/2')).toBeTruthy()
-    expect(screen.getByText('rename the lexer')).toBeTruthy()
-    await user.click(within(row).getByRole('button', { name: 'Next version' }))
-    expect(within(row).getByText('2/2')).toBeTruthy()
-    expect(screen.getByText(USER_TEXT)).toBeTruthy()
+    // Walking asks the pane for one position of the whole trail: a branch is more than this bubble's
+    // words, and the bubble holds no transcript to move.
+    await user.click(within(row).getByRole('button', { name: 'Previous branch' }))
+    expect(onCheckoutBranch).toHaveBeenCalledWith(revised.id, 1)
   })
 
-  it('draws no pager while the pane says the conversation is moving', () => {
-    // The verdict the pane passes down when a run is in flight: the version a pager would walk to is
-    // the one being written, so there is nothing to offer yet.
-    const revised: AgentTurn = { ...agentTurn(), replyVersions: [{ content: 'The lexer is renamed.' }] }
+  it('draws no switcher while the pane says the conversation is moving', () => {
+    // The verdict the pane passes down when a run is in flight: the trail a switch would reach is the one
+    // being written, so there is nothing to offer yet.
+    const revised: AgentTurn = {
+      ...agentTurn(),
+      branchPoints: [{ turns: [{ ...agentTurn(), content: 'The lexer is renamed.' }] }],
+      branch: 1,
+    }
     render(<MessageBubble message={revised} />)
 
     expect(screen.queryByText('2/2')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Previous version' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Previous branch' })).toBeNull()
   })
 })
 

@@ -6,6 +6,36 @@ coding assistant.
 
 <br>
 
+## 2026-10-17: v1.7.1 — Edit and regenerate become branch points, and one switcher moves the whole trail
+
+- **A conversation is a trail with branches now, and the record's `turns` array is the trail that is checked
+  out.** An edit and a regenerate park the tail they replace — the question, its answer, and every turn after
+  them — in `branchPoints` on the turn that is the branch point, in creation order, and `branch` says which
+  position is on screen. Checking a branch out swaps the whole trail from that turn onward, so the conversation
+  moves as a conversation rather than one bubble changing its words.
+- **The two pagers are one branch switcher.** A message's own action row used to draw a version pager on each
+  half of the pair; the turn that holds the branch point now draws one `‹ n/m ›` control, on whichever side of
+  the pair it is. It is drawn only when the turn has more than one branch and only while the pane says the
+  conversation is settled, and it asks the pane for a position rather than editing the bubble: a branch is more
+  than one message's words.
+- **An edit parks the tail it stood at the head of.** The checked-out trail becomes the edited question plus the
+  reply being written again for it, and nothing after that reply. The reply keeps its id, so the run fills the
+  turn it always filled; the message that followed the old answer was written from words this edit changed, and
+  it is one switch away rather than shown beside a new answer.
+- **A regenerate parks the tail it stood at the head of.** The checked-out trail becomes the same question plus
+  a reply written from nothing, and every turn that followed the old answer goes with it — the answer it used
+  to be, the question after it, the answer to that, and the card and checklist that answer's work left behind.
+- **The divergence v1.7.0 accepted is retired.** A conversation no longer keeps answers that were written from
+  words it no longer holds: a parked tail keeps the words it was written from, and checking it out is what
+  shows them. Everything that reads the conversation — the pane, the re-run's history, the export, the
+  clipboard, the search, a reopen, the plan — reads the checked-out trail, which is exactly the `turns` array.
+- **The record's two version arrays are gone, and `TRANSCRIPT_VERSION` stays 3.** `userVersions` and
+  `replyVersions` were optional-additive when they landed; a stored file that still carries them is read with
+  the keys stripped, which reads as the version that was live at the branch point and loses the ones parked
+  behind it. That is a read rather than a rewrite: no file on disk is touched by this build opening it.
+
+<br>
+
 ## 2026-10-16: v1.7.0 — Edited and regenerated messages keep every version, a conversation moves between projects, and the explorer row answers right-click
 
 - **An edit and a regenerate rewrite in place, and what was there is kept beside what is.** Both used to cut: an

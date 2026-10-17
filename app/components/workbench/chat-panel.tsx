@@ -97,6 +97,7 @@ import {
   ABANDONED_PAUSE_CODE,
   abandonUndecidedCalls,
   applyAgentChunk,
+  checkoutBranch,
   currentEndNotice,
   currentPlan,
   endTurn,
@@ -1655,12 +1656,12 @@ export function ChatPanel() {
    * replaced has to be on disk before anything else can fail, or the words they wanted to keep would be
    * the ones that went missing.
    *
-   * The history the run is handed ends at this message, and it carries the version in force rather than
-   * any of the ones parked behind it — which is why it is read off the turn instead of assembled here. The
-   * reply that follows is left out of it, because that reply is what is being written again, and so is
-   * everything after that. That last part is the divergence an in-place rewrite accepts: a later reply
-   * stays what it was, written from the older words, and the pane shows that rather than pretending the
-   * conversation was re-derived.
+   * The history the run is handed ends at this message, and it carries the question as it now stands.
+   * The reply that follows is left out of it, because that reply is what is being written again. Nothing
+   * after this turn is left on screen either: the tail the edit replaced — the words it used to say, the
+   * answer they were given, and every turn after them — is parked as a branch, and checking it out is
+   * what shows it. That is the branch model, and it is why no reader of this conversation ever sees an
+   * answer that was written from words it no longer holds.
    *
    * The message keeps its images. The editor has no image controls, and nothing here is a send from the
    * composer, so the references the message already carried are the references it has.
@@ -1676,24 +1677,25 @@ export function ChatPanel() {
         if (!target || target.role !== 'user') return
 
         const revised = reviseUserTurn(messagesRef.current, turnId, text, chips)
-        // The message is answered, so the reply that answered it is written again. A message with no reply
-        // after it yet has nothing to write again, and the run starts one at the end as a send would.
-        const following = revised[revised.findIndex((turn) => turn.id === turnId) + 1]
-        const answered = following && following.role === 'assistant' ? restartReplyTurn(revised, following.id) : revised
-        updateMessages(answered)
+        updateMessages(revised)
         await sessionsRef.current.saveNow()
+        // The trail the edit handed back ends at the reply being written again, when the message had one:
+        // that id is what the run fills. A message with no reply yet has nothing to write again, and the
+        // run starts one at the end as a send would.
+        const replay = revised[revised.length - 1]
+        const rewriting = replay && replay.role === 'assistant' ? replay.id : undefined
         // The conversation's engine, and its Buddy's role and server list, are the record's: read off the
         // window here, where they are current, rather than handed over by a create as a first send's are.
         // The chips are the ones the editor was left with, which is also what the revised turn carries.
         await runAgentTurn(
-          answered,
-          runHistoryFor(answered, turnId),
+          revised,
+          runHistoryFor(revised, turnId),
           chips,
           sessionsRef.current.openId ?? '',
           sessionsRef.current.engineId,
           sessionsRef.current.buddyRolePrompt,
           sessionsRef.current.buddyMcpSubset,
-          following && following.role === 'assistant' ? following.id : undefined
+          rewriting
         )
       })()
     },
@@ -1703,9 +1705,10 @@ export function ChatPanel() {
   /**
    * Answer the message again, writing the reply where it stands.
    *
-   * The reply keeps its place and its id, and the answer it is replacing is kept as a previous version
-   * beside the new one — the same rule the edit follows, on the other half of the pair. Everything after
-   * it stays exactly as it was.
+   * The reply keeps its place and its id, and the tail it stood at the head of is parked: the answer it
+   * used to be and every turn written after it, which were written from a conversation this run is
+   * replacing. The statement is the branch model's exactly — nothing that followed is left on screen as
+   * if it had been derived from the new answer, and one switch at this turn brings it all back.
    *
    * The save comes before the run, in the same order and for the same reason the edit does it: the answer
    * the user is replacing has to be on disk before the run that replaces it can fail.
@@ -1747,6 +1750,31 @@ export function ChatPanel() {
       })()
     },
     [isStreaming, pending, runAgentTurn, updateMessages]
+  )
+
+  /**
+   * Check out one of the branches parked at a turn.
+   *
+   * The whole trail from that turn onward moves, which is why the pane acts rather than the bubble: the
+   * question, its answer, and every turn after them are one conversation, and showing a branch means
+   * showing all of it. A settled conversation only — a trail still being written has no position to
+   * switch to — and the save follows the switch for the reason it follows every other rewrite: what is
+   * on screen has to be what disk holds.
+   *
+   * Nothing is sent. Checking a branch out reads a conversation that was already had, so it starts no run
+   * and appends no turn.
+   */
+  const checkoutReplyBranch = useCallback(
+    (turnId: string, position: number) => {
+      if (isStreaming || pending) return
+      const next = checkoutBranch(messagesRef.current, turnId, position)
+      // A walk to the branch already on screen is not a change, and rewriting the transcript for it would
+      // be a save recording that nothing happened.
+      if (next === messagesRef.current) return
+      updateMessages(next)
+      void sessionsRef.current.saveNow()
+    },
+    [isStreaming, pending, updateMessages]
   )
 
   /**
@@ -2248,12 +2276,13 @@ export function ChatPanel() {
                   >
                     {/* The controls that act on the transcript are unavailable while the conversation is
                     moving: a run in flight is producing the turn an edit or a regenerate would write
-                    again — and the version a pager would walk to is the one being written — while a
-                    paused decision belongs to a turn that has not ended. All of it is a fact about the
+                    again — and the trail a branch switch would check out is the one being written — while
+                    a paused decision belongs to a turn that has not ended. All of it is a fact about the
                     pane, so it is the pane that decides. */}
                     <MessageBubble
                       message={messages[item.index]}
                       canEdit={editAllowed}
+                      onCheckoutBranch={checkoutReplyBranch}
                       // The conversation these turns belong to, which is where a turn's images are stored:
                       // a chip asks that folder for its bytes, so a message sent in this session and a
                       // message restored from its file are read the same way.

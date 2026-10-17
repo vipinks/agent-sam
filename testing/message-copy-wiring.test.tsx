@@ -141,19 +141,22 @@ describe('copy on a message bubble', () => {
     expect(copied).not.toContain(PLAN_TEXT)
   })
 
-  it('copies the version that is live while a previous one is on screen', async () => {
+  it('copies the message as it stands, never the branch it has parked', async () => {
     const { user, writeText } = withClipboard()
-    // A message the user has rewritten: the words it used to have are parked behind the pager.
-    const revised: AgentTurn = { ...userTurn(), userVersions: [{ content: 'Rename the lexer' }] }
-    render(<MessageBubble message={revised} canEdit />)
+    // A message the user has rewritten: the words it used to have are parked in a branch, and the copy
+    // control sits beside the words on screen.
+    const revised: AgentTurn = {
+      ...userTurn(),
+      branchPoints: [{ turns: [{ ...userTurn(), content: 'Rename the lexer' }] }],
+      branch: 1,
+    }
+    render(<MessageBubble message={revised} canEdit onCheckoutBranch={vi.fn()} />)
 
-    // Walked back to what the message used to say...
-    await user.click(screen.getByRole('button', { name: 'Previous version' }))
-    expect(screen.getByText('1/2')).toBeTruthy()
-    expect(screen.getByText('Rename the lexer')).toBeTruthy()
+    // The parked branch is not on screen, and the copy takes what is: the clipboard is what the message
+    // *is*, which is the checked-out trail's version and nothing else.
+    expect(screen.queryByText('Rename the lexer')).toBeNull()
+    expect(screen.getByText('2/2')).toBeTruthy()
 
-    // ...and the copy still takes the message as it stands. A previous version is a thing this pane can
-    // show and nothing else reads: the clipboard is what the message *is*.
     await user.click(screen.getByRole('button', { name: 'Copy message' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
     expect(writeText).toHaveBeenCalledWith(USER_TEXT)

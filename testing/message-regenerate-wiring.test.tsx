@@ -14,10 +14,11 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  * regenerate control on an agent bubble, and on a *reply* only — a control that needs a reply to act on
  * has no business on the user's own message, and one offered mid-run would be offering to rewrite a turn
  * that is still being written. The second is what the run is: the reply is written again where it stands
- * — the same turn, the same id — with the answer it replaces kept as a previous version beside the new
- * one, and the agent continues from the message that reply was answering, with no second copy of that
- * message sent on the user's behalf, because the user did not say anything new. Nothing after it moves.
- * The third is that both versions reach the record on disk, not only the screen.
+ * — the same turn, the same id — with the tail it stood at the head of parked as a branch, and the agent
+ * continues from the message that reply was answering, with no second copy of that message sent on the
+ * user's behalf, because the user did not say anything new. What followed the old answer was written from
+ * a conversation this run is replacing, so it is parked with it rather than left on screen. The third is
+ * that both trails reach the record on disk, not only the screen.
  *
  * The history assertion is made against the payload itself rather than against a count of turns on
  * screen. "Re-ran on the remaining history" is a claim about what the loop was handed, and the only place
@@ -242,7 +243,7 @@ describe('the regenerate affordance', () => {
 })
 
 describe('regenerating the last reply', () => {
-  it('keeps the reply it replaces as a previous version, and walks back to it', async () => {
+  it('parks the reply it replaces as a branch, and walks back to it', async () => {
     const { stub, sent, transcripts } = renderChat()
     await loaded()
 
@@ -269,8 +270,8 @@ describe('regenerating the last reply', () => {
     expect(screen.queryByText('Reading src/lexer.ts')).toBeNull()
     expect(screen.queryByText('Rewrite the lexer')).toBeNull()
 
-    // While the run is in flight nothing offers to walk the versions: the one it would walk to is the
-    // one being written. The turn is the same turn, though, and this stream addresses its id.
+    // While the run is in flight nothing offers to switch branches: a trail still being written has no
+    // position to switch to. The turn is the same turn, though, and this stream addresses its id.
     await waitFor(() => expect(regenerateButtons().length).toBe(0))
     expect(screen.queryByText('2/2')).toBeNull()
 
@@ -279,28 +280,31 @@ describe('regenerating the last reply', () => {
     stub.emit(channel, { type: 'end' })
     await waitFor(() => expect(screen.getByText('Let me look again.')).toBeTruthy())
 
-    // Two versions now, the newest on screen — and the answer this reply replaced one click away.
+    // Two branches at that reply now, the newest on screen — and the answer it replaced one click away,
+    // with the whole trail that followed it.
     await waitFor(() => expect(screen.getByText('2/2')).toBeTruthy())
-    await userEvent.click(screen.getByRole('button', { name: 'Previous version' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Previous branch' }))
     expect(screen.getByText('1/2')).toBeTruthy()
     expect(screen.getByText(DISCARDED)).toBeTruthy()
-    // And forward again: a re-run leaves the newest version the one that is on screen.
-    await userEvent.click(screen.getByRole('button', { name: 'Next version' }))
+    // And forward again: a walk leaves the newest branch the one that is on screen.
+    await userEvent.click(screen.getByRole('button', { name: 'Next branch' }))
     expect(screen.getByText('2/2')).toBeTruthy()
     expect(screen.getByText('Let me look again.')).toBeTruthy()
 
-    // Written through the same save path a turn boundary uses, so the version is on disk and not only
-    // on screen — under the reply's own id, because it is the same turn written again. And the file is
-    // still the version this build reads.
+    // Written through the same save path a turn boundary uses, so the branch is on disk and not only on
+    // screen — under the reply's own id, because it is the same turn written again. And the file is still
+    // the version this build reads.
     const stored = transcripts.files[SESSION_ID]
     expect(stored.turns.map((turn) => turn.id)).toEqual(['user-1', 'assistant-2', 'user-3', 'assistant-4'])
-    expect(stored.turns[3].replyVersions).toEqual([{ content: DISCARDED }])
+    const parked = stored.turns[3].branchPoints?.[0]?.turns ?? []
+    expect(parked.map((turn) => turn.content)).toEqual([DISCARDED])
+    expect(stored.turns[3].branch).toBe(1)
     expect(stored.version).toBe(TRANSCRIPT_VERSION)
   })
 })
 
 describe('regenerating an earlier reply', () => {
-  it('rewrites it where it stands, and leaves every later turn in place', async () => {
+  it('rewrites it where it stands, and parks every later turn with the answer it replaced', async () => {
     const { stub, sent, transcripts } = renderChat({ turns: withLaterTurn() })
     await loaded()
 
@@ -315,32 +319,39 @@ describe('regenerating an earlier reply', () => {
     // it is not in the history, and neither is anything that followed it.
     expect(lastRun(sent).messages).toEqual([{ role: 'user', content: QUESTION }])
 
-    // Every turn after it is still on screen — the second question, the reply to it, and the message
-    // after that. Only the reply being rewritten is empty, and only until its answer arrives.
+    // Everything after the reply is parked rather than shown: the second question and the answer to it
+    // were written from a conversation this run is replacing, so the checked-out trail is the question
+    // and the reply being written, and nothing else.
     expect(screen.queryByText(ANSWER)).toBeNull()
-    expect(screen.getByText(SECOND_QUESTION)).toBeTruthy()
-    expect(screen.getByText(DISCARDED)).toBeTruthy()
-    expect(screen.getByText(LATER_QUESTION)).toBeTruthy()
+    expect(screen.queryByText(SECOND_QUESTION)).toBeNull()
+    expect(screen.queryByText(DISCARDED)).toBeNull()
+    expect(screen.queryByText(LATER_QUESTION)).toBeNull()
 
-    // And the record already holds the answer that was, parked under the reply's own id, with every
-    // later turn written down exactly as it was.
+    // And the record already holds the trail that was, parked behind the reply's own id: the answer, the
+    // question after it, the answer to that, and the message after that.
     const stored = transcripts.files[SESSION_ID]
-    expect(stored.turns.map((turn) => turn.id)).toEqual(['user-1', 'assistant-2', 'user-3', 'assistant-4', 'user-5'])
-    expect(stored.turns[1].replyVersions).toEqual([{ content: ANSWER }])
+    expect(stored.turns.map((turn) => turn.id)).toEqual(['user-1', 'assistant-2'])
+    const parked = stored.turns[1].branchPoints?.[0]?.turns ?? []
+    expect(parked.map((turn) => turn.id)).toEqual(['assistant-2', 'user-3', 'assistant-4', 'user-5'])
+    expect(parked.map((turn) => turn.content)).toEqual([ANSWER, SECOND_QUESTION, DISCARDED, LATER_QUESTION])
 
     const channel = await streamChannel(stub)
     stub.emit(channel, { type: 'data', value: { type: 'text_delta', text: 'Set up, again.' } })
     stub.emit(channel, { type: 'end' })
     await waitFor(() => expect(screen.getByText('Set up, again.')).toBeTruthy())
 
-    // Two versions of that reply, and the turns after it were never touched.
+    // Two branches at that reply, and one switch brings the whole parked trail back.
     await waitFor(() => expect(screen.getByText('2/2')).toBeTruthy())
-    await userEvent.click(screen.getByRole('button', { name: 'Previous version' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Previous branch' }))
+    expect(screen.getByText('1/2')).toBeTruthy()
     expect(screen.getByText(ANSWER)).toBeTruthy()
+    expect(screen.getByText(SECOND_QUESTION)).toBeTruthy()
+    expect(screen.getByText(DISCARDED)).toBeTruthy()
     expect(screen.getByText(LATER_QUESTION)).toBeTruthy()
+    expect(screen.queryByText('Set up, again.')).toBeNull()
   })
 
-  it('leaves the replies after it as they were, generated from the context they were', async () => {
+  it('parks the replies after it, so nothing is left answering words it was not written from', async () => {
     const { stub, sent } = renderChat({ turns: withLaterTurn() })
     await loaded()
 
@@ -350,10 +361,17 @@ describe('regenerating an earlier reply', () => {
     stub.emit(channel, { type: 'end' })
     await waitFor(() => expect(screen.getByText('Set up, again.')).toBeTruthy())
 
-    // One run, for the reply that was clicked. The reply after it was not written again and the message
-    // that followed it is exactly what it was — a conversation that diverges from its own history here,
-    // which is the one thing an in-place rewrite costs and the reason nothing is dropped.
+    // One run, for the reply that was clicked, and none of the turns after it are on screen: they were
+    // written from the answer this run replaced, so leaving them beside the new one would be the
+    // divergence the branch model removes. Their work is parked whole — the card, the checklist, and the
+    // question after them — and one switch brings all of it back.
     expect(sent.length).toBe(1)
+    expect(screen.queryByText(DISCARDED)).toBeNull()
+    expect(screen.queryByText(LATER_QUESTION)).toBeNull()
+    expect(screen.queryByText('Reading src/lexer.ts')).toBeNull()
+
+    await waitFor(() => expect(screen.getByText('2/2')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: 'Previous branch' }))
     expect(screen.getByText(DISCARDED)).toBeTruthy()
     expect(screen.getByText(LATER_QUESTION)).toBeTruthy()
     expect(screen.getByText('Reading src/lexer.ts')).toBeTruthy()

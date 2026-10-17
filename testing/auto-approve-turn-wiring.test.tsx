@@ -267,7 +267,7 @@ describe('the consent setting across a turn', () => {
     await waitFor(() => expect(sent.length).toBe(1))
     expect(sent[0]?.autoApprove).toBe(true)
     expect(isOn()).toBe(true)
-    // That save wrote a record on its way past — the reply parked as a previous version — so the file is
+    // That save wrote a record on its way past — the tail the re-run parked as a branch — so the file is
     // read here as well as after the run: it is the write that used to arrive without the key.
     expect(transcripts.files[FIRST_ID]?.autoApprove).toBe(true)
 
