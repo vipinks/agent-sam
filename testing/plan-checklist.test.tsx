@@ -243,4 +243,95 @@ describe('the plan checklist', () => {
     expect(screen.getByLabelText('Interrupted: Write the tests')).toBeTruthy()
     expect(screen.getByLabelText('Pending: Run the suite')).toBeTruthy()
   })
+
+  it('renders nothing above the composer once a finished plan’s turn has ended', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'plan',
+      plan: [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'write', text: 'Write the tests', status: 'done' },
+      ],
+    })
+    chunk(stub, channel, { type: 'text_delta', text: 'Both steps done.' })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 2 })
+    stub.emit(channel, { type: 'end' })
+
+    // Every step is done and the turn that was working from the plan is over: the checklist has
+    // nothing left to say that the answer has not just said, so it gives the space back.
+    expect(await screen.findByText('Both steps done.')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Plan' })).toBeNull())
+  })
+
+  it('renders nothing above the composer for a stored plan whose steps all finished', async () => {
+    const snapshot: TranscriptSnapshot = {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        { id: 'user-1', role: 'user', content: 'refactor the parser', steps: [] },
+        {
+          id: 'assistant-2',
+          role: 'assistant',
+          content: 'All three done.',
+          steps: [],
+          // Stored as it finished: a reopened conversation is the ordinary case of a completed plan
+          // with no turn in flight, because nothing at all is running when the file is read.
+          plan: [
+            { id: 'read', text: 'Read the parser', status: 'done' },
+            { id: 'write', text: 'Write the tests', status: 'done' },
+            { id: 'run', text: 'Run the suite', status: 'done' },
+          ],
+        },
+      ],
+    }
+
+    stubChat({ loadTranscript: () => snapshot })
+    renderChat()
+
+    // The record keeps the plan; the screen keeps the answer and nothing else.
+    expect(await screen.findByText('All three done.')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Plan' })).toBeNull()
+  })
+
+  it('renders a plan with a step still to do once its turn has ended', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'plan',
+      plan: [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'run', text: 'Run the suite', status: 'pending' },
+      ],
+    })
+    chunk(stub, channel, { type: 'text_delta', text: 'Read it; the suite is still to run.' })
+    chunk(stub, channel, { type: 'done', reason: 'complete', steps: 1 })
+    stub.emit(channel, { type: 'end' })
+
+    // Work is left, so the checklist is still the thing that says what it is — a plan is hidden for
+    // having nothing left to say, not for having stopped.
+    expect(await screen.findByText('Read it; the suite is still to run.')).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Plan' })).toBeTruthy()
+    expect(screen.getByLabelText('Pending: Run the suite')).toBeTruthy()
+  })
+
+  it('keeps a finished plan on screen while its turn is still in flight', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'plan',
+      plan: [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'run', text: 'Run the suite', status: 'done' },
+      ],
+    })
+
+    // Nothing has ended the turn, so it may still be working from this plan — and the counts are what
+    // the user is reading while the model writes its summary of them.
+    expect(await screen.findByRole('region', { name: 'Plan' })).toBeTruthy()
+    expect(screen.getByLabelText('Done: Run the suite')).toBeTruthy()
+  })
 })

@@ -2290,11 +2290,15 @@ export function ChatPanel() {
 
         Rendered from the live transcript, so a chunk updates it in place, and from the stored snapshot
         after a reopen, so a conversation resumed from disk shows the plan its turn ended with.
+
+        `live` is the pane's own answer to whether the conversation is moving — the same one the edit
+        and regenerate controls rest on, rather than a second way of asking it. The checklist needs that
+        answer because a finished plan is worth its space only while a turn is still working from it.
       */}
       {/* A plan and a turn that stopped early are both about a conversation; home has neither. */}
       {!atHome && (
         <div className="shrink-0 px-3">
-          <PlanChecklist plan={plan} />
+          <PlanChecklist plan={plan} live={!editAllowed} />
           {/*
           The other thing that is about now: a turn that stopped before it was done. Below the plan,
           because it is the immediate question — the plan says what the work is, this says that the

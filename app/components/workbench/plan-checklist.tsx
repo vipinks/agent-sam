@@ -19,6 +19,12 @@ import type { PlanStep, PlanStepStatus } from '@/conveyor/protocol/plan'
  * A session with no plan renders nothing. That is deliberate and load-bearing: a plan is optional, so
  * nothing here warns about a missing one, reserves space for one, or blocks on one — absence is the
  * degraded state, and the degraded state is silence.
+ *
+ * So is a plan with nothing left to do. A finished plan is a record of work that happened, and the
+ * answer below it has already said what it was; once every step is done and no turn is still working
+ * from it, the panel has nothing to add and gives the space back. The plan is not removed for being
+ * hidden — it stays on its turn, in the saved transcript and in an export — and a plan with a step
+ * still pending or interrupted is unfinished work, which is exactly what the panel is for.
  */
 
 /** How one status is drawn and named. */
@@ -29,7 +35,7 @@ const MARKERS: Record<PlanStepStatus, { icon: LucideIcon; label: string; text: s
   interrupted: { icon: Slash, label: 'Interrupted', text: 'text-muted-foreground italic' },
 }
 
-export function PlanChecklist({ plan }: { plan: PlanStep[] | null }) {
+export function PlanChecklist({ plan, live }: { plan: PlanStep[] | null; live: boolean }) {
   const [collapsed, setCollapsed] = useState(false)
 
   // No plan, no panel — checked before any state is read, so a session that never declared one renders
@@ -37,6 +43,13 @@ export function PlanChecklist({ plan }: { plan: PlanStep[] | null }) {
   if (!plan || plan.length === 0) return null
 
   const done = plan.filter((step) => step.status === 'done').length
+
+  // Every step finished and nothing running: the panel has said all it has to say, and the space above
+  // the composer belongs to the conversation again. The live check is a second condition rather than a
+  // substitute for the first, because a turn still in flight may be about to summarise the plan it has
+  // just completed — and a pause has not ended its turn either. This sits above the collapse state, so
+  // a hidden panel cannot be reopened into an empty one; the preference itself survives the hiding.
+  if (done === plan.length && !live) return null
 
   return (
     <section aria-label="Plan" className="mb-2 shrink-0 rounded-md border border-border bg-muted/30">

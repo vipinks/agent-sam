@@ -19,8 +19,9 @@ import { strict as assert } from 'node:assert'
 import { applyAgentChunk, endTurnPlan, type AgentTurn } from '../../app/components/workbench/agent-session'
 import { rehydrateTranscript, serializeTranscript } from '../../app/components/workbench/session-transcript'
 import { executeTool, needsApproval, runAgentLoop } from '../../conveyor/modules/agent'
+import { renderExport } from '../../conveyor/protocol/export'
 import { MAX_PLAN_STEPS, type PlanStep } from '../../conveyor/protocol/plan'
-import { TRANSCRIPT_VERSION } from '../../conveyor/protocol/transcript'
+import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '../../conveyor/protocol/transcript'
 import { AUTO_CONTINUE_MAX } from '../../conveyor/protocol/turn-end'
 
 const results: string[] = []
@@ -227,6 +228,35 @@ async function mergedDeclarations() {
   )
 }
 
+/**
+ * A plan whose steps all finished, kept as a record after it stops being a panel.
+ *
+ * The pane no longer draws a completed plan above the composer once no turn is using it. What must not
+ * follow from that is the plan leaving the transcript or an export: the screen stopped showing it, the
+ * conversation did not stop having had one. Freezing and reading back is where that claim lives — the
+ * serializer is what a save writes, and the JSON export is the snapshot the app holds.
+ */
+async function completedPlanStaysInTheRecord() {
+  const finished: PlanStep[] = [
+    { id: 'read', text: 'Read the parser', status: 'done' },
+    { id: 'tests', text: 'Add tests for it', status: 'done' },
+  ]
+
+  const chunks = await runLoop([planCallFrames('call_1', finished), proseFrames('Both done.')])
+  const snapshot = record(chunks)
+
+  assert.deepEqual(snapshot.turns[0].plan, finished, 'a finished plan is still written to the transcript')
+  assert.equal(snapshot.version, TRANSCRIPT_VERSION, 'hiding a finished plan must not move the transcript version')
+
+  // The round trip a session load performs, unchanged by what the pane chooses to draw.
+  assert.deepEqual(rehydrateTranscript(snapshot).turns[0].plan, finished, 'a finished plan reads back')
+
+  const exported = JSON.parse(
+    renderExport(snapshot, { title: 'refactor the parser', format: 'json' })
+  ) as TranscriptSnapshot
+  assert.deepEqual(exported.turns[0].plan, finished, 'a finished plan stays in the export')
+}
+
 async function planStaysAbsent() {
   // An empty list is not an empty checklist: a plan with nothing in it is no plan, and a chunk
   // announcing one would put a box on screen with nothing to read.
@@ -256,6 +286,7 @@ async function main() {
   const suites: Array<[string, () => Promise<void>]> = [
     ['a declared plan reaches the renderer ungated', declaredPlan],
     ['a second declaration merges over the first', mergedDeclarations],
+    ['a completed plan stays in the record and in the export', completedPlanStaysInTheRecord],
     ['an empty plan stays absent', planStaysAbsent],
     ['a plan beyond the cap is refused', planIsBounded],
   ]

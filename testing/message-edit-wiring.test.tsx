@@ -57,8 +57,10 @@ const AFTER_TEXT = 'also update the docs'
  * A conversation with a message in the middle to edit, and everything the cut has to take with it.
  *
  * The turn after the edit target carries a tool card and a plan on purpose: those are the pieces of the
- * transcript that are not prose, and a cut that dropped the prose while leaving a checklist claiming
- * work that has been removed would be the visible half of getting this wrong.
+ * transcript that are not prose, and a cut that dropped the prose while leaving a card claiming work
+ * that has been removed would be the visible half of getting this wrong. The plan is stored finished,
+ * because that is the ordinary shape of a reply whose work is done — and a finished plan draws nothing
+ * above the composer once no turn is using it, so the card is this suite's witness for it.
  */
 function transcriptTurns(): TranscriptTurn[] {
   return [
@@ -359,7 +361,10 @@ describe('editing a sent message', () => {
     expect(screen.queryByLabelText('Edit message text')).toBeNull()
     expect(screen.getByText(EDITED_TARGET)).toBeTruthy()
     expect(screen.getByText(AFTER_TEXT)).toBeTruthy()
-    expect(screen.getByText('Rewrite the lexer')).toBeTruthy()
+    // The reply's own work is still where it was. Its plan is finished and nothing is running, so the
+    // checklist above the composer has nothing to show for it — the card in the transcript is what
+    // proves this reply was not cut.
+    expect(screen.getByText('Reading src/lexer.ts')).toBeTruthy()
     expect(stub.methodsOn('agent')).not.toContain('chatWithTools')
     // One version of the message, so there is nothing for a pager to walk to.
     expect(screen.queryByText('2/2')).toBeNull()
