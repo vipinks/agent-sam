@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { app } from 'electron'
+import { app, dialog } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, command } from '../init'
@@ -389,5 +389,29 @@ export const imageAttachmentsModule = defineModule({
    */
   readDataUrl: command(z.object({ sessionId: segmentSchema, id: segmentSchema }), async ({ input }) => {
     return readAttachmentDataUrl(app.getPath('userData'), input.sessionId, input.id)
+  }),
+
+  /**
+   * Ask the OS for files to attach to the draft, and hand back the paths it returned.
+   *
+   * The composer's plus, and a command rather than a query because it opens a window: the answer is a
+   * list of paths, but getting it is a side-effect the user performs.
+   *
+   * Multi-select and no type filter, deliberately. A mention may be any file — a source file, a
+   * spreadsheet, a log — so a filter here would be the picker refusing before the user had chosen, and
+   * the send's own rules (size, count) are where a file is judged.
+   *
+   * A cancelled or empty dialog is an empty list rather than null or an error: a dismissal is an
+   * ordinary outcome, and the composer adds nothing and says nothing about it. The paths come back
+   * exactly as the dialog gave them — absolute, and not resolved here — because the chip is the user's
+   * record of what they chose, and re-spelling it would make the tooltip disagree with the dialog.
+   */
+  pick: command(async ({ ctx }) => {
+    const win = ctx.window
+    const options = { properties: ['openFile', 'multiSelections'] as ('openFile' | 'multiSelections')[] }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+
+    if (result.canceled) return []
+    return result.filePaths
   }),
 })

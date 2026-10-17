@@ -20,6 +20,7 @@ import { ToolsPanel } from './tools-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
+import { addMentionPath, mentionRefusalNote } from './mentions'
 import { chatGroupLayout, mainGroupLayout, outerGroupLayout, percentSize } from './layout'
 import { useWorkbenchLayout } from './use-workbench-layout'
 import { useThemeApplication } from './theme-apply'
@@ -141,6 +142,22 @@ function WorkbenchLayout() {
   useWorkspaceChangeInvalidation(selectedFile)
 
   /**
+   * Attach an explorer row's path to the draft the composer is holding.
+   *
+   * Here rather than in the explorer because the draft is this component's: the composer's chips live in
+   * the session state above both panes, so the gesture is handed up to the one place that owns it. The
+   * rule is the composer's own — one cap, one dedupe, one sentence when it is refused — reached through
+   * the same helper, so the two ways of attaching a file cannot come to disagree.
+   */
+  const attachRowToDraft = (path: string) => {
+    const applied = addMentionPath(sessions.composer.mentionPaths, path)
+    sessions.setComposer({
+      mentionPaths: applied.paths,
+      mentionNote: applied.refused ? mentionRefusalNote(applied.refused) : null,
+    })
+  }
+
+  /**
    * Export a session through main, and report where it landed.
    *
    * Raised here, at the panel that owns the list, rather than inside the row that was clicked: the
@@ -198,7 +215,7 @@ function WorkbenchLayout() {
       ) : activeActivity === 'git' ? (
         <GitPanel />
       ) : (
-        <ExplorerPanel />
+        <ExplorerPanel onAttach={attachRowToDraft} />
       )}
     </ResizablePanel>
   )

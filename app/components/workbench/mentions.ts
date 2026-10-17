@@ -112,6 +112,50 @@ export function removeMentionPath(paths: readonly string[], path: string): strin
 }
 
 /**
+ * Add a whole batch of paths, or none of them.
+ *
+ * The OS dialog can hand back more than one file at a time, and a batch is answered as one thing: if
+ * the row cannot hold everything the dialog returned, nothing is added and the cap is reported. Adding
+ * the part that fit would leave the user with three of the five files they chose and no way to know
+ * which two were dropped.
+ *
+ * A path already attached is skipped rather than reported: the batch as a whole is what was asked for,
+ * and "that file is already attached" about one member of a five-file selection would be read as a
+ * refusal of the gesture.
+ *
+ * An empty result — everything was already there, or the dialog returned nothing — is not a refusal,
+ * so the caller can stay silent about it.
+ */
+export function addMentionPaths(
+  paths: readonly string[],
+  batch: readonly string[]
+): { paths: string[]; refused: MentionRefusal | null } {
+  const fresh: string[] = []
+  for (const path of batch) {
+    if (typeof path !== 'string' || path.trim() === '') continue
+    if (paths.includes(path) || fresh.includes(path)) continue
+    fresh.push(path)
+  }
+
+  if (fresh.length === 0) return { paths: [...paths], refused: null }
+  if (paths.length + fresh.length > MAX_MENTION_PATHS) return { paths: [...paths], refused: 'full' }
+  return { paths: [...paths, ...fresh], refused: null }
+}
+
+/**
+ * Why an attach attempt did not add a chip, in the user's terms.
+ *
+ * The cap is named with the same constant main enforces on the wire, so the message cannot promise a
+ * number the schema would then refuse. Shared rather than owned by the composer because the explorer's
+ * row menu refuses in the same words: one boundary, one sentence.
+ */
+export function mentionRefusalNote(refusal: MentionRefusal): string {
+  return refusal === 'duplicate'
+    ? 'That file is already attached.'
+    : `One message can attach at most ${MAX_MENTION_PATHS} files.`
+}
+
+/**
  * What the transcript says about a file that could not be attached.
  *
  * Branched on the code, never on a sentence: main names the failure with a stable string, and the

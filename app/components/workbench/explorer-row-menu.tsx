@@ -63,12 +63,21 @@ export function rowRefusalMessage(code: string): string {
 export function ExplorerRowMenu({
   request,
   rootPath,
+  onAttach,
   onDone,
   onRefused,
 }: {
   request: RowMenuRequest
   /** The open folder, which the removal is resolved against. */
   rootPath: string
+  /**
+   * Attach this row's path to the draft the composer is holding, or absent where there is no draft.
+   *
+   * Raised to the panel rather than done here because the draft is the session layer's: the composer's
+   * chips live above both panes, so the menu hands the gesture up instead of owning a second copy of it.
+   * With no handler nothing is composing — a bare tree — and the item is not offered at all.
+   */
+  onAttach?: (path: string) => void
   /** The menu is finished: put it away and leave nothing behind. */
   onDone: () => void
   /** Main refused the act, under this code — the pane says so and reads the folder again. */
@@ -149,9 +158,20 @@ export function ExplorerRowMenu({
   // The groups, in the order the menu draws them, with a rule between each pair. The hand-off is
   // offered only where it can be taken — a pdf, a docx or a doc, and never a folder — and the rule
   // for that is `documentHandoffKind`, the same one main's command refuses under.
+  // Bound to a local because a closure does not keep the narrowing a parameter has.
+  const attach = onAttach
+
   const groups: Array<Array<{ label: string; run: () => void }>> = [
     [{ label: 'Delete', run: () => setConfirming(true) }],
-    [{ label: 'Show in folder', run: () => void run(() => revealPath.mutateAsync({ path: request.path })) }],
+    [
+      { label: 'Show in folder', run: () => void run(() => revealPath.mutateAsync({ path: request.path })) },
+      // A file row only, and only where something is composing: a chip names a file the send will read,
+      // and a folder is not one. Offered in the same group as the reveal because both are done *to* the
+      // path rather than opening it in a viewer.
+      ...(request.isDirectory || !attach
+        ? []
+        : [{ label: 'Attach to conversation', run: () => void run(async () => attach(request.path)) }]),
+    ],
   ]
   if (!request.isDirectory && documentHandoffKind(request.path) !== null) {
     groups.push([

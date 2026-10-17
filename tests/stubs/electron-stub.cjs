@@ -44,7 +44,19 @@ module.exports = {
     decryptString: () => '',
   },
   dialog: {
-    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    // The open dialog's answer comes from the environment for the same late-resolution reason as
+    // `userData` above: the attachment picker under test needs a real selection to hand back, and it
+    // also needs the cancel path. A suite sets SAM_TEST_OPEN_PATHS to a JSON array to have the dialog
+    // accept, and leaves it unset to have it dismissed.
+    //
+    // The options are recorded on `globalThis` as well, so a suite can assert how the dialog was asked
+    // — multi-select, and with no type filter — without having to know either argument's shape.
+    showOpenDialog: async (winOrOptions, maybeOptions) => {
+      globalThis.__samLastOpenDialogOptions = maybeOptions ?? winOrOptions
+      const paths = process.env.SAM_TEST_OPEN_PATHS
+      if (!paths) return { canceled: true, filePaths: [] }
+      return { canceled: false, filePaths: JSON.parse(paths) }
+    },
     // The save dialog is answered from the environment for the same late-resolution reason as
     // `userData` above: the export command under test needs a real path to write to, and it also
     // needs to be exercised on the cancel path. A suite sets SAM_TEST_SAVE_PATH to have the dialog

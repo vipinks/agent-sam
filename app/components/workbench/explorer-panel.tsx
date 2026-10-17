@@ -40,7 +40,20 @@ import { useWorkbenchStore } from './store'
  * itself, and the code a refusal arrives as, are shared with the home screen's folder row through
  * `useRootSwitch`: one place hands a path to main.
  */
-export function ExplorerPanel() {
+export function ExplorerPanel({
+  onAttach,
+}: {
+  /**
+   * Attach a file row's path to the draft the composer is holding, or absent where there is no draft.
+   *
+   * A prop rather than the session context because the draft is the workbench's: the chips live above
+   * both panes and outlive a remount of this one, and a panel that read that state itself would make a
+   * bare explorer unrenderable — which the pane's own suites, and anything that shows a tree on its
+   * own, would pay for. The workbench already holds the session state, so it is the one place that can
+   * hand this down without a second source of truth.
+   */
+  onAttach?: (path: string) => void
+} = {}) {
   const activeActivity = useWorkbenchStore((s) => s.activeActivity)
   const activity = activityById(activeActivity)
 
@@ -120,7 +133,9 @@ export function ExplorerPanel() {
     setRowMenu(request)
   }
 
-  /** The open folder's own dialog, as before — with the picked path routed through the same switch. */
+  /**
+   * The open folder's own dialog, as before — with the picked path routed through the same switch.
+   */
   const onOpenFolder = async () => {
     const picked = await rootSwitch.chooseFolder()
     // A cancelled dialog returns null, which is an ordinary outcome, not a failure — and the call that
@@ -268,6 +283,7 @@ export function ExplorerPanel() {
         <ExplorerRowMenu
           request={rowMenu}
           rootPath={rootPath}
+          onAttach={onAttach}
           onDone={() => setRowMenu(null)}
           onRefused={(code) => {
             setRowRefusal(rowRefusalMessage(code))

@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { listWorkspaceFiles, mentionsModule, readMention, readMentions } from '../../conveyor/modules/mentions'
 import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
-import { MAX_MENTION_ENTRIES } from '../../conveyor/protocol/mentions'
+import { MAX_MENTION_ENTRIES, assembleMentionContext } from '../../conveyor/protocol/mentions'
 
 const results: string[] = []
 
@@ -204,16 +204,16 @@ async function anOversizedMentionIsRefusedWithItsCode() {
   results.push('a mention over the per-file read cap is refused rather than loaded')
 }
 
-async function aMentionOutsideTheWorkspaceIsRefused() {
+async function aRelativeMentionOutsideTheWorkspaceIsRefused() {
   const root = makeRoot()
 
-  // Containment is the workspace's own law, not a check written for mentions: a traversal is refused
-  // by the same function the agent's tools obey.
+  // Containment is still the law for a relative path — the kind the `@` picker and the explorer row
+  // produce, and workspace-relative by construction. A traversal is refused by the same function the
+  // agent's tools obey. (An absolute path is read as the file it names; see the chip steps below.)
   assert.equal((await readMention(root, '../escape.ts')).status, 'refused', 'a traversal is refused')
-  assert.equal((await readMention(root, '/etc/passwd')).status, 'refused', 'an absolute escape is refused')
   assert.equal((await readMention(root, 'a\u0000b')).status, 'refused', 'a NUL byte is refused')
   assert.equal((await readMention(null, 'src/app.ts')).status, 'refused', 'no workspace is refused')
-  results.push('a mention outside the workspace is refused by the same containment law as every other read')
+  results.push('a relative mention outside the workspace is refused by the same containment law as every other read')
 }
 
 async function aMissingMentionIsReportedNotThrown() {
@@ -249,6 +249,51 @@ async function readsKeepTheRequestOrderAndTheCodes() {
     'every request is answered, in the order asked, with its own status'
   )
   results.push('a batch of mentions is answered in request order, one status each')
+}
+
+// ---------------------------------------------------------------- a chip's own path
+
+async function aChipOutsideTheWorkspaceIsRead() {
+  const root = makeRoot()
+  const outside = makeRoot('sam-mentions-outside-')
+  const path = join(outside, 'brief.md')
+  writeFileSync(path, 'outside the tree\n', 'utf8')
+
+  // What a send does with the chips it was handed: read every path, then assemble the section that
+  // rides on the user's message.
+  const reads = await readMentions(root, [path])
+
+  assert.deepEqual(
+    reads.map((r) => [r.path, r.status]),
+    [[path, 'ok']],
+    'a chip whose path is absolute is read as the file it names, whether or not the workspace holds it'
+  )
+
+  const { section, notices } = assembleMentionContext(reads)
+  assert.ok(section.includes('outside the tree'), 'and its contents are in the payload the model is sent')
+  assert.ok(section.includes(path), 'named by the path the chip carries, so the model can tell which file')
+  assert.deepEqual(notices, [], 'nothing to warn the user about')
+  results.push('a chip outside the workspace is read, and its contents ride the send')
+}
+
+async function aChipThatIsGoneIsAWarningRatherThanAFailedSend() {
+  const root = makeRoot()
+  const vanished = join(makeRoot('sam-mentions-gone-'), 'vanished.md')
+
+  const reads = await readMentions(root, [vanished])
+
+  // Never throws, and that is the point: a chip whose file moved is a fact to report, not a message
+  // the user loses. Reaching the assertions below is the send's own compatibility with a dead path.
+  assert.equal(reads[0]?.status, 'missing', 'a path that is gone is reported, not thrown')
+
+  const { section, notices } = assembleMentionContext(reads)
+  assert.deepEqual(
+    notices,
+    [{ path: vanished, code: 'CONTEXT_FILE_NOT_FOUND' }],
+    'and the code is the one the warning row is worded from'
+  )
+  assert.ok(section.includes(vanished), 'while the section still names the file that was asked for')
+  results.push('a chip whose file is gone renders a warning row instead of failing the send')
 }
 
 // ---------------------------------------------------------------- the registered query
@@ -311,9 +356,11 @@ async function main() {
     await step('walk: empty', anEmptyOrMissingRootListsNothing)
     await step('read: ok', aMentionedFileIsRead)
     await step('read: cap', anOversizedMentionIsRefusedWithItsCode)
-    await step('read: containment', aMentionOutsideTheWorkspaceIsRefused)
+    await step('read: containment', aRelativeMentionOutsideTheWorkspaceIsRefused)
     await step('read: missing', aMissingMentionIsReportedNotThrown)
     await step('read: batch', readsKeepTheRequestOrderAndTheCodes)
+    await step('read: outside the workspace', aChipOutsideTheWorkspaceIsRead)
+    await step('read: gone', aChipThatIsGoneIsAWarningRatherThanAFailedSend)
     await step('query: wired', theRegisteredQueryIsWiredToTheOpenWorkspace)
 
     console.log(`mentions files: ${results.length} passed`)

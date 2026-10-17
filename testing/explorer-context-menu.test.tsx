@@ -173,8 +173,9 @@ describe('a right-click on a file row', () => {
     expect(opened.style.left).toBe('120px')
     expect(opened.style.top).toBe('240px')
 
-    expect(items()).toEqual(['Delete', 'Show in folder', 'Open in default app'])
-    // Two rules rather than one per item: the groups are Delete, the reveal, and the rest.
+    expect(items()).toEqual(['Delete', 'Show in folder', 'Attach to conversation', 'Open in default app'])
+    // Two rules rather than one per item: the groups are Delete, what is done to the path itself, and
+    // the rest.
     expect(within(opened).getAllByRole('separator')).toHaveLength(2)
   })
 
@@ -185,8 +186,9 @@ describe('a right-click on a file row', () => {
     rightClick(await row('notes.txt'))
 
     // `workspace.openDocument` is a document opener — main refuses anything that is not a pdf, a docx
-    // or a doc — so a text file is not offered an item that would come back with a refusal.
-    expect(items()).toEqual(['Delete', 'Show in folder'])
+    // or a doc — so a text file is not offered an item that would come back with a refusal. Attaching
+    // it is a different question, and a file row is offered that wherever it lives in the tree.
+    expect(items()).toEqual(['Delete', 'Show in folder', 'Attach to conversation'])
     expect(within(menu()).getAllByRole('separator')).toHaveLength(1)
   })
 
@@ -302,12 +304,40 @@ describe("choosing one of the row's other actions", () => {
   })
 })
 
+describe('choosing Attach to conversation on a file row', () => {
+  it('chips the row path into the live draft and closes the menu', async () => {
+    const stub = stubWorkbench()
+    renderWorkbench()
+
+    rightClick(await row('notes.txt'))
+    await userEvent.click(within(menu()).getByRole('menuitem', { name: 'Attach to conversation' }))
+
+    // The chip is the draft's, and the name it is removed by is the whole path rather than the tail the
+    // label shows — the same chip the `@` picker and the plus produce.
+    expect(await screen.findByRole('button', { name: `Remove ${NOTES}` })).toBeTruthy()
+    expect(screen.getByTitle(NOTES).textContent).toBe('notes.txt')
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    // A draft edit rather than a command: nothing was asked of the disk to attach a path.
+    expect(stub.methodsOn('workspace')).not.toContain('deletePath')
+  })
+
+  it('is not offered on a folder row', async () => {
+    stubWorkbench()
+    renderWorkbench()
+
+    rightClick(await row('src'))
+
+    expect(items()).not.toContain('Attach to conversation')
+  })
+})
+
 describe('a right-click on a folder row', () => {
   it('offers the same menu, with the folder as its subject', async () => {
     const stub = stubWorkbench()
     renderWorkbench()
 
     rightClick(await row('src'))
+    // No attach item: a chip names a file the send reads, and a folder is not one.
     expect(items()).toEqual(['Delete', 'Show in folder'])
 
     await userEvent.click(within(menu()).getByRole('menuitem', { name: 'Delete' }))

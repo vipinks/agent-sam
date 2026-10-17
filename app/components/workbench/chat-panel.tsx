@@ -8,6 +8,7 @@ import {
   ImagePlus,
   Lock,
   Paperclip,
+  Plus,
   SendHorizontal,
   ShieldCheck,
   Square,
@@ -75,9 +76,10 @@ import { useChatSessionsContext } from './chat-sessions-context'
 import {
   activeMentionToken,
   addMentionPath,
+  addMentionPaths,
   filterMentionPaths,
+  mentionRefusalNote,
   removeMentionPath,
-  type MentionRefusal,
   type MentionToken,
 } from './mentions'
 import { MAX_MENTION_PATHS } from '@/conveyor/protocol/mentions'
@@ -124,18 +126,6 @@ import { useThemeStore } from '@/app/shell/theme-store'
  * chunk whatever the reader was doing, which is the behavior this constant is not for and does not change.
  */
 const EDGE_SLACK_PX = 48
-
-/**
- * Why an attach attempt did not add a chip, in the user's terms.
- *
- * The cap is named with the same constant main enforces on the wire, so the message cannot promise a
- * number the schema would then refuse.
- */
-function mentionRefusalNote(refusal: MentionRefusal): string {
-  return refusal === 'duplicate'
-    ? 'That file is already attached.'
-    : `One message can attach at most ${MAX_MENTION_PATHS} files.`
-}
 
 /**
  * What `/help` lists: every command available where it was typed, with the line that says what each one
@@ -553,6 +543,9 @@ export function ChatPanel() {
   const engineName = engineLabel(engineId)
   const engineConsent = useConveyorStore(engineConsentStore, (s) => s.pending) ?? null
   const consentAnswer = conveyor.engine.answerConsent.useMutation()
+  // The OS file picker, as a mutation because it opens a window: the hook is declared here, once, and
+  // the handler below reads the answer it resolves to.
+  const pickFiles = conveyor.attachments.pick.useMutation()
 
   /**
    * Answer the engine's question with the option that means what the user clicked.
@@ -947,6 +940,34 @@ export function ChatPanel() {
     if (!selectedFile) return
     applyMentionPath(selectedFile)
   }, [applyMentionPath, selectedFile])
+
+  /**
+   * Ask the OS for files and attach what it returned.
+   *
+   * A batch rather than a loop of the single-path action: a dialog can return twenty files at once, and
+   * the twenty-first would otherwise be refused after the first nineteen had already become chips. The
+   * batch rule refuses the selection whole, which is the only answer that does not leave the user to
+   * work out which of their files were dropped.
+   *
+   * A cancelled dialog returns an empty list and a dialog that would not open rejects; both are answered
+   * with nothing, because neither changed the draft. A refusal that did — the cap — is reported under
+   * the composer in the same words the paperclip uses.
+   */
+  const pickAttachments = useCallback(async () => {
+    let picked: string[]
+    try {
+      picked = await pickFiles.mutateAsync(undefined)
+    } catch {
+      // The dialog is the OS's, and a window that would not open is not a draft change. Nothing was
+      // attached, so there is nothing to say about the draft.
+      return
+    }
+    if (picked.length === 0) return
+
+    const applied = addMentionPaths(mentionPathsRef.current, picked)
+    setChips(applied.paths)
+    sessionsRef.current.setComposer({ mentionNote: applied.refused ? mentionRefusalNote(applied.refused) : null })
+  }, [pickFiles, setChips])
 
   const removeMention = useCallback(
     (path: string) => {
@@ -2423,7 +2444,7 @@ export function ChatPanel() {
                 // `field-sizing-content`, which grows the box with its content, and the composer wants the
                 // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
                 // the primitive's own floor so the height below is the height, not a suggestion.
-                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-28 text-[13px]"
+                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-36 text-[13px]"
                 // The height is state rather than styling — it is the number the drag produces — so it is the
                 // one thing here that cannot be a class.
                 style={{ height: composerHeight }}
@@ -2448,6 +2469,23 @@ export function ChatPanel() {
                 aria-label="Choose images to attach"
                 onChange={onAttachPicked}
               />
+              {/*
+                The OS's own file dialog, beside the paperclip rather than folded into it: the paperclip
+                attaches the file already open in the viewer, and this one asks for any file on the machine
+                at all. They are two questions, and one control that guessed which was meant would be wrong
+                half the time. It takes the row's leftmost slot so the paperclip and the send button stay
+                exactly where hands already reach for them.
+              */}
+              <Button
+                size="icon-sm"
+                variant="outline"
+                className="absolute right-[7rem] bottom-2"
+                aria-label="Attach files"
+                title="Attach files"
+                onClick={() => void pickAttachments()}
+              >
+                <Plus />
+              </Button>
               <Button
                 size="icon-sm"
                 variant="outline"

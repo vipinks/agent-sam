@@ -106,6 +106,7 @@ const SUITES = [
   { name: 'root name (last segment, trailing separator, absent root)', src: 'sessions/root-name-test.ts' },
   { name: 'orphan sweep', src: 'sessions/sweep-test.ts' },
   { name: 'image attachment rules (mime, caps, content parts)', src: 'attachments/image-attachments-rules-test.ts' },
+  { name: 'attachment picker (selection, cancel, dialog options)', src: 'attachments/attachment-picker-test.ts' },
   { name: 'image attachment store (save, read, retention, sweep)', src: 'attachments/image-attachments-store-test.ts' },
   {
     name: 'image attachment capture (gate, capture rules, order)',

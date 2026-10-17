@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from 'fs/promises'
-import { join, relative, sep } from 'path'
+import { join, isAbsolute, relative, resolve, sep } from 'path'
 import { app } from 'electron'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query } from '../init'
@@ -112,6 +112,29 @@ export async function listWorkspaceFiles(rootPath: string | null): Promise<strin
 }
 
 /**
+ * The target an absolute mention names.
+ *
+ * A chip may carry a path the workspace does not contain: the OS dialog can be pointed anywhere, and the
+ * explorer hands over whichever row the user right-clicked. So an absolute path is read as the file it
+ * names rather than contained — and *only* here. Every other read in this app still goes through
+ * `resolveWorkspacePath`, and a relative mention still does, because a relative path is one the app
+ * produced itself: the `@` picker walks the open folder, and nothing else writes a relative chip.
+ *
+ * Containment was never the thing making this safe: there is one local user, the dialog is theirs, and
+ * every chip came from their own click. What a path that cannot be read costs is a warning row on the
+ * turn, not a failed send.
+ *
+ * The NUL check stays because it is about the string rather than about containment: the OS truncates a
+ * path there, which would make the tail of the request mean something the user never chose.
+ */
+function resolveAttachmentPath(requested: string): string {
+  if (requested.includes('\0')) {
+    throw new ConveyorError('INVALID_PATH', 'That path contains a null byte.')
+  }
+  return resolve(requested)
+}
+
+/**
  * Read one mentioned file, under the caps that govern every read in this app.
  *
  * Never throws, and that is the point: a mention is the user asking for a file, and a file that
@@ -119,15 +142,16 @@ export async function listWorkspaceFiles(rootPath: string | null): Promise<strin
  * own status so the caller can name it — and so the renderer can branch on a code rather than on
  * wording, which is the rule everywhere else a failure crosses this boundary.
  *
- * `resolveWorkspacePath` is what enforces containment, and it is called rather than reimplemented:
- * a mention that named `../../etc/passwd` is refused by the same check the agent's own tools obey.
+ * `resolveWorkspacePath` is what enforces containment for a relative path — the kind the picker
+ * produces — while an absolute path is read as the file it names, for the reason
+ * `resolveAttachmentPath` gives.
  */
 export async function readMention(rootPath: string | null, requested: string): Promise<MentionRead> {
   const path = typeof requested === 'string' ? requested : ''
 
   let target: string
   try {
-    target = resolveWorkspacePath(rootPath, path)
+    target = isAbsolute(path) ? resolveAttachmentPath(path) : resolveWorkspacePath(rootPath, path)
   } catch (err) {
     // A traversal, a NUL byte, or no workspace at all. All three are the user asking for something
     // outside what can be handed over, which is one outcome as far as the message is concerned.
