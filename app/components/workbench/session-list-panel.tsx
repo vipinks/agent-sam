@@ -184,6 +184,20 @@ export function SessionListPanel({
   const groups = useMemo(() => groupSessionsByRoot(visible, rootPath), [visible, rootPath])
 
   /**
+   * The projects those groups are showing, in the order their headers are drawn.
+   *
+   * Handed to the move rule so a project can never be a visible group yet an impossible destination.
+   * Derived from the groups rather than from every stored session, because the invariant is about what
+   * is on screen: a project the list is not drawing is not claimed to be a destination here, and one it
+   * is drawing always is. Conversations with no project contribute no root — there is no folder to move
+   * into.
+   */
+  const groupRoots = useMemo(
+    () => groups.map((group) => group.root).filter((root): root is string => root !== null),
+    [groups]
+  )
+
+  /**
    * Commit the row's editor: write the new title, or leave the session alone.
    *
    * Both outcomes close the editor, and for the same reason — the previous title is what the row
@@ -311,11 +325,12 @@ export function SessionListPanel({
                       const metaLabel = sessionRowLabel(session)
                       const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
                       // Where this row may be moved to, decided by the rule rather than by the menu: the
-                      // remembered folders minus this row's own project, with the open folder first. A row
-                      // with nowhere to go draws no control at all, because a menu with nothing in it is a
-                      // dead end rather than an offer.
+                      // remembered folders and the projects the list is drawing, minus this row's own
+                      // project, with the open folder first. A row with nowhere to go draws no control at
+                      // all, because a menu with nothing in it is a dead end rather than an offer.
                       const targets = moveTargets({
                         recentRoots,
+                        groupRoots,
                         currentRoot: rootPath,
                         sessionRoot: session.lastRoot,
                       })

@@ -32,6 +32,8 @@ const KEPT = 'the notes work'
 const ROOT = 'C:/work/sam-ai'
 const NOTES = 'C:/work/notes'
 const ARCHIVE = 'C:/work/archive'
+/** A project the list draws a group for, which the recents have never held. */
+const DOCS = 'C:/work/docs'
 
 /** One conversation, as the store holds it. A session with no project has no `lastRoot` key. */
 interface SessionRow {
@@ -222,6 +224,32 @@ describe('session move wiring', () => {
     // The row already belongs to sam-ai, so sam-ai is not a destination — and the other remembered
     // folders are, named by their last segment the way a group header names a folder.
     expect(menuItems(menu)).toEqual(['notes', 'archive'])
+  })
+
+  it('offers a project the list draws as a group even when the recents never held it', async () => {
+    // docs has a conversation, so the panel draws its header — while the recents list holds only sam-ai,
+    // notes and archive. That is the shape the recents cap leaves behind: a project on screen that the
+    // menu did not offer.
+    const { stub } = stubMove({
+      sessions: [
+        { id: MOVED, title: TITLE, lastRoot: ROOT },
+        { id: OTHER, title: KEPT, lastRoot: DOCS },
+      ],
+    })
+    renderRail()
+    await screen.findByText(TITLE)
+    expect(within(group('docs')).getByText(KEPT)).toBeTruthy()
+
+    const menu = await openMoveMenu(TITLE)
+
+    // The open folder first, then the remembered ones in their own order, then the group-only project —
+    // one entry for the folder the row already belongs to is still absent.
+    expect(menuItems(menu)).toEqual(['notes', 'archive', 'docs'])
+
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'docs' }))
+
+    // The choice reaches main with the path the group's header stands for, not with its label.
+    await waitFor(() => expect(moveCalls(stub)).toContainEqual({ id: MOVED, destination: DOCS }))
   })
 
   it('sends the move command the row and the folder that was picked', async () => {

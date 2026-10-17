@@ -410,7 +410,12 @@ function aConversationIsCreatedInTheFolderItWasStartedIn() {
 // ---------------------------------------------------------------- moving between projects
 
 function aMoveOffersEveryRememberedFolderExceptTheRowsOwn() {
-  const targets = moveTargets({ recentRoots: [SAM, NOTES, ARCHIVE], currentRoot: SAM, sessionRoot: SAM })
+  const targets = moveTargets({
+    recentRoots: [SAM, NOTES, ARCHIVE],
+    groupRoots: [],
+    currentRoot: SAM,
+    sessionRoot: SAM,
+  })
 
   // The open folder is the row's own project, so it is absent — a move to where the conversation already
   // is is not a move — and the other two are offered in the list's own order.
@@ -421,27 +426,36 @@ function aMoveOffersEveryRememberedFolderExceptTheRowsOwn() {
 function theOpenFolderIsOfferedFirstWhenItIsSomewhereElse() {
   // The row lives in NOTES; the window is showing SAM. Both are destinations, and the window's folder is
   // offered first because it is the one the user is in.
-  assert.deepEqual(moveTargets({ recentRoots: [SAM, NOTES, ARCHIVE], currentRoot: SAM, sessionRoot: NOTES }), [
-    SAM,
-    ARCHIVE,
-  ])
+  assert.deepEqual(
+    moveTargets({ recentRoots: [SAM, NOTES, ARCHIVE], groupRoots: [], currentRoot: SAM, sessionRoot: NOTES }),
+    [SAM, ARCHIVE]
+  )
 
   // And the open folder is offered even when the remembered list has never held it — the list is capped at
   // eight, so a folder can be open and not remembered.
-  assert.deepEqual(moveTargets({ recentRoots: [NOTES, ARCHIVE], currentRoot: SAM, sessionRoot: NOTES }), [SAM, ARCHIVE])
+  assert.deepEqual(
+    moveTargets({ recentRoots: [NOTES, ARCHIVE], groupRoots: [], currentRoot: SAM, sessionRoot: NOTES }),
+    [SAM, ARCHIVE]
+  )
   results.push('move targets: the open folder is offered first, and offered even when the list forgot it')
 }
 
 function aRowWithNoProjectMayBeMovedAnywhere() {
-  assert.deepEqual(moveTargets({ recentRoots: [SAM, NOTES], currentRoot: SAM, sessionRoot: undefined }), [SAM, NOTES])
+  assert.deepEqual(
+    moveTargets({ recentRoots: [SAM, NOTES], groupRoots: [], currentRoot: SAM, sessionRoot: undefined }),
+    [SAM, NOTES]
+  )
   // With no folder open either, the remembered list is the whole answer rather than an empty menu.
-  assert.deepEqual(moveTargets({ recentRoots: [NOTES], currentRoot: null, sessionRoot: undefined }), [NOTES])
+  assert.deepEqual(moveTargets({ recentRoots: [NOTES], groupRoots: [], currentRoot: null, sessionRoot: undefined }), [
+    NOTES,
+  ])
   results.push('move targets: a row with no project may be moved anywhere the list remembers')
 }
 
 function oneFolderIsOfferedOnceHoweverItIsSpelled() {
   const targets = moveTargets({
     recentRoots: ['C:/work/notes', 'C:/Work/SAM-AI', 'c:/WORK/notes'],
+    groupRoots: [],
     currentRoot: 'C:/work/NOTES',
     sessionRoot: SAM.toUpperCase(),
   })
@@ -450,6 +464,52 @@ function oneFolderIsOfferedOnceHoweverItIsSpelled() {
   // and the row's own project is excluded however its case arrived.
   assert.deepEqual(targets, ['C:/work/NOTES'], 'the first spelling wins, and the row’s own folder is gone')
   results.push('move targets: one folder is one destination, whatever case it is spelled in')
+}
+
+/**
+ * A project the list draws as a group is a destination, whether or not the recents still hold it.
+ *
+ * The recents list stops at eight folders, while the list keeps every project a conversation was last
+ * used in. A ninth folder therefore has a header above its rows and, under the old rule, no entry in the
+ * menu — a project visible on screen that could not be chosen. That is the defect the union closes, and
+ * the ordering pinned here is what keeps the menu's shape recognisable: where the user is, then where
+ * they have been, then what the list is showing.
+ */
+function aProjectTheListDrawsIsAlwaysADestination() {
+  const PUBS = 'C:/work/pub-house'
+
+  assert.deepEqual(
+    moveTargets({ recentRoots: [NOTES, ARCHIVE], groupRoots: [PUBS, SAM], currentRoot: SAM, sessionRoot: ARCHIVE }),
+    [SAM, NOTES, PUBS],
+    'the open folder leads, the remembered list keeps its order, and a group-only project follows it'
+  )
+
+  // One root in both sources is one destination, and it keeps the place the earlier source gave it.
+  assert.deepEqual(
+    moveTargets({
+      recentRoots: [NOTES, SAM, ARCHIVE],
+      groupRoots: ['c:/WORK/notes', PUBS],
+      currentRoot: SAM,
+      sessionRoot: ARCHIVE,
+    }),
+    [SAM, NOTES, PUBS],
+    'a root the list draws and the recents also hold is offered once, where the recents put it'
+  )
+
+  // The row's own project is absent however it arrived — from the recents, from the groups, or from both.
+  assert.deepEqual(
+    moveTargets({ recentRoots: [NOTES], groupRoots: [ARCHIVE, SAM], currentRoot: SAM, sessionRoot: ARCHIVE }),
+    [SAM, NOTES],
+    'a group-only project the row already belongs to is not a destination either'
+  )
+
+  // With nothing remembered, the groups are still the whole answer, in the order their headers are drawn.
+  assert.deepEqual(
+    moveTargets({ recentRoots: [], groupRoots: [SAM, NOTES], currentRoot: null, sessionRoot: undefined }),
+    [SAM, NOTES],
+    'an empty recents list is not an empty menu while the list is showing projects'
+  )
+  results.push('move targets: every project the list draws as a group is a destination, after the remembered ones')
 }
 
 function aRefusedMoveSaysWhichFolderIsGone() {
@@ -503,6 +563,7 @@ function main(): void {
   step('move targets: open folder first', theOpenFolderIsOfferedFirstWhenItIsSomewhereElse)
   step('move targets: no project', aRowWithNoProjectMayBeMovedAnywhere)
   step('move targets: one folder', oneFolderIsOfferedOnceHoweverItIsSpelled)
+  step('move targets: drawn projects', aProjectTheListDrawsIsAlwaysADestination)
   step('move notice: gone folder', aRefusedMoveSaysWhichFolderIsGone)
   step('move notice: guards', aGuardedMoveIsSaidInTheMoveSOwnTerms)
 

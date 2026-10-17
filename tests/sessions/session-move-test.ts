@@ -33,6 +33,7 @@ import {
   setSessionMoveSink,
 } from '../../conveyor/modules/sessions'
 import { createStoreHarness } from './chat-sessions-store-harness'
+import { moveTargets } from '../../app/components/workbench/session-project'
 
 const results: string[] = []
 
@@ -199,6 +200,53 @@ async function aFolderThatIsGoneIsRefusedByCode() {
   results.push('a destination that does not exist is refused with WORKSPACE_MISSING, and changes nothing')
 }
 
+async function aGroupOnlyProjectThatIsGoneIsRefusedLikeAnyOther() {
+  const destination = makeFolder()
+
+  // The list draws this folder as a group — one conversation names it — while the recents have never held
+  // it: the shape the eight-entry cap leaves behind. The rule must offer it as a destination.
+  const targets = moveTargets({
+    recentRoots: [SOURCE],
+    groupRoots: [destination],
+    currentRoot: SOURCE,
+    sessionRoot: SOURCE,
+  })
+  assert.ok(targets.includes(destination), 'the menu the rule builds offers the project the list is drawing')
+
+  // Then the folder goes away between the menu being built and the choice being made, which is the one
+  // thing a destination can do after it has been offered.
+  rmSync(destination, { recursive: true, force: true })
+
+  const harness = createStoreHarness()
+  harness.run('addSession', {
+    id: MOVED_ID,
+    title: 'the parser work',
+    providerId: 'deepseek',
+    model: 'deepseek-chat',
+    lastRoot: SOURCE,
+  })
+  setSessionMoveSink(({ id, destination: next }) => harness.run('touchSession', { id, lastRoot: next }))
+
+  try {
+    assert.equal(
+      await codeOf(() => moveCommand().resolver({ input: { id: MOVED_ID, destination } })),
+      WORKSPACE_MISSING,
+      'a destination that is gone is refused with the code, whichever list offered it'
+    )
+  } finally {
+    setSessionMoveSink(null)
+  }
+
+  // And the record is exactly where it was: the conversation being moved still belongs to its own project
+  // rather than to a folder that is no longer there.
+  assert.equal(
+    harness.state().sessions.find((session) => session.id === MOVED_ID)?.lastRoot,
+    SOURCE,
+    'a refused move leaves the record untouched'
+  )
+  results.push('a group-only destination that is gone is refused under WORKSPACE_MISSING, and changes nothing')
+}
+
 async function aFileIsNotAFolder() {
   const folder = makeFolder()
   const file = join(folder, 'notes.txt')
@@ -238,6 +286,7 @@ async function main() {
     await step('move: record field', theRecordWriteIsTheStoreActionTheRouterWires)
     await step('move: transcript untouched', leavesTheTranscriptWhereItIs)
     await step('refuse: gone', aFolderThatIsGoneIsRefusedByCode)
+    await step('refuse: group-only, gone', aGroupOnlyProjectThatIsGoneIsRefusedLikeAnyOther)
     await step('refuse: file', aFileIsNotAFolder)
     await step('refuse: schema', refusesWhatCannotBeADestination)
 

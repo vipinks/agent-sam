@@ -296,13 +296,19 @@ export function planGroupCollapse(input: {
 /**
  * The folders one row may be moved into.
  *
+ * Two sources, because a project can be visible in the list without being remembered by the recents.
  * The remembered list is the same one the Recents menu draws — the store's own `recentRoots`, ordered
- * and capped by main — because a destination is a folder the user has worked in, and a list of movable
- * projects kept anywhere else would be a second answer to which folders exist.
+ * and capped by main — and the group roots are the projects the list is drawing headers for right now.
+ * The recents stop at eight folders while the list keeps every project a conversation was last used
+ * in, so a ninth project would otherwise have a header above its rows and no way to be chosen; the
+ * union is what makes "a visible project" and "a possible destination" the same set.
  *
  * The open folder leads, for the reason the group order puts it first: it is where the user is, and
  * therefore the project a conversation is most often being filed into. It is offered even when the list
- * has forgotten it — the list stops at eight, so a folder can be open and not remembered.
+ * has forgotten it, and even when no group is drawing it.
+ *
+ * Then the remembered folders in their own order, then the group-only ones in the order the list draws
+ * their headers: where the user has been, then what they are looking at.
  *
  * The row's own project is absent, and that absence is a rule rather than an omission: a move to where a
  * conversation already is is not a move, and a menu offering it would be offering nothing. A row with no
@@ -310,18 +316,20 @@ export function planGroupCollapse(input: {
  * conversation a project without sending it a message.
  *
  * One folder is offered once, compared by the store's own rule, so a differently-cased spelling of the
- * open folder cannot appear beside it.
+ * open folder cannot appear beside it, and a project held by both sources keeps the earlier place.
  */
 export function moveTargets(input: {
   /** The folders the app remembers, most recent first. */
   recentRoots: readonly string[]
+  /** The projects the list is drawing as groups, in the order their headers appear. */
+  groupRoots: readonly string[]
   /** The folder this window is showing, or null when none is open. */
   currentRoot: string | null
   /** The row's own project, or undefined when it has none. */
   sessionRoot: string | undefined
 }): string[] {
-  const { recentRoots, currentRoot, sessionRoot } = input
-  const ordered = currentRoot === null ? [...recentRoots] : [currentRoot, ...recentRoots]
+  const { recentRoots, groupRoots, currentRoot, sessionRoot } = input
+  const ordered = [...(currentRoot === null ? [] : [currentRoot]), ...recentRoots, ...groupRoots]
   const targets: string[] = []
 
   for (const candidate of ordered) {
