@@ -6,6 +6,26 @@ coding assistant.
 
 <br>
 
+## 2026-10-17: v1.9.0 — Old turns fold into a summary, and a long conversation compacts itself
+
+- **A turn may now stand for turns that came before it, and the transcript keeps every one of them.** A turn
+  carries `summarizesTurns`, the ids of the turns it stands for at send time. Compaction adds one such turn at
+  the head of the transcript and leaves every turn it names exactly where it was: the file and the pane keep
+  the whole conversation, and only the send-time projection leaves the summarized turns out and travels the
+  summary in their place. The pane draws a seam where the summary sits, naming the range and expanding to the
+  turns it replaced on demand. `TRANSCRIPT_VERSION` stays 3 — the key is additive and optional, so an older
+  build reads the conversation whole rather than refusing it.
+- **The summary is the Sam loop's answer, and the fold can happen on its own.** A compaction's summary is
+  whatever the loop answers to a prompt built from the range's own turns; the stub remains the fallback when
+  the loop is unavailable or answers nothing. A send that leaves the conversation at or past the Overview
+  meter's compact point folds it once the reply lands, and a compacted conversation can be folded again from
+  the first turn after the previous summary's range. The meter row now states the threshold in percent and
+  tokens and whether the conversation is compacted, naming the range.
+- The v1.8.0 baseline is everything before this entry. This entry is v1.9.0 — the two Phase 94 commits,
+  which are the work described above.
+
+<br>
+
 ## 2026-10-17: v1.7.1 — Edit and regenerate become branch points, and one switcher moves the whole trail
 
 - **A conversation is a trail with branches now, and the record's `turns` array is the trail that is checked
