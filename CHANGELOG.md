@@ -6,6 +6,21 @@ coding assistant.
 
 <br>
 
+## 2026-10-18: v1.10.0 — Session rows tab under their project, and the hover actions paint over the title
+
+- **The conversation list rows sit under their project, and the hover actions sit on the title.** Session
+  rows are tabbed inside the project's open angle icon in every group including the no-project group, and
+  the hover action cluster overlays the title's right edge instead of reserving a gutter beside it. The
+  cluster paints an opaque plate in its own right (the accent token, in both themes) with a short fade at
+  its left edge, so no fragment of a title shows through or between the icons in the hover and focus
+  states; the row paints the same accent under hover and focus-within so the plate and the row always
+  agree.
+
+- The v1.9.0 baseline is everything before this entry. This entry is v1.10.0 — the three Phase 95
+  commits, which are the work described above.
+
+<br>
+
 ## 2026-10-17: v1.9.0 — Old turns fold into a summary, and a long conversation compacts itself
 
 - **A turn may now stand for turns that came before it, and the transcript keeps every one of them.** A turn
