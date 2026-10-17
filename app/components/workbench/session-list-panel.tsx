@@ -339,7 +339,7 @@ export function SessionListPanel({
                         <li key={session.id}>
                           <div
                             className={cn(
-                              'group relative flex items-start gap-2 px-3 py-2 transition-colors',
+                              'group relative flex items-start gap-2 py-2 pr-3 pl-8 transition-colors',
                               isActive ? 'bg-brand-soft' : 'hover:bg-accent'
                             )}
                           >
@@ -392,7 +392,7 @@ export function SessionListPanel({
                             {/* Row actions. Hidden until hover, but revealed on focus as well so they are
                       reachable by keyboard rather than being a pointer-only affordance. */}
                             {editingId !== session.id && (
-                              <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                              <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 bg-inherit opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                                 <IconButton
                                   label={`Rename ${session.title}`}
                                   tooltip="Rename"
