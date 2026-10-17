@@ -50,6 +50,7 @@ import { EnginePicker } from './engine-picker'
 import { EngineModelPicker } from './engine-model-picker'
 import type { ToolStep } from './agent-session'
 import { MessageBubble } from './message-bubble'
+import { SummarySeam } from './summary-seam'
 import { MentionPicker } from './mention-picker'
 import { CommandNotice, CommandPicker, type CommandNoticeText } from './command-picker'
 import { MentionChipRow } from './mention-chip'
@@ -2279,24 +2280,32 @@ export function ChatPanel() {
                     again — and the trail a branch switch would check out is the one being written — while
                     a paused decision belongs to a turn that has not ended. All of it is a fact about the
                     pane, so it is the pane that decides. */}
-                    <MessageBubble
-                      message={messages[item.index]}
-                      canEdit={editAllowed}
-                      onCheckoutBranch={checkoutReplyBranch}
-                      // The conversation these turns belong to, which is where a turn's images are stored:
-                      // a chip asks that folder for its bytes, so a message sent in this session and a
-                      // message restored from its file are read the same way.
-                      sessionId={sessions.openId ?? undefined}
-                      // Which side the user's own bubble sits on and how large the message text is painted:
-                      // two values of the store's, passed down as they are, so a bubble's own memo sees a
-                      // primitive change rather than a new object.
-                      alignment={appearanceAlignment}
-                      fontPreset={appearanceFontPreset}
-                      onResend={reviseUserMessage}
-                      onRegenerate={regenerateReply}
-                      onApprove={() => void decide(true)}
-                      onDeny={() => void decide(false)}
-                    />
+                    {/* A summary turn draws as a seam rather than as a message: the words are the
+                    model's, not the user's, and the turn's role only says who the request is dressed
+                    as. Everything the seam stands for is still in `messages`, which is why the row
+                    is handed the list and not a precomputed range. */}
+                    {messages[item.index].summarizesTurns?.length ? (
+                      <SummarySeam summary={messages[item.index]} turns={messages} />
+                    ) : (
+                      <MessageBubble
+                        message={messages[item.index]}
+                        canEdit={editAllowed}
+                        onCheckoutBranch={checkoutReplyBranch}
+                        // The conversation these turns belong to, which is where a turn's images are stored:
+                        // a chip asks that folder for its bytes, so a message sent in this session and a
+                        // message restored from its file are read the same way.
+                        sessionId={sessions.openId ?? undefined}
+                        // Which side the user's own bubble sits on and how large the message text is painted:
+                        // two values of the store's, passed down as they are, so a bubble's own memo sees a
+                        // primitive change rather than a new object.
+                        alignment={appearanceAlignment}
+                        fontPreset={appearanceFontPreset}
+                        onResend={reviseUserMessage}
+                        onRegenerate={regenerateReply}
+                        onApprove={() => void decide(true)}
+                        onDeny={() => void decide(false)}
+                      />
+                    )}
                   </div>
                 ))}
               </div>

@@ -80,6 +80,21 @@ const turnBaseSchema = z.object({
   steps: z.array(toolStepSchema),
   error: z.string().optional(),
   /**
+   * The ids of the turns this turn stands for at send time, when it is a summary.
+   *
+   * Compaction never rewrites the transcript: it adds a summary turn at the head and names, here, the
+   * turns that summary replaces in what the engine is handed. The named turns stay in `turns` — they are
+   * what the pane expands to and what the file still holds — so a reader that does not know this key
+   * reads the whole conversation, which is the safe reading rather than a wrong one: the send is given
+   * more than it needed, never less than the user wrote.
+   *
+   * Optional, and it did not bump the version for the reason every additive field above did not: a file
+   * written before compaction existed has no key, and an absent optional key is stripped rather than
+   * defaulted, so old files stay valid reads. A summary turn read by an older build loses its range
+   * rather than itself, which is why `TRANSCRIPT_VERSION` stays where it is.
+   */
+  summarizesTurns: z.array(z.string()).optional(),
+  /**
    * The instructions file this turn was sent under, and whether that read was capped.
    *
    * On the turn rather than on the snapshot, because the context a conversation is sent under can

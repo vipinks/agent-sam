@@ -83,6 +83,12 @@ function freezeTurn(turn: AgentTurn): TranscriptTurn {
     content: turn.content,
     steps: turn.steps.map((step) => ({ ...step })),
     ...(turn.error !== undefined ? { error: turn.error } : {}),
+    // The range a summary turn stands for. Written only when there is one, so an ordinary turn is the
+    // same record it was before compaction existed — the same additive rule every optional field here
+    // follows, and the reason a compacted conversation still opens in a build that predates this key.
+    ...(turn.summarizesTurns !== undefined && turn.summarizesTurns.length > 0
+      ? { summarizesTurns: [...turn.summarizesTurns] }
+      : {}),
     // Written only when the turn was actually sent under instructions, so an ordinary conversation
     // carries no key rather than a null it would then have to be read back out of.
     ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),
@@ -176,6 +182,12 @@ function thawTurn(turn: TranscriptTurn): AgentTurn {
     content: turn.content,
     steps: turn.steps.map((step) => ({ ...step })),
     ...(turn.error !== undefined ? { error: turn.error } : {}),
+    // Carried back so a compacted conversation still sends its summary rather than the turns it stands
+    // for: the range is what the projection reads, and a reopened transcript with the key dropped would
+    // send the whole conversation again — which is not wrong, but is not what the user compacted for.
+    ...(turn.summarizesTurns !== undefined && turn.summarizesTurns.length > 0
+      ? { summarizesTurns: [...turn.summarizesTurns] }
+      : {}),
     // Carried back so an opened conversation keeps saying what it was sent under, and so an export of
     // it can still name the file.
     ...(turn.instructionsFile !== undefined ? { instructionsFile: turn.instructionsFile } : {}),

@@ -10,7 +10,8 @@ import {
   serializeTranscript,
   type TranscriptState,
 } from './session-transcript'
-import { resumeTurnNumbering, type AgentTurn, type PendingCall } from './agent-session'
+import { resumeTurnNumbering, startSummaryTurn, type AgentTurn, type PendingCall } from './agent-session'
+import { compactionRange, summaryText } from '@/conveyor/protocol/truncate'
 import type { DraftAttachment } from './attachments'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
@@ -194,6 +195,19 @@ export interface ChatSessions {
    * caller cannot drop what it was never handed.
    */
   setTurns: (turns: AgentTurn[]) => void
+  /**
+   * Compact the conversation on screen: summarize the turns before the one it is on, and add the
+   * summary at the head.
+   *
+   * Nothing is removed. The summary turn names the range it stands for, the send-time projection is
+   * what leaves those turns out of the next request, and the transcript — on screen and on disk —
+   * keeps every word the user wrote. Manual this turn: a trigger the user presses, with the automatic
+   * one and the meter integration left to the next.
+   *
+   * Does nothing when there is nothing to fold — fewer than two turns — which is the home screen and a
+   * conversation that has only just started.
+   */
+  compact: () => void
   /**
    * The composer's in-progress state: what the user has typed and not sent, and what goes with it.
    *
@@ -592,6 +606,29 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const scheduleSave = useCallback(() => {
     debounced.current.schedule()
   }, [])
+
+  /**
+   * Compact the conversation on screen, and write it down.
+   *
+   * The rules are `compactionRange`'s and `summaryText`'s; this is only the act — the summary goes on
+   * the front of the turns that are already there, and the save is queued like any other write so a
+   * crash after a compaction reopens the conversation it produced rather than the one before it. A
+   * range with nothing in it is a no-op: the button is disabled there, and a caller that presses anyway
+   * gets the transcript it already had.
+   */
+  const compact = useCallback(() => {
+    const turns = transcriptRef.current.turns
+    const range = compactionRange(turns)
+    if (range.length === 0) return
+    setTurns([
+      startSummaryTurn(
+        summaryText(range),
+        range.map((turn) => turn.id)
+      ),
+      ...turns,
+    ])
+    scheduleSave()
+  }, [scheduleSave, setTurns])
 
   // The session's consent setting, read off the transcript on screen: the record owns it, so the live
   // state is only ever a copy of what was loaded or of what the user has just set.
@@ -1255,6 +1292,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   return {
     transcript,
     setTurns,
+    compact,
     composer,
     setComposer,
     autoApprove,

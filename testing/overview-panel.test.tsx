@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -731,5 +731,134 @@ describe('the context card beneath the tiles', () => {
     expect(await screen.findByText('Open a conversation to see what it has spent.')).toBeTruthy()
     expect(container.querySelector('[data-slot="overview-context-card"]')).toBeNull()
     expect(container.querySelector('[data-slot="overview-tiles"]')).toBeNull()
+  })
+})
+
+describe('compacting a conversation', () => {
+  /**
+   * jsdom implements no layout, so the scroll region's own `offsetHeight` reads as zero and
+   * `@tanstack/react-virtual` renders no rows at all. A viewport is stood in for, for this suite only,
+   * so the pane draws the turns the compaction acts on. Same stand-in, same reason, as the transcript
+   * suites': the virtualizer's window is measured, and a zero-height window is an empty one.
+   */
+  const VIEWPORT = { width: 900, height: 800 }
+
+  beforeAll(() => {
+    const proto = HTMLElement.prototype as unknown as Record<string, number>
+    for (const [property, value] of [
+      ['offsetWidth', VIEWPORT.width],
+      ['offsetHeight', VIEWPORT.height],
+    ] as const) {
+      Object.defineProperty(proto, property, { configurable: true, get: () => value })
+    }
+  })
+
+  afterAll(() => {
+    const proto = HTMLElement.prototype as unknown as Record<string, number>
+    delete proto.offsetWidth
+    delete proto.offsetHeight
+  })
+
+  /** The scroll region the pane draws its turns in. */
+  function transcriptPane(container: HTMLElement): HTMLElement {
+    const found = container.querySelector<HTMLElement>('[data-slot="chat-transcript"]')
+    if (!found) throw new Error('the transcript pane is not drawn')
+    return found
+  }
+
+  /** The seam row a summary turn draws, which is the head of a compacted conversation. */
+  function seam(container: HTMLElement): HTMLElement {
+    const found = transcriptPane(container).querySelector<HTMLElement>('[data-slot="summary-seam"]')
+    if (!found) throw new Error('no summary seam in the transcript')
+    return found
+  }
+
+  /**
+   * A transcript a previous compaction wrote: the summary turn at the head naming the two turns it
+   * stands for, those turns still behind it, and the turn the conversation has gone on with.
+   */
+  function reopened(): TranscriptSnapshot {
+    return {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        {
+          id: 'summary-1',
+          role: 'user',
+          content: 'Summary of turns 1 through 2:\nuser 0',
+          steps: [],
+          summarizesTurns: ['user-0', 'assistant-1'],
+        },
+        { id: 'user-0', role: 'user', content: 'user 0', steps: [] },
+        { id: 'assistant-1', role: 'assistant', content: 'assistant 1', steps: [] },
+        { id: 'user-2', role: 'user', content: 'user 2', steps: [] },
+      ],
+    }
+  }
+
+  it('offers Compact conversation beside the panel’s own controls', async () => {
+    stubWorkbench({
+      sessions: { sessions: [session()], activeSessionId: SESSION_ID },
+      transcript: saved(['user', 'assistant', 'user', 'assistant', 'user']),
+    })
+    const { container } = await mountWorkbench()
+
+    const found = await dockOverview(container)
+    expect(within(found).getByRole('button', { name: 'Compact conversation' })).toBeTruthy()
+  })
+
+  it('summarizes the older turns and draws a seam naming them', async () => {
+    stubWorkbench({
+      sessions: { sessions: [session()], activeSessionId: SESSION_ID },
+      transcript: saved(['user', 'assistant', 'user', 'assistant', 'user']),
+    })
+    const { container } = await mountWorkbench()
+
+    const found = await dockOverview(container)
+    expect(transcriptPane(container).querySelector('[data-slot="summary-seam"]')).toBeNull()
+
+    await userEvent.click(within(found).getByRole('button', { name: 'Compact conversation' }))
+
+    // Four of the five turns are behind the summary; the last one stays in the conversation it was in.
+    await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 4 summarized'))
+    // The summary is the head of the conversation, and the turns it stands for are still behind it: the
+    // transcript is added to, never cut. The expansion below is where they are read back.
+    expect(transcriptPane(container).querySelector('[data-index="0"] [data-slot="summary-seam"]')).not.toBeNull()
+  })
+
+  it('expands the seam row to the turns it stands for', async () => {
+    stubWorkbench({
+      sessions: { sessions: [session()], activeSessionId: SESSION_ID },
+      transcript: saved(['user', 'assistant', 'user', 'assistant', 'user']),
+    })
+    const { container } = await mountWorkbench()
+
+    const found = await dockOverview(container)
+    await userEvent.click(within(found).getByRole('button', { name: 'Compact conversation' }))
+    await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 4 summarized'))
+
+    // Collapsed, the row is a line and not the conversation it replaces.
+    expect(within(seam(container)).queryByText('user 2')).toBeNull()
+
+    await userEvent.click(within(seam(container)).getByRole('button', { name: 'Show the summarized turns' }))
+
+    await waitFor(() => expect(within(seam(container)).getByText('user 2')).toBeTruthy())
+    for (const text of ['user 0', 'assistant 1', 'assistant 3']) {
+      expect(within(seam(container)).getByText(text)).toBeTruthy()
+    }
+    // Reading them does not put them back on the wire, and the seam is still the head of the conversation.
+    expect(seam(container).textContent).toContain('Turns 1 through 4 summarized')
+  })
+
+  it('draws the seam row when a compacted conversation is reopened', async () => {
+    stubWorkbench({
+      sessions: { sessions: [session()], activeSessionId: SESSION_ID },
+      transcript: reopened(),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 2 summarized'))
+    expect(within(seam(container)).queryByText('user 0')).toBeNull()
   })
 })

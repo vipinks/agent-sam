@@ -3,6 +3,7 @@ import type { FileDiff } from '@/conveyor/protocol/diff'
 import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
+import { summarizedIds } from '@/conveyor/protocol/truncate'
 import { liveMessageVersion, saysTheSameVersion } from '@/conveyor/protocol/message-versions'
 import {
   AUTO_CONTINUE_MAX,
@@ -115,6 +116,15 @@ export interface AgentTurn {
   content: string
   steps: ToolStep[]
   error?: string
+  /**
+   * The ids of the turns this turn stands for at send time, when it is a summary.
+   *
+   * A summary is a regular turn — role `user`, its prose the summary itself — carrying the range it
+   * replaces. The turns it names stay in the transcript: they are what the seam row expands to and what
+   * the file still holds, and only the send-time projection in `toHistory` leaves them out. Absent for
+   * every ordinary turn, so a conversation that was never compacted sends exactly what it always sent.
+   */
+  summarizesTurns?: string[]
   /**
    * The project instructions file this turn was sent under, when there was one.
    *
@@ -492,6 +502,12 @@ function callArgs(call: PendingCall): Record<string, unknown> {
  * `tool_calls` and `tool` turns) and hands it back on a pause, so rebuilding it here would be a
  * second source of truth that could disagree with the first.
  *
+ * Compaction is applied here and only here: a turn named by some summary turn's `summarizesTurns` is
+ * left out of what is sent, and the summary turn that named it travels in its place. That is the one
+ * place the two readings of a transcript part company — the pane and the file keep every turn, the
+ * send gets the summary and the turns after it — which is why the projection is a rule about the list
+ * rather than a rewrite of it. A transcript with no summary turn projects every turn, exactly as before.
+ *
  * A turn's `imageRefs` travel with it, and they are references rather than pictures: main resolves each
  * one against the attachment store at the moment a request is built, so what crosses this boundary is
  * an id, a name, a media type and a size — never the bytes, which would multiply the size of everything
@@ -500,8 +516,9 @@ function callArgs(call: PendingCall): Record<string, unknown> {
  * images existed, which is what `tests/ui/agent-session-test.ts` pins by equality.
  */
 export function toHistory(turns: AgentTurn[]): HistoryMessage[] {
+  const summarized = new Set(summarizedIds(turns))
   return turns
-    .filter((t) => !t.error)
+    .filter((t) => !t.error && !summarized.has(t.id))
     .map((t) => ({
       role: t.role,
       content: t.content,
@@ -881,6 +898,23 @@ export function resolveDecision(turns: AgentTurn[], turnId: string, callId: stri
 /** Start an assistant turn for a run; the id is what every following chunk addresses. */
 export function startAssistantTurn(): AgentTurn {
   return { id: nextId('assistant'), role: 'assistant', content: '', steps: [] }
+}
+
+/**
+ * Start the summary turn a compaction adds at the head of the transcript.
+ *
+ * A regular turn, written like any other: role `user`, the summary as its prose, and the range it
+ * stands for in `summarizesTurns`. Nothing about it is live — there is no run behind it and no chunk
+ * will ever address its id — which is why it is created whole rather than appended to.
+ */
+export function startSummaryTurn(content: string, summarizesTurns: readonly string[]): AgentTurn {
+  return {
+    id: nextId('summary'),
+    role: 'user',
+    content,
+    steps: [],
+    summarizesTurns: [...summarizesTurns],
+  }
 }
 
 export function startUserTurn(

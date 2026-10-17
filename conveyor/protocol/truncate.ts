@@ -68,3 +68,66 @@ export function runHistoryFor<T extends { id: string; role: 'user' | 'assistant'
   if (index === -1) return [...turns]
   return turns[index].role === 'user' ? turns.slice(0, index + 1) : truncateFromTurn(turns, turnId)
 }
+
+/**
+ * Compaction: a summary turn at the head of a conversation, standing for turns that are still there.
+ *
+ * A summary is a regular turn whose `summarizesTurns` names what it speaks for. That is the whole
+ * record-side mechanism — nothing is moved, marked, or deleted — and these rules are the arithmetic
+ * around it: which turns a compaction replaces, what the stubbed summary says, and what the seam row
+ * expands to. Kept here, beside `runHistoryFor`, because both answer one question about a list of
+ * turns: what does a send get.
+ *
+ * Pure and generic over anything carrying an id and a role, for the reason the two rules above are:
+ * the live turns and the stored ones are the same shape, and a second copy of this arithmetic is a
+ * second answer waiting to disagree with the first.
+ */
+
+/** The turns a manual compaction replaces: everything before the turn the conversation is on. */
+export function compactionRange<T extends { id: string }>(turns: readonly T[]): T[] {
+  // The last turn stays: compaction is triggered from the conversation in front of the user, and the
+  // exchange they are looking at is the one it must not swallow. Nothing to fold below two turns.
+  return turns.length < 2 ? [] : turns.slice(0, turns.length - 1)
+}
+
+/** How the seam row names the range it stands for. */
+export function seamLabel(count: number): string {
+  return `Turns 1 through ${count} summarized`
+}
+
+/**
+ * The stubbed summary: the range's header, then what the user actually asked in it.
+ *
+ * Deliberately not clever. This turn provides the mechanism, not the summarisation: concatenating the
+ * user's messages preserves the conversation's key content and produces a working summary, and a real
+ * one from the Sam loop replaces this function's body rather than the projection around it. Assistant
+ * prose is left out because a summary of a conversation is what was asked and settled, and the answers
+ * are the part a model can afford to lose first.
+ */
+export function summaryText(turns: readonly { role: 'user' | 'assistant'; content: string }[]): string {
+  const asked = turns.filter((turn) => turn.role === 'user' && turn.content.trim()).map((turn) => turn.content)
+  return [`Summary of turns 1 through ${turns.length}:`, ...asked].join('\n')
+}
+
+/** Every id any summary turn in the list stands for, in the order they were summarized. */
+export function summarizedIds<T extends { summarizesTurns?: string[] }>(turns: readonly T[]): string[] {
+  const ids: string[] = []
+  for (const turn of turns) {
+    for (const id of turn.summarizesTurns ?? []) if (!ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * The records a given summary stands for, in transcript order.
+ *
+ * Read off the transcript rather than off the summary, because the summary names ids and the records
+ * are what the seam row expands to — the words, in the order they were said.
+ */
+export function summarizedTurns<T extends { id: string }>(
+  turns: readonly T[],
+  summary: { summarizesTurns?: string[] }
+): T[] {
+  const ids = new Set(summary.summarizesTurns ?? [])
+  return turns.filter((turn) => ids.has(turn.id))
+}

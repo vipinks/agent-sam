@@ -1,8 +1,9 @@
-import { ChartColumn } from 'lucide-react'
+import { ChartColumn, Scissors } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { overviewTiles, resolveRates } from '@/conveyor/protocol/session-usage'
+import { compactionRange } from '@/conveyor/protocol/truncate'
 import { useChatSessionsContext } from './chat-sessions-context'
 import { ContextWindowCard } from './context-window-card'
 import { PaneHeader } from './pane-header'
@@ -63,6 +64,7 @@ export function OverviewPanel() {
   return (
     <div data-slot="overview-panel" className="flex h-full flex-col bg-background">
       <PaneHeader icon={ChartColumn} title="Overview">
+        <CompactControl />
         <PanelExpandControl />
         <PanelCollapseControl />
       </PaneHeader>
@@ -88,6 +90,36 @@ export function OverviewPanel() {
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * The manual compaction trigger.
+ *
+ * Beside the panel's own controls because compaction is a decision about what this conversation costs
+ * — the same subject as the tiles — and because the card it sits over is the one that makes the cost
+ * visible. Manual this turn: nothing compacts on its own, and the button is the whole of the trigger.
+ *
+ * Disabled rather than hidden when there is nothing to fold: a conversation with one turn, the home
+ * screen and a run in flight all have nothing this could safely summarize — a run in flight is writing
+ * the turn at the end of the list the range would be cut against — and a control that vanished at
+ * those moments would be a control the user has to guess about.
+ */
+function CompactControl() {
+  const { atHome, transcript, streaming, compact } = useChatSessionsContext()
+  const canCompact = !atHome && !streaming && compactionRange(transcript.turns).length > 0
+
+  return (
+    <button
+      type="button"
+      aria-label="Compact conversation"
+      title="Compact conversation"
+      disabled={!canCompact}
+      onClick={compact}
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+    >
+      <Scissors aria-hidden="true" className="size-3.5" />
+    </button>
   )
 }
 
