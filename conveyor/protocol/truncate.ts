@@ -83,11 +83,34 @@ export function runHistoryFor<T extends { id: string; role: 'user' | 'assistant'
  * second answer waiting to disagree with the first.
  */
 
-/** The turns a manual compaction replaces: everything before the turn the conversation is on. */
-export function compactionRange<T extends { id: string }>(turns: readonly T[]): T[] {
-  // The last turn stays: compaction is triggered from the conversation in front of the user, and the
-  // exchange they are looking at is the one it must not swallow. Nothing to fold below two turns.
-  return turns.length < 2 ? [] : turns.slice(0, turns.length - 1)
+/** Whether a turn is a summary: it names the turns it stands for. */
+export function isSummaryTurn(turn: { summarizesTurns?: string[] }): boolean {
+  return (turn.summarizesTurns?.length ?? 0) > 0
+}
+
+/**
+ * The turns a compaction replaces: everything before the turn the conversation is on, less whatever an
+ * earlier summary already stands for.
+ *
+ * A summary turn is never summarized again, and neither is a turn it already speaks for: a conversation
+ * folded once and then folded again has to start its second range at the first turn after the first
+ * range's end. Reading that as "skip every summarized id" is the same rule said in a way that survives a
+ * transcript that was loaded from disk, where the summary and its range sit in whatever order the file
+ * holds them.
+ *
+ * The last turn stays: compaction is triggered from the conversation in front of the user, and the
+ * exchange they are looking at is the one it must not swallow. With a draft in the composer the last
+ * two stay, because the message being written is answered by the turn before it. Nothing to fold below
+ * the turns kept.
+ */
+export function compactionRange<T extends { id: string; summarizesTurns?: string[] }>(
+  turns: readonly T[],
+  options: { draft?: boolean } = {}
+): T[] {
+  const keep = options.draft === true ? 2 : 1
+  const already = new Set(summarizedIds(turns))
+  const candidates = turns.filter((turn) => !isSummaryTurn(turn) && !already.has(turn.id))
+  return candidates.length <= keep ? [] : candidates.slice(0, candidates.length - keep)
 }
 
 /** How the seam row names the range it stands for. */
@@ -96,13 +119,107 @@ export function seamLabel(count: number): string {
 }
 
 /**
+ * The range a summary stands for, counted in conversation turns rather than named by ids.
+ *
+ * `seamLabel` numbers from the first turn, which is right for the first compaction and wrong for the
+ * second: a range that starts at the fifth turn has to say so. The positions are taken over the
+ * conversation the user reads — summary turns are not turns of the conversation — so the label names
+ * the same turns the seam expands to. Null when the transcript no longer holds the range, which is a
+ * stale summary rather than one this can name.
+ */
+export function summaryRangeLabel(
+  turns: readonly { id: string; summarizesTurns?: string[] }[],
+  summary: { summarizesTurns?: string[] }
+): string | null {
+  const ids = new Set(summary.summarizesTurns ?? [])
+  if (ids.size === 0) return null
+
+  const positions: number[] = []
+  turns
+    .filter((turn) => !isSummaryTurn(turn))
+    .forEach((turn, index) => {
+      if (ids.has(turn.id)) positions.push(index + 1)
+    })
+  if (positions.length === 0) return null
+
+  const start = positions[0]
+  const end = positions[positions.length - 1]
+  return start === 1 ? seamLabel(end) : `Turns ${start} through ${end} summarized`
+}
+
+/** The latest summary in a transcript, or null when the conversation has never been compacted. */
+export function latestSummary<T extends { summarizesTurns?: string[] }>(turns: readonly T[]): T | null {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (isSummaryTurn(turns[index])) return turns[index]
+  }
+  return null
+}
+
+/** The message the Sam loop is asked for: one instruction, and the range as the conversation it reads. */
+export interface SummaryMessage {
+  role: 'system' | 'user'
+  content: string
+}
+
+/**
+ * What the summarization asks for: a concise summary of the conversation so far, written from the
+ * range's own turns.
+ *
+ * The range travels as a transcript rather than as the stub's list of questions, because that is what
+ * a summary is written from: an answer can be the thing a later question builds on, and a model handed
+ * only the questions would summarize a conversation half of which it never read. Tool chatter is not
+ * filtered here — the range is turns, and a turn's prose is what the user and the assistant said.
+ */
+export function summaryPrompt(turns: readonly { role: 'user' | 'assistant'; content: string }[]): SummaryMessage[] {
+  const transcript = turns
+    .filter((turn) => turn.content.trim().length > 0)
+    .map((turn) => `${turn.role === 'user' ? 'User' : 'Assistant'}: ${turn.content.trim()}`)
+    .join('\n\n')
+
+  return [
+    {
+      role: 'system',
+      content:
+        'You summarize conversations. Reply with one concise paragraph, keeping the names, decisions, constraints and open questions, and leaving out pleasantries and tool chatter. Reply with the summary only.',
+    },
+    { role: 'user', content: `Summarize the conversation so far.\n\n${transcript}` },
+  ]
+}
+
+/**
+ * The summary a compaction writes: the Sam loop's answer, or the Turn 1 stub when it cannot answer.
+ *
+ * The loop is the app's own model call, so it can be unavailable — no key saved, a provider that
+ * refuses, a network that is down — and every one of those is the same fact to this rule: there is no
+ * real summary to write. The stub is not a failure swallowed: it is the mechanism's own fallback,
+ * asserted by its own suite, and a conversation compacted without a model is still a conversation that
+ * sends less than it did.
+ *
+ * An empty answer is treated as no answer. A model that returns whitespace has told the caller nothing,
+ * and a summary turn carrying nothing would be worse than the stub it replaced.
+ */
+export async function summarizeRange(
+  turns: readonly { role: 'user' | 'assistant'; content: string }[],
+  ask: (messages: SummaryMessage[]) => Promise<string>
+): Promise<string> {
+  if (!turns.some((turn) => turn.content.trim().length > 0)) return summaryText(turns)
+
+  try {
+    const reply = (await ask(summaryPrompt(turns))).trim()
+    return reply.length > 0 ? reply : summaryText(turns)
+  } catch {
+    return summaryText(turns)
+  }
+}
+
+/**
  * The stubbed summary: the range's header, then what the user actually asked in it.
  *
- * Deliberately not clever. This turn provides the mechanism, not the summarisation: concatenating the
- * user's messages preserves the conversation's key content and produces a working summary, and a real
- * one from the Sam loop replaces this function's body rather than the projection around it. Assistant
- * prose is left out because a summary of a conversation is what was asked and settled, and the answers
- * are the part a model can afford to lose first.
+ * Deliberately not clever, and no longer the only answer: it is what `summarizeRange` writes when the
+ * Sam loop cannot answer. Concatenating the user's messages preserves the conversation's key content and
+ * produces a working summary without a model, which is what a conversation with no key saved still
+ * gets. Assistant prose is left out because a summary of a conversation is what was asked and settled,
+ * and the answers are the part a model can afford to lose first.
  */
 export function summaryText(turns: readonly { role: 'user' | 'assistant'; content: string }[]): string {
   const asked = turns.filter((turn) => turn.role === 'user' && turn.content.trim()).map((turn) => turn.content)

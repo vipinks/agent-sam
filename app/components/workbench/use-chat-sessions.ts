@@ -11,7 +11,10 @@ import {
   type TranscriptState,
 } from './session-transcript'
 import { resumeTurnNumbering, startSummaryTurn, type AgentTurn, type PendingCall } from './agent-session'
-import { compactionRange, summaryText } from '@/conveyor/protocol/truncate'
+import { compactionRange, summarizeRange } from '@/conveyor/protocol/truncate'
+import { pastCompactPoint, resolveWindow } from '@/conveyor/protocol/context-window'
+import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
+import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import type { DraftAttachment } from './attachments'
 import { planRename } from './rename'
 import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
@@ -201,13 +204,24 @@ export interface ChatSessions {
    *
    * Nothing is removed. The summary turn names the range it stands for, the send-time projection is
    * what leaves those turns out of the next request, and the transcript — on screen and on disk —
-   * keeps every word the user wrote. Manual this turn: a trigger the user presses, with the automatic
-   * one and the meter integration left to the next.
+   * keeps every word the user wrote. The summary is the Sam loop's answer when it can give one and the
+   * Turn 1 stub when it cannot, and a conversation folded once can be folded again: the next range
+   * starts at the first turn after the last summary's range.
    *
-   * Does nothing when there is nothing to fold — fewer than two turns — which is the home screen and a
-   * conversation that has only just started.
+   * Does nothing when there is nothing to fold — fewer than the two turns the cut leaves — which is the
+   * home screen and a conversation that has only just started.
    */
   compact: () => void
+  /**
+   * Compact the conversation on screen when the meter says it is past its compact point.
+   *
+   * Called once at the end of every send, after the reply has landed. The measurement is the Overview
+   * meter's own — the session's context snapshot against the model's window and the compact point the
+   * Settings field holds — so what compacts is what the card says is past the point, and the cut rule is
+   * the manual trigger's. A conversation that is not past the point, has nothing measured, or has no
+   * window to measure against is left alone.
+   */
+  compactAutomatically: () => void
   /**
    * The composer's in-progress state: what the user has typed and not sent, and what goes with it.
    *
@@ -546,6 +560,22 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   // stable identity — they are mostly invoked from event handlers that must not re-create a stream.
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+
+  // Whether a summary is being written. A compaction is a model round trip, so the transcript can be
+  // asked to fold itself again while the first summary is still arriving; the ref is what makes the
+  // second request a no-op rather than a second summary turn over a range that has moved.
+  const compactingRef = useRef(false)
+
+  // The meter's two inputs, read where the trigger can reach them: the compact point the Settings
+  // field writes, and the windows the model rows declare. Refs beside the state for the reason the
+  // session ref above is one — the post-send check runs in a callback built during an earlier render,
+  // and a value closed over there would answer for the settings the window had when the send began.
+  const compactPercent = useConveyorStore(contextPreferencesStore, (s) => s.compactPoint)
+  const compactPercentRef = useRef(compactPercent)
+  compactPercentRef.current = compactPercent
+  const providers = useConveyorStore(providerConfigStore, (s) => s.providers)
+  const providersRef = useRef(providers)
+  providersRef.current = providers
   const hydratedIdRef = useRef<string | null>(null)
   // The folder this window is showing, mirrored for the callbacks below: a click and a turn start both
   // read it, and both have to keep a stable identity or a switch would re-create the run's handlers.
@@ -610,25 +640,86 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   /**
    * Compact the conversation on screen, and write it down.
    *
-   * The rules are `compactionRange`'s and `summaryText`'s; this is only the act — the summary goes on
-   * the front of the turns that are already there, and the save is queued like any other write so a
-   * crash after a compaction reopens the conversation it produced rather than the one before it. A
-   * range with nothing in it is a no-op: the button is disabled there, and a caller that presses anyway
-   * gets the transcript it already had.
+   * The rules are `compactionRange`'s, `summarizeRange`'s and `summaryText`'s; this is only the act —
+   * the summary goes on the front of the turns that are already there, and the save is queued like any
+   * other write so a crash after a compaction reopens the conversation it produced rather than the one
+   * before it. A range with nothing in it is a no-op: the button is disabled there, and a caller that
+   * presses anyway gets the transcript it already had.
+   *
+   * The summary is written by the Sam loop through `llm.chat`, which is the same provider and model
+   * resolution the loop itself uses, without the tool apparatus a summary has no use for. A loop that
+   * cannot answer — no key, a refusal, a stream that fails — is `summarizeRange`'s fallback rather than
+   * this callback's failure: a compaction that leaves the conversation honest is still a compaction.
+   *
+   * The range is re-read after the summary arrives, because writing one is a round trip and the
+   * transcript can move under it. A range that is no longer the one on screen is dropped rather than
+   * half-applied: the summary and the turns it names have to describe the same conversation.
    */
-  const compact = useCallback(() => {
-    const turns = transcriptRef.current.turns
-    const range = compactionRange(turns)
+  const runCompaction = useCallback(async () => {
+    if (compactingRef.current) return
+    const hasDraft = () => composerRef.current.text.trim().length > 0
+    const range = compactionRange(transcriptRef.current.turns, { draft: hasDraft() })
     if (range.length === 0) return
-    setTurns([
-      startSummaryTurn(
-        summaryText(range),
-        range.map((turn) => turn.id)
-      ),
-      ...turns,
-    ])
-    scheduleSave()
-  }, [scheduleSave, setTurns])
+    const ids = range.map((turn) => turn.id)
+
+    compactingRef.current = true
+    try {
+      const record = sessionsRef.current.find((s) => s.id === activeIdRef.current)
+      const summary = await summarizeRange(range, async (messages) => {
+        let text = ''
+        // Plain strings: `llm.chat` is the Sam loop's text-only surface, so a chunk is prose rather
+        // than the agent's tagged frame.
+        for await (const piece of conveyor.llm.chat({
+          providerId: record?.providerId ?? providerId,
+          model: record?.model ?? model,
+          messages,
+        })) {
+          if (typeof piece === 'string') text += piece
+        }
+        return text
+      })
+
+      const current = compactionRange(transcriptRef.current.turns, { draft: hasDraft() })
+      if (current.length !== ids.length || current.some((turn, index) => turn.id !== ids[index])) return
+
+      setTurns([startSummaryTurn(summary, ids), ...transcriptRef.current.turns])
+      scheduleSave()
+    } finally {
+      compactingRef.current = false
+    }
+  }, [model, providerId, scheduleSave, setTurns])
+
+  const compact = useCallback(() => {
+    void runCompaction()
+  }, [runCompaction])
+
+  /**
+   * Compact after a send, when the conversation has grown past its compact point.
+   *
+   * The check is the Overview meter's, read as the meter reads it: the send's own context snapshot
+   * against the window the model resolves to, at the percent the Settings field holds. Called once per
+   * send from the run's end, so a conversation compacts at most once between two sends — and a
+   * conversation that is already mid-compaction is not asked to fold itself twice.
+   */
+  const compactAutomatically = useCallback(() => {
+    if (streamingRef.current || compactingRef.current) return
+    const record = sessionsRef.current.find((s) => s.id === activeIdRef.current)
+    if (!record) return
+    const window = resolveWindow({
+      model: record.model,
+      modelWindows: providersRef.current[record.providerId]?.modelWindows,
+    })
+    if (
+      !pastCompactPoint({
+        snapshot: record.contextSnapshot,
+        window,
+        compactPercent: compactPercentRef.current,
+      })
+    ) {
+      return
+    }
+    void runCompaction()
+  }, [runCompaction])
 
   // The session's consent setting, read off the transcript on screen: the record owns it, so the live
   // state is only ever a copy of what was loaded or of what the user has just set.
@@ -1293,6 +1384,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     transcript,
     setTurns,
     compact,
+    compactAutomatically,
     composer,
     setComposer,
     autoApprove,

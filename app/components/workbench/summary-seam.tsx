@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Scissors } from 'lucide-react'
-import { seamLabel, summarizedTurns } from '@/conveyor/protocol/truncate'
+import { seamLabel, summarizedTurns, summaryRangeLabel } from '@/conveyor/protocol/truncate'
 import type { AgentTurn } from './agent-session'
 
 /**
@@ -20,13 +20,17 @@ export function SummarySeam({ summary, turns }: { summary: AgentTurn; turns: Age
   const [open, setOpen] = useState(false)
   const range = summary.summarizesTurns ?? []
   const replaced = summarizedTurns(turns, summary)
+  // The range as the conversation numbers it, so a second summary says where it starts rather than
+  // counting from the first turn again. A transcript that no longer holds the range falls back to the
+  // count it does have.
+  const label = summaryRangeLabel(turns, summary) ?? seamLabel(range.length)
 
   return (
     <div data-slot="summary-seam" className="mx-auto my-2 w-full max-w-3xl px-4">
       <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
         <Scissors aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         <span data-slot="summary-seam-label" className="text-[12.5px] font-medium">
-          {seamLabel(range.length)}
+          {label}
         </span>
         <button
           type="button"

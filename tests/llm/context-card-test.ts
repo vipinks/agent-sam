@@ -15,7 +15,6 @@ import { strict as assert } from 'node:assert'
 import {
   CONTEXT_EM_DASH,
   CONTEXT_ESTIMATOR_FOOTNOTE,
-  CONTEXT_PILL_CAPTION,
   contextCard,
   type ContextSnapshot,
 } from '../../conveyor/protocol/context-window'
@@ -104,10 +103,11 @@ function aKnownWindowDrawsTheFigureTheBadgeAndTheRows() {
   assert.equal(view.remainderLabel, 'To compact point')
   assert.equal(view.remainderText, '31k tokens')
 
-  // The pill and the two sentences that are the same on every card.
+  // The pill and the caption beneath it: the status, and the point the status is decided at. No
+  // summary label on this card, so the state is the one a conversation that has never been folded is in.
   assert.equal(view.pill, 'healthy')
   assert.equal(view.pillLabel, 'Healthy')
-  assert.equal(view.pillCaption, CONTEXT_PILL_CAPTION)
+  assert.equal(view.pillCaption, 'Compacts at 70% \u2014 70k tokens. Not compacted yet.')
   assert.equal(view.footnote, CONTEXT_ESTIMATOR_FOOTNOTE)
   assert.equal(view.pointed, null, 'a window that is known needs no sentence pointing at the model row')
 
@@ -237,6 +237,31 @@ function nothingMeasuredDrawsOneSentenceAndNoZeros() {
   results.push('an unmeasured conversation draws one sentence and no zeros')
 }
 
+// ---------------------------------------------------------------- the meter row's sentence
+
+function theCaptionNamesThePointAndTheState() {
+  // The compacted state names the range the latest summary stands for, in the conversation's own
+  // numbering, so a second fold says where it starts rather than counting from the first turn again.
+  const compacted = contextCard({
+    snapshot: SNAPSHOT,
+    window: WINDOW,
+    compactPercent: PERCENT,
+    summaryLabel: 'Turns 5 through 8 summarized',
+  })
+  assert.equal(compacted.pillCaption, 'Compacts at 70% \u2014 70k tokens. Compacted: turns 5 through 8 summarized.')
+
+  // The threshold is stated even where the status is past it: the caption says what decided the pill.
+  const past = contextCard({ snapshot: spent(75_000), window: WINDOW, compactPercent: PERCENT })
+  assert.equal(past.pill, 'pastCompact')
+  assert.equal(past.pillCaption, 'Compacts at 70% \u2014 70k tokens. Not compacted yet.')
+
+  // No window to take a share of: the percent is still the point, said as a share.
+  const unknown = contextCard({ snapshot: SNAPSHOT, window: null, compactPercent: PERCENT })
+  assert.equal(unknown.pillCaption, 'Compacts at 70% of the window. Not compacted yet.')
+
+  results.push('the caption states the compact-point threshold in tokens and the conversation’s state')
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
@@ -244,6 +269,7 @@ async function main() {
   theRowsAddBackToTheUsedTotal()
   theWordingFlipsAtTheCompactPoint()
   thePillStatesFlipAtTheWindowToo()
+  theCaptionNamesThePointAndTheState()
   anUnknownWindowKeepsTheTokensAndDashesTheRest()
   nothingMeasuredDrawsOneSentenceAndNoZeros()
 

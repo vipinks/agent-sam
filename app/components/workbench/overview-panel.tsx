@@ -3,7 +3,7 @@ import { useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { overviewTiles, resolveRates } from '@/conveyor/protocol/session-usage'
-import { compactionRange } from '@/conveyor/protocol/truncate'
+import { compactionRange, latestSummary, summaryRangeLabel } from '@/conveyor/protocol/truncate'
 import { useChatSessionsContext } from './chat-sessions-context'
 import { ContextWindowCard } from './context-window-card'
 import { PaneHeader } from './pane-header'
@@ -61,6 +61,12 @@ export function OverviewPanel() {
   // frames just watched.
   const turns = transcript.turns.filter((turn) => turn.role === 'assistant').length
 
+  // The range the conversation's latest summary stands for, or null when it has never been folded. The
+  // card draws that state under its pill, so the meter says whether this conversation is compacted and
+  // which turns the summary speaks for.
+  const summary = latestSummary(transcript.turns)
+  const summaryLabel = summary === null ? null : summaryRangeLabel(transcript.turns, summary)
+
   return (
     <div data-slot="overview-panel" className="flex h-full flex-col bg-background">
       <PaneHeader icon={ChartColumn} title="Overview">
@@ -84,8 +90,10 @@ export function OverviewPanel() {
             <OverviewTileRow usage={usage} rates={rates} turns={turns} engineId={engineId} />
             {/* Beneath the tiles rather than in Settings: the quick surface answers "what is this
                 conversation about to cost me", and the card is the elaboration of the same question.
-                The percent it is measured against is the preference, and that one is in Settings. */}
-            <ContextWindowCard />
+                The percent it is measured against is the preference, and that one is in Settings. The
+                summary label is read off the transcript, so the row says what the conversation's own
+                turns say rather than a state held beside them. */}
+            <ContextWindowCard summaryLabel={summaryLabel} />
           </>
         )}
       </div>
@@ -98,7 +106,8 @@ export function OverviewPanel() {
  *
  * Beside the panel's own controls because compaction is a decision about what this conversation costs
  * — the same subject as the tiles — and because the card it sits over is the one that makes the cost
- * visible. Manual this turn: nothing compacts on its own, and the button is the whole of the trigger.
+ * visible. Manual, and no longer the only trigger: a send that leaves the conversation past the
+ * compact point folds it on its own, and this is the control for folding before that.
  *
  * Disabled rather than hidden when there is nothing to fold: a conversation with one turn, the home
  * screen and a run in flight all have nothing this could safely summarize — a run in flight is writing
@@ -106,8 +115,11 @@ export function OverviewPanel() {
  * those moments would be a control the user has to guess about.
  */
 function CompactControl() {
-  const { atHome, transcript, streaming, compact } = useChatSessionsContext()
-  const canCompact = !atHome && !streaming && compactionRange(transcript.turns).length > 0
+  const { atHome, transcript, streaming, composer, compact } = useChatSessionsContext()
+  // The same cut the trigger makes: a draft in the composer keeps the turn it is answering, so a
+  // conversation with two turns left is not one this can fold while that draft is there.
+  const canCompact =
+    !atHome && !streaming && compactionRange(transcript.turns, { draft: composer.text.trim().length > 0 }).length > 0
 
   return (
     <button

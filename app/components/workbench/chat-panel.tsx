@@ -1532,6 +1532,12 @@ export function ChatPanel() {
       // transcript is worth writing. Never per token — the run above may have produced hundreds of
       // chunks, and this is one save.
       sessionsRef.current.scheduleSave()
+
+      // A send is the moment the meter is read again: the reply has landed, so the measurement the
+      // Overview draws is the request the user just made, and a conversation past its compact point
+      // folds now rather than waiting for the button. Edits and regenerates rewrite a turn that was
+      // already here and add nothing for the meter to have measured, so they do not trigger it.
+      if (rewrittenTurnId === undefined) sessionsRef.current.compactAutomatically()
     },
     [
       activeModel,

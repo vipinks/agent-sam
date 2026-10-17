@@ -37,7 +37,7 @@ const PILL_CLASSES: Record<ContextPill, string> = {
   unknown: 'border-border bg-muted text-muted-foreground',
 }
 
-export function ContextWindowCard() {
+export function ContextWindowCard({ summaryLabel }: { summaryLabel: string | null }) {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
   const compactPercent = useConveyorStore(contextPreferencesStore, (s) => s.compactPoint)
@@ -54,6 +54,7 @@ export function ContextWindowCard() {
     snapshot: session?.contextSnapshot ?? null,
     window,
     compactPercent,
+    summaryLabel,
   })
 
   return (
@@ -81,8 +82,9 @@ export function ContextWindowCard() {
             </span>
           </div>
 
-          {/* The pill's own line, and it is load-bearing: nothing in this build compacts, and a coloured
-              pill with no words under it would read as a feature that is about to act on its own. */}
+          {/* The pill's own line, and it carries two facts: the compact point this card is measured
+              against, and whether the conversation has already been folded. A coloured pill with no
+              words under it would read as a status with nothing behind it. */}
           <p data-slot="context-caption" className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
             {view.pillCaption}
           </p>

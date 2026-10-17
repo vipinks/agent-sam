@@ -332,6 +332,24 @@ export function contextStatus(used: number, window: number, percent: number): Co
   return 'healthy'
 }
 
+/**
+ * Whether a conversation has reached the point this app compacts at.
+ *
+ * The trigger's own reading of the meter, and the meter's own rule: `contextStatus` says a conversation
+ * at the point is past it, so a conversation exactly at the point is one that compacts. Nothing
+ * measured, and no window to measure against, is false — an absence is not a reason to fold a
+ * conversation, and a card drawing dashes has no status to act on.
+ */
+export function pastCompactPoint(input: {
+  snapshot: ContextSnapshot | null | undefined
+  window: number | null
+  compactPercent: number
+}): boolean {
+  const { snapshot, window, compactPercent } = input
+  if (!snapshot || window === null || !Number.isFinite(window) || window <= 0) return false
+  return contextStatus(snapshot.used, window, compactPercent) !== 'healthy'
+}
+
 // ---------------------------------------------------------------- the card
 
 /**
@@ -343,14 +361,30 @@ export function contextStatus(used: number, window: number, percent: number): Co
 export const CONTEXT_EM_DASH = '\u2014'
 
 /**
- * The one line under the pill.
+ * The meter row's sentence: the point this conversation compacts at, and the state it is in.
  *
- * It exists because the pill is a *preference* rather than a promise, and nothing this build does acts
- * on it: a card that drew an amber pill and said nothing else would read as a feature that is about to
- * do something on its own. No verb about compacting appears anywhere in it, because no such behaviour
- * exists to describe.
+ * Two facts in one line because they are one answer: a threshold with no state would leave a reader
+ * asking whether it had already happened, and a state with no threshold would name an event without
+ * saying what decided it. The threshold is the percent the Settings field holds and the token count
+ * that percent falls at, floored the way the tick is placed; when no window resolves the percent is
+ * still the point, stated as a share rather than as a count.
+ *
+ * The compacted state names the range through `summaryRangeLabel`, so the second compaction says where
+ * its range starts rather than counting from the first turn again.
  */
-export const CONTEXT_PILL_CAPTION = 'Agent Sam does not compact yet. Past the point, consider a new session.'
+export function compactionCaption(input: {
+  window: number | null
+  compactPercent: number
+  summaryLabel: string | null
+}): string {
+  const { window, compactPercent, summaryLabel } = input
+  const known = window !== null && Number.isFinite(window) && window > 0
+  const point = known
+    ? `${compactPercent}% ${CONTEXT_EM_DASH} ${compactTokens(compactPoint(window, compactPercent))} tokens`
+    : `${compactPercent}% of the window`
+  const state = summaryLabel === null ? 'Not compacted yet.' : `Compacted: ${summaryLabel.toLowerCase()}.`
+  return `Compacts at ${point}. ${state}`
+}
 
 /**
  * The footnote under the card: the estimate stated as the rule it is, rather than as a measurement.
@@ -501,6 +535,8 @@ export function contextCard(input: {
   snapshot: ContextSnapshot | null | undefined
   window: number | null
   compactPercent: number
+  /** The range the conversation's latest summary stands for, or null when it has never been compacted. */
+  summaryLabel?: string | null
 }): ContextCardView {
   const { snapshot, window, compactPercent } = input
   if (!snapshot) return EMPTY_CARD
@@ -518,7 +554,11 @@ export function contextCard(input: {
     sentence: null,
     pill: status,
     pillLabel: PILL_LABELS[status],
-    pillCaption: CONTEXT_PILL_CAPTION,
+    pillCaption: compactionCaption({
+      window: known ? window : null,
+      compactPercent,
+      summaryLabel: input.summaryLabel ?? null,
+    }),
     usedText,
     figure: known ? `${usedText} / ${compactTokens(window)}` : `${usedText} / ${CONTEXT_EM_DASH}`,
     usedPercentText: known ? `${wholePercent(used, window)}%` : CONTEXT_EM_DASH,

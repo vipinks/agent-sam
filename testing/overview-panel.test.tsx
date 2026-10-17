@@ -271,6 +271,19 @@ function chunk(stub: BridgeStub, channel: string, value: unknown): void {
   stub.emit(channel, { type: 'data', value })
 }
 
+/**
+ * Answer the summary stream a compaction opens, as the Sam loop would.
+ *
+ * A compaction is a model round trip now, so a test that presses the control has to drive the stream it
+ * starts: the start alone leaves the summary turn unwritten, which is what the seam would never appear
+ * for. The reply text is the model's answer, and ending the stream is the model finishing it.
+ */
+async function answerSummary(stub: BridgeStub, text = 'The user compared two parsers.'): Promise<void> {
+  const channel = await streamChannel(stub)
+  stub.emit(channel, { type: 'data', value: text })
+  stub.emit(channel, { type: 'end' })
+}
+
 beforeEach(() => {
   standIn.groups.clear()
   localStorage.clear()
@@ -619,10 +632,13 @@ describe('the context card beneath the tiles', () => {
     const card = await cardFor(container)
 
     expect(field(card, 'context-pill').textContent).toBe('Healthy')
-    // Green from the theme's own success token, and a caption that says what the pill is not: nothing
-    // here compacts, and a coloured pill with no words would read as a feature that acts on its own.
+    // Green from the theme's own success token, and a caption that names the point this conversation
+    // is measured against and the state it is in: the pill states the status, the line under it states
+    // the threshold the status is decided at.
     expect(field(card, 'context-pill').className).toContain('text-success')
-    expect(field(card, 'context-caption').textContent).toContain('does not compact yet')
+    expect(field(card, 'context-caption').textContent).toBe(
+      `Compacts at 60% ${'\u2014'} 60k tokens. Not compacted yet.`
+    )
 
     expect(field(card, 'context-fill').style.width).toBe('39%')
     expect(field(card, 'context-used-badge').textContent).toBe('39%')
@@ -808,7 +824,7 @@ describe('compacting a conversation', () => {
   })
 
   it('summarizes the older turns and draws a seam naming them', async () => {
-    stubWorkbench({
+    const { stub } = stubWorkbench({
       sessions: { sessions: [session()], activeSessionId: SESSION_ID },
       transcript: saved(['user', 'assistant', 'user', 'assistant', 'user']),
     })
@@ -818,6 +834,7 @@ describe('compacting a conversation', () => {
     expect(transcriptPane(container).querySelector('[data-slot="summary-seam"]')).toBeNull()
 
     await userEvent.click(within(found).getByRole('button', { name: 'Compact conversation' }))
+    await answerSummary(stub)
 
     // Four of the five turns are behind the summary; the last one stays in the conversation it was in.
     await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 4 summarized'))
@@ -827,7 +844,7 @@ describe('compacting a conversation', () => {
   })
 
   it('expands the seam row to the turns it stands for', async () => {
-    stubWorkbench({
+    const { stub } = stubWorkbench({
       sessions: { sessions: [session()], activeSessionId: SESSION_ID },
       transcript: saved(['user', 'assistant', 'user', 'assistant', 'user']),
     })
@@ -835,6 +852,7 @@ describe('compacting a conversation', () => {
 
     const found = await dockOverview(container)
     await userEvent.click(within(found).getByRole('button', { name: 'Compact conversation' }))
+    await answerSummary(stub)
     await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 4 summarized'))
 
     // Collapsed, the row is a line and not the conversation it replaces.
@@ -860,5 +878,24 @@ describe('compacting a conversation', () => {
     await dockOverview(container)
     await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 2 summarized'))
     expect(within(seam(container)).queryByText('user 0')).toBeNull()
+  })
+
+  it('names the compact-point threshold and the compacted range on the meter row', async () => {
+    // The row beneath the pill is where a reader checks *what* the conversation is measured against and
+    // whether it has been folded yet. A measured conversation, so the card is drawn at all, and the
+    // reopened transcript's own summary turn, so the state is the compacted one it names.
+    stubWorkbench({
+      sessions: { sessions: [session(undefined, SNAPSHOT)], activeSessionId: SESSION_ID },
+      providers: declared(),
+      transcript: reopened(),
+    })
+    const { container } = await mountWorkbench()
+
+    await dockOverview(container)
+    const card = await cardFor(container)
+
+    expect(field(card, 'context-caption').textContent).toBe(
+      `Compacts at 70% ${'\u2014'} 70k tokens. Compacted: turns 1 through 2 summarized.`
+    )
   })
 })
