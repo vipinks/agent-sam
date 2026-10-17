@@ -339,8 +339,11 @@ export function SessionListPanel({
                         <li key={session.id}>
                           <div
                             className={cn(
-                              'group relative flex items-start gap-2 py-2 pr-3 pl-8 transition-colors',
-                              isActive ? 'bg-brand-soft' : 'hover:bg-accent'
+                              // The actions are drawn from this background, so the two states that show
+                              // them must be solid: the selected tint alone is translucent over the
+                              // panel, and would let the title read through the icons.
+                              'group relative flex items-start gap-2 py-2 pr-3 pl-8 transition-colors hover:bg-accent focus-within:bg-accent',
+                              isActive && 'bg-brand-soft'
                             )}
                           >
                             {editingId === session.id ? (
@@ -393,6 +396,13 @@ export function SessionListPanel({
                       reachable by keyboard rather than being a pointer-only affordance. */}
                             {editingId !== session.id && (
                               <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 bg-inherit opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                {/* The cluster's own left edge, carrying the row colour out to
+                                    transparent so the title's last glyph dissolves into the icons
+                                    instead of stopping against a hard boundary. */}
+                                <span
+                                  aria-hidden="true"
+                                  className="h-6 w-5 shrink-0 bg-linear-to-r from-transparent to-accent"
+                                />
                                 <IconButton
                                   label={`Rename ${session.title}`}
                                   tooltip="Rename"

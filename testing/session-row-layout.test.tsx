@@ -28,7 +28,7 @@ beforeEach(() => {
 })
 
 /** Install a stub, seed one project row and one no-project row, and render the real panel. */
-function renderPanel() {
+function renderPanel(activeSessionId: string | null = null) {
   const stub = createBridgeStub({
     loadTranscript: () => null,
     listFilesFlat: () => [],
@@ -53,7 +53,7 @@ function renderPanel() {
         model: 'deepseek-chat',
       },
     ],
-    activeSessionId: null,
+    activeSessionId,
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [ROOT] })
   setActiveStub(stub)
@@ -149,5 +149,56 @@ describe('the session row aligns under its project and its actions', () => {
     // Transparent would let the title's tail show through the icons; inheriting the row's own
     // background covers it in the resting, hovered and selected tints alike, in both themes.
     expect(tokens(clusterFor('project work'))).toContain('bg-inherit')
+  })
+})
+
+describe('the action cluster hides the title beneath it opaquely', () => {
+  it('paints an opaque row background in the two states that reveal the cluster', async () => {
+    renderPanel()
+    await screen.findByText('project work')
+
+    // The resting row stays bare, but the two states that reveal the actions resolve to the solid
+    // accent token, so the cluster inherits a colour the title cannot show through.
+    const row = tokens(rowFor('project work'))
+    expect(row).toContain('hover:bg-accent')
+    expect(row).toContain('focus-within:bg-accent')
+  })
+
+  it('resolves the opaque state over the selected tint too', async () => {
+    renderPanel(PROJECT_ID)
+    await screen.findByText('project work')
+
+    // The selected tint is translucent over the panel, so it cannot be the colour the cluster
+    // inherits while the actions are up: the hover and focus states must win on a selected row.
+    const row = tokens(rowFor('project work'))
+    expect(row).toContain('bg-brand-soft')
+    expect(row).toContain('hover:bg-accent')
+    expect(row).toContain('focus-within:bg-accent')
+  })
+
+  it('keeps the cluster inheriting that background, out of the title flow', async () => {
+    renderPanel()
+    await screen.findByText('project work')
+
+    const cluster = tokens(clusterFor('project work'))
+    expect(cluster).toContain('bg-inherit')
+    expect(cluster).toContain('absolute')
+    expect(cluster).toContain('right-3')
+    expect(cluster).toContain('top-1/2')
+    expect(cluster).toContain('-translate-y-1/2')
+  })
+
+  it('fades the title into the cluster along its left edge', async () => {
+    renderPanel()
+    await screen.findByText('project work')
+
+    // A filler, not an action: the cluster's first child is the strip that carries the row colour
+    // out to transparent, so the last visible glyph softens instead of meeting a hard edge.
+    const fade = clusterFor('project work').firstElementChild as HTMLElement
+    expect(fade.tagName).toBe('SPAN')
+    expect(fade.getAttribute('aria-hidden')).toBe('true')
+    expect(tokens(fade)).toContain('bg-linear-to-r')
+    expect(tokens(fade)).toContain('from-transparent')
+    expect(tokens(fade)).toContain('to-accent')
   })
 })
