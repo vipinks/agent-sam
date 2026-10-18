@@ -43,12 +43,15 @@ function expectedTooltip(label: string): string {
  *
  * Walked from the theme toggle backwards, and only while the siblings are buttons — so a wrapper such
  * as a div around the four, or anything else wedged between them and the toggle, makes this empty and
- * fails the order test rather than passing over the gap.
+ * fails the order test rather than passing over the gap. The one thing skipped is the group separator
+ * Phase 96 puts on every seam of the row: it is a rule drawn between two groups, not a box around
+ * one, so the four are still the toggle's immediate neighbours in everything but position.
  */
 function buttonsBeforeThemeToggle(): HTMLElement[] {
   const theme = screen.getByRole('button', { name: 'Toggle theme' })
   const before: HTMLElement[] = []
   for (let node = theme.previousElementSibling; node; node = node.previousElementSibling) {
+    if (node.hasAttribute('data-titlebar-separator')) continue
     if (node.tagName !== 'BUTTON') break
     before.unshift(node as HTMLElement)
   }

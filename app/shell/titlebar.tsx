@@ -29,10 +29,12 @@ import { useWorkbenchStore } from '../components/workbench/store'
  * manager already uses.
  *
  * The bottom terminal panel's toggle comes after them, behind a vertical divider, because it is the
- * row's one control that is not about how the window looks: the divider is what says so, and nothing
- * else in this row needs one. It reports a state rather than an action — pressed while the panel is
- * showing — and that state is the persisted flag and nothing else, so what the glyph says cannot drift
- * from what the panel below is doing.
+ * row's one control that is not about how the window looks. The row is read in groups — zoom, layout,
+ * theme, update, terminal — and every seam between them carries the same hairline, so the divider says
+ * which group the toggle belongs to rather than that it is an exception to the rest of the row. It
+ * reports a state rather than an action — pressed while the panel is showing — and that state is the
+ * persisted flag and nothing else, so what the glyph says cannot drift from what the panel below is
+ * doing.
  *
  * The zoom ladder and fullscreen lead the row, immediately before the light/dark toggle: they are the
  * acts the View menu's own zoom and fullscreen entries perform, drawn on the bar because a reader
@@ -79,10 +81,12 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
 
       <div className="ml-auto flex items-center [-webkit-app-region:no-drag]">
         <ViewActions />
+        <TitlebarGroupSeparator />
         <ThemeToggle />
         <ThemeButton />
         <BrightnessButton />
         <ContrastButton />
+        <TitlebarGroupSeparator />
         <UpdateBadge />
         <TerminalPanelToggle />
         {!isMac && <WindowControls />}
@@ -144,13 +148,28 @@ function WindowControl({
 }
 
 /**
+ * The hairline between two of the row's functional groups.
+ *
+ * A rule rather than a wrapper element, and deliberately: the buttons stay children of the row, so a
+ * group cannot take one of them out of the tab order or out of the order a reader walks them in. What
+ * says "these belong together" is the spacing and the rule; what holds them together is nothing. The
+ * mark is a data attribute because a separator and a divider are the same element in a snapshot, and a
+ * test that had to guess which one it was looking at would be a test of the guess.
+ */
+function TitlebarGroupSeparator() {
+  return <Separator orientation="vertical" data-titlebar-separator="" className="mx-1.5 h-5" />
+}
+
+/**
  * The zoom ladder and fullscreen, in the order the View menu lists them, before the theme toggle.
  *
  * The glyphs are the ladder read left to right — a magnifier gaining, a magnifier losing, the sizes a
  * page can be drawn at — and the window's own corners for fullscreen, which is the one of the four that
  * is not about size. A fragment rather than a wrapping element: the four are buttons of the row, level
  * with the theme controls beside them, and a box around them would put a gap in the row where there is
- * none between any of the others.
+ * none between any of the others. The rule after the ladder is the one seam *inside* this group: zoom
+ * is what a reader changes while reading, fullscreen is where the window is put, and the hairline says
+ * so without moving either of them.
  */
 function ViewActions() {
   return (
@@ -164,6 +183,7 @@ function ViewActions() {
       <ViewAction label="Actual Size" onClick={() => conveyor.window.resetZoom()}>
         <Ratio className="size-4" />
       </ViewAction>
+      <TitlebarGroupSeparator />
       <ViewAction label="Toggle Fullscreen" onClick={() => conveyor.window.toggleFullscreen()}>
         <Maximize className="size-4" />
       </ViewAction>
@@ -240,7 +260,7 @@ function TerminalPanelToggle() {
 
   return (
     <div className="flex items-center">
-      <Separator orientation="vertical" className="mx-1.5 h-5" />
+      <Separator orientation="vertical" data-titlebar-separator="" className="mx-1.5 h-5" />
       <ControlTooltip label={bottomPanelOpen ? 'Hide the terminal panel' : 'Show the terminal panel'}>
         <ControlButton
           label="Terminal panel"

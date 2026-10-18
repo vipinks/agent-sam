@@ -87,30 +87,30 @@
 
   .dark {
     color-scheme: dark;
-    --background: #08090a;
+    --background: hsl(210 12% 9.4%);
     --foreground: #f2f3f3;
-    --card: #0e1011;
+    --card: hsl(210 11% 12.35%);
     --card-foreground: #f2f3f3;
-    --popover: #0e1011;
+    --popover: hsl(210 11% 12.35%);
     --popover-foreground: #f2f3f3;
     --primary: #f2f3f3;
     --primary-foreground: #14100e;
-    --secondary: #131617;
+    --secondary: hsl(210 10% 14.5%);
     --secondary-foreground: #f2f3f3;
-    --muted: #131617;
+    --muted: hsl(210 10% 14.5%);
     --muted-foreground: #a3aaad;
-    --accent: #131617;
+    --accent: hsl(210 10% 14.5%);
     --accent-foreground: #f2f3f3;
     --destructive: #e81123;
     --destructive-foreground: #f2f3f3;
-    --border: #212527;
-    --border-bright: #2e3335;
-    --input: #212527;
-    --ring: #2e3335;
+    --border: hsl(210 13% 17.06%);
+    --border-bright: hsl(210 12% 22%);
+    --input: hsl(210 13% 17.06%);
+    --ring: hsl(210 12% 22%);
     --brand: #dc2626;
     --brand-soft: rgba(220, 38, 38, 0.13);
     --brand-hover: #e24949;
-    --brand-text: hsl(0 72.222% 59%);
+    --brand-text: hsl(0 72.222% 64.5%);
     --success: #4ade80;
     /* The same three hues, lightened for a near-black surface rather than re-chosen. */
     --syntax-keyword: #ec8686;

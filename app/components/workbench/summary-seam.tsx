@@ -27,7 +27,7 @@ export function SummarySeam({ summary, turns }: { summary: AgentTurn; turns: Age
 
   return (
     <div data-slot="summary-seam" className="mx-auto my-2 w-full max-w-3xl px-4">
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+      <div className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 shadow-sm">
         <Scissors aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         <span data-slot="summary-seam-label" className="text-[12.5px] font-medium">
           {label}

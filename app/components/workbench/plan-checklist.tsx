@@ -52,7 +52,7 @@ export function PlanChecklist({ plan, live }: { plan: PlanStep[] | null; live: b
   if (done === plan.length && !live) return null
 
   return (
-    <section aria-label="Plan" className="mb-2 shrink-0 rounded-md border border-border bg-muted/30">
+    <section aria-label="Plan" className="mb-2 shrink-0 rounded-md bg-card shadow-sm">
       <button
         type="button"
         aria-expanded={!collapsed}

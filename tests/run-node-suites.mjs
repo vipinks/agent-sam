@@ -59,6 +59,10 @@ const SUITES = [
     name: 'theme contrast (slot, preference, resolved map, floor across the range)',
     src: 'ui/theme-contrast-test.ts',
   },
+  {
+    name: 'lifted canvas (charcoal ladder, tint, dark brand-text on the lifted surfaces)',
+    src: 'ui/lifted-canvas-test.ts',
+  },
   { name: 'terminal pty sessions', src: 'terminal/terminal-pty-test.ts' },
   { name: 'terminal preferences (bounds + store)', src: 'terminal/terminal-preferences-test.ts' },
   { name: 'terminal wire (chunk framing)', src: 'terminal/terminal-wire-test.ts' },

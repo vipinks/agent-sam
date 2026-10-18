@@ -290,7 +290,7 @@ export const MessageBubble = memo(function MessageBubble({
             // `text-[13px]` beside a `leading-*` class as one conflict and keeps whichever comes later,
             // so a preset placed after this one would silently take the bubble's line-height away.
             'leading-relaxed',
-            isUser ? 'bg-brand-soft text-foreground' : 'border border-border bg-card text-card-foreground'
+            isUser ? 'bg-brand-soft text-foreground' : 'bg-card text-card-foreground shadow-sm'
           )}
         >
           {isUser ? (
@@ -567,7 +567,7 @@ function CopyMessageButton({ value, label }: { value: string; label: string }) {
  */
 function ContextNoticeRow({ path, code }: { path: string; code: string }) {
   return (
-    <div className="flex items-start gap-2 rounded-md border border-border bg-muted px-2 py-1.5 text-[12px] text-muted-foreground">
+    <div className="flex items-start gap-2 rounded-md bg-muted px-2 py-1.5 text-[12px] text-muted-foreground">
       <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
       <p className="min-w-0">
         <span className="font-mono break-all text-foreground">{path}</span> {contextNoticeText(code)}{' '}

@@ -408,6 +408,10 @@ describe('the chat pane’s appearance', () => {
     // to this promise: the body is the box that could be widened by an unbreakable child, and the cap is
     // what stops the transcript clipping instead of wrapping. It sits after `min-w-0` because that is
     // where the merge emits it — the two are the same property pair the class string has always led with.
+    //
+    // Phase 96 took the outline off the answer's plate and gave it the hairline shadow every other
+    // container in the column carries, so the agent body's list ends in `bg-card`/`text-card-foreground`
+    // and `shadow-sm` rather than in a border. The user's body is unchanged: it was already a plate.
     expect([...userRow().classList]).toEqual(['flex', 'w-full', 'px-4', 'py-2.5', 'justify-end'])
     expect([...agentRow().classList]).toEqual(['flex', 'w-full', 'px-4', 'py-2.5', 'justify-start'])
     expect([...bodyOf(userRow()).classList]).toEqual([
@@ -429,10 +433,9 @@ describe('the chat pane’s appearance', () => {
       'py-2.5',
       TODAYS_BODY_CLASS,
       'leading-relaxed',
-      'border',
-      'border-border',
       'bg-card',
       'text-card-foreground',
+      'shadow-sm',
     ])
   })
 })

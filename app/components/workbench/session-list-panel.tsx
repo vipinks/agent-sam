@@ -298,7 +298,7 @@ export function SessionListPanel({
                   }
                   aria-expanded={!collapsed}
                   aria-label={`${label}, ${count} ${count === 1 ? 'conversation' : 'conversations'}`}
-                  className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  className="flex w-full items-center gap-1.5 rounded-xl px-3 py-1.5 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 >
                   {collapsed ? (
                     <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
@@ -312,7 +312,7 @@ export function SessionListPanel({
                   </span>
                   {/* The number of rows this group is showing, so it stays true while a search is
                   narrowing the group. */}
-                  <span className="shrink-0 tabular-nums">{count}</span>
+                  <span className="w-6 shrink-0 text-right tabular-nums">{count}</span>
                 </button>
 
                 {!collapsed && (

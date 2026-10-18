@@ -221,7 +221,7 @@ export function IconRail() {
         aria-current={atHome ? 'page' : undefined}
         onClick={goHome}
         className={cn(
-          'flex size-10 items-center justify-center rounded-md outline-none transition-colors',
+          'flex size-10 items-center justify-center rounded-xl outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-ring',
           atHome ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
         )}
@@ -243,7 +243,7 @@ export function IconRail() {
             aria-pressed={isActive}
             onClick={() => choose(activity.id)}
             className={cn(
-              'flex size-10 items-center justify-center rounded-md outline-none transition-colors',
+              'flex size-10 items-center justify-center rounded-xl outline-none transition-colors',
               'focus-visible:ring-2 focus-visible:ring-ring',
               isActive ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
             )}
@@ -260,7 +260,7 @@ export function IconRail() {
         aria-pressed={activeActivity === 'settings'}
         onClick={openSettings}
         className={cn(
-          'mt-auto flex size-10 items-center justify-center rounded-md outline-none transition-colors',
+          'mt-auto flex size-10 items-center justify-center rounded-xl outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-ring',
           activeActivity === 'settings'
             ? 'bg-brand-soft text-brand'

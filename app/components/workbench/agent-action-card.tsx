@@ -70,15 +70,16 @@ export function AgentActionCard({
       icon={<ToolIcon tool={step.tool} />}
       trailing={<StatusMark status={step.status} />}
       className={cn(
-        'rounded-md border text-[12px]',
-        // The brand token rather than a warning colour, which this theme does not define: a pending
-        // decision should read as "needs you", not as an error.
-        awaiting ? 'border-brand/50 bg-brand-soft/40' : 'border-border bg-muted/30',
+        'rounded-md bg-card text-[12px] shadow-sm',
+        // The accent token rather than a warning colour, which this theme does not define: a pending
+        // decision should read as "needs you", not as an error. It is a tint on the plate rather than an
+        // outline around it, so the one card with something to say keeps the borderless grammar.
+        awaiting && 'bg-brand-soft',
         // A queued call is visibly inert rather than dimmed out of existence: the user should see
         // what is waiting behind the decision without mistaking it for something they can act on now.
         queued && 'opacity-70'
       )}
-      bodyClassName="border-t border-border/70 px-2.5 py-2"
+      bodyClassName="px-2.5 py-2"
     >
       {/* Why nobody was asked about this call, on the calls nobody was asked about. A flagged
           server's calls run without a pause, so the card names the flag that let this one through
