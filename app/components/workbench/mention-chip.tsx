@@ -18,7 +18,7 @@ export function MentionChip({ path, onRemove }: { path: string; onRemove?: (path
   return (
     <span
       title={path}
-      className="inline-flex max-w-56 min-w-0 items-center gap-1 rounded-md border border-border bg-background py-0.5 pr-0.5 pl-1.5 font-mono text-[11px] text-foreground"
+      className="inline-flex max-w-56 min-w-0 items-center gap-1 rounded-md bg-background py-0.5 pr-0.5 pl-1.5 font-mono text-[11px] text-foreground shadow-sm"
     >
       <span className="truncate">{mentionTail(path)}</span>
       {onRemove && (

@@ -29,7 +29,7 @@ const PILL_CLASSES: Record<ContextPill, string> = {
   // Green, the app's own success token: a conversation with room.
   healthy: 'border-success/35 bg-success/10 text-success',
   // Amber is the brand coral, which is this app's caution hue — the same one its warning glyphs take.
-  pastCompact: 'border-brand/35 bg-brand-soft text-brand',
+  pastCompact: 'border-brand/35 bg-brand-soft text-brand-text',
   // Red, the destructive token: the request itself has stopped being sendable.
   overWindow: 'border-destructive/35 bg-destructive/8 text-destructive',
   // Neither, for a conversation nothing has declared a window for: muted, which is what an absence looks

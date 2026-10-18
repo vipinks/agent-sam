@@ -15,7 +15,7 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore } fr
  * would leave the pane docked and read the wrong element. One file, one pane, one state.
  *
  * jsdom lays nothing out, so nothing here measures a corner. What it holds is the class contract the
- * running window is judged by — the radius step, the translucent tint and the hairline shadow, with
+ * running window is judged by — the radius step, the opaque tint and the hairline shadow, with
  * no border drawing the plate's edge.
  */
 
@@ -62,7 +62,7 @@ function renderHome(): void {
 }
 
 describe('the composer card', () => {
-  it('carries the unified radius, the translucent tint and no border', async () => {
+  it('carries the unified radius, the opaque tint and no border', async () => {
     renderHome()
 
     // The hero is the pane's own statement that it is on the home screen; the composer above it is the
@@ -74,7 +74,7 @@ describe('the composer card', () => {
     const classes = tokens(composer)
 
     expect(classes).toContain('rounded-xl')
-    expect(classes).toContain('bg-card/80')
+    expect(classes).toContain('bg-card')
     expect(classes).toContain('shadow-sm')
     expect(classes.filter((token) => token === 'border' || token.startsWith('border-'))).toEqual([])
   })

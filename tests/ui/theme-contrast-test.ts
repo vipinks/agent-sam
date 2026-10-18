@@ -26,6 +26,7 @@ import {
   MIN_CONTRAST,
   PAIR_SURFACES,
   SURFACE_VARIABLES,
+  TEXT_SURFACES,
   contrastRatio,
   ensureReadable,
   parseHsl,
@@ -226,6 +227,36 @@ function theFloorHoldsAtEveryStepOfTheRange(): void {
   }
 }
 
+/**
+ * The brand-text token, measured rather than eyeballed.
+ *
+ * A brand hue is chosen for a surface, not for text: in dark mode the accent is the same colour it is
+ * in light mode in three of the five themes, and text at body size on a near-black page is exactly the
+ * case 4.5:1 exists for. `--brand-text` is the token text call sites read; this claim holds it to the
+ * floor on every surface text is drawn on, from the token values themselves rather than from a
+ * rendered window.
+ *
+ * Both modes are measured, and dark mode is the one the pass was opened for: a theme whose accent
+ * already reads as text keeps `--brand-text` at its own `--brand`, so the token is not a repaint.
+ */
+function everyThemeCarriesALegibleBrandText(): void {
+  for (const theme of THEMES) {
+    for (const mode of THEME_MODES) {
+      const tokens = theme.tokens[mode] as Record<string, string | undefined>
+      const brandText = tokens['brand-text']
+      assert.equal(typeof brandText, 'string', `${theme.id} ${mode}: the registry carries a --brand-text`)
+
+      for (const surface of TEXT_SURFACES) {
+        const ratio = contrastRatio(brandText ?? '', theme.tokens[mode][surface])
+        assert.ok(
+          ratio >= MIN_CONTRAST,
+          `${theme.id} ${mode}: --brand-text (${brandText}) on --${surface} (${theme.tokens[mode][surface]}) measured ${ratio}, under the ${MIN_CONTRAST} floor`
+        )
+      }
+    }
+  }
+}
+
 function theTerminalFollowsByTheSameRoute(): void {
   for (const theme of THEMES) {
     for (const mode of THEME_MODES satisfies readonly ThemeMode[]) {
@@ -257,6 +288,9 @@ async function main(): Promise<void> {
   )
   claim('every pair clears the floor at every step of the range, and the pass moves nothing', () =>
     theFloorHoldsAtEveryStepOfTheRange()
+  )
+  claim('every theme carries a --brand-text that clears the floor as text, in dark mode above all', () =>
+    everyThemeCarriesALegibleBrandText()
   )
   claim('the terminal follows the contrast by the route it follows the brightness', () =>
     theTerminalFollowsByTheSameRoute()

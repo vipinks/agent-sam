@@ -103,12 +103,12 @@ function renderWithStub(node: ReactNode): void {
 }
 
 describe('the card primitive is a borderless tinted plate', () => {
-  it('carries the hairline shadow and the translucent card tint, and draws no border', () => {
+  it('carries the hairline shadow and the opaque card tint, and draws no border', () => {
     const { container } = render(<Card />)
     const card = container.firstElementChild
 
     expect(tokens(card)).toContain('shadow-sm')
-    expect(tokens(card)).toContain('bg-card/80')
+    expect(tokens(card)).toContain('bg-card')
     expect(tokens(card)).toContain('backdrop-blur-sm')
     expect(borderTokens(card), `border utilities: ${borderTokens(card).join(', ')}`).toEqual([])
   })

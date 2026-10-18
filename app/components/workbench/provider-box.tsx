@@ -152,7 +152,7 @@ export function ProviderBox({
         {configured && (
           <span
             data-slot="provider-saved-badge"
-            className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10.5px] font-medium text-brand"
+            className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10.5px] font-medium text-brand-text"
           >
             <Check className="size-2.5" />
             saved

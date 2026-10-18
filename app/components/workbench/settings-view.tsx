@@ -81,8 +81,8 @@ const RAIL_ENTRY = [
   'h-8 flex-none w-full justify-start px-2.5 py-1.5 text-[12.5px] font-medium',
   'text-muted-foreground hover:bg-accent hover:text-foreground',
   'dark:text-muted-foreground dark:hover:text-foreground',
-  'data-[state=active]:bg-brand-soft data-[state=active]:text-brand',
-  'dark:data-[state=active]:bg-brand-soft dark:data-[state=active]:text-brand',
+  'data-[state=active]:bg-brand-soft data-[state=active]:text-brand-text',
+  'dark:data-[state=active]:bg-brand-soft dark:data-[state=active]:text-brand-text',
   'group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none',
 ].join(' ')
 

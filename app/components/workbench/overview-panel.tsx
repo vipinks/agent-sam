@@ -170,7 +170,7 @@ function OverviewTileRow({
  */
 function Tile({ id, label, value, note }: { id: string; label: string; value: string; note: string }) {
   return (
-    <div className="rounded-xl bg-card/80 px-3.5 py-3 shadow-sm backdrop-blur-sm">
+    <div className="rounded-xl bg-card px-3.5 py-3 shadow-sm backdrop-blur-sm">
       <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
       <p data-slot={`overview-${id}`} className="mt-1 text-[19px] leading-tight font-semibold tabular-nums">
         {value}

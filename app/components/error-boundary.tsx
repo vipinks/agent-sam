@@ -86,9 +86,9 @@ function ErrorScreen({
         <div className="flex items-start gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[10.5px] tracking-[0.14em] text-brand uppercase">Runtime error</span>
+              <span className="font-mono text-[10.5px] tracking-[0.14em] text-brand-text uppercase">Runtime error</span>
               {code && (
-                <span className="rounded-full border border-brand/30 bg-brand-soft px-2 py-0.5 font-mono text-[10.5px] text-brand">
+                <span className="rounded-full border border-brand/30 bg-brand-soft px-2 py-0.5 font-mono text-[10.5px] text-brand-text">
                   {code}
                 </span>
               )}

@@ -2246,108 +2246,119 @@ export function ChatPanel() {
         )}
       </PaneHeader>
 
-      {atHome ? (
-        <HomeHero />
-      ) : (
-        // The transcript's own box, so the jump controls can be placed against the region they move
-        // rather than inside it. A control drawn inside the scroll container travels with the content it
-        // is meant to leave behind, and the container is the one element in the pane whose box has to
-        // stay exactly what the virtualizer measured.
-        <div className="relative min-h-0 flex-1">
-          <div
-            ref={scrollRef}
-            data-slot="chat-transcript"
-            onScroll={syncEdges}
-            // The pane's own `flex-1` and `min-h-0` are on the box above, so the scroll region keeps the
-            // height it had as the pane's flex child — it is now the full height of that box instead.
-            className="h-full overflow-y-auto overflow-x-hidden"
-          >
-            {messages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-                <MessageSquare className="size-6 text-muted-foreground/40" />
-                <p className="text-[13px] font-medium">Start a conversation</p>
-                <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
-                  Answers stream in here, and the agent shows every file it reads and command it runs.
-                </p>
-              </div>
-            ) : (
-              // Virtualized: the transcript can grow without bound while the DOM stays small.
-              <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-                {virtualizer.getVirtualItems().map((item) => (
-                  <div
-                    key={messages[item.index].id}
-                    ref={virtualizer.measureElement}
-                    data-index={item.index}
-                    className="absolute top-0 left-0 w-full"
-                    style={{ transform: `translateY(${item.start}px)` }}
-                  >
-                    {/* The controls that act on the transcript are unavailable while the conversation is
+      {/*
+        Home's content is one stack: the headline, the composer card, the remembered folders and the
+        starters. The stack is what takes the leftover height, and it centres its children inside
+        itself, so a tall window distributes that height above and below the group rather than opening
+        a void between the headline and the box. In a conversation the wrapper is `display: contents`,
+        so the transcript and the composer stay the pane's own flex children.
+      */}
+      <div
+        data-slot={atHome ? 'home-stack' : undefined}
+        className={atHome ? 'flex min-h-0 flex-1 flex-col items-center justify-center gap-4 py-6' : 'contents'}
+      >
+        {atHome ? (
+          <HomeHero />
+        ) : (
+          // The transcript's own box, so the jump controls can be placed against the region they move
+          // rather than inside it. A control drawn inside the scroll container travels with the content it
+          // is meant to leave behind, and the container is the one element in the pane whose box has to
+          // stay exactly what the virtualizer measured.
+          <div className="relative min-h-0 flex-1">
+            <div
+              ref={scrollRef}
+              data-slot="chat-transcript"
+              onScroll={syncEdges}
+              // The pane's own `flex-1` and `min-h-0` are on the box above, so the scroll region keeps the
+              // height it had as the pane's flex child — it is now the full height of that box instead.
+              className="h-full overflow-y-auto overflow-x-hidden"
+            >
+              {messages.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
+                  <MessageSquare className="size-6 text-muted-foreground/40" />
+                  <p className="text-[13px] font-medium">Start a conversation</p>
+                  <p className="max-w-64 text-[12.5px] leading-relaxed text-muted-foreground">
+                    Answers stream in here, and the agent shows every file it reads and command it runs.
+                  </p>
+                </div>
+              ) : (
+                // Virtualized: the transcript can grow without bound while the DOM stays small.
+                <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+                  {virtualizer.getVirtualItems().map((item) => (
+                    <div
+                      key={messages[item.index].id}
+                      ref={virtualizer.measureElement}
+                      data-index={item.index}
+                      className="absolute top-0 left-0 w-full"
+                      style={{ transform: `translateY(${item.start}px)` }}
+                    >
+                      {/* The controls that act on the transcript are unavailable while the conversation is
                     moving: a run in flight is producing the turn an edit or a regenerate would write
                     again — and the trail a branch switch would check out is the one being written — while
                     a paused decision belongs to a turn that has not ended. All of it is a fact about the
                     pane, so it is the pane that decides. */}
-                    {/* A summary turn draws as a seam rather than as a message: the words are the
+                      {/* A summary turn draws as a seam rather than as a message: the words are the
                     model's, not the user's, and the turn's role only says who the request is dressed
                     as. Everything the seam stands for is still in `messages`, which is why the row
                     is handed the list and not a precomputed range. */}
-                    {messages[item.index].summarizesTurns?.length ? (
-                      <SummarySeam summary={messages[item.index]} turns={messages} />
-                    ) : (
-                      <MessageBubble
-                        message={messages[item.index]}
-                        canEdit={editAllowed}
-                        onCheckoutBranch={checkoutReplyBranch}
-                        // The conversation these turns belong to, which is where a turn's images are stored:
-                        // a chip asks that folder for its bytes, so a message sent in this session and a
-                        // message restored from its file are read the same way.
-                        sessionId={sessions.openId ?? undefined}
-                        // Which side the user's own bubble sits on and how large the message text is painted:
-                        // two values of the store's, passed down as they are, so a bubble's own memo sees a
-                        // primitive change rather than a new object.
-                        alignment={appearanceAlignment}
-                        fontPreset={appearanceFontPreset}
-                        onResend={reviseUserMessage}
-                        onRegenerate={regenerateReply}
-                        onApprove={() => void decide(true)}
-                        onDeny={() => void decide(false)}
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                      {messages[item.index].summarizesTurns?.length ? (
+                        <SummarySeam summary={messages[item.index]} turns={messages} />
+                      ) : (
+                        <MessageBubble
+                          message={messages[item.index]}
+                          canEdit={editAllowed}
+                          onCheckoutBranch={checkoutReplyBranch}
+                          // The conversation these turns belong to, which is where a turn's images are stored:
+                          // a chip asks that folder for its bytes, so a message sent in this session and a
+                          // message restored from its file are read the same way.
+                          sessionId={sessions.openId ?? undefined}
+                          // Which side the user's own bubble sits on and how large the message text is painted:
+                          // two values of the store's, passed down as they are, so a bubble's own memo sees a
+                          // primitive change rather than a new object.
+                          alignment={appearanceAlignment}
+                          fontPreset={appearanceFontPreset}
+                          onResend={reviseUserMessage}
+                          onRegenerate={regenerateReply}
+                          onApprove={() => void decide(true)}
+                          onDeny={() => void decide(false)}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-          {/*
+            {/*
             A control per edge rather than one per "in the middle": the top arrow is drawn whenever the
             top is somewhere to go, the bottom arrow whenever the bottom is. At either end that leaves
             exactly the control that still does something, and a transcript with nothing to scroll — a
             conversation that has not drawn a turn yet — offers neither.
           */}
-          {!atEdge.top && (
-            <button
-              type="button"
-              aria-label="Jump to the top of the conversation"
-              onClick={() => jumpToEdge('top')}
-              className="absolute top-2 left-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              <ArrowUp className="size-3.5" />
-            </button>
-          )}
-          {!atEdge.bottom && (
-            <button
-              type="button"
-              aria-label="Jump to the bottom of the conversation"
-              onClick={() => jumpToEdge('bottom')}
-              className="absolute bottom-2 left-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              <ArrowDown className="size-3.5" />
-            </button>
-          )}
-        </div>
-      )}
+            {!atEdge.top && (
+              <button
+                type="button"
+                aria-label="Jump to the top of the conversation"
+                onClick={() => jumpToEdge('top')}
+                className="absolute top-2 left-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <ArrowUp className="size-3.5" />
+              </button>
+            )}
+            {!atEdge.bottom && (
+              <button
+                type="button"
+                aria-label="Jump to the bottom of the conversation"
+                onClick={() => jumpToEdge('bottom')}
+                className="absolute bottom-2 left-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <ArrowDown className="size-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
-      {/*
+        {/*
         Between the transcript and the composer, outside both the scrolling region and the composer's
         own container: a plan is read while the run is happening, so it must not scroll away with the
         conversation — and it must not sit inside the composer either, which is the region a click is
@@ -2360,140 +2371,140 @@ export function ChatPanel() {
         and regenerate controls rest on, rather than a second way of asking it. The checklist needs that
         answer because a finished plan is worth its space only while a turn is still working from it.
       */}
-      {/* A plan and a turn that stopped early are both about a conversation; home has neither. */}
-      {!atHome && (
-        <div className="shrink-0 px-3">
-          <PlanChecklist plan={plan} live={!editAllowed} />
-          {/*
+        {/* A plan and a turn that stopped early are both about a conversation; home has neither. */}
+        {!atHome && (
+          <div className="shrink-0 px-3">
+            <PlanChecklist plan={plan} live={!editAllowed} />
+            {/*
           The other thing that is about now: a turn that stopped before it was done. Below the plan,
           because it is the immediate question — the plan says what the work is, this says that the
           work has just stopped. Continuing sends the resume text through the ordinary send path, so a
           resumed turn is an ordinary turn in the transcript rather than a special case.
         */}
-          <TurnEndNotice
-            notice={endNotice}
-            {...(endNotice?.resumable ? { onContinue: () => void sendText(RESUME_MESSAGE) } : {})}
-          />
-        </div>
-      )}
+            <TurnEndNotice
+              notice={endNotice}
+              {...(endNotice?.resumable ? { onContinue: () => void sendText(RESUME_MESSAGE) } : {})}
+            />
+          </div>
+        )}
 
-      {/*
+        {/*
         The composer: docked under the transcript in a conversation, and a card of its own on the home
         screen, centred and one width rather than stretched across the column. The height, the drag, the
         chips, the picker and the send button are the same element either way — which is the point. A
         second composer drawn for the home screen would be a second thing to keep in step with this one,
         and the send it performed would be the second send path the doc above rules out.
       */}
-      {/*
+        {/*
         An engine's permission question, on the shield the agent's own calls use: the same card, the same two
         buttons, and the engine's name where a server's consent block would be. Above the composer rather than
         inside the transcript, because this question did not come from a turn in it — nothing of this exchange
         has been written yet, and a card in the history would have no turn to belong to.
       */}
-      {engineConsent !== null && (
-        <div className="shrink-0 border-t border-border px-3 py-2">
-          <AgentActionCard
-            step={engineConsentStep(engineConsent)}
-            onApprove={() => answerEngineConsent(engineConsent, true)}
-            onDeny={() => answerEngineConsent(engineConsent, false)}
-          />
-        </div>
-      )}
-
-      <div
-        ref={composerRef}
-        className={cn(
-          'relative p-4',
-          atHome
-            ? 'mx-auto w-full max-w-3xl rounded-xl bg-card/80 shadow-sm backdrop-blur-sm'
-            : 'shrink-0 border-t border-border'
+        {engineConsent !== null && (
+          <div className="shrink-0 border-t border-border px-3 py-2">
+            <AgentActionCard
+              step={engineConsentStep(engineConsent)}
+              onApprove={() => answerEngineConsent(engineConsent, true)}
+              onDeny={() => answerEngineConsent(engineConsent, false)}
+            />
+          </div>
         )}
-      >
-        {/*
+
+        <div
+          ref={composerRef}
+          className={cn(
+            'relative p-4',
+            atHome
+              ? 'mx-auto w-full max-w-3xl shrink-0 rounded-xl bg-card shadow-sm backdrop-blur-sm'
+              : 'shrink-0 border-t border-border'
+          )}
+        >
+          {/*
           The composer's top edge, as a grab target. A separator rather than a button because what it
           does is resize the region below it, and `cursor-row-resize` is the cursor that says so before
           anyone has started dragging. It straddles the border rather than sitting under it, so the strip
           does not eat the first line of the textarea's hit area, and `touch-none` keeps a touch drag from
           being read as a scroll of the transcript.
         */}
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize the composer"
-          className="absolute inset-x-0 -top-1 h-2 cursor-row-resize touch-none"
-          onPointerDown={startComposerDrag}
-        />
-        <Popover
-          open={pickerOpen || commandOpen}
-          onOpenChange={(next) => {
-            // The picker can also be dismissed by the layer itself — Escape, or a click outside the
-            // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
-            // The command line owns the popover while it is showing, so it is the one that hears this.
-            if (next) return
-            if (commandOpen) dismissCommandPicker()
-            else dismissPicker()
-          }}
-        >
-          {/*
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the composer"
+            className="absolute inset-x-0 -top-1 h-2 cursor-row-resize touch-none"
+            onPointerDown={startComposerDrag}
+          />
+          <Popover
+            open={pickerOpen || commandOpen}
+            onOpenChange={(next) => {
+              // The picker can also be dismissed by the layer itself — Escape, or a click outside the
+              // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
+              // The command line owns the popover while it is showing, so it is the one that hears this.
+              if (next) return
+              if (commandOpen) dismissCommandPicker()
+              else dismissPicker()
+            }}
+          >
+            {/*
             Anchored to the composer rather than to a trigger: the textarea is what the token was read
             from, and the picker has to sit against the sentence it belongs to. There is no trigger at
             all, because nothing opens this popover except the caret being inside an `@` token.
           */}
-          <PopoverAnchor asChild>
-            <div className="relative" onDragOver={onComposerDragOver} onDrop={onComposerDrop}>
-              {/*
+            <PopoverAnchor asChild>
+              <div className="relative" onDragOver={onComposerDragOver} onDrop={onComposerDrop}>
+                {/*
                 What this conversation is working from, above the sentence being written about it. Chips
                 rather than a line of prose because the point is that they can be taken off again, and
                 beside the mention chips because both are "what goes with this message".
               */}
-              {skillChips.length > 0 && (
-                <SkillChipRow
-                  skills={skillChips}
-                  disabled={isStreaming || pending !== null}
-                  onRemove={sessions.toggleSkill}
-                  className="mb-2"
-                />
-              )}
-              {mentionPaths.length > 0 && (
-                <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
-              )}
-              {/*
+                {skillChips.length > 0 && (
+                  <SkillChipRow
+                    skills={skillChips}
+                    disabled={isStreaming || pending !== null}
+                    onRemove={sessions.toggleSkill}
+                    className="mb-2"
+                  />
+                )}
+                {mentionPaths.length > 0 && (
+                  <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
+                )}
+                {/*
                 The images the next send will carry, beside the files for the same reason the files are
                 there: both are "what goes with this message", and both can be taken off again.
               */}
-              {draftImages.length > 0 && (
-                <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
-              )}
-              <Textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => {
-                  setDraft(e.target.value)
-                  syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
-                  syncCommand(e.target.value)
-                  // Typing is the user moving on, which is what puts a command's answer away.
-                  setCommandNotice(null)
-                }}
-                // The caret moving is what ends a token as much as typing is, so following it keeps the
-                // picker attached to the word the user is actually in.
-                onSelect={(e) => {
-                  const area = e.currentTarget
-                  syncMention(area.value, area.selectionStart ?? area.value.length)
-                }}
-                onKeyDown={onKeyDown}
-                onPaste={onComposerPaste}
-                placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'}
-                aria-label="Message"
-                // `field-sizing-fixed` is the whole of the behaviour change: the primitive ships
-                // `field-sizing-content`, which grows the box with its content, and the composer wants the
-                // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
-                // the primitive's own floor so the height below is the height, not a suggestion.
-                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-36 text-[13px]"
-                // The height is state rather than styling — it is the number the drag produces — so it is the
-                // one thing here that cannot be a class.
-                style={{ height: composerHeight }}
-              />
-              {/*
+                {draftImages.length > 0 && (
+                  <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
+                )}
+                <Textarea
+                  ref={textareaRef}
+                  value={draft}
+                  onChange={(e) => {
+                    setDraft(e.target.value)
+                    syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+                    syncCommand(e.target.value)
+                    // Typing is the user moving on, which is what puts a command's answer away.
+                    setCommandNotice(null)
+                  }}
+                  // The caret moving is what ends a token as much as typing is, so following it keeps the
+                  // picker attached to the word the user is actually in.
+                  onSelect={(e) => {
+                    const area = e.currentTarget
+                    syncMention(area.value, area.selectionStart ?? area.value.length)
+                  }}
+                  onKeyDown={onKeyDown}
+                  onPaste={onComposerPaste}
+                  placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'}
+                  aria-label="Message"
+                  // `field-sizing-fixed` is the whole of the behaviour change: the primitive ships
+                  // `field-sizing-content`, which grows the box with its content, and the composer wants the
+                  // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
+                  // the primitive's own floor so the height below is the height, not a suggestion.
+                  className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-36 text-[13px]"
+                  // The height is state rather than styling — it is the number the drag produces — so it is the
+                  // one thing here that cannot be a class.
+                  style={{ height: composerHeight }}
+                />
+                {/*
                 The picker, as an input nothing draws and a button that clicks it.
 
                 A separate control from the paperclip above it rather than the same one: the paperclip
@@ -2503,124 +2514,124 @@ export function ChatPanel() {
                 the rules would take — and a user who overrides it anyway is refused with the rule's own
                 sentence rather than silently ignored.
               */}
-              <input
-                ref={attachInputRef}
-                data-slot="attachment-input"
-                type="file"
-                accept={ATTACHMENT_ACCEPT_ATTRIBUTE}
-                multiple
-                className="hidden"
-                aria-label="Choose images to attach"
-                onChange={onAttachPicked}
-              />
-              {/*
+                <input
+                  ref={attachInputRef}
+                  data-slot="attachment-input"
+                  type="file"
+                  accept={ATTACHMENT_ACCEPT_ATTRIBUTE}
+                  multiple
+                  className="hidden"
+                  aria-label="Choose images to attach"
+                  onChange={onAttachPicked}
+                />
+                {/*
                 The OS's own file dialog, beside the paperclip rather than folded into it: the paperclip
                 attaches the file already open in the viewer, and this one asks for any file on the machine
                 at all. They are two questions, and one control that guessed which was meant would be wrong
                 half the time. It takes the row's leftmost slot so the paperclip and the send button stay
                 exactly where hands already reach for them.
               */}
-              <Button
-                size="icon-sm"
-                variant="outline"
-                className="absolute right-[7rem] bottom-2"
-                aria-label="Attach files"
-                title="Attach files"
-                onClick={() => void pickAttachments()}
-              >
-                <Plus />
-              </Button>
-              <Button
-                size="icon-sm"
-                variant="outline"
-                className="absolute right-[4.75rem] bottom-2"
-                aria-label="Attach images"
-                title="Attach images (or paste, or drop them)"
-                onClick={() => attachInputRef.current?.click()}
-              >
-                <ImagePlus />
-              </Button>
-              <Button
-                size="icon-sm"
-                variant="outline"
-                className="absolute right-2 bottom-2"
-                aria-label="Attach the open file"
-                title={selectedFile ? `Attach ${selectedFile}` : 'Open a file to attach it'}
-                disabled={!selectedFile}
-                onClick={attachOpenFile}
-              >
-                <Paperclip />
-              </Button>
-              {isStreaming ? (
                 <Button
                   size="icon-sm"
                   variant="outline"
-                  className="absolute right-11 bottom-2"
-                  aria-label="Stop"
-                  onClick={stop}
+                  className="absolute right-[7rem] bottom-2"
+                  aria-label="Attach files"
+                  title="Attach files"
+                  onClick={() => void pickAttachments()}
                 >
-                  <Square />
+                  <Plus />
                 </Button>
-              ) : (
                 <Button
                   size="icon-sm"
-                  className="absolute right-11 bottom-2"
-                  aria-label="Send message"
-                  disabled={!draft.trim() || pending !== null}
-                  onClick={() => void sendDraft()}
+                  variant="outline"
+                  className="absolute right-[4.75rem] bottom-2"
+                  aria-label="Attach images"
+                  title="Attach images (or paste, or drop them)"
+                  onClick={() => attachInputRef.current?.click()}
                 >
-                  <SendHorizontal />
+                  <ImagePlus />
                 </Button>
-              )}
-            </div>
-          </PopoverAnchor>
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  className="absolute right-2 bottom-2"
+                  aria-label="Attach the open file"
+                  title={selectedFile ? `Attach ${selectedFile}` : 'Open a file to attach it'}
+                  disabled={!selectedFile}
+                  onClick={attachOpenFile}
+                >
+                  <Paperclip />
+                </Button>
+                {isStreaming ? (
+                  <Button
+                    size="icon-sm"
+                    variant="outline"
+                    className="absolute right-11 bottom-2"
+                    aria-label="Stop"
+                    onClick={stop}
+                  >
+                    <Square />
+                  </Button>
+                ) : (
+                  <Button
+                    size="icon-sm"
+                    className="absolute right-11 bottom-2 disabled:opacity-40"
+                    aria-label="Send message"
+                    disabled={!draft.trim() || pending !== null}
+                    onClick={() => void sendDraft()}
+                  >
+                    <SendHorizontal />
+                  </Button>
+                )}
+              </div>
+            </PopoverAnchor>
 
-          {pickerOpen && (
-            <MentionPicker
-              paths={mentionMatches}
-              // The unfiltered count, so an empty list can say whether nothing matched or there is
-              // nothing to match at all.
-              total={allMentionFiles.length}
-              activeIndex={activePickerIndex}
-              atCap={mentionPaths.length >= MAX_MENTION_PATHS}
-              onSelect={chooseMention}
-              onInteractOutside={keepComposerClicks}
-            />
-          )}
+            {pickerOpen && (
+              <MentionPicker
+                paths={mentionMatches}
+                // The unfiltered count, so an empty list can say whether nothing matched or there is
+                // nothing to match at all.
+                total={allMentionFiles.length}
+                activeIndex={activePickerIndex}
+                atCap={mentionPaths.length >= MAX_MENTION_PATHS}
+                onSelect={chooseMention}
+                onInteractOutside={keepComposerClicks}
+              />
+            )}
 
-          {commandOpen && (
-            <CommandPicker
-              commands={commandRows}
-              activeIndex={activeCommandIndex}
-              onSelect={runCommand}
-              onInteractOutside={keepComposerClicks}
-            />
-          )}
-        </Popover>
+            {commandOpen && (
+              <CommandPicker
+                commands={commandRows}
+                activeIndex={activeCommandIndex}
+                onSelect={runCommand}
+                onInteractOutside={keepComposerClicks}
+              />
+            )}
+          </Popover>
 
-        {/* Under the composer rather than as a toast: a refusal is about the control the user just
+          {/* Under the composer rather than as a toast: a refusal is about the control the user just
             used, and it has to still be there when they look back at it. */}
-        {mentionNote && (
-          <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
-            {mentionNote}
-          </p>
-        )}
+          {mentionNote && (
+            <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
+              {mentionNote}
+            </p>
+          )}
 
-        {/* A refused image, said in the same place as a refused file and for the same reason: it is about
+          {/* A refused image, said in the same place as a refused file and for the same reason: it is about
             the control the user just used. Its own line rather than sharing the one above, because the two
             answer two different gestures and one would otherwise overwrite the other. */}
-        {attachmentNote && (
-          <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
-            {attachmentNote}
-          </p>
-        )}
+          {attachmentNote && (
+            <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
+              {attachmentNote}
+            </p>
+          )}
 
-        {/* A command's answer, under the composer it was typed in and for the reason the refusal above
+          {/* A command's answer, under the composer it was typed in and for the reason the refusal above
             is: it is about the control the user just used. A card rather than a line because `/help`
             has eight of them to list, and it is kept until the user types again. */}
-        {commandNotice && <CommandNotice notice={commandNotice} />}
+          {commandNotice && <CommandNotice notice={commandNotice} />}
 
-        {/*
+          {/*
           The approval choice, made before there is a conversation to make it on.
 
           It is the same setting the header's toggle shows once a conversation exists — one value, two
@@ -2628,7 +2639,7 @@ export function ChatPanel() {
           with. Off is what it says until it is set: a choice nobody has made is not consent, and a
           conversation that has never been told otherwise asks.
         */}
-        {/*
+          {/*
           The skills control, in the composer's own footer beside the approval chip: both are choices
           about the next message rather than settings for the window, and this is where the one of them
           that is only asked before a conversation already lives.
@@ -2636,43 +2647,44 @@ export function ChatPanel() {
           The row is drawn whether or not the approval chip is, so the control does not move as a
           conversation starts. What a conversation runs with is shown above, as chips.
         */}
-        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
-          <SkillPicker
-            project={projectSkills}
-            user={userSkills}
-            errors={skillListing.errors}
-            activeSkillIds={activeSkillIds}
-            // A toggle changes the turn after the one in flight, so it is offered exactly when there
-            // is no turn to confuse it with: nothing to interrupt, and no question waiting on an
-            // answer. This is also the condition the session layer refuses a toggle under.
-            disabled={isStreaming || pending !== null}
-            loading={skillsQuery.isPending}
-            onToggle={sessions.toggleSkill}
-          />
-          {atHome && (
-            <button
-              type="button"
-              aria-label="Approval mode"
-              aria-pressed={autoApprove}
-              title={autoApproveHelperText(autoApprove)}
-              onClick={() => sessions.setAutoApprove(!autoApprove)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <ShieldCheck aria-hidden="true" className="size-3.5" />
-              <span className={autoApprove ? 'text-foreground' : undefined}>
-                {autoApprove ? 'Auto-approve' : 'Manual'}
-              </span>
-            </button>
-          )}
+          <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+            <SkillPicker
+              project={projectSkills}
+              user={userSkills}
+              errors={skillListing.errors}
+              activeSkillIds={activeSkillIds}
+              // A toggle changes the turn after the one in flight, so it is offered exactly when there
+              // is no turn to confuse it with: nothing to interrupt, and no question waiting on an
+              // answer. This is also the condition the session layer refuses a toggle under.
+              disabled={isStreaming || pending !== null}
+              loading={skillsQuery.isPending}
+              onToggle={sessions.toggleSkill}
+            />
+            {atHome && (
+              <button
+                type="button"
+                aria-label="Approval mode"
+                aria-pressed={autoApprove}
+                title={autoApproveHelperText(autoApprove)}
+                onClick={() => sessions.setAutoApprove(!autoApprove)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ShieldCheck aria-hidden="true" className="size-3.5" />
+                <span className={autoApprove ? 'text-foreground' : undefined}>
+                  {autoApprove ? 'Auto-approve' : 'Manual'}
+                </span>
+              </button>
+            )}
+          </div>
         </div>
-      </div>
 
-      {/*
+        {/*
         Under the card, and deliberately in this order: the folder the next conversation will run in, the
         conversations already there, and three ways to start one. Nothing above it is repeated here — the
         headline said what the screen is for, and these are the things to do about it.
       */}
-      {atHome && <HomePanel onStarter={prefillComposer} starters={starters} />}
+        {atHome && <HomePanel onStarter={prefillComposer} starters={starters} />}
+      </div>
     </div>
   )
 }

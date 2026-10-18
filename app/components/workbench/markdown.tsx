@@ -44,7 +44,7 @@ export function MarkdownContent({ content }: { content: string }) {
   return (
     // `data-slot` is the hook the theme file scopes its GFM rules to, so the chat and the preview get one
     // set of table, checkbox and strikethrough styles rather than two that can drift apart.
-    <div data-slot="markdown" className="space-y-2.5 [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2">
+    <div data-slot="markdown" className="space-y-2.5 [&_a]:text-brand-text [&_a]:underline [&_a]:underline-offset-2">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{

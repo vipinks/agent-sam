@@ -35,9 +35,10 @@ import { releaseViewer } from './use-chat-sessions'
 /** The headline, in the space above the composer. */
 export function HomeHero() {
   return (
-    // The space is the transcript's, taken as it stands: the column keeps its shape between the two
-    // states, and the headline is centred in whatever height the window has for it.
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-8 py-6 text-center">
+    // One item in the home stack, not a block that swallows the window's leftover height: the stack
+    // centres as a whole, so extra height is distributed above and below it rather than opening a gap
+    // between the headline and the composer.
+    <div className="flex shrink-0 flex-col items-center gap-2 px-8 text-center">
       {/* The screen's one heading, and a real one: this is what the view is, and a screen reader
           landing here should be told that rather than being read a styled paragraph. */}
       <h1 className="text-[19px] font-semibold tracking-tight text-foreground">{HOME_HEADLINE}</h1>
@@ -65,7 +66,7 @@ export function HomePanel({
   starters: readonly string[]
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 pt-3 pb-6">
+    <div className="flex w-full max-w-3xl shrink-0 flex-col gap-4 px-3">
       <RecentProjects />
 
       {/*
@@ -75,7 +76,13 @@ export function HomePanel({
       */}
       <div className="flex flex-wrap gap-2">
         {starters.map((prompt) => (
-          <Button key={prompt} variant="outline" size="sm" className="text-[12.5px]" onClick={() => onStarter(prompt)}>
+          <Button
+            key={prompt}
+            variant="ghost"
+            size="sm"
+            className="bg-card text-[12.5px] shadow-sm"
+            onClick={() => onStarter(prompt)}
+          >
             {prompt}
           </Button>
         ))}
@@ -194,7 +201,7 @@ function RecentProjects() {
               aria-current={open ? 'true' : undefined}
               onClick={() => void openChip(chip)}
               className={cn(
-                'flex max-w-72 items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[12px] transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                'flex max-w-72 items-center gap-1.5 rounded-full bg-card px-2.5 py-1 text-[12px] shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
                 open && 'font-medium text-foreground'
               )}
             >

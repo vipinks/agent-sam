@@ -77,7 +77,7 @@ function AttachmentChip({ image, onRemove }: { image: DraftAttachment; onRemove?
     <span
       data-slot="attachment-chip"
       title={image.name}
-      className="inline-flex max-w-56 min-w-0 items-center gap-1.5 rounded-md border border-border bg-background py-0.5 pr-0.5 pl-1 text-[11px] text-foreground"
+      className="inline-flex max-w-56 min-w-0 items-center gap-1.5 rounded-md bg-background py-0.5 pr-0.5 pl-1 text-[11px] text-foreground shadow-sm"
     >
       {thumbnail ? (
         // Decorative: the file's name is the text beside it, so a screen reader has nothing to gain from
