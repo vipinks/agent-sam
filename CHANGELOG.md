@@ -6,6 +6,27 @@ coding assistant.
 
 <br>
 
+## 2026-10-18: v1.11.0 — The whole application speaks one design language, and dark mode leaves pure black
+
+- **The whole application gets one design language.** Every surface now speaks a single grammar: one accent
+  per theme on every selected and active state, borderless plates with a hairline shadow instead of outlined
+  cards, one radius scale, and inputs keeping their borders because a border is an input affordance. The home
+  screen is one centred stack with bounded gaps instead of a growing void; chips, cards and transcript
+  containers all read as plates.
+- **Dark mode leaves pure black for a lifted charcoal canvas,** authored per theme in that theme's own hue at
+  a whisper of saturation, so plates separate from the page and light ink stops blooming; every brand-coloured
+  text token is re-tuned against the new surfaces and held to the 4.5:1 floor by the contrast suite in both
+  modes, closing light-mode contrast gaps that shipped earlier.
+- **The shell reads in groups:** the titlebar's icon cluster gains hairline separators between its functional
+  groups, the icon rail's active indicator and the session group headers adopt the pass's radius and plate
+  treatment, and nothing about behaviour, layout structure or functionality changes — this is a token and
+  surface pass, verified by structure suites and by the running window in both modes and all five themes.
+
+- The v1.10.0 baseline is everything before this entry. This entry is v1.11.0 — the three Phase 96
+  commits, which are the work described above.
+
+<br>
+
 ## 2026-10-18: v1.10.0 — Session rows tab under their project, and the hover actions paint over the title
 
 - **The conversation list rows sit under their project, and the hover actions sit on the title.** Session
