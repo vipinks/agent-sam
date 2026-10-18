@@ -325,7 +325,7 @@ describe('resolution', () => {
         const vars = resolveThemeVars(theme.id, mode, BRIGHTNESS_DEFAULT)
         for (const name of THEME_VARIABLES) {
           if (name === 'radius') {
-            expect(vars[name], `${theme.id} ${mode} --${name}`).toBe('0.5rem')
+            expect(vars[name], `${theme.id} ${mode} --${name}`).toBe('0.75rem')
             continue
           }
           expect(vars[name], `${theme.id} ${mode} --${name}`).toMatch(/^hsl\(/)

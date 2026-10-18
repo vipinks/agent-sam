@@ -341,8 +341,8 @@ export function SessionListPanel({
                             className={cn(
                               // The states that reveal the actions paint the same solid accent the plate
                               // carries, so the row's own colour agrees with the plate laid over it. The
-                              // selected tint alone is 13% coral and is never what the plate shows.
-                              'group relative flex items-start gap-2 py-2 pr-3 pl-8 transition-colors hover:bg-accent focus-within:bg-accent',
+                              // selected tint alone is 13% of the theme's accent and is never what the plate shows.
+                              'group relative flex items-start gap-2 rounded-xl py-2 pr-3 pl-8 transition-colors hover:bg-accent focus-within:bg-accent',
                               isActive && 'bg-brand-soft'
                             )}
                           >

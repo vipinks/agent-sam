@@ -32,7 +32,7 @@
   --color-border-bright: var(--border-bright);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  /* Brand coral accent — the one new color; everything else maps onto the neutrals above. */
+  /* Brand accent — the one accent hue a theme carries; every selected or active surface paints it. */
   --color-brand: var(--brand);
   --color-brand-soft: var(--brand-soft);
   --color-brand-hover: var(--brand-hover);
@@ -65,9 +65,9 @@
     --border-bright: #d3cec6;
     --input: #e2ded8;
     --ring: #d3cec6;
-    --brand: #ff5c3a;
-    --brand-soft: rgba(255, 92, 58, 0.13);
-    --brand-hover: #f04724;
+    --brand: #dc2626;
+    --brand-soft: rgba(220, 38, 38, 0.13);
+    --brand-hover: #bb1e1e;
     --success: #16a34a;
     /*
       Syntax tokens: three hues, each derived from the palette above — the keyword from the brand
@@ -76,10 +76,10 @@
       colour rather than taking a fourth hue, which is what keeps a highlighted file reading as this
       app's own text rather than as a foreign theme.
     */
-    --syntax-keyword: #a5320d;
+    --syntax-keyword: #991919;
     --syntax-string: #0f6b41;
     --syntax-number: #7d5300;
-    --radius: 0.5rem;
+    --radius: 0.75rem;
   }
 
   .dark {
@@ -104,15 +104,15 @@
     --border-bright: #2e3335;
     --input: #212527;
     --ring: #2e3335;
-    --brand: #ff5c3a;
-    --brand-soft: rgba(255, 92, 58, 0.13);
-    --brand-hover: #ff7053;
+    --brand: #dc2626;
+    --brand-soft: rgba(220, 38, 38, 0.13);
+    --brand-hover: #e24949;
     --success: #4ade80;
     /* The same three hues, lightened for a near-black surface rather than re-chosen. */
-    --syntax-keyword: #ff8f73;
+    --syntax-keyword: #ec8686;
     --syntax-string: #7ddba3;
     --syntax-number: #e3b341;
-    --radius: 0.5rem;
+    --radius: 0.75rem;
   }
 
   * {

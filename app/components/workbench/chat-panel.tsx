@@ -2403,9 +2403,9 @@ export function ChatPanel() {
       <div
         ref={composerRef}
         className={cn(
-          'relative p-3',
+          'relative p-4',
           atHome
-            ? 'mx-auto w-full max-w-3xl rounded-xl border border-border bg-card'
+            ? 'mx-auto w-full max-w-3xl rounded-xl bg-card/80 shadow-sm backdrop-blur-sm'
             : 'shrink-0 border-t border-border'
         )}
       >
