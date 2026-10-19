@@ -6,6 +6,27 @@ coding assistant.
 
 <br>
 
+## 2026-10-20: v1.13.0 — The menu bar is gone and the chrome becomes one grid
+
+- **The menu bar is gone and the chrome becomes one grid.** The File, Edit and View menus leave the
+  titlebar for good, including the Alt toggle; their six actions survive as keyboard shortcuts — Ctrl+R
+  reload, Ctrl+Shift+I devtools, Ctrl+Plus and Ctrl+Minus zoom, Ctrl+0 actual size, F11 fullscreen —
+  through a menu-independent pure key-to-command mapping that reuses the same window commands, and Reload
+  also gains a titlebar icon before the zoom controls. The titlebar and both side rails now share one
+  measure (a 40-pixel band with 32-pixel icons and a single gap token), the rail icons sit at one
+  consistent pitch on both rails, and the titlebar's functional groups divide with visible vertical
+  hairlines — reload, zoom, layout, theme, update, terminal. Those hairlines had in fact never rendered
+  since their first introduction: the shared separator primitive's vertical form collapsed to zero height
+  under a cascade specificity win, so the element existed and painted nothing; the rules are now
+  fixed-geometry spans painted in the theme's own ink, and the suite asserts visible geometry and paint
+  rather than mere existence. Native editing chords are unaffected by the menu removal; only the
+  clickable Edit menu entries are gone.
+
+- The v1.12.1 baseline is everything before this entry; this entry is v1.13.0 — the two commits,
+  4c132da and 9a1e1b9, which are the work described above.
+
+<br>
+
 ## 2026-10-19: v1.12.1 — Light-mode inputs recessed, and nine other polish items
 
 - **Light-mode inputs gain recessed backgrounds, and nine other polish items land across the settings,
