@@ -6,6 +6,26 @@ coding assistant.
 
 <br>
 
+## 2026-10-19: v1.12.0 — Buddies draw their chosen glyph, and their cards carry the description
+
+- **Buddies draw their chosen glyph wherever they appear, and their descriptions show on the cards.** One
+  shared registry resolves a buddy's glyph id to a lucide icon at every avatar site — the settings card plate,
+  the chat header chip, and the picker rows — in the plate the letter monogram used to fill. The custom-buddy
+  glyph picker grows from 12 to 32 marks spanning documents, writing, analysis, communication, tools, science,
+  nature and shapes; the growth is strictly additive so every saved buddy's stored glyph id keeps resolving
+  forever, and the shared registry is the single source of truth for the picker, every render site, and any
+  store validation. The three built-in buddies (Writer / Editor, Study Tutor, Analyst) ship fitting marks —
+  PenLine, GraduationCap, ChartLine — and stay locked. Settings cards draw the buddy's description under the
+  title row, clamped to two lines in a slot every card reserves, so all buddy cards keep one uniform height
+  whether or not a buddy has a description. The one schema-level change is the glyph-id field's character bound
+  (2 to 24), forced by the new ids being lucide icon names rather than single letters; field shape, trust rules
+  and locked-built-in rules are untouched.
+
+- The v1.11.2 baseline is everything before this entry. This entry is v1.12.0 — the one commit, which is the
+  work described above.
+
+<br>
+
 ## 2026-10-19: v1.11.2 — Inputs separate from the surface, and popup forms get room
 
 - **Inputs pop out of the dark surface, and popup forms get room.** In dark mode an input takes a raised tint of
