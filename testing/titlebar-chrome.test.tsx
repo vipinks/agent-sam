@@ -22,8 +22,10 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  *    an Alt press to flip.
  * 2. Reload sits immediately before the zoom-in control, and reaches the same `web.reload` the View
  *    menu’s own Reload entry called.
- * 3. Every group seam in the row is one vertical rule, the pitch inside a group is the single gap token,
- *    and the update group’s rule arrives with the badge rather than standing alone.
+ * 3. Every group seam in the row is one vertical rule that carries its own fixed geometry and its own
+ *    paint — a rule that exists but is zero tall is the failure this file now names — the pitch inside a
+ *    group is the single gap token, and the update group’s rule arrives with the badge rather than
+ *    standing alone.
  * 4. Both rails are as wide as the titlebar is tall, their icons are sized inside that measure, and both
  *    carry the same gap token.
  * 5. The six chords still fire with no menu in the tree — and not into a field, and not while another
@@ -190,6 +192,30 @@ describe('the row’s groups', () => {
     renderChrome()
 
     expect(row()).toEqual(ROW)
+  })
+
+  it('draws each rule with geometry and paint that survive layout', () => {
+    renderChrome()
+
+    const rules = [...document.querySelectorAll<HTMLElement>('[data-titlebar-separator]')]
+    expect(rules, 'one rule per seam').toHaveLength(ROW.filter((entry) => entry === '|').length)
+
+    for (const rule of rules) {
+      const classes = tokens(rule)
+      // Presence is not the claim. A `h-full` rule inside a cluster whose own height is its content's
+      // resolves against an indefinite height, computes to `auto`, and an empty box at `auto` height is
+      // zero tall: it is in the tree, in the right place, and paints nothing. So the geometry has to be
+      // the fixed measure and the bitmap has to be a paint with contrast against the bar, both read off
+      // the element rather than assumed from the fact that it rendered.
+      expect(classes, 'a fixed height, not a percentage of an indefinite one').toContain('h-5')
+      expect(classes, 'a one-pixel width').toContain('w-px')
+      expect(classes, 'self-centred, so the cluster’s alignment cannot flatten it').toContain('self-center')
+      expect(
+        classes.filter((candidate) => /(^|:)h-(full|auto)$/.test(candidate)),
+        'no height that resolves to zero'
+      ).toEqual([])
+      expect(classes, 'a paint that reads against the bar rather than a surface token').toContain('bg-foreground/35')
+    }
   })
 
   it('keeps one gap token between the icons inside a group', () => {

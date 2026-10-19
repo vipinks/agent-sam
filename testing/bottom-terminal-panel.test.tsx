@@ -247,8 +247,15 @@ describe('the title bar’s toggle', () => {
     // because "after the theme icons and behind a divider" is an order, and jsdom draws none of it.
     const row = control.parentElement as HTMLElement
     const divider = row.firstElementChild as HTMLElement
-    expect(divider.getAttribute('data-slot'), 'the divider is the row’s first child').toBe('separator')
-    expect(divider.getAttribute('data-orientation')).toBe('vertical')
+    expect(divider.getAttribute('data-titlebar-separator'), 'the divider is the row’s first child').toBe('')
+    // The mark is the shell's own rule rather than the shared `Separator` since Phase 100 turn 2: the
+    // primitive's vertical form carried the percentage height that collapsed this rule to nothing, so what
+    // is asserted here is the geometry and the paint of the element that is actually drawn, not a
+    // primitive's slot and orientation.
+    const classes = divider.className.split(/\s+/)
+    expect(classes, 'a fixed height').toContain('h-5')
+    expect(classes, 'a one-pixel width').toContain('w-px')
+    expect(classes, 'a paint of its own').toContain('bg-foreground/35')
 
     const themeRow = row.parentElement as HTMLElement
     expect(themeRow.contains(screen.getByRole('button', { name: 'Brightness' }))).toBe(true)
