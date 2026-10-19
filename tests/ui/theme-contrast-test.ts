@@ -257,6 +257,32 @@ function everyThemeCarriesALegibleBrandText(): void {
   }
 }
 
+/**
+ * The whole dark foreground family, not the accent alone.
+ *
+ * The guard used to be `--brand-text` by itself. The foreground ladder moved with the surfaces this
+ * phase, so every token a glyph is drawn with is held to the same floor here: primary text on the three
+ * tokens that carry it, muted text beside them, each against the canvas, the plate and the popover in
+ * all five themes. The registry's own values are measured, so a theme that authored an unreadable ink
+ * fails rather than being rescued by the readability pass further down.
+ */
+function everyDarkForegroundTokenReads(): void {
+  const inks = ['foreground', 'card-foreground', 'popover-foreground', 'muted-foreground'] as const
+  const surfaces = ['background', 'card', 'popover'] as const
+
+  for (const theme of THEMES) {
+    for (const ink of inks) {
+      for (const surface of surfaces) {
+        const ratio = contrastRatio(theme.tokens.dark[ink], theme.tokens.dark[surface])
+        assert.ok(
+          ratio >= MIN_CONTRAST,
+          `${theme.id} dark: --${ink} (${theme.tokens.dark[ink]}) on --${surface} (${theme.tokens.dark[surface]}) measured ${ratio}, under the ${MIN_CONTRAST} floor`
+        )
+      }
+    }
+  }
+}
+
 function theTerminalFollowsByTheSameRoute(): void {
   for (const theme of THEMES) {
     for (const mode of THEME_MODES satisfies readonly ThemeMode[]) {
@@ -291,6 +317,9 @@ async function main(): Promise<void> {
   )
   claim('every theme carries a --brand-text that clears the floor as text, in dark mode above all', () =>
     everyThemeCarriesALegibleBrandText()
+  )
+  claim('every dark foreground token clears the floor on the canvas, the plate and the popover', () =>
+    everyDarkForegroundTokenReads()
   )
   claim('the terminal follows the contrast by the route it follows the brightness', () =>
     theTerminalFollowsByTheSameRoute()

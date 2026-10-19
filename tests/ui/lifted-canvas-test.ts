@@ -1,21 +1,36 @@
 /**
- * The lifted dark canvas, as arithmetic: the charcoal ladder under every theme, and the ink held on it.
+ * The dark ladder at GitHub's depth, as arithmetic: the surface family every theme sits on, and the ink
+ * held on it.
  *
- * Turn 1 and Turn 1b left the dark page at `#08090a` — a near-black that a plate could not separate
- * from and that body-size text bloomed against. This suite is the record of the lift: each theme's dark
- * surface family sits on a charcoal ladder, per theme and with a whisper of that theme's own hue rather
- * than a neutral grey, and every dark `--brand-text` clears the 4.5:1 floor on the surfaces text is
- * actually drawn on. The light family is asserted to stay where it was, because the lift was a dark-mode
- * change and a suite that let both modes drift would not notice if it stopped being one.
+ * The previous lift put the dark page on a charcoal near `#15171b`. This pass moves it to the depth
+ * github.com's own dark mode uses — a page at `#0d1117`, a plate at `#161b22`, a hairline at `#30363d` —
+ * and rebuilds the foreground family to match: primary text near `#e6edf3`, muted text a cool step below
+ * it. Lightness and saturation are the same shape for every theme, and only the hue moves, so the five
+ * themes keep their identities on a surface family that reads like GitHub rather than like a neutral grey.
+ *
+ * Two numbers here are not the ones the brief names, and both are deliberate:
+ *
+ * - The muted rung sits at 64 percent, not the 53 percent of `#7d8590`. GitHub draws its muted text on
+ *   `#0d1117` (5.07:1) and `#161b22` (4.64:1), never on the subtle chip surface this app calls `--muted`:
+ *   at 53 percent the same ink measures 4.10 to 4.46 against that step, under the floor. The contrast
+ *   control's top step spreads the chip further from the page still, so anything under about 64 percent
+ *   would have to be rescued by the readability pass at a slider position a user can reach. 64 is the
+ *   first uniform rung that clears every guarded surface at every step of both controls.
+ * - The foregrounds are held against canvas, plate and popover — the three surfaces the brief names —
+ *   while the muted rung is additionally held to the chip step by the engine's own guard, which is why
+ *   the number above had to move at all.
+ *
+ * The light family is asserted to stay where it was: this is a dark-mode change, and a suite that let
+ * both modes drift would not notice if it stopped being one.
  *
  * The floor is stated as an assertion and never relaxed to fit the data: `MIN_CONTRAST` is the engine's
  * own constant, and a theme that could not reach it is a theme to retune rather than a number to lower.
  * The values are read from the registry, through the suite's own HSL parse, so a claim about a value is
  * never the engine agreeing with itself.
  *
- * Nothing here measures a pixel: what the lifted page *looks* like — the plate separating from it in
- * both modes and all five themes, on a conversation view and on the home view — is Boss's eyes on the
- * running window. What is provable without a browser is the ladder and the arithmetic on it.
+ * Nothing here measures a pixel: what the page *looks* like — the room at GitHub's depth in all five
+ * themes, beside a github.com dark page — is Boss's eyes on the running window. What is provable without
+ * a browser is the ladder and the arithmetic on it.
  */
 import { strict as assert } from 'node:assert'
 import {
@@ -32,16 +47,33 @@ const results: string[] = []
 const failures: string[] = []
 
 /**
- * The ladder the dark canvas is lifted onto, as lightness in the HSL the registry spells.
+ * The ladder the dark canvas sits on, in the HSL the registry spells.
  *
- * Three numbers because three surfaces are what the brief names: the page, the plate that sits on it,
- * and the hairline that draws an edge when an edge is still wanted. The rest of the family — muted,
- * accent, secondary, the bright hairline — is asserted by its *order* against these three rather than
- * by a fourth number, so the ladder can gain a step without this file having an opinion about it.
+ * Three surfaces, exactly as the brief names them: the page, the plate that sits on it, and the hairline
+ * that draws an edge when an edge is still wanted. Each carries its own saturation because the shape being
+ * copied is github.com's own: 25 percent on the page, 20 on the plate, 12 on the hairline. The rest of the
+ * family — muted, accent, secondary, the bright hairline — is asserted by its *order* against these three
+ * rather than by a fourth number, so the ladder can gain a step without this file having an opinion.
  */
-const LIFTED = { background: 9.4, card: 12.35, border: 17.06 } as const
+const LIFTED = {
+  background: { lightness: 7, saturation: 25 },
+  card: { lightness: 11, saturation: 20 },
+  border: { lightness: 21, saturation: 12 },
+} as const
 
-/** Half a point of lightness, which is finer than any of these three values needs to be pinned. */
+/**
+ * The foreground ladder, in the same shape.
+ *
+ * Primary text is the three tokens a foreground is drawn with: `--foreground`, `--card-foreground` and
+ * `--popover-foreground`. Muted text is its own rung. The saturation caps are what keep the hue a whisper:
+ * a theme tints its whites, it does not paint them.
+ */
+const INK = {
+  primary: { lightness: 93, saturation: 20 },
+  muted: { lightness: 64, saturation: 10 },
+} as const
+
+/** Half a point, which is finer than any of these values needs to be pinned. */
 const TOLERANCE = 0.5
 
 /** One claim, reported on its own so a red run names every claim that is red. */
@@ -54,12 +86,11 @@ function claim(name: string, check: () => void): void {
   }
 }
 
+type SurfaceName = 'background' | 'card' | 'border' | 'muted' | 'border-bright' | 'secondary'
+type ForegroundName = 'foreground' | 'card-foreground' | 'popover-foreground' | 'muted-foreground'
+
 /** A token as HSL, failing loudly rather than measuring `undefined` as black. */
-function hslOf(
-  themeId: string,
-  mode: ThemeMode,
-  name: 'background' | 'card' | 'border' | 'muted' | 'border-bright' | 'secondary'
-) {
+function hslOf(themeId: string, mode: ThemeMode, name: SurfaceName | ForegroundName) {
   const value = THEMES.find((theme) => theme.id === themeId)?.tokens[mode][name]
   const hsl = parseHsl(value ?? '')
   assert.ok(hsl, `${themeId} ${mode}: --${name} (${value}) is not an hsl colour`)
@@ -67,20 +98,26 @@ function hslOf(
 }
 
 /**
- * Every dark theme sits on the lifted ladder.
+ * Every dark theme sits on the ladder at GitHub's depth.
  *
- * Read as a band rather than as an equality: the brief names a charcoal near `#15171b` for the page,
- * near `#1b1e24` for the plate and near `#262a31` for the hairline, and a theme's own tint moves the
- * channel values by a point or two either way. What is being asserted is that the page is charcoal and
- * no longer black, which is the property the lift is for.
+ * Read as a band rather than as an equality: a theme's own tint moves a channel by a point or two either
+ * way, and what is being asserted is the depth — a page at seven percent, a plate at eleven, a hairline at
+ * twenty-one — with the saturation shape that makes those three the values github.com chose.
  */
 function everyThemeSitsOnTheLiftedLadder(): void {
   for (const theme of THEMES) {
-    for (const [name, expected] of Object.entries(LIFTED) as [keyof typeof LIFTED, number][]) {
-      const { l } = hslOf(theme.id, 'dark', name)
+    for (const [name, expected] of Object.entries(LIFTED) as [
+      keyof typeof LIFTED,
+      (typeof LIFTED)[keyof typeof LIFTED],
+    ][]) {
+      const { l, s } = hslOf(theme.id, 'dark', name)
       assert.ok(
-        Math.abs(l - expected) <= TOLERANCE,
-        `${theme.id} dark: --${name} is at ${l}%, not the lifted ${expected}%`
+        Math.abs(l - expected.lightness) <= TOLERANCE,
+        `${theme.id} dark: --${name} is at ${l}%, not the GitHub depth of ${expected.lightness}%`
+      )
+      assert.ok(
+        Math.abs(s - expected.saturation) <= TOLERANCE,
+        `${theme.id} dark: --${name} is at ${s}% saturation, not the ${expected.saturation}% of the ladder`
       )
     }
   }
@@ -89,9 +126,9 @@ function everyThemeSitsOnTheLiftedLadder(): void {
 /**
  * The ladder ascends, so a plate still separates from the page it sits on.
  *
- * This is the half the numbers alone cannot state: three lifted values that happened to land in the
- * wrong order would pass the band above and draw a page with no separation at all, which is the exact
- * defect the pass is repairing.
+ * This is the half the numbers alone cannot state: three lifted values that happened to land in the wrong
+ * order would pass the band above and draw a page with no separation at all, which is the exact defect the
+ * pass is repairing.
  */
 function theLadderAscends(): void {
   for (const theme of THEMES) {
@@ -115,26 +152,106 @@ function theLadderAscends(): void {
 }
 
 /**
- * Each theme's tint survives the lift as a whisper.
+ * Each theme's tint survives the depth change as a whisper.
  *
- * The four surface tokens of one theme share one hue — the hue that theme's dark family already had —
- * at a saturation low enough to read as charcoal rather than as a colour, and high enough that the
- * window is not a neutral grey five times over. Both halves matter: a lift to `#15171b` reproduced
- * with zero saturation would delete the difference between the five themes in dark mode.
+ * Every surface token of one theme shares one hue — the theme's own — so crimson is a warm room, ocean a
+ * cool one, and so on, while the saturation stays low enough to read as charcoal rather than as a colour.
+ * The named three carry the ladder's own saturation shape; the chip and bright-hairline steps only have to
+ * stay inside the whisper band, because they are the steps the brief does not name.
  */
 function eachThemeKeepsItsOwnTint(): void {
   for (const theme of THEMES) {
-    const family = ['background', 'card', 'muted', 'border'] as const
+    const family = ['background', 'card', 'muted', 'border', 'border-bright'] as const
     const hues = family.map((name) => hslOf(theme.id, 'dark', name))
     const reference = hues[0].h
 
     for (const [index, hsl] of hues.entries()) {
+      const name = family[index]
       assert.ok(
         Math.abs(hsl.h - reference) <= 2,
-        `${theme.id} dark: --${family[index]} is at hue ${hsl.h}, not the family's ${reference}`
+        `${theme.id} dark: --${name} is at hue ${hsl.h}, not the family's ${reference}`
       )
-      assert.ok(hsl.s >= 4, `${theme.id} dark: --${family[index]} is at ${hsl.s}% saturation, which is a neutral grey`)
-      assert.ok(hsl.s <= 20, `${theme.id} dark: --${family[index]} is at ${hsl.s}% saturation, which is a colour`)
+
+      if (name in LIFTED) {
+        const expected = LIFTED[name as keyof typeof LIFTED]
+        assert.ok(
+          Math.abs(hsl.s - expected.saturation) <= TOLERANCE,
+          `${theme.id} dark: --${name} is at ${hsl.s}% saturation, not the ${expected.saturation}% of the ladder`
+        )
+        continue
+      }
+
+      assert.ok(hsl.s >= 4, `${theme.id} dark: --${name} is at ${hsl.s}% saturation, which is a neutral grey`)
+      assert.ok(hsl.s <= 20, `${theme.id} dark: --${name} is at ${hsl.s}% saturation, which is a colour`)
+    }
+  }
+}
+
+/**
+ * The foreground family sits on GitHub's cool ladder, in each theme's own hue.
+ *
+ * The three primary tokens share one rung at 93 percent — near-white, but not the pure bloom the old
+ * family used — and the muted token sits below them. Saturation is capped rather than fixed, because what
+ * has to hold is the *whisper*: a hue of the theme's own, never a tint strong enough to name.
+ */
+function everyDarkForegroundSitsOnTheLadder(): void {
+  for (const theme of THEMES) {
+    const familyHue = hslOf(theme.id, 'dark', 'background').h
+
+    for (const name of ['foreground', 'card-foreground', 'popover-foreground'] as const) {
+      const { l, s, h } = hslOf(theme.id, 'dark', name)
+      assert.ok(
+        Math.abs(l - INK.primary.lightness) <= TOLERANCE,
+        `${theme.id} dark: --${name} is at ${l}%, not the primary rung of ${INK.primary.lightness}%`
+      )
+      assert.ok(
+        s <= INK.primary.saturation,
+        `${theme.id} dark: --${name} is at ${s}% saturation, past the ${INK.primary.saturation}% cap`
+      )
+      assert.ok(s >= 4, `${theme.id} dark: --${name} is at ${s}% saturation, a neutral white rather than a tinted one`)
+      assert.ok(
+        Math.abs(h - familyHue) <= 2,
+        `${theme.id} dark: --${name} is at hue ${h}, not the family's ${familyHue}`
+      )
+    }
+
+    const muted = hslOf(theme.id, 'dark', 'muted-foreground')
+    assert.ok(
+      Math.abs(muted.l - INK.muted.lightness) <= TOLERANCE,
+      `${theme.id} dark: --muted-foreground is at ${muted.l}%, not the muted rung of ${INK.muted.lightness}%`
+    )
+    assert.ok(
+      muted.s <= INK.muted.saturation,
+      `${theme.id} dark: --muted-foreground is at ${muted.s}% saturation, past the ${INK.muted.saturation}% cap`
+    )
+    assert.ok(muted.s >= 4, `${theme.id} dark: --muted-foreground is at ${muted.s}% saturation, a neutral grey`)
+    assert.ok(
+      Math.abs(muted.h - familyHue) <= 2,
+      `${theme.id} dark: --muted-foreground is at hue ${muted.h}, not the family's ${familyHue}`
+    )
+  }
+}
+
+/**
+ * Every dark foreground clears the floor on every surface the brief names.
+ *
+ * Primary text, card text, popover text and muted text, each measured against the canvas, the plate and the
+ * popover in all five themes. The registry's own strings are measured, so this is a claim about what a
+ * theme authors rather than about what the engine would rescue.
+ */
+function everyDarkForegroundPairReads(): void {
+  const inks = ['foreground', 'card-foreground', 'popover-foreground', 'muted-foreground'] as const
+  const surfaces = ['background', 'card', 'popover'] as const
+
+  for (const theme of THEMES) {
+    for (const ink of inks) {
+      for (const surface of surfaces) {
+        const ratio = contrastRatio(theme.tokens.dark[ink], theme.tokens.dark[surface])
+        assert.ok(
+          ratio >= MIN_CONTRAST,
+          `${theme.id} dark: --${ink} (${theme.tokens.dark[ink]}) on --${surface} (${theme.tokens.dark[surface]}) measured ${ratio.toFixed(2)}, under the ${MIN_CONTRAST} floor`
+        )
+      }
     }
   }
 }
@@ -160,10 +277,10 @@ function lightModeIsUntouched(): void {
 /**
  * Every dark `--brand-text` clears the floor on every surface text is drawn on.
  *
- * An accent is chosen for a surface, not for text, and the lifted page raised every surface under it:
- * the ink that read at `#08090a` is the ink this claim re-measures on the charcoal one. The card is
- * named in the brief and every text surface is measured, because a muted line and a popover are as
- * much somewhere a glyph is drawn as a plate is.
+ * An accent is chosen for a surface, not for text, and this pass moved every surface under it: the ink that
+ * read at the old charcoal is the ink this claim re-measures at GitHub's depth. The card is named in the
+ * brief and every text surface is measured, because a muted line and a popover are as much somewhere a
+ * glyph is drawn as a plate is.
  */
 function everyDarkBrandTextReads(): void {
   for (const theme of THEMES) {
@@ -180,16 +297,16 @@ function everyDarkBrandTextReads(): void {
 
     // The card is the surface the brief names, stated on its own so a red run points at it by name.
     const onCard = contrastRatio(brandText, theme.tokens.dark.card)
-    assert.ok(onCard >= MIN_CONTRAST, `${theme.id} dark: --brand-text on the lifted card measured ${onCard.toFixed(2)}`)
+    assert.ok(onCard >= MIN_CONTRAST, `${theme.id} dark: --brand-text on the plate measured ${onCard.toFixed(2)}`)
   }
 }
 
 /**
- * The readability pass has nothing to rescue on the lifted ladder.
+ * The readability pass has nothing to rescue on the new ladder.
  *
- * If a pair needed moving at the theme's own brightness, the floor would still be met — by the pass
- * rather than by the palette — and the app would launch into a theme that is not the one it authored.
- * So the pass is asked here whether it moved anything, in both modes, and expected to say no.
+ * If a pair needed moving at the theme's own brightness, the floor would still be met — by the pass rather
+ * than by the palette — and the app would launch into a theme that is not the one it authored. So the pass
+ * is asked here whether it moved anything, in both modes, and expected to say no.
  */
 function thePassMovesNothingAtTheDefaultBrightness(): void {
   for (const theme of THEMES) {
@@ -203,9 +320,11 @@ function thePassMovesNothingAtTheDefaultBrightness(): void {
 // ---------------------------------------------------------------- main
 
 function main(): void {
-  claim('every theme sits on the lifted charcoal ladder in dark mode', everyThemeSitsOnTheLiftedLadder)
+  claim('every theme sits at GitHub depth in dark mode', everyThemeSitsOnTheLiftedLadder)
   claim('the dark ladder ascends, so a plate separates from its page', theLadderAscends)
   claim('each theme keeps its own tint as a whisper rather than a neutral grey', eachThemeKeepsItsOwnTint)
+  claim('the dark foregrounds sit on GitHub’s cool rung in each theme’s own hue', everyDarkForegroundSitsOnTheLadder)
+  claim('every dark foreground clears the floor on the canvas, the plate and the popover', everyDarkForegroundPairReads)
   claim('the light family is where it was', lightModeIsUntouched)
   claim('every dark --brand-text clears the floor on every surface it is drawn on', everyDarkBrandTextReads)
   claim('the default brightness needs no rescue from the readability pass', thePassMovesNothingAtTheDefaultBrightness)
