@@ -6,6 +6,21 @@ coding assistant.
 
 <br>
 
+## 2026-10-19: v1.11.2 — Inputs separate from the surface, and popup forms get room
+
+- **Inputs pop out of the dark surface, and popup forms get room.** In dark mode an input takes a raised tint of
+  the same `--input` token — the dark-only opacity moves from 30% to 50% — so it no longer dissolves into the
+  surface it sits on, and it gains a taller touch target (h-9 to h-10). Popup forms widen from sm:max-w-md to
+  md:max-w-xl at tablet width and lg:max-w-2xl at desktop, behind the existing viewport-bounded mobile cap
+  (max-w-[calc(100%-2rem)]) that keeps them fitting on narrow screens. Light mode's input treatment is unchanged
+  and the popup primitive keeps its structure — border, radius, padding, shadow and animation all stand. No
+  functionality, no new tokens, no surface grammar changes.
+
+- The v1.11.1 baseline is everything before this entry. This entry is v1.11.2 — the one commit, which is the
+  work described above.
+
+<br>
+
 ## 2026-10-19: v1.11.1 — Dark mode reads at github.com's depth
 
 - **Dark mode now reads at github.com's depth.** The dark room moves from the lifted charcoal of v1.11.0 to
