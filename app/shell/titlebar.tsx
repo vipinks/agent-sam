@@ -1,22 +1,44 @@
 import { useEffect, type ReactNode } from 'react'
-import { Minus, Square, Copy, X, Sun, Moon, SquareTerminal, ZoomIn, ZoomOut, Ratio, Maximize } from 'lucide-react'
+import {
+  Minus,
+  Square,
+  Copy,
+  X,
+  Sun,
+  Moon,
+  SquareTerminal,
+  ZoomIn,
+  ZoomOut,
+  Ratio,
+  Maximize,
+  RotateCw,
+} from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { cn } from '@/lib/utils'
 import { useWindowStore } from './window-store'
 import { useThemeStore } from './theme-store'
-import { MENUS } from './menu'
-import { TitlebarMenu } from './titlebar-menu'
+import { CHROME_BAND_HEIGHT, CHROME_ICON_GAP } from './chrome'
+import { windowShortcut, type WindowCommand } from './window-shortcuts'
+import { useWindowShortcuts } from './use-window-shortcuts'
 import { ControlButton } from './control-button'
 import { ControlTooltip } from './control-tooltip'
 import { UpdateBadge } from './update-badge'
 import { BrightnessButton, ContrastButton, ThemeButton } from './theme-controls'
-import { Separator } from '../components/ui/separator'
+import { TitlebarGroupSeparator } from './group-separator'
 import { useWorkbenchStore } from '../components/workbench/store'
 
 /**
  * Custom window titlebar: core shell chrome, styled with Tailwind on the theme tokens (no legacy
- * window.css). A conveyor consumer itself: the menu + controls call the window/web modules. macOS
- * keeps its native inset traffic lights; win32/linux render these controls.
+ * window.css). A conveyor consumer itself: the controls call the window/web modules, and the six
+ * accelerators are dispatched from here too. macOS keeps its native inset traffic lights; win32/linux
+ * render these controls.
+ *
+ * Phase 100 took the File, Edit and View menus off this bar for good, and with them the Alt press that
+ * showed and hid them. What the bar holds instead is what those menus performed, as controls and as
+ * chords: the row leads with reload — the View menu's own Reload entry, drawn where a reader reaches for
+ * it while looking at the page — and the six shortcuts survive through a listener that reads no menu at
+ * all (`useWindowShortcuts`). DevTools and actual size stay keyboard-only: a bar with a glyph for every
+ * entry a menu listed would be a bar nobody read.
  *
  * The theme chooser, the brightness control and the contrast control sit beside the light/dark toggle, in
  * that order: the four of them are one subject — what the window looks like — and the toggle is the one that
@@ -29,41 +51,34 @@ import { useWorkbenchStore } from '../components/workbench/store'
  * manager already uses.
  *
  * The bottom terminal panel's toggle comes after them, behind a vertical divider, because it is the
- * row's one control that is not about how the window looks. The row is read in groups — zoom, layout,
- * theme, update, terminal — and every seam between them carries the same hairline, so the divider says
- * which group the toggle belongs to rather than that it is an exception to the rest of the row. It
- * reports a state rather than an action — pressed while the panel is showing — and that state is the
- * persisted flag and nothing else, so what the glyph says cannot drift from what the panel below is
+ * row's one control that is not about how the window looks. The row is read in groups — reload, zoom,
+ * layout, theme, update, terminal — and every seam between them carries the same hairline, so the
+ * divider says which group the toggle belongs to rather than that it is an exception to the rest of the
+ * row. It reports a state rather than an action — pressed while the panel is showing — and that state is
+ * the persisted flag and nothing else, so what the glyph says cannot drift from what the panel below is
  * doing.
  *
- * The zoom ladder and fullscreen lead the row, immediately before the light/dark toggle: they are the
- * acts the View menu's own zoom and fullscreen entries perform, drawn on the bar because a reader
- * reaches for them while looking at the page rather than while looking for the View menu. Nothing here
- * remembers a level — each press dispatches its act and the window's own page stays the only thing that
- * knows what size it is drawn at — so the four are buttons and tooltips and no state at all.
+ * The gaps and the rules are one grid rather than two decisions: the same token that separates two icons
+ * of a group is the token the rails use between theirs (`app/shell/chrome.ts`), and a rule is drawn only
+ * at a seam, so what a reader sees between two glyphs is either a small gap or a group boundary and never
+ * an accident of margins.
+ *
+ * The zoom ladder and fullscreen are the acts the View menu's own zoom and fullscreen entries performed,
+ * unchanged by its removal. Nothing here remembers a level — each press dispatches its act and the
+ * window's own page stays the only thing that knows what size it is drawn at — so they are buttons and
+ * tooltips and no state at all.
  */
 export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
   const platform = useWindowStore((s) => s.platform)
-  const menuVisible = useWindowStore((s) => s.menuVisible)
-  const toggleMenu = useWindowStore((s) => s.toggleMenu)
   const isMac = platform === 'darwin'
 
-  // Alt shows/hides the menu bar, like a normal Electron window.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Alt' && !e.repeat) {
-        e.preventDefault()
-        toggleMenu()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [toggleMenu])
+  useWindowShortcuts()
 
   return (
     <header
       className={cn(
-        'relative flex h-10 shrink-0 items-center border-b border-border bg-card select-none [-webkit-app-region:drag]',
+        'relative flex shrink-0 items-center border-b border-border bg-card select-none [-webkit-app-region:drag]',
+        CHROME_BAND_HEIGHT,
         isMac && 'pl-20'
       )}
     >
@@ -71,7 +86,6 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
         {/* The native traffic lights already anchor the left edge on macOS, where a same-sized dot
             beside them just reads as a fourth window control. */}
         {!isMac && <span className="size-3.25 rounded-lg bg-brand ring-[3px] ring-brand/20" />}
-        {menuVisible && <TitlebarMenu />}
       </div>
 
       {/* Centered title. pointer-events-none so the drag region shows through. */}
@@ -79,14 +93,20 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
         <span className="text-[13px] font-medium text-foreground/60">{title}</span>
       </div>
 
-      <div className="ml-auto flex items-center [-webkit-app-region:no-drag]">
-        <ViewActions />
+      <div className={cn('ml-auto flex items-center [-webkit-app-region:no-drag]', CHROME_ICON_GAP)}>
+        <ReloadAction />
+        <TitlebarGroupSeparator />
+        <ZoomActions />
+        <TitlebarGroupSeparator />
+        <FullscreenAction />
         <TitlebarGroupSeparator />
         <ThemeToggle />
         <ThemeButton />
         <BrightnessButton />
         <ContrastButton />
-        <TitlebarGroupSeparator />
+        {/* The update group draws its own rule, so a bar with no badge in it carries no bare seam: the
+            badge is absent outside a packaged build, and two rules with nothing between them is what
+            that used to look like. */}
         <UpdateBadge />
         <TerminalPanelToggle />
         {!isMac && <WindowControls />}
@@ -96,23 +116,26 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
 }
 
 /**
- * The View menu's own words for an action: its label, and its accelerator when the menu shows one.
+ * One view action: the row's own square control, under the tooltip that names it and its chord.
  *
- * Read from the menu rather than written again here, so a button and the entry it mirrors cannot
- * disagree — and so an accelerator added to the View menu turns up on the button without a second edit.
- * Three of the four entries carry no accelerator today, so their tooltips are the label alone; only
- * fullscreen names one, and it names the F11 the menu declares.
+ * The words come from the shortcut table rather than from a menu, and from the same row the listener
+ * resolves against: a tooltip that taught a chord the listener did not answer would be the one defect a
+ * row of glyphs cannot afford. All four of these buttons name an accelerator now — the View menu listed
+ * none for the ladder, so before this phase their tooltips were the label alone.
  */
-function viewActionTooltip(label: string): string {
-  const entry = MENUS.find((menu) => menu.label === 'View')?.items.find((item) => item.label === label)
+function ViewAction({
+  command,
+  onClick,
+  children,
+}: {
+  command: WindowCommand
+  onClick: () => void
+  children: ReactNode
+}) {
+  const { label, accelerator } = windowShortcut(command)
 
-  return entry?.shortcut ? `${entry.label} (${entry.shortcut})` : label
-}
-
-/** One view action: the row's own square control, under a tooltip that names it and its accelerator. */
-function ViewAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
-    <ControlTooltip label={viewActionTooltip(label)}>
+    <ControlTooltip label={`${label} (${accelerator})`}>
       <ControlButton label={label} onClick={onClick}>
         {children}
       </ControlButton>
@@ -148,46 +171,59 @@ function WindowControl({
 }
 
 /**
- * The hairline between two of the row's functional groups.
+ * Reload, leading the row: the View menu's own Reload entry, kept where a reader reaches for it.
  *
- * A rule rather than a wrapper element, and deliberately: the buttons stay children of the row, so a
- * group cannot take one of them out of the tab order or out of the order a reader walks them in. What
- * says "these belong together" is the spacing and the rule; what holds them together is nothing. The
- * mark is a data attribute because a separator and a divider are the same element in a snapshot, and a
- * test that had to guess which one it was looking at would be a test of the guess.
+ * `web.reload` is the command that entry called, reused rather than reimplemented, which is what makes
+ * the menu's removal a move of its behaviour onto the bar instead of a second reload of the shell's own
+ * making. The glyph is the arrow coming round on itself that every browser puts on the same act, and the
+ * chord in its tooltip is the one the listener answers, read from the same table.
  */
-function TitlebarGroupSeparator() {
-  return <Separator orientation="vertical" data-titlebar-separator="" className="mx-1.5 h-5" />
+function ReloadAction() {
+  return (
+    <ViewAction command="reload" onClick={() => conveyor.web.reload()}>
+      <RotateCw className="size-4" />
+    </ViewAction>
+  )
 }
 
 /**
- * The zoom ladder and fullscreen, in the order the View menu lists them, before the theme toggle.
+ * The zoom ladder, in the order a page's size runs: gaining, losing, and back to the size it was drawn at.
  *
- * The glyphs are the ladder read left to right — a magnifier gaining, a magnifier losing, the sizes a
- * page can be drawn at — and the window's own corners for fullscreen, which is the one of the four that
- * is not about size. A fragment rather than a wrapping element: the four are buttons of the row, level
- * with the theme controls beside them, and a box around them would put a gap in the row where there is
- * none between any of the others. The rule after the ladder is the one seam *inside* this group: zoom
- * is what a reader changes while reading, fullscreen is where the window is put, and the hairline says
- * so without moving either of them.
+ * A fragment rather than a wrapping element: the three are buttons of the row, level with the groups
+ * beside them, and a box around them would put a gap in the row where there is none between any of the
+ * others. Actual Size belongs to this group rather than to the one after it — it is a level, and the
+ * next group is about where the window is put.
  */
-function ViewActions() {
+function ZoomActions() {
   return (
     <>
-      <ViewAction label="Zoom In" onClick={() => conveyor.window.zoomIn()}>
+      <ViewAction command="zoomIn" onClick={() => conveyor.window.zoomIn()}>
         <ZoomIn className="size-4" />
       </ViewAction>
-      <ViewAction label="Zoom Out" onClick={() => conveyor.window.zoomOut()}>
+      <ViewAction command="zoomOut" onClick={() => conveyor.window.zoomOut()}>
         <ZoomOut className="size-4" />
       </ViewAction>
-      <ViewAction label="Actual Size" onClick={() => conveyor.window.resetZoom()}>
+      <ViewAction command="actualSize" onClick={() => conveyor.window.resetZoom()}>
         <Ratio className="size-4" />
       </ViewAction>
-      <TitlebarGroupSeparator />
-      <ViewAction label="Toggle Fullscreen" onClick={() => conveyor.window.toggleFullscreen()}>
-        <Maximize className="size-4" />
-      </ViewAction>
     </>
+  )
+}
+
+/**
+ * Where the window is put: the window's own corners, in a group of its own after the ladder.
+ *
+ * It is one control because the titlebar has no other: a panel is opened from the right rail and put
+ * away from its own header, so the layout group this row can honestly draw is fullscreen alone. The rule
+ * before it is the seam the old row drew between zoom and fullscreen, promoted from a division inside
+ * one group to a boundary between two — the ladder is what a reader changes while reading, fullscreen is
+ * where the window is put, and now that reload leads the row the two read as the two subjects they are.
+ */
+function FullscreenAction() {
+  return (
+    <ViewAction command="toggleFullscreen" onClick={() => conveyor.window.toggleFullscreen()}>
+      <Maximize className="size-4" />
+    </ViewAction>
   )
 }
 
@@ -260,7 +296,7 @@ function TerminalPanelToggle() {
 
   return (
     <div className="flex items-center">
-      <Separator orientation="vertical" data-titlebar-separator="" className="mx-1.5 h-5" />
+      <TitlebarGroupSeparator />
       <ControlTooltip label={bottomPanelOpen ? 'Hide the terminal panel' : 'Show the terminal panel'}>
         <ControlButton
           label="Terminal panel"

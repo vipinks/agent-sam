@@ -354,9 +354,10 @@ async function expectTooltip(name: string, tooltip: string): Promise<void> {
  * time.
  */
 const ROW_ICONS = [
-  { name: 'Zoom In', tooltip: 'Zoom In' },
-  { name: 'Zoom Out', tooltip: 'Zoom Out' },
-  { name: 'Actual Size', tooltip: 'Actual Size' },
+  { name: 'Reload', tooltip: 'Reload (Ctrl+R)' },
+  { name: 'Zoom In', tooltip: 'Zoom In (Ctrl+Plus)' },
+  { name: 'Zoom Out', tooltip: 'Zoom Out (Ctrl+Minus)' },
+  { name: 'Actual Size', tooltip: 'Actual Size (Ctrl+0)' },
   { name: 'Toggle Fullscreen', tooltip: 'Toggle Fullscreen (F11)' },
   { name: 'Theme: Crimson', tooltip: 'Theme: Crimson' },
   { name: 'Brightness', tooltip: 'Brightness' },

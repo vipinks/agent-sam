@@ -218,10 +218,12 @@ describe('the header update badge', () => {
 
     // The terminal control is drawn with its divider in a wrapper of its own, so the badge's place in the
     // row is the sibling immediately before that wrapper — the position the design names, asserted rather
-    // than assumed.
+    // than assumed. Since Phase 100 the badge draws its own leading divider and so sits in a wrapper too,
+    // which is why this is a containment rather than an identity: what the row has to show is the badge's
+    // group immediately left of the terminal's.
     const terminal = screen.getByRole('button', { name: 'Terminal panel' })
     const wrapper = terminal.parentElement as HTMLElement
-    expect(wrapper.previousElementSibling).toBe(badge())
+    expect(wrapper.previousElementSibling?.contains(badge()), 'the badge’s group precedes the terminal’s').toBe(true)
 
     // The row's other controls, in the order they were in before this phase: nothing was renamed or moved
     // to make room for the badge, and the four view acts are still led by the zoom ladder.

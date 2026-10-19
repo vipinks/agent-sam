@@ -22,7 +22,7 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore } fr
  * main column, and the drawer's declared share is unchanged.
  *
  * The pixels are a model, and the limit is jsdom's and is named rather than papered over: nothing
- * lays out here, so a width is read from *declarations* — `w-16` is 4rem, `w-px` is the separator's
+ * lays out here, so a width is read from *declarations* — `w-10` is 2.5rem, `w-px` is the separator's
  * own pixel, and the resize library gives each panel `flex-basis: 0` with `flex-grow` set to its
  * share. What the model therefore asserts is the budget the share is resolved against, which is
  * exactly the claim; a live window's measured pixels remain the app's to confirm.
@@ -98,8 +98,8 @@ const WINDOWED_WINDOW_PX = 1240
  */
 const MAXIMIZED_WINDOW_PX = 1920
 
-/** A rail's declared width: `w-16`, asserted on the element itself below. */
-const RAIL_PX = 64
+/** A rail's declared width: `w-10`, asserted on the element itself below. */
+const RAIL_PX = 40
 
 /** The separator's own width: `w-px`, taken out of the group before the shares are divided. */
 const HANDLE_PX = 1
@@ -232,12 +232,12 @@ describe('the drawer’s share, and the box it is a share of', () => {
   it('measures a windowed launch against the window and the left rail alone, as it did at 8d9c03b', () => {
     const { container } = renderWorkbench()
 
-    // One fixed-width column beside the group, and it is the left rail: 64 pixels, non-shrinking. The
+    // One fixed-width column beside the group, and it is the left rail: 40 pixels, non-shrinking. The
     // right rail is not on this list — that is the regression this file exists for.
     const shared = columnOutsideTheGroup(container)
     expect(shared.map((node) => node.getAttribute('aria-label'))).toEqual(['Workbench'])
     for (const node of shared) {
-      expect(node.className).toContain('w-16')
+      expect(node.className).toContain('w-10')
       expect(node.className).toContain('shrink-0')
     }
 
@@ -246,15 +246,16 @@ describe('the drawer’s share, and the box it is a share of', () => {
     expect(container.querySelector('[data-group]#workbench > [aria-label="Right rail"]')).toBeNull()
 
     // The saved set's semantics as they stood then: the drawer's own share of the group, unchanged —
-    // and the group's box the window less that one rail, so a 34 percent drawer is 399.5 pixels rather
-    // than the 377.74 those same 34 percent bought while the rail was taking its 64 pixels out of the
-    // group's box.
+    // and the group's box the window less that one rail, so a 34 percent drawer is 407.66 pixels rather
+    // than the 394.06 those same 34 percent bought while the rail was taking its 40 pixels out of the
+    // group's box. (Phase 100 narrowed the rail from 64 to 40, which is why the two numbers are 8 wider
+    // than they were: the share is the same share, and the box it is a share of grew.)
     const columns = outerColumns(container)
     expect(columns.map((panel) => panel.id)).toEqual(['secondary', 'main'])
     expect(columns[0]?.defaultSize).toBe(percentSize(WINDOWED.outer.drawer))
-    expect(drawerContentBoxPx(WINDOWED_WINDOW_PX, shared, WINDOWED.outer.drawer)).toBeCloseTo(399.5, 2)
+    expect(drawerContentBoxPx(WINDOWED_WINDOW_PX, shared, WINDOWED.outer.drawer)).toBeCloseTo(407.66, 2)
     expect(drawerContentBoxPx(WINDOWED_WINDOW_PX, shared, WINDOWED.outer.drawer) - RAIL_PX * 0.34).toBeCloseTo(
-      377.74,
+      394.06,
       2
     )
   })
@@ -272,11 +273,11 @@ describe('the drawer’s share, and the box it is a share of', () => {
 
     const columns = outerColumns(container)
     expect(columns.map((panel) => panel.id)).toEqual(['secondary', 'main'])
-    // 0.20 of the window less the rail, less the separator: 371 pixels, where the rail's cut of the
-    // same share left 358.2.
-    expect(drawerContentBoxPx(MAXIMIZED_WINDOW_PX, shared, MAXIMIZED.outer.drawer)).toBeCloseTo(371, 2)
+    // 0.20 of the window less the rail, less the separator: 375.8 pixels, where the rail's cut of the
+    // same share left 367.8.
+    expect(drawerContentBoxPx(MAXIMIZED_WINDOW_PX, shared, MAXIMIZED.outer.drawer)).toBeCloseTo(375.8, 2)
     expect(drawerContentBoxPx(MAXIMIZED_WINDOW_PX, shared, MAXIMIZED.outer.drawer) - RAIL_PX * 0.2).toBeCloseTo(
-      358.2,
+      367.8,
       2
     )
   })

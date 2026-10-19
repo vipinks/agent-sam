@@ -164,6 +164,19 @@ const MANIFEST: Record<string, Record<string, string>> = {
     resetZoom: 'command',
     toggleFullscreen: 'command',
   },
+  // The web-content acts the titlebar's menus used to call, and the ones Phase 100 moved onto the row
+  // and onto the keyboard: reload is a button again, and all six are chords answered by a listener that
+  // reads no menu. Commands, the kind main registers them as, and listed rather than left out — the
+  // client refuses an unlisted member before any handler is reached, so a reload button whose command
+  // was absent here could not dispatch at all.
+  web: {
+    reload: 'command',
+    toggleDevtools: 'command',
+    zoomIn: 'command',
+    zoomOut: 'command',
+    actualSize: 'command',
+    toggleFullscreen: 'command',
+  },
   // The running app's own version, which `/version` reports. A query, like `sessions.transcriptVersion`
   // above it, and listed for the same reason: the client refuses an unlisted member rather than
   // dispatching it, and a command that reached nothing would render an empty notice rather than fail.

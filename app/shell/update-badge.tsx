@@ -4,6 +4,7 @@ import { updateBadge } from '@/conveyor/protocol/updates'
 import { updateStatusStore } from '@/conveyor/stores/update-status'
 import { ControlButton } from './control-button'
 import { ControlTooltip } from './control-tooltip'
+import { TitlebarGroupSeparator } from './group-separator'
 import { useWorkbenchStore } from '../components/workbench/store'
 
 /**
@@ -36,6 +37,11 @@ import { useWorkbenchStore } from '../components/workbench/store'
  * neighbours do not have: without it, a control that only appears once in a while reads as another glyph in
  * a row of glyphs, and the mark is what says there is something behind it.
  *
+ * The rule before it belongs to the group and is drawn here, with the badge. Phase 100 re-cut the row into
+ * groups where every seam is one hairline, and the update group is the one that empties: outside a packaged
+ * build there is no badge at all, so a rule written in the row above would leave two hairlines with nothing
+ * between them. Drawn here, the seam arrives and leaves with the only control it separates.
+ *
  * In development it renders nothing at all, by the same code path the requirement names: the updater is
  * never wired outside a packaged build, so the mirror this reads never leaves `idle`.
  */
@@ -52,20 +58,23 @@ export function UpdateBadge() {
   if (!badge.present || availableVersion === null) return null
 
   return (
-    <ControlTooltip label={badge.label}>
-      <ControlButton
-        data-slot="update-badge"
-        label={badge.label}
-        className="relative"
-        onClick={() => openSettingsAt('updates')}
-      >
-        <CircleArrowUp className="size-4" />
-        <span
-          data-slot="update-badge-dot"
-          aria-hidden
-          className="absolute top-2 right-2 size-1.5 rounded-full bg-amber-500"
-        />
-      </ControlButton>
-    </ControlTooltip>
+    <div className="flex items-center">
+      <TitlebarGroupSeparator />
+      <ControlTooltip label={badge.label}>
+        <ControlButton
+          data-slot="update-badge"
+          label={badge.label}
+          className="relative"
+          onClick={() => openSettingsAt('updates')}
+        >
+          <CircleArrowUp className="size-4" />
+          <span
+            data-slot="update-badge-dot"
+            aria-hidden
+            className="absolute top-2 right-2 size-1.5 rounded-full bg-amber-500"
+          />
+        </ControlButton>
+      </ControlTooltip>
+    </div>
   )
 }

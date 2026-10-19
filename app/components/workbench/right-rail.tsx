@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CHROME_ICON_GAP, CHROME_RAIL_ICON, CHROME_RAIL_WIDTH } from '@/app/shell/chrome'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'
 
@@ -89,7 +90,10 @@ export function RightRail() {
   const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel)
 
   return (
-    <nav aria-label="Right rail" className="flex w-16 shrink-0 flex-col items-center gap-1 bg-card py-2">
+    <nav
+      aria-label="Right rail"
+      className={cn('flex shrink-0 flex-col items-center bg-card py-2', CHROME_RAIL_WIDTH, CHROME_ICON_GAP)}
+    >
       {RIGHT_RESIDENTS.map((resident) => {
         const Icon = resident.icon
         const isDocked = resident.id === rightPanel
@@ -102,7 +106,8 @@ export function RightRail() {
             aria-pressed={isDocked}
             onClick={() => toggleRightPanel(resident.id)}
             className={cn(
-              'flex size-10 items-center justify-center rounded-md outline-none transition-colors',
+              'flex items-center justify-center rounded-md outline-none transition-colors',
+              CHROME_RAIL_ICON,
               'focus-visible:ring-2 focus-visible:ring-ring',
               isDocked ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
             )}

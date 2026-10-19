@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CHROME_ICON_GAP, CHROME_RAIL_ICON, CHROME_RAIL_WIDTH } from '@/app/shell/chrome'
 import { Button } from '../ui/button'
 import { useWorkbenchStore } from './store'
 import { useChatSessionsContext } from './chat-sessions-context'
@@ -208,7 +209,10 @@ export function IconRail() {
   }
 
   return (
-    <nav aria-label="Workbench" className="flex w-16 shrink-0 flex-col items-center gap-1 bg-card py-2">
+    <nav
+      aria-label="Workbench"
+      className={cn('flex shrink-0 flex-col items-center bg-card py-2', CHROME_RAIL_WIDTH, CHROME_ICON_GAP)}
+    >
       {/*
       The way back to the start, at the leading position and in both drawer states: it is the one
       control here that is about the window rather than about the drawer, so the drawer's arrival and
@@ -221,7 +225,8 @@ export function IconRail() {
         aria-current={atHome ? 'page' : undefined}
         onClick={goHome}
         className={cn(
-          'flex size-10 items-center justify-center rounded-xl outline-none transition-colors',
+          'flex items-center justify-center rounded-xl outline-none transition-colors',
+          CHROME_RAIL_ICON,
           'focus-visible:ring-2 focus-visible:ring-ring',
           atHome ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
         )}
@@ -243,7 +248,8 @@ export function IconRail() {
             aria-pressed={isActive}
             onClick={() => choose(activity.id)}
             className={cn(
-              'flex size-10 items-center justify-center rounded-xl outline-none transition-colors',
+              'flex items-center justify-center rounded-xl outline-none transition-colors',
+              CHROME_RAIL_ICON,
               'focus-visible:ring-2 focus-visible:ring-ring',
               isActive ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
             )}
@@ -260,7 +266,8 @@ export function IconRail() {
         aria-pressed={activeActivity === 'settings'}
         onClick={openSettings}
         className={cn(
-          'mt-auto flex size-10 items-center justify-center rounded-xl outline-none transition-colors',
+          'mt-auto flex items-center justify-center rounded-xl outline-none transition-colors',
+          CHROME_RAIL_ICON,
           'focus-visible:ring-2 focus-visible:ring-ring',
           activeActivity === 'settings'
             ? 'bg-brand-soft text-brand'

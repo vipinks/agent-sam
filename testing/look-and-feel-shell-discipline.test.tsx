@@ -170,8 +170,9 @@ describe('the titlebar’s icon cluster', () => {
     renderWithStub(<WindowFrame>{null}</WindowFrame>)
 
     const separators = [...document.querySelectorAll('[data-titlebar-separator]')]
-    // Four groups lead the row — zoom, layout, theme, update — and the terminal's own divider is the
-    // fifth, so what the cluster carries is one rule between each of the groups it draws.
+    // Four groups draw a seam with no update badge in the bar — reload │ zoom → layout → theme → the
+    // terminal's own leading rule — and the badge adds a fifth while it has something to say. What the
+    // assertion pins is that the count is at least the four seams the row always has.
     expect(separators.length).toBeGreaterThanOrEqual(4)
     for (const separator of separators) expect(separator.getAttribute('aria-hidden') ?? 'true').toBe('true')
   })
@@ -184,7 +185,8 @@ describe('the titlebar’s icon cluster', () => {
     }
 
     // The zoom ladder still sits immediately before the theme toggle, with only a separator between
-    // them: a wrapper element would have made this walk come back empty.
+    // them: a wrapper element would have made this walk come back empty. Reload leads it, as Phase 100
+    // put it there, and fullscreen is the last of the five.
     const themeToggle = screen.getByRole('button', { name: 'Toggle theme' })
     const labels: string[] = []
     for (let node = themeToggle.previousElementSibling; node; node = node.previousElementSibling) {
@@ -192,7 +194,7 @@ describe('the titlebar’s icon cluster', () => {
       if (node.tagName !== 'BUTTON') break
       labels.unshift(node.getAttribute('aria-label') ?? '')
     }
-    expect(labels).toEqual(['Zoom In', 'Zoom Out', 'Actual Size', 'Toggle Fullscreen'])
+    expect(labels).toEqual(['Reload', 'Zoom In', 'Zoom Out', 'Actual Size', 'Toggle Fullscreen'])
   })
 })
 
