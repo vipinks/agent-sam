@@ -24,25 +24,7 @@
  * here — the caps, the fields and the sentences are the protocol's.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import {
-  AlertTriangle,
-  BookOpen,
-  ChartColumn,
-  FileText,
-  GitBranch,
-  KeyRound,
-  Lock,
-  MessageSquare,
-  Pencil,
-  Plus,
-  Search,
-  Table2,
-  Trash2,
-  Wrench,
-  X,
-  Zap,
-  type LucideIcon,
-} from 'lucide-react'
+import { Lock, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { useConveyorStore } from 'electron-conveyor/react'
 import {
@@ -83,29 +65,7 @@ import { Label } from '../ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
-
-/**
- * The marks a Buddy can be given, each one a lucide glyph this app already draws.
- *
- * A mark rather than an icon name, because the record's `glyph` is a character or two — that is what the
- * three built-ins carry, and a row draws the same badge for every kind of record — so what the picker
- * stores has to be the mark itself. The glyph is what the user is choosing; the icon beside it is how the
- * choice is offered, drawn from the set the app already imports rather than from a second icon library.
- */
-const GLYPH_CHOICES: ReadonlyArray<{ icon: LucideIcon; mark: string }> = [
-  { icon: AlertTriangle, mark: 'A' },
-  { icon: BookOpen, mark: 'B' },
-  { icon: ChartColumn, mark: 'C' },
-  { icon: FileText, mark: 'F' },
-  { icon: GitBranch, mark: 'G' },
-  { icon: KeyRound, mark: 'K' },
-  { icon: MessageSquare, mark: 'M' },
-  { icon: Pencil, mark: 'P' },
-  { icon: Search, mark: 'S' },
-  { icon: Table2, mark: 'T' },
-  { icon: Wrench, mark: 'W' },
-  { icon: Zap, mark: 'Z' },
-]
+import { BUDDY_GLYPHS, buddyGlyphFor, buddyMonogram } from './buddy-glyphs'
 
 /** The value a `Select` needs for \"nothing chosen\": Radix refuses an empty string as an item's value. */
 const NONE = 'none'
@@ -252,6 +212,8 @@ function BuddyRow({
   onDelete: () => void
   onToggle: (enabled: boolean) => void
 }) {
+  const glyph = buddyGlyphFor(row.glyph)
+
   return (
     <div
       data-slot="buddy-row"
@@ -263,23 +225,40 @@ function BuddyRow({
         data-slot="buddy-glyph"
         className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted font-mono text-[12px] font-medium"
       >
-        {row.glyph}
+        {/* The plate the monogram filled, holding the mark its id names: same square, same muted surface,
+            same height. A record whose id this build has no mark for keeps drawing its own character rather
+            than an empty square. */}
+        {glyph === null ? buddyMonogram(row.glyph) : <glyph.Icon aria-hidden="true" className="size-4" />}
       </span>
 
-      <span data-slot="buddy-name" className="min-w-0 truncate text-[13px] font-medium">
-        {row.name}
-      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span data-slot="buddy-name" className="min-w-0 truncate text-[13px] font-medium">
+            {row.name}
+          </span>
 
-      {row.builtin && (
-        <span
-          data-slot="buddy-locked"
-          title="One of the app's own: it can be switched off, but not edited or deleted."
-          className="flex flex-none items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+          {row.builtin && (
+            <span
+              data-slot="buddy-locked"
+              title="One of the app's own: it can be switched off, but not edited or deleted."
+              className="flex flex-none items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+            >
+              <Lock aria-hidden="true" className="size-3" />
+              Locked
+            </span>
+          )}
+        </div>
+
+        {/* The slot is reserved whether or not there is a line to draw in it: a card whose Buddy says
+            nothing is the same height as one that says two lines, so the list reads as one column rather
+            than as a ragged stack. `line-clamp-2` is what stops a long line at the reserved height. */}
+        <p
+          data-slot="buddy-description"
+          className="mt-1 line-clamp-2 h-9 text-[12px] leading-[18px] text-muted-foreground"
         >
-          <Lock aria-hidden="true" className="size-3" />
-          Locked
-        </span>
-      )}
+          {row.description}
+        </p>
+      </div>
 
       <div className="ml-auto flex flex-none items-center gap-1.5">
         {!row.builtin && (
@@ -352,7 +331,7 @@ interface EditorError {
 function draftFor(record: BuddyRecord | null): BuddyDraft {
   return {
     name: record?.name ?? '',
-    glyph: record?.glyph ?? GLYPH_CHOICES[0].mark,
+    glyph: record?.glyph ?? BUDDY_GLYPHS[0].id,
     description: record?.description ?? '',
     rolePrompt: record?.rolePrompt ?? '',
     skillIds: [...(record?.skillIds ?? [])],
@@ -525,17 +504,17 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
 
           <div className="flex flex-col gap-1.5">
             <Label>Glyph</Label>
-            <div data-slot="buddy-glyph-picker" className="flex flex-wrap gap-1.5">
-              {GLYPH_CHOICES.map(({ icon: GlyphIcon, mark }) => (
+            <div data-slot="buddy-glyph-picker" className="grid grid-cols-6 gap-1.5 sm:grid-cols-8">
+              {BUDDY_GLYPHS.map(({ id, label, Icon: GlyphIcon }) => (
                 <Button
-                  key={mark}
+                  key={id}
                   type="button"
                   size="icon-sm"
-                  variant={draft.glyph === mark ? 'secondary' : 'ghost'}
-                  aria-label={`Glyph ${mark}`}
-                  title={`Glyph ${mark}`}
-                  aria-pressed={draft.glyph === mark}
-                  onClick={() => edit({ glyph: mark })}
+                  variant={draft.glyph === id ? 'secondary' : 'ghost'}
+                  aria-label={`Glyph ${label}`}
+                  title={`Glyph ${label}`}
+                  aria-pressed={draft.glyph === id}
+                  onClick={() => edit({ glyph: id })}
                 >
                   <GlyphIcon aria-hidden="true" />
                 </Button>

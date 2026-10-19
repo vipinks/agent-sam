@@ -41,6 +41,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { buddyGlyphFor, buddyMonogram } from './buddy-glyphs'
 import { COMPOSER_MIN_HEIGHT, clampComposerHeight, composerBounds } from './composer-resize'
 import { HOME_STARTERS } from './home'
 import { HomeHero, HomePanel } from './home-panel'
@@ -357,15 +358,18 @@ function engineConsentStep(consent: PendingEngineConsent): ToolStep {
  *
  * `null` rather than a separate flag, because `null` is already how this screen reads the default: an id
  * that resolves to no record is the Agent Sam entry, and it is the one entry with no record to carry a
- * character of its own. The mark is then the app's logo from the renderer's own path in the repo — the same
+ * glyph of its own. The mark is then the app's logo from the renderer's own path in the repo — the same
  * file the window, the installers and the app's icon are built from, so a default entry and the app cannot
  * end up with two different marks.
  *
  * One element for both places it is drawn, because the trigger and the list it opens show the same entry
  * twice: a trigger that marked a Buddy differently from the row it was picked from would be two marks for
- * one entry. The badge is the settings list's own — the same square, the same muted surface, the same
- * monospace character — read at this row's height, which is the shorter of the two rows the app draws a
- * Buddy in.
+ * one entry. The badge is the settings list's own — the same square, the same muted surface — read at this
+ * row's height, which is the shorter of the two rows the app draws a Buddy in, and it holds the same
+ * component the card draws, because both resolve the id through the one registry.
+ *
+ * A record whose glyph id resolves to nothing still draws its own character, which is what keeps a record
+ * written by another build from leaving an empty square beside its name.
  *
  * Both forms are decoration and both are drawn that way: the name stands beside them, so the logo is given
  * no description and the badge is hidden from the accessibility tree. That is what keeps an entry's name
@@ -376,13 +380,15 @@ function BuddyAvatar({ glyph }: { glyph: string | null }) {
     return <img src={samMark} alt="" data-slot="buddy-avatar-logo" className="size-4.5 shrink-0 rounded-md" />
   }
 
+  const mark = buddyGlyphFor(glyph)
+
   return (
     <span
       data-slot="buddy-avatar-glyph"
       aria-hidden="true"
       className="flex size-4.5 shrink-0 items-center justify-center rounded-md bg-muted font-mono text-[10px] font-medium"
     >
-      {glyph}
+      {mark === null ? buddyMonogram(glyph) : <mark.Icon aria-hidden="true" className="size-3" />}
     </span>
   )
 }

@@ -55,8 +55,15 @@ export const MAX_BUDDY_ID_CHARS = 64
 /** How long a Buddy's name may be. It is a label on a row, and a paragraph there reads as a mistake. */
 export const MAX_BUDDY_NAME_CHARS = 40
 
-/** How long the mark beside a Buddy's name may be. Two characters: a letter, or a letter and a tiebreak. */
-export const MAX_BUDDY_GLYPH_CHARS = 2
+/**
+ * How long the glyph id beside a Buddy's name may be.
+ *
+ * A glyph is an id rather than the character the badge used to hold, so the bound follows the longest name
+ * the palette carries: the twelve letter ids the app shipped with are one character and stay that way,
+ * while a mark named after its icon is a word. Still bounded, because it is a key read off a stored record
+ * rather than prose — two dozen characters holds every id the palette ships and refuses a pasted paragraph.
+ */
+export const MAX_BUDDY_GLYPH_CHARS = 24
 
 /**
  * How long the one line under a Buddy's name may be: what it is for, one or two sentences.
@@ -160,7 +167,7 @@ export const BUILTIN_BUDDIES: readonly BuddyRecord[] = [
   {
     id: 'writer-editor',
     name: 'Writer / Editor',
-    glyph: 'W',
+    glyph: 'PenLine',
     description: 'Drafts and edits prose, and says what it would cut and why.',
     rolePrompt:
       "You are a careful writer and editor. Write prose that says what it means in as few words as it takes, and when you are asked to edit, change the writing rather than the claims: keep the author's meaning, voice and structure unless you are asked to change them, and say plainly what you cut and why. Prefer the concrete noun and the active verb, and never inflate a sentence to sound thorough.",
@@ -176,7 +183,7 @@ export const BUILTIN_BUDDIES: readonly BuddyRecord[] = [
   {
     id: 'study-tutor',
     name: 'Study Tutor',
-    glyph: 'T',
+    glyph: 'GraduationCap',
     description: 'Teaches by question: works you to the answer instead of handing it over.',
     rolePrompt:
       'You are a patient tutor. Your job is to make the person you are teaching able to do this without you: explain the idea behind the answer before the answer itself, ask one question at a time to find out what they actually understand, and when they are close, let them finish the step rather than finishing it for them. Say when something is a simplification, and never state a fact you are not sure of as though you were.',
@@ -192,7 +199,7 @@ export const BUILTIN_BUDDIES: readonly BuddyRecord[] = [
   {
     id: 'analyst',
     name: 'Analyst',
-    glyph: 'A',
+    glyph: 'ChartLine',
     description: 'Reads the numbers and says what they support, and what they do not.',
     rolePrompt:
       'You are an analyst. Read the numbers before you interpret them, state the question each figure actually answers, and separate what the data shows from what you take it to mean. When something cannot be concluded from what is in hand, say so and name what would settle it, rather than answering a slightly different question that the data does support.',
@@ -246,6 +253,13 @@ export interface BuddyListRow {
   id: string
   name: string
   glyph: string
+  /**
+   * The one line the row says about itself, drawn under its name on the settings card.
+   *
+   * On the row rather than read off the record when the card draws it, because a built-in has no stored
+   * record to read: the catalogue is where its description lives, and the row is what a card is given.
+   */
+  description: string
   /** Whether the row is one of the app's own three. A built-in row is editable only in being switched. */
   builtin: boolean
   /**
@@ -278,6 +292,7 @@ function listRowFor(buddy: BuddyRecord, switchedOff: ReadonlySet<string>): Buddy
     id: buddy.id,
     name: buddy.name,
     glyph: buddy.glyph,
+    description: buddy.description,
     builtin: buddy.builtin,
     enabled: !switchedOff.has(buddy.id),
   }

@@ -55,7 +55,7 @@ const SWITCHED_OFF = 'analyst'
 const CAPTAIN: BuddyRecord = {
   id: 'release-captain',
   name: 'Release Captain',
-  glyph: 'R',
+  glyph: 'P',
   description: 'Ships the thing and says what shipped.',
   rolePrompt: 'You are the release captain. Cut the smallest release that is honest.',
   skillIds: ['code-review'],
@@ -74,6 +74,24 @@ const REVIEWER: BuddyRecord = {
   glyph: 'P',
   description: 'Reads the diff before you do.',
   rolePrompt: 'Read the diff and say what would break.',
+  skillIds: [],
+  mcpIds: [],
+  starters: [],
+  builtin: false,
+}
+
+/**
+ * A custom record whose glyph is an id the palette knows by name.
+ *
+ * Deliberately a named id rather than a letter: a row has to draw the mark the id names, and a fixture
+ * that stored a character could not tell a resolved glyph from the fallback monogram beside it.
+ */
+const CARTOGRAPHER: BuddyRecord = {
+  id: 'cartographer',
+  name: 'Cartographer',
+  glyph: 'PenLine',
+  description: 'Draws the map before anyone walks it.',
+  rolePrompt: 'You draw the map before anyone walks it.',
   skillIds: [],
   mcpIds: [],
   starters: [],
@@ -249,9 +267,10 @@ async function openBuddyPicker(): Promise<HTMLElement> {
 /**
  * The name an option shows, read from the element that holds it rather than from the whole row.
  *
- * Every option is prefixed with its entry's mark since the marks landed, so a row's `textContent` is the
- * badge's character followed by the name — `WWriter` — and what these cases are about is the name. The
- * slot is where the name is, which is also the same slot the Buddies list gives the same name.
+ * Every option is prefixed with its entry's mark, so a row's `textContent` is whatever that mark draws and
+ * then the name — an icon draws nothing, a fallback monogram draws its letter — and what these cases are
+ * about is the name. The slot is where the name is, which is also the same slot the Buddies list gives the
+ * same name.
  */
 const optionName = (option: HTMLElement): string => option.querySelector('[data-slot="buddy-name"]')?.textContent ?? ''
 
@@ -379,14 +398,12 @@ describe('the marks the Buddy Select draws', () => {
     expect(logo?.getAttribute('src')).toBe(samMark)
     expect(rows[0].querySelector('[data-slot="buddy-avatar-glyph"]')).toBeNull()
 
-    // Every Buddy draws the character its own record carries — the same badge the Buddies list draws for
-    // it — the app's own three first, then the user's, each beside its own name.
-    const glyphs = rows.slice(1).map((row) => row.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent)
-    expect(glyphs).toEqual([
-      ...BUILTINS.filter((buddy) => buddy.id !== SWITCHED_OFF).map((buddy) => buddy.glyph),
-      CAPTAIN.glyph,
-      REVIEWER.glyph,
-    ])
+    // Every Buddy draws the mark its own record's glyph id names — the same component the Buddies card draws
+    // for it — the app's own three first, then the user's, each beside its own name. The id itself is never
+    // drawn as a letter, so every plate is an icon and none of them states a character.
+    const plates = rows.slice(1).map((row) => row.querySelector('[data-slot="buddy-avatar-glyph"]'))
+    expect(plates.every((plate) => plate?.querySelector('svg') !== null)).toBe(true)
+    expect(plates.map((plate) => plate?.textContent)).toEqual(['', '', '', ''])
     expect(rows.slice(1).every((row) => row.querySelector('img[data-slot="buddy-avatar-logo"]') === null)).toBe(true)
   })
 
@@ -413,11 +430,62 @@ describe('the marks the Buddy Select draws', () => {
     await openBuddyPicker()
     await pick(CAPTAIN.name)
 
-    // The chosen entry's own mark, for the same record the row above was drawn from.
+    // The chosen entry's own mark, for the same record the row above was drawn from: the glyph's component,
+    // not the id it stores.
     const chosen = await buddyTrigger()
     expect(chosen.textContent).toContain(CAPTAIN.name)
-    expect(chosen.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe(CAPTAIN.glyph)
+    expect(chosen.querySelector('[data-slot="buddy-avatar-glyph"] svg')).not.toBeNull()
+    expect(chosen.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe('')
     expect(chosen.querySelector('img[data-slot="buddy-avatar-logo"]')).toBeNull()
+  })
+})
+
+describe('the glyphs the rows are drawn from', () => {
+  it('draws a row’s glyph as the icon its id names, and never as a letter', async () => {
+    stubScreen({ buddies: { custom: [CARTOGRAPHER], disabledIds: [] } })
+    renderScreen()
+    await openBuddyPicker()
+
+    const entry = screen.getAllByRole('option').find((option) => optionName(option) === CARTOGRAPHER.name)
+    if (!entry) throw new Error(`no option named ${CARTOGRAPHER.name}`)
+
+    const plate = entry.querySelector('[data-slot="buddy-avatar-glyph"]')
+    // The plate the monogram used to fill now holds the glyph's own component, and the id itself is not
+    // drawn beside it: a row reads as the mark and the name, not as the id a record happens to store.
+    expect(plate?.querySelector('svg')).not.toBeNull()
+    expect(plate?.textContent).toBe('')
+    expect(entry.textContent).not.toContain(CARTOGRAPHER.glyph)
+  })
+
+  it('draws the chosen mark on the trigger, so the chip and its row agree', async () => {
+    stubScreen({ buddies: { custom: [CARTOGRAPHER], disabledIds: [] } })
+    renderScreen()
+
+    await openBuddyPicker()
+    await pick(CARTOGRAPHER.name)
+
+    const chosen = await buddyTrigger()
+    const plate = chosen.querySelector('[data-slot="buddy-avatar-glyph"]')
+    expect(plate?.querySelector('svg')).not.toBeNull()
+    expect(plate?.textContent).toBe('')
+  })
+
+  it('gives each of the app’s own three the mark the catalogue ships with', async () => {
+    stubScreen({ buddies: NO_CUSTOM })
+    renderScreen()
+    await openBuddyPicker()
+
+    const rows = screen.getAllByRole('option').slice(1)
+    expect(rows.map(optionName)).toEqual(BUILTINS.map((buddy) => buddy.name))
+
+    // Every built-in carries a glyph id now, so every one of its plates holds an icon rather than the
+    // letter the catalogue used to ship — and the id it carries is one the palette resolves.
+    for (const builtin of BUILTINS) {
+      const entry = screen.getAllByRole('option').find((option) => optionName(option) === builtin.name)
+      const plate = entry?.querySelector('[data-slot="buddy-avatar-glyph"]')
+      expect(plate?.querySelector('svg')).not.toBeNull()
+      expect(plate?.textContent).toBe('')
+    }
   })
 })
 
@@ -490,8 +558,9 @@ describe('the Buddy Select in an open conversation', () => {
     expect(trigger.textContent).toContain(CAPTAIN.name)
     expect(isDisabled(trigger)).toBe(true)
     // The mark is the record's while the control is locked, which is where the two facts meet: the identity
-    // is fixed, and the badge is the fixed identity's own rather than the default's or the last choice's.
-    expect(trigger.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe(CAPTAIN.glyph)
+    // is fixed, and the badge is the fixed identity's own glyph rather than the default's or the last choice's.
+    expect(trigger.querySelector('[data-slot="buddy-avatar-glyph"] svg')).not.toBeNull()
+    expect(trigger.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe('')
     expect(trigger.querySelector('img[data-slot="buddy-avatar-logo"]')).toBeNull()
     // The rule, in one sentence: the identity is fixed and the two controls beside it are not — which is
     // what makes a locked control read as deliberate rather than broken.

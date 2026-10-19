@@ -33,7 +33,7 @@ const BUILTIN_IDS = BUILTIN_BUDDIES.map((buddy) => buddy.id)
 const CAPTAIN: BuddyRecord = {
   id: 'release-captain',
   name: 'Release Captain',
-  glyph: 'R',
+  glyph: 'P',
   description: 'Ships the thing and says what shipped.',
   rolePrompt: 'You are the release captain. Cut the smallest release that is honest.',
   skillIds: ['code-review'],
@@ -43,6 +43,20 @@ const CAPTAIN: BuddyRecord = {
   autoApprove: true,
   starters: ['Cut a release'],
   builtin: false,
+}
+
+/**
+ * A custom record that declares no description at all.
+ *
+ * Only a fixture can be in this state — the editor's rule refuses an empty description, and the store's
+ * schema refuses it again — and it is the state the card's reserved slot exists for: a card is the same
+ * height whether or not there is a line to draw in it.
+ */
+const QUIET: BuddyRecord = {
+  ...CAPTAIN,
+  id: 'quiet-desk',
+  name: 'Quiet Desk',
+  description: '',
 }
 
 /** An empty store: the built-ins are not in it, which is the point of their being pure data. */
@@ -361,10 +375,14 @@ describe('the Buddies section', () => {
       builtin: false,
     })
 
-    // And the row the answer makes appear is the record just written.
+    // And the row the answer makes appear is the record just written — drawn with the mark it was given,
+    // which is the glyph's component rather than the id the record stores.
     await waitFor(() => expect(rows().length).toBe(4))
     expect(within(row('release-captain')).getByText('Release Captain')).toBeTruthy()
-    expect(within(row('release-captain')).getByText('B')).toBeTruthy()
+    expect(within(row('release-captain')).getByText('Ships the thing and says what shipped.')).toBeTruthy()
+    const plate = control(row('release-captain'), 'buddy-glyph')
+    expect(plate?.querySelector('svg')).not.toBeNull()
+    expect(plate?.textContent).toBe('')
   })
 
   it('refuses a draft on its own field, in the rule’s own words, and stays open', async () => {
@@ -565,5 +583,55 @@ describe('the Buddy editor’s bounds and containment', () => {
     // And the row main's answer makes appear is the record just written, whole.
     await waitFor(() => expect(rows().some((node) => node.dataset.buddyId === 'dialectical-materialist')).toBe(true))
     expect(within(row('dialectical-materialist')).getByText('Dialectical Materialist')).toBeTruthy()
+  })
+})
+
+/**
+ * The two things a card draws about a Buddy beyond its name: its glyph, and its description.
+ *
+ * Structure rather than pixels, as everywhere in this file. jsdom lays nothing out, so "two lines and no
+ * more" is asserted as the classes that state the policy — `line-clamp-2` on the text and a reserved
+ * two-line height every card carries whether or not it has a line to draw — and the uniformity of the
+ * cards' heights is asserted as every card carrying the same slot and the same reserved height. Whether
+ * that reads as one even column is Boss's eyes on the running window.
+ */
+describe('the glyph and the description a card draws', () => {
+  it('draws each card’s glyph as the icon its id names, and never as a letter', async () => {
+    stubBuddies({ custom: [CAPTAIN], disabledIds: [] })
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await waitFor(() => expect(rows().length).toBe(4))
+
+    for (const node of rows()) {
+      const plate = control(node, 'buddy-glyph')
+      expect(plate?.querySelector('svg')).not.toBeNull()
+      // The plate the monogram used to fill holds a component now: no character is drawn in it at all.
+      expect(plate?.textContent).toBe('')
+    }
+  })
+
+  it('draws the description under the name, clamped to two lines in a slot every card reserves', async () => {
+    stubBuddies({ custom: [CAPTAIN, QUIET], disabledIds: [] })
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await waitFor(() => expect(rows().length).toBe(5))
+
+    const mine = control(row(CAPTAIN.id), 'buddy-description')
+    expect(mine?.textContent).toBe(CAPTAIN.description)
+    expect(mine?.className).toContain('line-clamp-2')
+    expect(mine?.className).toContain('text-muted-foreground')
+
+    // The slot is reserved on every card, so a card with nothing to say is the same height as one with a
+    // line to say it: the empty card carries the slot, at the same reserved two-line height.
+    const quiet = control(row(QUIET.id), 'buddy-description')
+    expect(quiet).not.toBeNull()
+    expect(quiet?.textContent).toBe('')
+    expect(quiet?.className).toBe(mine?.className)
+
+    // And every card, locked or custom, describes itself in that one slot: one height for the whole list.
+    for (const node of rows()) {
+      const slot = control(node, 'buddy-description')
+      expect(slot?.className).toBe(mine?.className)
+    }
   })
 })

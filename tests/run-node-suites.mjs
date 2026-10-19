@@ -90,6 +90,7 @@ const SUITES = [
   { name: 'buddy rules (records, resolve, seed, mcp subset)', src: 'buddies/buddies-rules-test.ts' },
   { name: 'buddy store (custom records, switches, creation write)', src: 'buddies/buddies-store-test.ts' },
   { name: 'buddy list (rows, switches, labels, editor refusals)', src: 'buddies/buddies-list-test.ts' },
+  { name: 'buddy glyphs (palette, built-in marks, fallback, glyph bound)', src: 'buddies/buddies-glyphs-test.ts' },
   { name: 'mcp config rules', src: 'mcp/mcp-rules-test.ts' },
   { name: 'mcp servers (files, trust, secrets)', src: 'mcp/mcp-servers-test.ts' },
   { name: 'mcp runtime (spawn, tools, stderr)', src: 'mcp/mcp-runtime-test.ts' },
