@@ -8,7 +8,7 @@ import {
   AlertDialogDescription,
   AlertDialogTitle,
 } from '@/app/components/ui/alert-dialog'
-import { CustomProviders } from '@/app/components/workbench/custom-provider-settings'
+import { AddProviderDialog } from '@/app/components/workbench/custom-provider-settings'
 import { createBridgeStub, setActiveStub, stubStore } from './bridge-stub'
 
 /**
@@ -85,11 +85,13 @@ describe('popup width', () => {
     const user = userEvent.setup()
     render(
       <QueryClientProvider client={client}>
-        <CustomProviders configured={[]} disabled={false} onProvidersChanged={() => {}} />
+        {/* The trigger rather than the list: the control that opens this form lives in the section header
+            now, so the component that owns the dialog is the one rendered on its own here. */}
+        <AddProviderDialog disabled={false} onAdded={() => {}} />
       </QueryClientProvider>
     )
 
-    await user.click(await screen.findByRole('button', { name: '+ Add Provider' }))
+    await user.click(await screen.findByRole('button', { name: 'Add Provider' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog.getAttribute('data-slot')).toBe('alert-dialog-content')

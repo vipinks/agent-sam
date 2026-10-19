@@ -58,8 +58,10 @@ function draftError(code: ProviderDraftRejection): { field: 'name' | 'baseUrl'; 
 /**
  * The added providers, as the tail of the Settings list.
  *
- * The add button comes first and the boxes after it, in the order they were added: a provider that was
- * just added is the last one, which is also where a reader looks for it.
+ * The boxes only, in the order they were added: a provider that was just added is the last one, which is
+ * also where a reader looks for it. The control that grows the list is not one of its rows — it lives in
+ * the section header beside the heading it adds to, which is where the MCP section's own add control sits
+ * and what makes both screens read as the same screen with different lists.
  */
 export function CustomProviders({
   configured,
@@ -76,7 +78,6 @@ export function CustomProviders({
 
   return (
     <>
-      <AddProviderDialog disabled={disabled} onAdded={onProvidersChanged} />
       {providers.map((provider) => (
         <CustomProviderCard
           key={provider.id}
@@ -91,7 +92,12 @@ export function CustomProviders({
 }
 
 /**
- * The form that describes a provider before it exists.
+ * The form that describes a provider before it exists, and the one control that opens it.
+ *
+ * The trigger is the section header's, beside the heading it belongs to, and it is a plus glyph followed
+ * by the words: the icon is the plus, so the text that follows it is "Add Provider" and never a second
+ * one. `disabled` is the keychain's answer rather than this form's own reading — a system that cannot
+ * hold a secret still lists its providers, it just cannot accept a key for one.
  *
  * Saving does two things in one gesture, because a user who types a key means it to be used: the
  * provider joins the list, and — when a key was typed — that key is stored by main under the id the
@@ -99,7 +105,7 @@ export function CustomProviders({
  * here so a refusal lands on the field it belongs to instead of leaving the dialog silently open, and
  * applied again by the store, which owns the list the name must be unique against.
  */
-function AddProviderDialog({ disabled, onAdded }: { disabled: boolean; onAdded: () => void }) {
+export function AddProviderDialog({ disabled, onAdded }: { disabled: boolean; onAdded: () => void }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -158,11 +164,12 @@ function AddProviderDialog({ disabled, onAdded }: { disabled: boolean; onAdded: 
         data-slot="add-provider"
         size="sm"
         variant="outline"
-        className="mt-2.5 w-full justify-center"
+        className="shrink-0"
         disabled={disabled}
         onClick={() => setOpen(true)}
       >
-        <Plus aria-hidden="true" />+ Add Provider
+        <Plus aria-hidden="true" />
+        Add Provider
       </Button>
 
       <AlertDialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>

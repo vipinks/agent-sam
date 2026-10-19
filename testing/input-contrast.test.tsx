@@ -8,12 +8,15 @@ import { Input } from '@/app/components/ui/input'
  * The field is drawn on the dialog's own card surface. In dark mode the input token at 30 percent is
  * almost the card's own colour, so the field reads as an outline rather than as a place to type; the
  * fixed contract is a higher tint of the same `--input` token, which lightens the field without
- * introducing a second background token.
+ * introducing a second background token. Light mode is the opposite problem: a transparent field on a
+ * `#fffefc` card is a border with nothing inside it, so the light branch takes the page-family tone at
+ * the alpha the rest of the app recesses a block with — the same `bg-background/60` a code block under a
+ * card already wears. Neither branch introduces a token.
  *
  * jsdom applies no stylesheet, so "dark mode" cannot be toggled into existence here. What is checkable
- * is the class contract itself: the dark branch carries the raised tint and the light branch carries
- * no dark override, which is the cause of the rendered colour rather than a copy of it. Whether the
- * field *looks* lighter is a pixel judgement the running window makes, in both modes and every theme.
+ * is the class contract itself: the dark branch carries the raised tint and the light branch the recessed
+ * one, which is the cause of the rendered colour rather than a copy of it. Whether the field *looks* like
+ * a field is a pixel judgement the running window makes, in both modes and every theme.
  */
 
 /** Class tokens, not substrings: `file:bg-transparent` must never satisfy a `bg-transparent` check. */
@@ -36,11 +39,13 @@ describe('input surface', () => {
     expect(tokens.has('dark:bg-input/30')).toBe(false)
   })
 
-  it('leaves the light surface to the card behind it', () => {
+  it('recesses the field into the light card it sits on', () => {
     const tokens = renderInput()
 
-    // Light mode keeps the field transparent, so the card's own surface shows through unchanged.
-    expect(tokens.has('bg-transparent')).toBe(true)
+    // Light mode paints the page-family tone at 60 percent, which is what separates a field from the
+    // white card around it. `file:bg-transparent` is a different token and must not answer for this.
+    expect(tokens.has('bg-background/60')).toBe(true)
+    expect(tokens.has('bg-transparent')).toBe(false)
   })
 
   it('keeps the input border token and the larger touch target', () => {

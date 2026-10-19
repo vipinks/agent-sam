@@ -320,6 +320,9 @@ const chipCount = (root: string): string => rootChip(root).lastElementChild?.tex
 
 const approvalChip = (): HTMLElement => screen.getByRole('button', { name: 'Approval mode' })
 
+/** The chip's class tokens, so an assertion names the utility rather than a substring of the string. */
+const chipTokens = (): string[] => approvalChip().className.split(/\s+/).filter(Boolean)
+
 beforeEach(() => {
   // The workbench store outlives a test; clear what a test could otherwise inherit.
   useWorkbenchStore.setState({ selectedFile: null, selectedChange: null })
@@ -641,6 +644,29 @@ describe('the first message', () => {
 
     await waitFor(() => expect(stub.methodsOn('sessions')).toContain('saveTranscript'), { timeout: 5000 })
     expect(transcripts[created.payload.id]?.autoApprove).toBe(true)
+  })
+})
+
+describe('the approval chip', () => {
+  it('paints the accent only while auto-approve is on', async () => {
+    stubHome()
+    renderScreen()
+    await screen.findByText(HOME_HEADLINE)
+
+    // Manual is what a conversation nobody has told otherwise runs under, so it is the neutral chip:
+    // muted ink on no plate.
+    expect(approvalChip().textContent).toContain('Manual')
+    expect(chipTokens()).toContain('text-muted-foreground')
+    expect(chipTokens()).not.toContain('bg-brand-soft')
+
+    await userEvent.click(approvalChip())
+    await waitFor(() => expect(approvalChip().textContent).toContain('Auto-approve'))
+
+    // On is an active state, and every active state in this app is painted with the theme accent: the
+    // soft plate behind the word and the accent ink over it. Nothing else about the chip moves.
+    expect(chipTokens()).toContain('bg-brand-soft')
+    expect(chipTokens()).toContain('text-brand')
+    expect(chipTokens()).toContain('rounded-full')
   })
 })
 

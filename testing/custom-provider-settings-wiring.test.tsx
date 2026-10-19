@@ -170,9 +170,9 @@ async function fillAndSave(fields: { name?: string; url?: string; key?: string }
   await userEvent.click(screen.getByRole('button', { name: 'Save provider' }))
 }
 
-/** The add-provider button, which the brief places after the predefined boxes. */
+/** The add-provider button, which now sits in the section header beside the heading it adds to. */
 async function addProviderButton(): Promise<HTMLElement> {
-  return await screen.findByRole('button', { name: '+ Add Provider' })
+  return await screen.findByRole('button', { name: 'Add Provider' })
 }
 
 beforeEach(() => {
@@ -180,18 +180,29 @@ beforeEach(() => {
 })
 
 describe('the add-provider dialog', () => {
-  it('opens from the button that follows the predefined boxes', async () => {
+  it('opens from the section header, and the label is words rather than a second plus', async () => {
     stubSettings()
     const { container } = renderSettings()
 
     const button = await addProviderButton()
     // The predefined boxes are a query's answer, so their number is the fact that says the list is up.
     await waitFor(() => expect(boxes(container)).toHaveLength(2))
-    const listed = [
-      ...container.querySelectorAll<HTMLElement>('[data-slot="provider-box"], [data-slot="add-provider"]'),
-    ]
-    // After them, not among them: the button is the list's next row, so DOM order answers for position.
-    expect(listed.map((node) => node.dataset.slot)).toEqual(['provider-box', 'provider-box', 'add-provider'])
+
+    // In the header, beside the heading it belongs to — the placement the MCP section already gives its
+    // own add control — rather than a full-width row inside the list.
+    const header = button.closest('header')
+    expect(header).not.toBeNull()
+    expect(within(header as HTMLElement).getByRole('heading', { name: 'Model providers' })).toBeTruthy()
+
+    // One plus, drawn: the icon is the plus, so the text beside it is the words alone. The doubled glyph
+    // read '+ + Add Provider' to anyone with a screen reader, and to everyone else it was two pluses.
+    expect(button.querySelector('svg')).not.toBeNull()
+    expect(button.textContent).toBe('Add Provider')
+    expect(button.textContent).not.toContain('+')
+
+    // And the list is only boxes now: the control that grows it is no longer a row in it.
+    expect(container.querySelectorAll('[data-slot="add-provider"]')).toHaveLength(1)
+    expect(container.querySelector('[data-slot="add-provider"]')?.parentElement?.closest('header')).toBe(header)
 
     await userEvent.click(button)
 

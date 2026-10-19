@@ -2673,12 +2673,19 @@ export function ChatPanel() {
                 aria-pressed={autoApprove}
                 title={autoApproveHelperText(autoApprove)}
                 onClick={() => sessions.setAutoApprove(!autoApprove)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                // On is an active state, and every active state in this app is painted with the theme
+                // accent, so the chip takes the same soft plate and accent ink a switched-on surface
+                // wears. Manual is the default and wears nothing: a chip that painted itself before the
+                // user had chosen would be claiming a consent nobody gave.
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  autoApprove
+                    ? 'border-brand/30 bg-brand-soft text-brand hover:bg-brand-soft'
+                    : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+                )}
               >
                 <ShieldCheck aria-hidden="true" className="size-3.5" />
-                <span className={autoApprove ? 'text-foreground' : undefined}>
-                  {autoApprove ? 'Auto-approve' : 'Manual'}
-                </span>
+                <span>{autoApprove ? 'Auto-approve' : 'Manual'}</span>
               </button>
             )}
           </div>

@@ -8,7 +8,7 @@ import { Button } from '../ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { PaneHeader } from './pane-header'
 import { ProviderBox } from './provider-box'
-import { CustomProviders } from './custom-provider-settings'
+import { CustomProviders, AddProviderDialog } from './custom-provider-settings'
 import { McpServersSection } from './mcp-settings'
 import { SkillsSection } from './skills-settings'
 import { TerminalSection } from './terminal-settings'
@@ -188,12 +188,21 @@ export function SettingsView() {
         {/* The pane: what is left of the panel after the rail, and the only part of it that scrolls. */}
         <div data-slot="settings-pane" className="min-h-0 min-w-0 flex-1 overflow-auto">
           <TabsContent value="providers" data-slot="settings-section-providers" className="mx-auto max-w-2xl px-8 py-7">
-            <header className="mb-6">
-              <h1 className="text-lg font-semibold tracking-tight">Model providers</h1>
-              <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-                Keys are encrypted with your operating system keychain and never leave the main process. Fetch a
-                provider&rsquo;s models, switch on the ones you want, and they appear in the chat picker.
-              </p>
+            <header className="mb-6 flex items-start justify-between gap-6">
+              <div>
+                <h1 className="text-lg font-semibold tracking-tight">Model providers</h1>
+                <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+                  Keys are encrypted with your operating system keychain and never leave the main process. Fetch a
+                  provider&rsquo;s models, switch on the ones you want, and they appear in the chat picker.
+                </p>
+              </div>
+              {/* The header's own control, in the corner the MCP section puts its Add Server in: the one act
+                  that grows this screen belongs beside the heading that names it rather than as a row
+                  inside the list it grows. */}
+              <AddProviderDialog
+                disabled={encryptionAvailable.data === false}
+                onAdded={() => void configured.refetch()}
+              />
             </header>
 
             {encryptionAvailable.data === false && (
@@ -223,8 +232,8 @@ export function SettingsView() {
                 />
               ))}
 
-              {/* After the ones that ship, because a provider the user added is an addition to that list —
-                  and the button between them is where the list grows. */}
+              {/* After the ones that ship, because a provider the user added is an addition to that list.
+                  The boxes only: the control that grows the list is in the header above it. */}
               <CustomProviders
                 configured={configured.data ?? []}
                 disabled={encryptionAvailable.data === false}

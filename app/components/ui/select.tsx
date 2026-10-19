@@ -22,7 +22,7 @@ function SelectTrigger({ className, children, ...props }: React.ComponentProps<t
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       className={cn(
-        'flex w-fit items-center justify-between gap-1.5 overflow-hidden rounded-md border border-input bg-transparent px-2 py-1 text-[12px] whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none',
+        'flex w-fit items-center justify-between gap-1.5 overflow-hidden rounded-md border border-input bg-background/60 px-2 py-1 text-[12px] whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/50',
         'data-[placeholder]:text-muted-foreground',
         'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
         'disabled:cursor-not-allowed disabled:opacity-50',
@@ -120,6 +120,9 @@ function SelectItem({ className, children, ...props }: React.ComponentProps<type
       className={cn(
         'relative flex w-full cursor-default items-center rounded-sm py-1.5 pr-7 pl-2 text-[12px] outline-none select-none',
         'focus:bg-accent focus:text-accent-foreground',
+        // The chosen option keeps the accent-soft plate the navigator paints on the row that is current,
+        // so which one is picked survives the checkmark being the smallest thing in the menu.
+        'data-[state=checked]:bg-brand-soft data-[state=checked]:text-foreground',
         'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
         className
       )}

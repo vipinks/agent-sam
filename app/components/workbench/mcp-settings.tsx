@@ -356,6 +356,11 @@ function ServerRow({
             {setAutoApprove.isPending ? <Loader2 className="animate-spin" /> : <Zap />}
           </Button>
 
+          {/* The two process controls read as a status light as well as a pair of actions: play is green
+              while a process is there to report, and stop — the only act that ends one — is the row's
+              danger red, withheld and muted while there is nothing to stop. Both still say what a click
+              will do to which server in the label and the tooltip, because the ink is the second reading
+              of the state rather than the only one. */}
           <Button
             data-slot="mcp-start"
             size="icon-sm"
@@ -365,7 +370,11 @@ function ServerRow({
             disabled={!startAllowed || start.isPending}
             onClick={() => void onStart()}
           >
-            {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+            {start.isPending ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Play className={isRunning ? 'text-green-500' : 'text-muted-foreground'} />
+            )}
           </Button>
           <Button
             data-slot="mcp-stop"
@@ -376,7 +385,11 @@ function ServerRow({
             disabled={!isRunning || stop.isPending}
             onClick={() => void onStop()}
           >
-            {stop.isPending ? <Loader2 className="animate-spin" /> : <Square />}
+            {stop.isPending ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Square className={isRunning ? 'text-red-500' : 'text-muted-foreground'} />
+            )}
           </Button>
 
           <SecretsDialog server={server} rootPath={rootPath} onChanged={onChanged} onFailed={onFailed}>

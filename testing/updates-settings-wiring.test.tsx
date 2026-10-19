@@ -173,6 +173,12 @@ function isDisabled(element: HTMLElement): boolean {
   return element.hasAttribute('disabled')
 }
 
+/** Class tokens, so an assertion names the utility rather than a substring of the class string. */
+function tokensOf(element: Element | null): Set<string> {
+  if (!element) throw new Error('expected an element')
+  return new Set((element.className ?? '').toString().split(/\s+/).filter(Boolean))
+}
+
 /** The methods the section called on the updates module, in order. */
 function updateMethods(stub: BridgeStub): string[] {
   return stub.methodsOn('updates')
@@ -346,6 +352,57 @@ describe('the Updates settings section', () => {
     await waitFor(() => expect(slot('updates-status').textContent).toBe('Update failed'))
     expect(document.body.textContent).not.toContain('ECONNREFUSED')
     expect(document.body.textContent).not.toContain('api.github.com')
+  })
+
+  /**
+   * The three surfaces this pass repainted, as structure: the weight the build states itself at, the
+   * status as a badge whose tone is the state, and the check as the design system's outline button.
+   *
+   * Tones are asserted as class tokens rather than colours, because jsdom paints nothing: green is the
+   * success token plated behind the word, and orange is the one tone every other state shares — the
+   * difference between "nothing to do" and "there is something to look at", which is the state's own
+   * fact rather than a second reading of it.
+   */
+  it('draws the version at regular weight, the status as a toned badge, and the check as an outline button', async () => {
+    stubSettings(statusState({ state: 'up-to-date' }))
+    renderSettings()
+    await openUpdates()
+
+    // Regular weight, stated rather than inherited: the build's own line is a caption, not a heading.
+    const version = tokensOf(slot('updates-version'))
+    expect(version.has('font-normal')).toBe(true)
+    expect(version.has('font-bold')).toBe(false)
+
+    // Up to date is the one state with nothing to do, and the one badge that is green. The word inside
+    // it is still the rule's answer, so the badge is a plate under the rule rather than a copy of it.
+    const badge = within(slot('updates-status')).getByText(updateStatusWord('up-to-date', null))
+    expect(badge.getAttribute('data-slot')).toBe('badge')
+    expect(tokensOf(badge).has('text-success')).toBe(true)
+    expect(tokensOf(badge).has('bg-success/12')).toBe(true)
+
+    // The check is a control in the design system's outline form: a border, a surface and a hover plate
+    // rather than the secondary fill it wore before.
+    const check = tokensOf(slot('updates-check'))
+    expect(check.has('border')).toBe(true)
+    expect(check.has('bg-background')).toBe(true)
+  })
+
+  it('tones every state that is not up to date the same warning colour', async () => {
+    for (const state of UPDATE_STATES) {
+      if (state === 'up-to-date') continue
+      const errorCode = state === 'error' ? UPDATES_DOWNLOAD_FAILED : null
+      stubSettings(statusState({ state, errorCode }))
+      renderSettings()
+      await openUpdates()
+
+      const badge = within(slot('updates-status')).getByText(updateStatusWord(state, errorCode))
+      expect(tokensOf(badge).has('bg-orange-500/12'), state).toBe(true)
+      expect(tokensOf(badge).has('text-orange-600'), state).toBe(true)
+      // And never the green one: a state with something waiting in it is not a state at rest.
+      expect(tokensOf(badge).has('text-success'), state).toBe(false)
+
+      cleanup()
+    }
   })
 })
 

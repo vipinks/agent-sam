@@ -410,13 +410,17 @@ function McpRowView({
  * pressable, and the destructive ink the panel's failure line already uses, which is what tells them the
  * last attempt did not land. Both are the same difference in either theme, because both are tokens rather
  * than colours.
+ *
+ * The two live actions are coloured for what they do rather than for where they sit: stop ends a process
+ * that is running, so it is the one danger red on the row, and play only offers one, so it keeps the muted
+ * ink and never reads as an alarm. The glyph is still the status — the colour is the second reading of it.
  */
 function controlGlyph(glyph: McpServerButtonGlyph) {
   switch (glyph) {
     case 'play':
-      return <Play />
+      return <Play className="text-muted-foreground" />
     case 'stop':
-      return <Square />
+      return <Square className="text-red-500" />
     case 'spinner':
       return <Loader2 className="animate-spin text-muted-foreground" />
     case 'retry':

@@ -1027,6 +1027,38 @@ describe('the MCP servers tab', () => {
         .filter((called) => called === method).length
     }
 
+    /**
+     * The class tokens on the glyph a control draws.
+     *
+     * The ink lives on the icon rather than on the button, because the button's own class is the ghost
+     * variant's and would answer the same for every glyph. An SVG's `class` is an attribute rather than
+     * the HTML `className` string, so it is read as one.
+     */
+    function glyphTokens(control: HTMLElement): string[] {
+      const svg = control.querySelector('svg')
+      return (svg?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
+    }
+
+    it('paints the running row’s stop as the danger it is, and the stopped row’s play as neutral', async () => {
+      stubWorkbench()
+      renderWorkbench()
+      await dockTools()
+      await dockMcp()
+
+      // A running server's control is Stop, and stop is the one destructive act on this row: the ink says
+      // so before the square is read.
+      const stop = processControl('filesystem')
+      expect(stop.getAttribute('data-glyph')).toBe('stop')
+      expect(glyphTokens(stop)).toContain('text-red-500')
+
+      // A server nothing is running offers Play, and play is not a colour: it keeps the muted ink the
+      // row's own meta uses, so a stopped row reads as a row at rest rather than as an alarm.
+      const play = processControl('memory')
+      expect(play.getAttribute('data-glyph')).toBe('play')
+      expect(glyphTokens(play)).toContain('text-muted-foreground')
+      expect(glyphTokens(play)).not.toContain('text-red-500')
+    })
+
     it('starts a stopped server through the settings command, naming the action and the server', async () => {
       const stub = stubWorkbench()
       renderWorkbench()

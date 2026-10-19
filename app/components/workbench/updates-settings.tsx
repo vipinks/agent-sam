@@ -3,6 +3,7 @@ import { conveyor } from '@/conveyor/client'
 import { updateAvailability } from '@/conveyor/protocol/updates'
 import { updatePreferencesStore } from '@/conveyor/stores/update-preferences'
 import { updateStatusStore } from '@/conveyor/stores/update-status'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Label } from '../ui/label'
 import { Switch } from '../ui/switch'
@@ -71,7 +72,7 @@ export function UpdatesSection() {
             status mirror rather than anything this component derived, so a window that has just opened says
             what main already knows. */}
         <div className="flex flex-col gap-1">
-          <span data-slot="updates-version" className="text-[12.5px] leading-relaxed text-muted-foreground">
+          <span data-slot="updates-version" className="text-[12.5px] leading-relaxed font-normal text-muted-foreground">
             Agent Sam {currentVersion || 'version unknown'}
           </span>
           <span data-slot="updates-last-checked" className="text-[12.5px] leading-relaxed text-muted-foreground">
@@ -80,9 +81,23 @@ export function UpdatesSection() {
         </div>
 
         {/* The status line, verbatim from the rule — including a failure, which is worded by its code and
-            never by the sentence main's own Error carried. */}
-        <p data-slot="updates-status" className="text-[13px] leading-relaxed text-foreground">
-          {availability.statusWord}
+            never by the sentence main's own Error carried. It is drawn as a badge rather than as a
+            sentence because it is one fact about the updater, and it takes the tone that fact deserves:
+            green only for the state with nothing left to do, and the warm tone for every state that still
+            has something waiting in it — available, downloading, ready, a check in flight, a failure. The
+            tone is a second reading of the state, never a second word for it. */}
+        <p data-slot="updates-status" className="leading-relaxed">
+          <Badge
+            data-state={state}
+            variant="outline"
+            className={
+              state === 'up-to-date'
+                ? 'border-transparent bg-success/12 text-success'
+                : 'border-transparent bg-orange-500/12 text-orange-600 dark:text-orange-400'
+            }
+          >
+            {availability.statusWord}
+          </Badge>
         </p>
 
         {/* The one preference. It is read by the updater as it applies its settings before each check, so
@@ -115,7 +130,7 @@ export function UpdatesSection() {
           <Button
             data-slot="updates-check"
             size="sm"
-            variant="secondary"
+            variant="outline"
             disabled={!availability.canCheck || check.isPending}
             onClick={() => void check.mutateAsync()}
           >

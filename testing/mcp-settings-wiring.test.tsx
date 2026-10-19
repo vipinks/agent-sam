@@ -501,6 +501,50 @@ describe('a row’s own controls', () => {
   })
 })
 
+describe('the row’s process controls as a status light', () => {
+  /** The class tokens on the glyph a control draws; an SVG states its class as an attribute. */
+  function glyphTokens(control: HTMLElement): string[] {
+    return (control.querySelector('svg')?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
+  }
+
+  /** One row's Start, and its Stop, by the slots the row marks them with. */
+  function processControl(id: string, slot: 'mcp-start' | 'mcp-stop'): HTMLButtonElement {
+    const control = row(id).querySelector<HTMLButtonElement>(`[data-slot="${slot}"]`)
+    if (!control) throw new Error(`no ${slot} on ${id}`)
+    return control
+  }
+
+  it('greens the play while running, reddens the stop, and leaves both muted when stopped', async () => {
+    stubSettings({
+      // Two user servers, one of them answering: the default fixture has a single user row, and this claim
+      // needs the same row drawn in both states at once so the two inks are compared on one screen.
+      user: [
+        { id: 'filesystem', command: 'npx', args: ['-y', 'server-filesystem', '.'], enabled: true },
+        { id: 'memory', command: 'npx', args: ['-y', 'server-memory'], enabled: true },
+      ],
+      tools: { filesystem: ['read_file'] },
+    })
+    renderSettings()
+    await openMcp()
+
+    // Running: play doubles as the status light, so it takes the running green, and stop is the danger
+    // action for the process that is actually there.
+    const runningPlay = processControl('filesystem', 'mcp-start')
+    const runningStop = processControl('filesystem', 'mcp-stop')
+    expect(glyphTokens(runningPlay)).toContain('text-green-500')
+    expect(glyphTokens(runningStop)).toContain('text-red-500')
+    expect(runningStop.disabled).toBe(false)
+
+    // Stopped: there is nothing to stop, so stop is withheld and muted, and play is back to the neutral
+    // ink of a control that is merely offered rather than reporting.
+    const stoppedPlay = processControl('memory', 'mcp-start')
+    const stoppedStop = processControl('memory', 'mcp-stop')
+    expect(glyphTokens(stoppedPlay)).toContain('text-muted-foreground')
+    expect(glyphTokens(stoppedStop)).toContain('text-muted-foreground')
+    expect(stoppedStop.disabled).toBe(true)
+  })
+})
+
 describe('the trust gate', () => {
   it('disables Start on an untrusted project row, and Trust grants it', async () => {
     const { stub, state } = stubSettings({ project: [{ id: 'docs', command: 'node', enabled: true, trust: 'absent' }] })
