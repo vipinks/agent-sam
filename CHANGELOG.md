@@ -6,6 +6,25 @@ coding assistant.
 
 <br>
 
+## 2026-10-19: v1.12.1 — Light-mode inputs recessed, and nine other polish items
+
+- **Light-mode inputs gain recessed backgrounds, and nine other polish items land across the settings,
+  composer and MCP surfaces.** Input fields and select triggers in light mode take a recessed page-family
+  tone so they read as fields rather than as borders on the white card; dark mode keeps the raised tint from
+  the previous pass. The updates screen stops shouting: the version string states regular weight, the status
+  becomes a badge whose tone is the state (green only for up-to-date, warm for every other state), and the
+  check button becomes the design system's outline variant. Active states now say so: the auto-approve chip
+  paints the theme accent while it is on and stays neutral while it is Manual; the MCP tools rail's stop is
+  the row's one danger red and play stays muted; the MCP settings row turns play into a status light (green
+  while a process is there to report) with stop red and withheld when there is nothing to stop. The providers
+  page's add control moves into the section header beside the heading it grows, mirroring the MCP section,
+  and loses the second plus its label doubled against its icon. No schema, token, behavior or runner change.
+
+- The v1.12.0 baseline is everything before this entry; this entry is v1.12.1 — the one commit, 811a8b1,
+  which is the work described above.
+
+<br>
+
 ## 2026-10-19: v1.12.0 — Buddies draw their chosen glyph, and their cards carry the description
 
 - **Buddies draw their chosen glyph wherever they appear, and their descriptions show on the cards.** One
