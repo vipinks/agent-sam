@@ -6,6 +6,22 @@ coding assistant.
 
 <br>
 
+## 2026-10-19: v1.11.1 — Dark mode reads at github.com's depth
+
+- **Dark mode now reads at github.com's depth.** The dark room moves from the lifted charcoal of v1.11.0 to
+  GitHub's own ladder — canvas at 7%, plate at 11%, hairline at 21% — each carrying the theme's own hue at a
+  whisper of saturation, so the five themes keep their identities on a room that reads like GitHub's. The
+  foreground family follows: primary text replaces the near-white with a 93% rung in the theme hue, and muted
+  text moves with it. The muted rung sits brighter than GitHub's own by necessity — this app holds every text
+  pair to the 4.5:1 floor, and GitHub's muted text does not clear it — so muted reads slightly lighter than a
+  github.com page, by design. Crimson's dark surfaces, which had carried a neutral hue, now take the theme's
+  own. Light mode is byte-identical, and no surface, radius, shadow, border or behaviour changes.
+
+- The v1.11.0 baseline is everything before this entry. This entry is v1.11.1 — the one commit, which is the
+  work described above.
+
+<br>
+
 ## 2026-10-18: v1.11.0 — The whole application speaks one design language, and dark mode leaves pure black
 
 - **The whole application gets one design language.** Every surface now speaks a single grammar: one accent
