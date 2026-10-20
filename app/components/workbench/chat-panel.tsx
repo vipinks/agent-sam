@@ -38,6 +38,7 @@ import samMark from '@/resources/build/icon.svg'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
+import { SURFACE_FILL, SurfaceProvider, useSurfaceKind } from '../ui/surface'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
@@ -283,13 +284,19 @@ export function autoApproveHelperText(on: boolean): string {
  */
 function RootChip({ root }: { root: string | null }) {
   const name = rootFolderName(root)
+  const fill = SURFACE_FILL[useSurfaceKind()]
   if (name === null || root === null) return null
 
   return (
     <span
       data-slot="chat-root-chip"
       title={root}
-      className="flex max-w-40 min-w-0 shrink-6 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] text-muted-foreground"
+      className={cn(
+        'flex max-w-40 min-w-0 shrink-6 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] text-muted-foreground',
+        // The chip is a control, so it reads against the row it sits in rather than only being outlined:
+        // the header is the chat pane, which is the page.
+        fill
+      )}
     >
       <Folder aria-hidden="true" className="size-3 shrink-0" />
       <span className="min-w-0 truncate font-medium">{name}</span>
@@ -310,6 +317,17 @@ function RootChip({ root }: { root: string | null }) {
  */
 export const BUDDY_LOCK_CAPTION =
   'Fixed for this conversation — a new chat can pick another; the model and auto-approve stay yours to change.'
+
+/**
+ * What the header says when an engine owns the choice, and why the Buddy beside it is refused.
+ *
+ * The rule is the engine's, not the conversation's: an engine runs its own model and its own instructions,
+ * so a Buddy chosen beside it would be a choice nothing applies. The sentence says that, and then says the
+ * one thing a reader needs to know about their own selection — it is still there — because a disabled control
+ * with no way back reads as a setting that was taken away rather than one that is waiting.
+ */
+export const BUDDY_ENGINE_CAPTION =
+  'The engine answers, so Buddy is Agent Sam — pick Agent Sam again and your Buddy comes back.'
 
 /**
  * Why the engine picker will not move inside a conversation, in the same two halves the Buddy caption above has.
@@ -579,6 +597,24 @@ export function ChatPanel() {
    */
   const buddyId = atHome ? sessions.pendingBuddyId : sessions.buddyId
   /**
+   * The engine the picker beside this one is on, on the same two sources and for the same reason: the
+   * pending choice while home, the conversation's own once one exists. `null` is the app's own loop.
+   */
+  const chosenEngineId = atHome ? sessions.pendingEngineId : sessions.engineId
+  /**
+   * Whether an engine owns the conversation — and therefore whether a Buddy has anything to answer for.
+   *
+   * An engine brings its own model, its own instructions and its own tools; nothing a Buddy declares is
+   * applied to a turn it runs. Offering one anyway would be offering a choice nothing honours, so while an
+   * engine is chosen the header names the app's own loop and says why the control will not move.
+   *
+   * The stored choice is read and never cleared. Taking an engine is a statement about who answers, not a
+   * deletion of who was picked, and switching back to Agent Sam finds the Buddy exactly where it was.
+   */
+  const engineOwns = chosenEngineId !== null
+  /** The identity the header names: the engine's gate first, then the usual two sources. */
+  const shownBuddyId = engineOwns ? null : buddyId
+  /**
    * The user's own Buddies, and the ones switched off.
    *
    * Defaulted while the mirror is quiet: the store's state arrives a tick after this pane mounts, and
@@ -597,7 +633,7 @@ export function ChatPanel() {
    */
   const buddyRows = listBuddies({ custom: customBuddies, disabledIds: disabledBuddies }).filter((row) => row.enabled)
   /** What the Select draws, and what the starters below are read from: which of the three labels an id gets. */
-  const buddyName = buddyLabel(buddyId, customBuddies)
+  const buddyName = buddyLabel(shownBuddyId, customBuddies)
   /**
    * What home offers as a way in: the chosen Buddy's own starters when it declares any, and the app's
    * three when it is Agent Sam or a Buddy that offers none.
@@ -606,7 +642,7 @@ export function ChatPanel() {
    * Buddy deleted since is a conversation that runs under the role it was created with, and a home choice
    * that resolves to nothing offers exactly what the default offers.
    */
-  const chosenBuddy = resolveBuddy(buddyId, customBuddies)
+  const chosenBuddy = resolveBuddy(shownBuddyId, customBuddies)
   /**
    * The mark the trigger draws beside that name: the app's own for the default, the record's own glyph for
    * a Buddy.
@@ -617,7 +653,7 @@ export function ChatPanel() {
    * second case would borrow the app's own mark and read as a conversation nothing ever chose.
    */
   const selectedGlyph =
-    buddyId === null || buddyId === SAMAI_BUDDY_ID ? null : (chosenBuddy?.glyph ?? buddyName.slice(0, 1))
+    shownBuddyId === null || shownBuddyId === SAMAI_BUDDY_ID ? null : (chosenBuddy?.glyph ?? buddyName.slice(0, 1))
 
   const starters = chosenBuddy !== null && chosenBuddy.starters.length > 0 ? chosenBuddy.starters : HOME_STARTERS
 
@@ -2024,6 +2060,10 @@ export function ChatPanel() {
         identities. It is drawn rather than hidden, though: what a conversation runs as is the first thing
         a reader wants to know, and the caption says why the control will not move rather than leaving a
         refusal to be read as a fault.
+
+        And refused while another engine owns the choice even on home, because an engine brings its own
+        identity with it: the header then names the app's own loop and says which switch brings the Buddy
+        back. What was picked is remembered rather than dropped — see `shownBuddyId`.
       */}
       <PaneHeader
         icon={MessageSquare}
@@ -2031,23 +2071,25 @@ export function ChatPanel() {
         afterTitle={
           <>
             <Select
-              value={buddyId ?? SAMAI_BUDDY_ID}
+              value={shownBuddyId ?? SAMAI_BUDDY_ID}
               // Agent Sam is stored as the absent id rather than as itself: the default is what a conversation
               // that names nobody runs as, so picking it clears the choice instead of recording one.
               onValueChange={(picked) => sessions.setPendingBuddyId(picked === SAMAI_BUDDY_ID ? null : picked)}
-              disabled={!atHome}
+              disabled={!atHome || engineOwns}
             >
               <SelectTrigger
                 aria-label="Buddy"
                 // The value while home, and the reason the value cannot change once a conversation exists.
                 // A native title rather than the tooltip the shield beside it uses, because a disabled
                 // control is not a pointer target: a tooltip would mount on a hover it never receives.
-                title={atHome ? buddyName : BUDDY_LOCK_CAPTION}
+                title={!atHome ? BUDDY_LOCK_CAPTION : engineOwns ? BUDDY_ENGINE_CAPTION : buddyName}
                 className="max-w-40 min-w-0 shrink-6"
               >
                 {/* Drawn rather than only explained: a control that refuses without saying why reads as
                   broken, and the caption carried above says the rest. */}
-                {!atHome && <Lock aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />}
+                {(!atHome || engineOwns) && (
+                  <Lock aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+                )}
                 {/* The entry's own mark, and the same one its row in the list below carries: the id is the
                   conversation's while one is open and the pending choice while home, so the badge names
                   the entry the label beside it names. */}
@@ -2426,91 +2468,97 @@ export function ChatPanel() {
               : 'shrink-0 border-t border-border'
           )}
         >
-          {/*
+          {/* The composer is a card on the home screen and a plain band under a transcript once a
+              conversation exists, so the family it declares is the same one its classes paint. Its own
+              controls take the plate in the first case and the page's tone in the second. */}
+          <SurfaceProvider kind={atHome ? 'card' : 'page'}>
+            {/*
           The composer's top edge, as a grab target. A separator rather than a button because what it
           does is resize the region below it, and `cursor-row-resize` is the cursor that says so before
           anyone has started dragging. It straddles the border rather than sitting under it, so the strip
           does not eat the first line of the textarea's hit area, and `touch-none` keeps a touch drag from
           being read as a scroll of the transcript.
         */}
-          <div
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize the composer"
-            className="absolute inset-x-0 -top-1 h-2 cursor-row-resize touch-none"
-            onPointerDown={startComposerDrag}
-          />
-          <Popover
-            open={pickerOpen || commandOpen}
-            onOpenChange={(next) => {
-              // The picker can also be dismissed by the layer itself — Escape, or a click outside the
-              // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
-              // The command line owns the popover while it is showing, so it is the one that hears this.
-              if (next) return
-              if (commandOpen) dismissCommandPicker()
-              else dismissPicker()
-            }}
-          >
-            {/*
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize the composer"
+              className="absolute inset-x-0 -top-1 h-2 cursor-row-resize touch-none"
+              onPointerDown={startComposerDrag}
+            />
+            <Popover
+              open={pickerOpen || commandOpen}
+              onOpenChange={(next) => {
+                // The picker can also be dismissed by the layer itself — Escape, or a click outside the
+                // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
+                // The command line owns the popover while it is showing, so it is the one that hears this.
+                if (next) return
+                if (commandOpen) dismissCommandPicker()
+                else dismissPicker()
+              }}
+            >
+              {/*
             Anchored to the composer rather than to a trigger: the textarea is what the token was read
             from, and the picker has to sit against the sentence it belongs to. There is no trigger at
             all, because nothing opens this popover except the caret being inside an `@` token.
           */}
-            <PopoverAnchor asChild>
-              <div className="relative" onDragOver={onComposerDragOver} onDrop={onComposerDrop}>
-                {/*
+              <PopoverAnchor asChild>
+                <div className="relative" onDragOver={onComposerDragOver} onDrop={onComposerDrop}>
+                  {/*
                 What this conversation is working from, above the sentence being written about it. Chips
                 rather than a line of prose because the point is that they can be taken off again, and
                 beside the mention chips because both are "what goes with this message".
               */}
-                {skillChips.length > 0 && (
-                  <SkillChipRow
-                    skills={skillChips}
-                    disabled={isStreaming || pending !== null}
-                    onRemove={sessions.toggleSkill}
-                    className="mb-2"
-                  />
-                )}
-                {mentionPaths.length > 0 && (
-                  <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
-                )}
-                {/*
+                  {skillChips.length > 0 && (
+                    <SkillChipRow
+                      skills={skillChips}
+                      disabled={isStreaming || pending !== null}
+                      onRemove={sessions.toggleSkill}
+                      className="mb-2"
+                    />
+                  )}
+                  {mentionPaths.length > 0 && (
+                    <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
+                  )}
+                  {/*
                 The images the next send will carry, beside the files for the same reason the files are
                 there: both are "what goes with this message", and both can be taken off again.
               */}
-                {draftImages.length > 0 && (
-                  <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
-                )}
-                <Textarea
-                  ref={textareaRef}
-                  value={draft}
-                  onChange={(e) => {
-                    setDraft(e.target.value)
-                    syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
-                    syncCommand(e.target.value)
-                    // Typing is the user moving on, which is what puts a command's answer away.
-                    setCommandNotice(null)
-                  }}
-                  // The caret moving is what ends a token as much as typing is, so following it keeps the
-                  // picker attached to the word the user is actually in.
-                  onSelect={(e) => {
-                    const area = e.currentTarget
-                    syncMention(area.value, area.selectionStart ?? area.value.length)
-                  }}
-                  onKeyDown={onKeyDown}
-                  onPaste={onComposerPaste}
-                  placeholder={pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'}
-                  aria-label="Message"
-                  // `field-sizing-fixed` is the whole of the behaviour change: the primitive ships
-                  // `field-sizing-content`, which grows the box with its content, and the composer wants the
-                  // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
-                  // the primitive's own floor so the height below is the height, not a suggestion.
-                  className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-36 text-[13px]"
-                  // The height is state rather than styling — it is the number the drag produces — so it is the
-                  // one thing here that cannot be a class.
-                  style={{ height: composerHeight }}
-                />
-                {/*
+                  {draftImages.length > 0 && (
+                    <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
+                  )}
+                  <Textarea
+                    ref={textareaRef}
+                    value={draft}
+                    onChange={(e) => {
+                      setDraft(e.target.value)
+                      syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+                      syncCommand(e.target.value)
+                      // Typing is the user moving on, which is what puts a command's answer away.
+                      setCommandNotice(null)
+                    }}
+                    // The caret moving is what ends a token as much as typing is, so following it keeps the
+                    // picker attached to the word the user is actually in.
+                    onSelect={(e) => {
+                      const area = e.currentTarget
+                      syncMention(area.value, area.selectionStart ?? area.value.length)
+                    }}
+                    onKeyDown={onKeyDown}
+                    onPaste={onComposerPaste}
+                    placeholder={
+                      pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'
+                    }
+                    aria-label="Message"
+                    // `field-sizing-fixed` is the whole of the behaviour change: the primitive ships
+                    // `field-sizing-content`, which grows the box with its content, and the composer wants the
+                    // opposite — one height, scrolled internally, however long the draft gets. `min-h-0` undoes
+                    // the primitive's own floor so the height below is the height, not a suggestion.
+                    className="field-sizing-fixed min-h-0 resize-none overflow-y-auto pt-2.5 pr-36 text-[13px]"
+                    // The height is state rather than styling — it is the number the drag produces — so it is the
+                    // one thing here that cannot be a class.
+                    style={{ height: composerHeight }}
+                  />
+                  {/*
                 The picker, as an input nothing draws and a button that clicks it.
 
                 A separate control from the paperclip above it rather than the same one: the paperclip
@@ -2520,124 +2568,124 @@ export function ChatPanel() {
                 the rules would take — and a user who overrides it anyway is refused with the rule's own
                 sentence rather than silently ignored.
               */}
-                <input
-                  ref={attachInputRef}
-                  data-slot="attachment-input"
-                  type="file"
-                  accept={ATTACHMENT_ACCEPT_ATTRIBUTE}
-                  multiple
-                  className="hidden"
-                  aria-label="Choose images to attach"
-                  onChange={onAttachPicked}
-                />
-                {/*
+                  <input
+                    ref={attachInputRef}
+                    data-slot="attachment-input"
+                    type="file"
+                    accept={ATTACHMENT_ACCEPT_ATTRIBUTE}
+                    multiple
+                    className="hidden"
+                    aria-label="Choose images to attach"
+                    onChange={onAttachPicked}
+                  />
+                  {/*
                 The OS's own file dialog, beside the paperclip rather than folded into it: the paperclip
                 attaches the file already open in the viewer, and this one asks for any file on the machine
                 at all. They are two questions, and one control that guessed which was meant would be wrong
                 half the time. It takes the row's leftmost slot so the paperclip and the send button stay
                 exactly where hands already reach for them.
               */}
-                <Button
-                  size="icon-sm"
-                  variant="outline"
-                  className="absolute right-[7rem] bottom-2"
-                  aria-label="Attach files"
-                  title="Attach files"
-                  onClick={() => void pickAttachments()}
-                >
-                  <Plus />
-                </Button>
-                <Button
-                  size="icon-sm"
-                  variant="outline"
-                  className="absolute right-[4.75rem] bottom-2"
-                  aria-label="Attach images"
-                  title="Attach images (or paste, or drop them)"
-                  onClick={() => attachInputRef.current?.click()}
-                >
-                  <ImagePlus />
-                </Button>
-                <Button
-                  size="icon-sm"
-                  variant="outline"
-                  className="absolute right-2 bottom-2"
-                  aria-label="Attach the open file"
-                  title={selectedFile ? `Attach ${selectedFile}` : 'Open a file to attach it'}
-                  disabled={!selectedFile}
-                  onClick={attachOpenFile}
-                >
-                  <Paperclip />
-                </Button>
-                {isStreaming ? (
                   <Button
                     size="icon-sm"
                     variant="outline"
-                    className="absolute right-11 bottom-2"
-                    aria-label="Stop"
-                    onClick={stop}
+                    className="absolute right-[7rem] bottom-2"
+                    aria-label="Attach files"
+                    title="Attach files"
+                    onClick={() => void pickAttachments()}
                   >
-                    <Square />
+                    <Plus />
                   </Button>
-                ) : (
                   <Button
                     size="icon-sm"
-                    className="absolute right-11 bottom-2 disabled:opacity-40"
-                    aria-label="Send message"
-                    disabled={!draft.trim() || pending !== null}
-                    onClick={() => void sendDraft()}
+                    variant="outline"
+                    className="absolute right-[4.75rem] bottom-2"
+                    aria-label="Attach images"
+                    title="Attach images (or paste, or drop them)"
+                    onClick={() => attachInputRef.current?.click()}
                   >
-                    <SendHorizontal />
+                    <ImagePlus />
                   </Button>
-                )}
-              </div>
-            </PopoverAnchor>
+                  <Button
+                    size="icon-sm"
+                    variant="outline"
+                    className="absolute right-2 bottom-2"
+                    aria-label="Attach the open file"
+                    title={selectedFile ? `Attach ${selectedFile}` : 'Open a file to attach it'}
+                    disabled={!selectedFile}
+                    onClick={attachOpenFile}
+                  >
+                    <Paperclip />
+                  </Button>
+                  {isStreaming ? (
+                    <Button
+                      size="icon-sm"
+                      variant="outline"
+                      className="absolute right-11 bottom-2"
+                      aria-label="Stop"
+                      onClick={stop}
+                    >
+                      <Square />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="icon-sm"
+                      className="absolute right-11 bottom-2 disabled:opacity-40"
+                      aria-label="Send message"
+                      disabled={!draft.trim() || pending !== null}
+                      onClick={() => void sendDraft()}
+                    >
+                      <SendHorizontal />
+                    </Button>
+                  )}
+                </div>
+              </PopoverAnchor>
 
-            {pickerOpen && (
-              <MentionPicker
-                paths={mentionMatches}
-                // The unfiltered count, so an empty list can say whether nothing matched or there is
-                // nothing to match at all.
-                total={allMentionFiles.length}
-                activeIndex={activePickerIndex}
-                atCap={mentionPaths.length >= MAX_MENTION_PATHS}
-                onSelect={chooseMention}
-                onInteractOutside={keepComposerClicks}
-              />
-            )}
+              {pickerOpen && (
+                <MentionPicker
+                  paths={mentionMatches}
+                  // The unfiltered count, so an empty list can say whether nothing matched or there is
+                  // nothing to match at all.
+                  total={allMentionFiles.length}
+                  activeIndex={activePickerIndex}
+                  atCap={mentionPaths.length >= MAX_MENTION_PATHS}
+                  onSelect={chooseMention}
+                  onInteractOutside={keepComposerClicks}
+                />
+              )}
 
-            {commandOpen && (
-              <CommandPicker
-                commands={commandRows}
-                activeIndex={activeCommandIndex}
-                onSelect={runCommand}
-                onInteractOutside={keepComposerClicks}
-              />
-            )}
-          </Popover>
+              {commandOpen && (
+                <CommandPicker
+                  commands={commandRows}
+                  activeIndex={activeCommandIndex}
+                  onSelect={runCommand}
+                  onInteractOutside={keepComposerClicks}
+                />
+              )}
+            </Popover>
 
-          {/* Under the composer rather than as a toast: a refusal is about the control the user just
+            {/* Under the composer rather than as a toast: a refusal is about the control the user just
             used, and it has to still be there when they look back at it. */}
-          {mentionNote && (
-            <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
-              {mentionNote}
-            </p>
-          )}
+            {mentionNote && (
+              <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
+                {mentionNote}
+              </p>
+            )}
 
-          {/* A refused image, said in the same place as a refused file and for the same reason: it is about
+            {/* A refused image, said in the same place as a refused file and for the same reason: it is about
             the control the user just used. Its own line rather than sharing the one above, because the two
             answer two different gestures and one would otherwise overwrite the other. */}
-          {attachmentNote && (
-            <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
-              {attachmentNote}
-            </p>
-          )}
+            {attachmentNote && (
+              <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
+                {attachmentNote}
+              </p>
+            )}
 
-          {/* A command's answer, under the composer it was typed in and for the reason the refusal above
+            {/* A command's answer, under the composer it was typed in and for the reason the refusal above
             is: it is about the control the user just used. A card rather than a line because `/help`
             has eight of them to list, and it is kept until the user types again. */}
-          {commandNotice && <CommandNotice notice={commandNotice} />}
+            {commandNotice && <CommandNotice notice={commandNotice} />}
 
-          {/*
+            {/*
           The approval choice, made before there is a conversation to make it on.
 
           It is the same setting the header's toggle shows once a conversation exists — one value, two
@@ -2645,7 +2693,7 @@ export function ChatPanel() {
           with. Off is what it says until it is set: a choice nobody has made is not consent, and a
           conversation that has never been told otherwise asks.
         */}
-          {/*
+            {/*
           The skills control, in the composer's own footer beside the approval chip: both are choices
           about the next message rather than settings for the window, and this is where the one of them
           that is only asked before a conversation already lives.
@@ -2653,42 +2701,43 @@ export function ChatPanel() {
           The row is drawn whether or not the approval chip is, so the control does not move as a
           conversation starts. What a conversation runs with is shown above, as chips.
         */}
-          <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
-            <SkillPicker
-              project={projectSkills}
-              user={userSkills}
-              errors={skillListing.errors}
-              activeSkillIds={activeSkillIds}
-              // A toggle changes the turn after the one in flight, so it is offered exactly when there
-              // is no turn to confuse it with: nothing to interrupt, and no question waiting on an
-              // answer. This is also the condition the session layer refuses a toggle under.
-              disabled={isStreaming || pending !== null}
-              loading={skillsQuery.isPending}
-              onToggle={sessions.toggleSkill}
-            />
-            {atHome && (
-              <button
-                type="button"
-                aria-label="Approval mode"
-                aria-pressed={autoApprove}
-                title={autoApproveHelperText(autoApprove)}
-                onClick={() => sessions.setAutoApprove(!autoApprove)}
-                // On is an active state, and every active state in this app is painted with the theme
-                // accent, so the chip takes the same soft plate and accent ink a switched-on surface
-                // wears. Manual is the default and wears nothing: a chip that painted itself before the
-                // user had chosen would be claiming a consent nobody gave.
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  autoApprove
-                    ? 'border-brand/30 bg-brand-soft text-brand hover:bg-brand-soft'
-                    : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
-                )}
-              >
-                <ShieldCheck aria-hidden="true" className="size-3.5" />
-                <span>{autoApprove ? 'Auto-approve' : 'Manual'}</span>
-              </button>
-            )}
-          </div>
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+              <SkillPicker
+                project={projectSkills}
+                user={userSkills}
+                errors={skillListing.errors}
+                activeSkillIds={activeSkillIds}
+                // A toggle changes the turn after the one in flight, so it is offered exactly when there
+                // is no turn to confuse it with: nothing to interrupt, and no question waiting on an
+                // answer. This is also the condition the session layer refuses a toggle under.
+                disabled={isStreaming || pending !== null}
+                loading={skillsQuery.isPending}
+                onToggle={sessions.toggleSkill}
+              />
+              {atHome && (
+                <button
+                  type="button"
+                  aria-label="Approval mode"
+                  aria-pressed={autoApprove}
+                  title={autoApproveHelperText(autoApprove)}
+                  onClick={() => sessions.setAutoApprove(!autoApprove)}
+                  // On is an active state, and every active state in this app is painted with the theme
+                  // accent, so the chip takes the same soft plate and accent ink a switched-on surface
+                  // wears. Manual is the default and wears nothing: a chip that painted itself before the
+                  // user had chosen would be claiming a consent nobody gave.
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    autoApprove
+                      ? 'border-brand/30 bg-brand-soft text-brand hover:bg-brand-soft'
+                      : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+                  )}
+                >
+                  <ShieldCheck aria-hidden="true" className="size-3.5" />
+                  <span>{autoApprove ? 'Auto-approve' : 'Manual'}</span>
+                </button>
+              )}
+            </div>
+          </SurfaceProvider>
         </div>
 
         {/*

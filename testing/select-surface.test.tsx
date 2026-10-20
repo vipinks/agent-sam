@@ -2,16 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select'
+import { SurfaceProvider } from '@/app/components/ui/surface'
 
 /**
  * The select's two surfaces, as the classes they carry.
  *
- * A picker is a field and a list, and both had the same flaw this pass fixed on the input: nothing to see
- * inside the outline. The trigger now wears the input's own recessed tone in light mode (and the input's
- * raised tint in dark, because a control that looked like a hole in one mode and a plate in the other
- * would be two controls), and the option a reader has already picked wears the accent-soft plate the
- * navigator uses for the row that is current, so "which one is chosen" survives the checkmark being
- * small.
+ * A picker is a field and a list. The trigger wears the fill the surface under it calls for, which is the
+ * same answer the input gives because it is the same question: the raised plate on a page, the page's tone
+ * on a card. One fixed tone could only ever be right on one of the two, and the tone it used to name was
+ * the page's own — which is a trigger painted the colour of the page it was drawn on. Dark mode keeps the
+ * raised tint it had, and the option a reader has already picked keeps the accent-soft plate the navigator
+ * uses for the row that is current, so "which one is chosen" survives the checkmark being small.
  *
  * jsdom applies no stylesheet, so nothing here measures a colour: what is asserted is the class contract
  * that produces it — the same contract the input's own suite states beside it. Whether the plate reads
@@ -41,14 +42,35 @@ function renderOpenSelect() {
 }
 
 describe('the select surface', () => {
-  it('dresses the trigger in the same recessed tone the input wears, in both modes', async () => {
+  it('dresses the trigger in the fill of the surface it is drawn on, in both modes', async () => {
     const trigger = renderOpenSelect()
     const tokens = tokensOf(trigger)
 
-    // Light: the page-family tone, exactly as the input takes it.
-    expect(tokens.has('bg-background/60')).toBe(true)
+    // Light, on a page: the raised plate, which is the one the Recent-projects pill wears.
+    expect(tokens.has('bg-card')).toBe(true)
+    expect(tokens.has('bg-background/60'), 'the tone that dissolved into the page').toBe(false)
     expect(tokens.has('bg-transparent')).toBe(false)
     // Dark: the raised tint the input kept from the previous pass, so the two fields agree in both modes.
+    expect(tokens.has('dark:bg-input/50')).toBe(true)
+  })
+
+  it('recesses the trigger to the page tone when it is drawn on a card', () => {
+    render(
+      <SurfaceProvider kind="card">
+        <Select value="alpha" onValueChange={() => undefined}>
+          <SelectTrigger aria-label="card surface probe">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="alpha">Alpha</SelectItem>
+          </SelectContent>
+        </Select>
+      </SurfaceProvider>
+    )
+
+    const tokens = tokensOf(screen.getByRole('combobox', { name: 'card surface probe' }))
+    expect(tokens.has('bg-background')).toBe(true)
+    expect(tokens.has('bg-card'), 'the plate of the card it is already lying on').toBe(false)
     expect(tokens.has('dark:bg-input/50')).toBe(true)
   })
 

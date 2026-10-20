@@ -11,7 +11,7 @@ import './styles/app.css'
  */
 export default function App() {
   return (
-    <WindowFrame title="Agent Sam">
+    <WindowFrame>
       <Workbench />
       <Toaster position="bottom-right" theme="system" closeButton />
     </WindowFrame>

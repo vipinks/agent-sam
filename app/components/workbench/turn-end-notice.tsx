@@ -2,6 +2,7 @@ import { TriangleAlert } from 'lucide-react'
 import type { TurnEndNotice as TurnEndNoticeData } from './agent-session'
 import type { TurnEndCause } from '@/conveyor/protocol/turn-end'
 import { Button } from '../ui/button'
+import { SurfaceProvider } from '../ui/surface'
 
 /**
  * A turn that stopped before it was done, said out loud above the composer.
@@ -107,9 +108,14 @@ export function TurnEndNotice({
         ))}
       </div>
       {actionable ? (
-        <Button size="sm" variant="outline" className="shrink-0" onClick={onContinue}>
-          Continue
-        </Button>
+        // The card is a card, and its one control recesses into it rather than taking its plate. Wrapped
+        // around the button alone because the section is the surface: the declaration belongs to the thing
+        // that paints `bg-card`, and the heading beside it is text rather than a control.
+        <SurfaceProvider kind="card">
+          <Button size="sm" variant="outline" className="shrink-0" onClick={onContinue}>
+            Continue
+          </Button>
+        </SurfaceProvider>
       ) : null}
     </section>
   )

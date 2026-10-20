@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Popover as PopoverPrimitive } from 'radix-ui'
 
 import { cn } from '@/lib/utils'
+import { SurfaceProvider } from './surface'
 
 /**
  * shadcn/ui's popover, on the same `radix-ui` package the other primitives in this folder use.
@@ -36,16 +37,20 @@ function PopoverContent({
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   return (
     <PopoverPrimitive.Portal>
-      <PopoverPrimitive.Content
-        data-slot="popover-content"
-        align={align}
-        sideOffset={sideOffset}
-        className={cn(
-          'z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
-          className
-        )}
-        {...props}
-      />
+      {/* A popover is a card on the page and is portalled out of the tree that opened it, so its own family
+          is declared here: a field inside one recesses rather than taking the plate of the surface it lies on. */}
+      <SurfaceProvider kind="card">
+        <PopoverPrimitive.Content
+          data-slot="popover-content"
+          align={align}
+          sideOffset={sideOffset}
+          className={cn(
+            'z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
+            className
+          )}
+          {...props}
+        />
+      </SurfaceProvider>
     </PopoverPrimitive.Portal>
   )
 }

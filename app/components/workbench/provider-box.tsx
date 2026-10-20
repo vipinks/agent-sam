@@ -3,6 +3,7 @@ import { Check, KeyRound, Loader2, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { CardSurface } from '../ui/surface'
 import { Switch } from '../ui/switch'
 import { ModelList, type ModelEntry } from './model-list'
 import type { ModelRates } from '@/conveyor/protocol/session-usage'
@@ -140,7 +141,7 @@ export function ProviderBox({
   notice?: string | null
 }) {
   return (
-    <div
+    <CardSurface
       data-slot="provider-box"
       data-provider-kind={kind}
       data-provider-id={id}
@@ -273,6 +274,6 @@ export function ProviderBox({
           />
         </div>
       )}
-    </div>
+    </CardSurface>
   )
 }

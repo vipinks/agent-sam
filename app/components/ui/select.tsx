@@ -5,6 +5,7 @@ import { Select as SelectPrimitive } from 'radix-ui'
 import { Check, ChevronDown, ChevronUp } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { SURFACE_FILL, SurfaceProvider, useSurfaceKind } from './surface'
 
 /**
  * shadcn/ui's select primitive. Imported through the `radix-ui` umbrella package the rest of this
@@ -17,12 +18,20 @@ const SelectGroup = SelectPrimitive.Group
 
 const SelectValue = SelectPrimitive.Value
 
+/**
+ * The trigger, as a plate that reads against its parent — the same two answers the field gives, because the
+ * two are the same kind of control: a trigger on a page takes the raised plate, and a trigger on a card
+ * recesses to the page's tone. Dark mode keeps the raised tint it had.
+ */
 function SelectTrigger({ className, children, ...props }: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+  const fill = SURFACE_FILL[useSurfaceKind()]
+
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       className={cn(
-        'flex w-fit items-center justify-between gap-1.5 overflow-hidden rounded-md border border-input bg-background/60 px-2 py-1 text-[12px] whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/50',
+        'flex w-fit items-center justify-between gap-1.5 overflow-hidden rounded-md border border-input px-2 py-1 text-[12px] whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/50',
+        fill,
         'data-[placeholder]:text-muted-foreground',
         'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
         'disabled:cursor-not-allowed disabled:opacity-50',
@@ -72,33 +81,37 @@ function SelectContent({
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (
     <SelectPrimitive.Portal>
-      <SelectPrimitive.Content
-        data-slot="select-content"
-        className={cn(
-          'relative z-50 max-h-[var(--radix-select-content-available-height)] min-w-32 overflow-x-hidden overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md',
-          'origin-[var(--radix-select-content-transform-origin)]',
-          'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
-          'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
-          'data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2',
-          position === 'popper' && 'data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1',
-          className
-        )}
-        position={position}
-        {...props}
-      >
-        <SelectScrollUpButton />
-        <SelectPrimitive.Viewport
+      {/* The menu is a card surface of its own, and it is portalled out of whatever opened it — so the
+          family is declared here rather than inherited from a tree this content no longer sits in. */}
+      <SurfaceProvider kind="card">
+        <SelectPrimitive.Content
+          data-slot="select-content"
           className={cn(
-            'p-1',
-            // Match the trigger's width so the menu never reads as detached from the control.
-            position === 'popper' &&
-              'h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]'
+            'relative z-50 max-h-[var(--radix-select-content-available-height)] min-w-32 overflow-x-hidden overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md',
+            'origin-[var(--radix-select-content-transform-origin)]',
+            'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+            'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+            'data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2',
+            position === 'popper' && 'data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1',
+            className
           )}
+          position={position}
+          {...props}
         >
-          {children}
-        </SelectPrimitive.Viewport>
-        <SelectScrollDownButton />
-      </SelectPrimitive.Content>
+          <SelectScrollUpButton />
+          <SelectPrimitive.Viewport
+            className={cn(
+              'p-1',
+              // Match the trigger's width so the menu never reads as detached from the control.
+              position === 'popper' &&
+                'h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]'
+            )}
+          >
+            {children}
+          </SelectPrimitive.Viewport>
+          <SelectScrollDownButton />
+        </SelectPrimitive.Content>
+      </SurfaceProvider>
     </SelectPrimitive.Portal>
   )
 }

@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from '../ui/alert-dialog'
 import { Button } from '../ui/button'
+import { CardSurface } from '../ui/surface'
 import { PaneHeader } from './pane-header'
 import { activityById, DrawerClose } from './icon-rail'
 import { TreeLevel, listErrorMessage } from './file-tree'
@@ -151,7 +152,7 @@ export function ExplorerPanel({
   )
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    <CardSurface className="flex h-full flex-col bg-card">
       <PaneHeader icon={activity.icon} title={activity.panelTitle}>
         <RootSwitcher
           rootPath={rootPath}
@@ -291,6 +292,6 @@ export function ExplorerPanel({
           }}
         />
       )}
-    </div>
+    </CardSurface>
   )
 }

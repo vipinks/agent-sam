@@ -2,6 +2,7 @@ import * as React from 'react'
 import { AlertDialog as AlertDialogPrimitive } from 'radix-ui'
 import { cn } from '@/lib/utils'
 import { buttonVariants } from './button'
+import { SURFACE_FILL, SurfaceProvider, useSurfaceKind } from './surface'
 
 /**
  * Confirmation dialog, following the shadcn/ui new-york pattern on Radix's alert dialog.
@@ -35,18 +36,25 @@ function AlertDialogOverlay({ className, ...props }: React.ComponentProps<typeof
   )
 }
 
+/**
+ * The dialog's own content is a card, and it is portalled out of whatever opened it, so the family is
+ * declared on the content rather than inherited: a field or an outline button inside a dialog recesses to
+ * the page's tone instead of taking the plate of the card it is lying on.
+ */
 function AlertDialogContent({ className, ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
-      <AlertDialogPrimitive.Content
-        data-slot="alert-dialog-content"
-        className={cn(
-          'fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-card p-5 shadow-lg duration-150 data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 md:max-w-xl lg:max-w-2xl',
-          className
-        )}
-        {...props}
-      />
+      <SurfaceProvider kind="card">
+        <AlertDialogPrimitive.Content
+          data-slot="alert-dialog-content"
+          className={cn(
+            'fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-card p-5 shadow-lg duration-150 data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 md:max-w-xl lg:max-w-2xl',
+            className
+          )}
+          {...props}
+        />
+      </SurfaceProvider>
     </AlertDialogPortal>
   )
 }
@@ -99,10 +107,14 @@ function AlertDialogAction({ className, ...props }: React.ComponentProps<typeof 
 }
 
 function AlertDialogCancel({ className, ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Cancel>) {
+  // The variant names no light fill any more — the plate is the surface's to give — and a dialog's content is
+  // a card, so this is the same page tone the variant used to state on its own.
+  const fill = SURFACE_FILL[useSurfaceKind()]
+
   return (
     <AlertDialogPrimitive.Cancel
       data-slot="alert-dialog-cancel"
-      className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), className)}
+      className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), fill, className)}
       {...props}
     />
   )

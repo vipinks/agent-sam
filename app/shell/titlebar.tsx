@@ -68,7 +68,7 @@ import { useWorkbenchStore } from '../components/workbench/store'
  * window's own page stays the only thing that knows what size it is drawn at — so they are buttons and
  * tooltips and no state at all.
  */
-export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
+export function Titlebar() {
   const platform = useWindowStore((s) => s.platform)
   const isMac = platform === 'darwin'
 
@@ -88,11 +88,9 @@ export function Titlebar({ title = 'Electron React App' }: { title?: string }) {
         {!isMac && <span className="size-3.25 rounded-lg bg-brand ring-[3px] ring-brand/20" />}
       </div>
 
-      {/* Centered title. pointer-events-none so the drag region shows through. */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <span className="text-[13px] font-medium text-foreground/60">{title}</span>
-      </div>
-
+      {/* No words in the bar: the window's own title says what the window is, and a second copy of it in
+          the middle of the chrome is a label nobody reads twice. The bar itself is still the drag region,
+          which is why nothing replaced the span — the space it took is the space the drag region keeps. */}
       <div className={cn('ml-auto flex items-center [-webkit-app-region:no-drag]', CHROME_ICON_GAP)}>
         <ReloadAction />
         <TitlebarGroupSeparator />

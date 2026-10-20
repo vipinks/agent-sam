@@ -32,6 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '../ui/alert-dialog'
+import { CardSurface } from '../ui/surface'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
 import { DrawerClose, activityById } from './icon-rail'
@@ -211,7 +212,7 @@ export function SessionListPanel({
   }
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    <CardSurface className="flex h-full flex-col bg-card">
       <PaneHeader icon={activity.icon} title={activity.panelTitle}>
         <Input
           value={query}
@@ -490,7 +491,7 @@ export function SessionListPanel({
           })}
         </div>
       )}
-    </div>
+    </CardSurface>
   )
 }
 

@@ -8,8 +8,11 @@ import { useThemeStore } from './theme-store'
  * The app shell: themed titlebar + a scrollable content region. Hydrates window state from
  * `window.init()`, keeps focus/maximize live via the window module's push events, and applies the
  * light/dark theme. Wrap the app's content in this.
+ *
+ * No title travels through here: the window's own `<title>` is what names it, and the bar draws chrome
+ * rather than words.
  */
-export function WindowFrame({ title, children }: { title?: string; children: ReactNode }) {
+export function WindowFrame({ children }: { children: ReactNode }) {
   const setInit = useWindowStore((s) => s.setInit)
   const setFocused = useWindowStore((s) => s.setFocused)
   const setMaximized = useWindowStore((s) => s.setMaximized)
@@ -30,7 +33,7 @@ export function WindowFrame({ title, children }: { title?: string; children: Rea
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <Titlebar title={title} />
+      <Titlebar />
       <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
     </div>
   )

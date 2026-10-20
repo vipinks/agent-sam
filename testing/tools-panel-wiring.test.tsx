@@ -730,6 +730,42 @@ describe('the MCP servers tab', () => {
     await screen.findByLabelText('Search MCP servers')
   }
 
+  /**
+   * The two columns a row's controls sit in, as slots rather than as each control's own width.
+   *
+   * What this pins is the layout rule, not the pixels: the play/stop control and the toggle are two different
+   * components with two independent size variants, so their widths agreeing is arithmetic that can change
+   * under either one — a spinner in a wider button, a glyph that sizes itself, a second switch size. A slot of
+   * its own states the column once, and every row reads the same numbers down the list.
+   */
+  it('sets each row’s process control and toggle in the same fixed columns', async () => {
+    stubWorkbench()
+    renderWorkbench()
+    await dockTools()
+    await dockMcp()
+
+    const rows = mcpRows()
+    expect(rows.length, 'more than one row, or a column has nothing to line up with').toBeGreaterThan(1)
+
+    for (const row of rows) {
+      const process = row.querySelector<HTMLElement>('[data-slot="mcp-panel-process"]')
+      const toggle = row.querySelector<HTMLElement>('[data-slot="mcp-panel-enabled"]')
+      expect(process, 'the row draws its process control').not.toBeNull()
+      expect(toggle, 'the row draws its toggle').not.toBeNull()
+
+      const processSlot = process?.parentElement
+      const toggleSlot = toggle?.parentElement
+      expect(processSlot?.getAttribute('data-slot')).toBe('mcp-panel-process-slot')
+      expect(toggleSlot?.getAttribute('data-slot')).toBe('mcp-panel-enabled-slot')
+
+      for (const slot of [processSlot, toggleSlot]) {
+        const classes = (slot?.className ?? '').split(/\s+/)
+        expect(classes, 'one width, stated on the slot').toContain('w-6')
+        expect(classes, 'and a column that cannot be squeezed by a long id').toContain('shrink-0')
+      }
+    }
+  })
+
   it('states both tabs with their own counts, and keeps each tab’s narrowing across a switch', async () => {
     stubWorkbench()
     renderWorkbench()

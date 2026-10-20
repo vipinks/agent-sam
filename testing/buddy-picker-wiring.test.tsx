@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { BUDDY_LOCK_CAPTION, ChatPanel } from '@/app/components/workbench/chat-panel'
+import { BUDDY_ENGINE_CAPTION, BUDDY_LOCK_CAPTION, ChatPanel } from '@/app/components/workbench/chat-panel'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { HOME_STARTERS } from '@/app/components/workbench/home'
@@ -14,6 +14,7 @@ import {
 } from '@/conveyor/protocol/buddies'
 import type { BuddiesState } from '@/conveyor/stores/buddies'
 import type { ChatSession } from '@/conveyor/stores/chat-sessions'
+import { AGENT_SAM_ENGINE_NAME, type EngineRow } from '@/conveyor/protocol/engine'
 import { queryClient } from '@/conveyor/client'
 import samMark from '@/resources/build/icon.svg'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
@@ -101,6 +102,16 @@ const CARTOGRAPHER: BuddyRecord = {
 /** An empty store: the built-ins are not in it, which is the point of their being pure data. */
 const NO_CUSTOM: BuddiesState = { custom: [], disabledIds: [] }
 
+/**
+ * The engine rail, as the header's engine picker draws it: the app's own loop and one engine the probe
+ * found, which is the one a user can actually take. Nothing here runs it — the gate is about which engine
+ * is *chosen*, and a chosen engine is a mirror value rather than a process.
+ */
+const ENGINES: EngineRow[] = [
+  { id: null, name: AGENT_SAM_ENGINE_NAME, installed: true, version: null, note: null },
+  { id: 'codex', name: 'ChatGPT (Codex)', installed: true, version: '0.154.0', note: null },
+]
+
 /** The providers and models the model dropdown beside the Select draws from. */
 const PROVIDERS = [
   { id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' },
@@ -148,6 +159,7 @@ function stubScreen(
     buddies?: BuddiesState
     sessions?: ChatSession[]
     activeSessionId?: string | null
+    engines?: EngineRow[]
   } = {}
 ): PickerFixture {
   const chat: { sessions: ChatSession[]; activeSessionId: string | null } = {
@@ -170,6 +182,9 @@ function stubScreen(
   stubStore(stub, 'provider-config', { providers: {}, customProviders: [] })
   // The user's own Buddies, which the picker's rows and the seed both read.
   stubStore(stub, 'buddies', options.buddies ?? NO_CUSTOM)
+  // The engine rail the picker beside the Buddy draws from: seeded rather than stubbed, because it is what
+  // main already publishes after a probe.
+  stubStore(stub, 'engine-status', { rows: options.engines ?? ENGINES })
 
   const actions: RecordedAction[] = []
   const procedures = stub.bridge.invoke
@@ -486,6 +501,72 @@ describe('the glyphs the rows are drawn from', () => {
       expect(plate?.querySelector('svg')).not.toBeNull()
       expect(plate?.textContent).toBe('')
     }
+  })
+})
+
+/** Class tokens, so an assertion names the utility rather than a substring of the string. */
+function tokensOf(element: Element | null | undefined): Set<string> {
+  if (!element) throw new Error('expected an element')
+  return new Set((element.className ?? '').toString().split(/\s+/).filter(Boolean))
+}
+
+/** Open a Select from the keyboard, the one path Radix routes without consulting the pointer. */
+async function openSelect(trigger: HTMLElement): Promise<void> {
+  trigger.focus()
+  await userEvent.keyboard('{Enter}')
+  await screen.findByRole('listbox')
+}
+
+/** The header's engine Select. */
+const engineTrigger = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Engine' })
+
+// Grouped with the other home-state cases on purpose: these are the last two that start from a pane with no
+// conversation, and everything below opens one.
+describe('the engine gate on the Buddy Select', () => {
+  it('refuses the picker while another engine answers, and keeps the Buddy for the switch back', async () => {
+    stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
+    renderScreen()
+
+    // A Buddy chosen on home, before any engine is — the choice the gate has to survive.
+    await openBuddyPicker()
+    await pick(CAPTAIN.name)
+    expect((await buddyTrigger()).textContent).toContain(CAPTAIN.name)
+
+    // An engine brings its own identity with it, so the Buddy beside it is refused rather than ignored...
+    await openSelect(await engineTrigger())
+    await userEvent.click(screen.getByRole('option', { name: 'ChatGPT (Codex)' }))
+
+    const gated = await buddyTrigger()
+    expect(isDisabled(gated), 'a Buddy is not offered while an engine answers').toBe(true)
+    expect(gated.textContent, 'the header names the app’s own loop').toContain(AGENT_SAM_BUDDY_NAME)
+    expect(gated.textContent, 'and not the Buddy the engine cannot run').not.toContain(CAPTAIN.name)
+    // The default's mark is the app's own, on the same element both states draw it in.
+    expect(gated.querySelector('img[data-slot="buddy-avatar-logo"]')).not.toBeNull()
+    expect(gated.querySelector('[data-slot="buddy-avatar-glyph"]'), 'no glyph of the refused Buddy').toBeNull()
+    // The refusal says why, and says the choice is waiting rather than gone.
+    expect(gated.getAttribute('title')).toBe(BUDDY_ENGINE_CAPTION)
+
+    // ...and switching back is a restore, not a reset: nothing cleared the stored choice.
+    await openSelect(await engineTrigger())
+    await userEvent.click(screen.getByRole('option', { name: AGENT_SAM_ENGINE_NAME }))
+
+    const restored = await buddyTrigger()
+    expect(isDisabled(restored), 'the picker is live again under the app’s own loop').toBe(false)
+    expect(restored.textContent, 'the Buddy that was chosen before the switch').toContain(CAPTAIN.name)
+    expect(restored.getAttribute('title')).toBe(CAPTAIN.name)
+  })
+})
+
+describe('the header row the pickers sit in', () => {
+  it('gives the project chip the raised plate the header row is drawn against', async () => {
+    stubScreen()
+    renderScreen()
+
+    // The chip is a control between the pickers, and the row is the chat pane — the page. A chip with only
+    // a border on it was the one control in the header with no plate of its own.
+    const chip = await screen.findByTitle(ROOT)
+    expect(chip.getAttribute('data-slot')).toBe('chat-root-chip')
+    expect(tokensOf(chip).has('bg-card'), 'the Recent-projects pill’s plate').toBe(true)
   })
 })
 

@@ -1,6 +1,7 @@
 import { FolderTree } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
+import { CardSurface } from '../ui/surface'
 import { PaneHeader } from './pane-header'
 import { activityById, DrawerClose } from './icon-rail'
 import { ChangesSection } from './changes-section'
@@ -33,7 +34,7 @@ export function GitPanel() {
   const activity = activityById('git')
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    <CardSurface className="flex h-full flex-col bg-card">
       <PaneHeader icon={activity.icon} title={activity.panelTitle}>
         <DrawerClose />
       </PaneHeader>
@@ -60,6 +61,6 @@ export function GitPanel() {
           <ChangesSection rootPath={rootPath} />
         </div>
       )}
-    </div>
+    </CardSurface>
   )
 }

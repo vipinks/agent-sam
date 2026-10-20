@@ -380,11 +380,13 @@ describe('the Updates settings section', () => {
     expect(tokensOf(badge).has('text-success')).toBe(true)
     expect(tokensOf(badge).has('bg-success/12')).toBe(true)
 
-    // The check is a control in the design system's outline form: a border, a surface and a hover plate
-    // rather than the secondary fill it wore before.
+    // The check is a control in the design system's outline form: a border, the fill the surface under it
+    // calls for, and a hover plate. The settings screen is the page, so that fill is the raised one — the
+    // plate the outline form used to name by hand was the page's own tone, which is the surface it sits on.
     const check = tokensOf(slot('updates-check'))
     expect(check.has('border')).toBe(true)
-    expect(check.has('bg-background')).toBe(true)
+    expect(check.has('bg-card')).toBe(true)
+    expect(check.has('bg-background')).toBe(false)
   })
 
   it('tones every state that is not up to date the same warning colour', async () => {
