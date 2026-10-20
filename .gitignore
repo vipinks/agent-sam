@@ -15,3 +15,5 @@ temp
 .kun-canvas/
 # The whiteboard's own image scratch: a generated picture lands here before it is placed on a board
 img/
+
+temp/
