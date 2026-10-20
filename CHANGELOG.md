@@ -6,6 +6,25 @@ coding assistant.
 
 <br>
 
+## 2026-10-20: v1.13.1 — Controls read against whatever they sit on, and the chrome tells the truth
+
+- **Controls read against whatever they sit on, and the chrome tells the truth.** A new surface module
+  declares the page and card families and one fill table, so inputs, select triggers and
+  outline/secondary buttons take the Recent-projects pill fill on page-grey parents and the recessed
+  page fill on white cards — a control never dissolves into its surface in either context, in light
+  mode; dark mode keeps its raised tint. The titlebar's centred title text is gone. The MCP tools
+  rail's play/stop and toggle now sit in one fixed trailing cluster so both columns align identically
+  across every row. The Buddy picker is disabled and shows the default identity while a non-Sam engine
+  is selected, because a Buddy's role prompt, skills and MCP ceiling are Sam-loop machinery an external
+  engine never receives; switching back restores the prior Buddy. The default identity's mark is now
+  the app's own logo — the robot artwork the window icon, installers and README banner are built
+  from — replacing the old red square the picker had worn since before the rebrand.
+
+- The v1.13.0 baseline is everything before this entry; this entry is v1.13.1 — the two commits,
+  2139ab0 and 09abe37, which are the work described above.
+
+<br>
+
 ## 2026-10-20: v1.13.0 — The menu bar is gone and the chrome becomes one grid
 
 - **The menu bar is gone and the chrome becomes one grid.** The File, Edit and View menus leave the
