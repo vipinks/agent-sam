@@ -184,7 +184,13 @@ describe('isResumable', () => {
 
   it('answers for every cause in the vocabulary, so a new one cannot be forgotten', () => {
     const answers = TURN_END_CAUSES.map((cause: TurnEndCause) => isResumable(cause))
-    expect(answers).toEqual([false, true, true, true])
+    expect(answers).toEqual([false, true, true, true, true])
+  })
+
+  it('offers a way on for a run that was stopped, because nothing about the conversation moved', () => {
+    // The ending nobody's reply produced: an abort. The model never answered and the history is
+    // untouched, so the work is exactly where the turn left it and the click is worth offering.
+    expect(isResumable('interrupted')).toBe(true)
   })
 })
 
@@ -262,6 +268,13 @@ describe('shouldAutoContinue', () => {
     expect(shouldAutoContinue('stream_error', unfinished, 0)).toBe(false)
   })
 
+  it('leaves a run the user stopped stopped, because a nudge would undo the decision', () => {
+    // The ending with an author: Stop was pressed, or the window was closed. The plan may well be
+    // unfinished, and that is the card's news — not a reason for the app to send anything on its own.
+    expect(shouldAutoContinue('interrupted', unfinished, 0)).toBe(false)
+    expect(shouldAutoContinue('interrupted', reconcilePlanOnTurnEnd([step('a', 'in_progress')]), 0)).toBe(false)
+  })
+
   it('says nothing for a finished plan, or for no plan at all', () => {
     expect(shouldAutoContinue('model_stop', [step('a', 'done'), step('b', 'done')], 0)).toBe(false)
     expect(shouldAutoContinue('model_stop', [], 0)).toBe(false)
@@ -315,7 +328,7 @@ describe('shouldAutoContinue', () => {
     // with the segment the nudge opens, which is a fact about the caller's counter rather than about this
     // rule. Pinned here so a later reader tempted to widen the vocabulary for the ceiling — a
     // `step_ceiling` cause, or a fourth argument — has a test to argue with first.
-    expect(TURN_END_CAUSES).toEqual(['model_stop', 'empty_stop', 'truncated', 'stream_error'])
+    expect(TURN_END_CAUSES).toEqual(['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted'])
     expect(shouldAutoContinue('model_stop', unfinished, 0)).toBe(true)
     expect(shouldAutoContinue('model_stop', unfinished, AUTO_CONTINUE_MAX)).toBe(false)
   })

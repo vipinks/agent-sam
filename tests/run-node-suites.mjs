@@ -36,6 +36,7 @@ const SUITES = [
   { name: 'agent plan', src: 'agent/plan-test.ts' },
   { name: 'turn end diagnosis', src: 'agent/turn-end-test.ts' },
   { name: 'plan-unfinished notice', src: 'agent/plan-unfinished-test.ts' },
+  { name: 'plan inheritance and aborted endings', src: 'agent/plan-inherit-test.ts' },
   { name: 'bounded auto-continue', src: 'agent/auto-continue-test.ts' },
   {
     name: 'outbound history (empty assistant turns, stored shape, every ending)',

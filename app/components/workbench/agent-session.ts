@@ -1156,7 +1156,15 @@ export function endTurn(turns: AgentTurn[], turnId: string, cause: TurnEndCause 
   const turn = ended.find((t) => t.id === turnId)
   if (!turn || turn.endNotice) return ended
 
-  const notice = planUnfinishedNotice(turn.plan ?? [], cause)
+  // The plan this ending is judged against is the conversation's, not only this turn's. A nudge turn
+  // declares nothing of its own — the plan it is working from belongs to the turn above it, which is
+  // the turn the user is reading — so reading its own plan alone reported a conversation mid-plan as
+  // one with no plan at all, and the turn ended with nothing on screen. `currentPlan` is the same
+  // rule the checklist draws from, reconciled here because a turn that has ended cannot have a step
+  // under way: a step an earlier turn left `in_progress` is work this turn inherited, not work it is
+  // doing.
+  const plan = reconcilePlanOnTurnEnd(currentPlan(ended) ?? [])
+  const notice = planUnfinishedNotice(plan, cause)
   if (!notice) return ended
 
   return replaceTurn(ended, turnId, (t) => ({

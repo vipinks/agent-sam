@@ -1567,6 +1567,13 @@ export function ChatPanel() {
             // the request it always sent, key for key.
             rolePrompt: rolePrompt ?? undefined,
             mcpSubset: mcpSubset ?? undefined,
+            // The plan this conversation still has work on, handed to the run rather than left behind.
+            // A send is also how a stopped turn is picked back up, and main opens every run with an
+            // empty plan of its own — so a send that dropped this would be the one run that continues
+            // the work while being unable to see it, which is how a turn could stop mid-plan with the
+            // checklist still on screen and no card under it. `undefined` rather than an empty list,
+            // because a conversation that never planned anything sends the request it always sent.
+            plan: currentPlan(turns) ?? undefined,
           }),
         turnId,
         sessionId

@@ -70,8 +70,13 @@ const TOOL_ITEM_TYPES: readonly string[] = [
  * framer is this mapper's one import and a second one would put the vocabulary's module — and whatever it
  * reaches — behind a per-line parser. The node suite asserts the two sets are equal, which is what keeps a
  * restatement from becoming a second, drifting definition.
+ *
+ * Restated as the vocabulary, not as the endings this mapper can produce: `truncated` was never one of
+ * its answers and `interrupted` is not either — a child that is cancelled reports `stream_error`, because
+ * what this side saw was a turn that stopped arriving. Both are here because a cause this set is missing
+ * would be a cause a stored codex transcript could not read back, and the set's job is to be the app's.
  */
-export const CODEX_TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error'] as const
+export const CODEX_TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted'] as const
 export type CodexTurnEndCause = (typeof CODEX_TURN_END_CAUSES)[number]
 
 /**

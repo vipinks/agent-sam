@@ -14,8 +14,8 @@ import { SurfaceProvider } from '../ui/surface'
  *
  * The wording is branched on the cause and lives here rather than crossing IPC, which is the rule the
  * rest of the app's failures follow: main reports a cause, the UI says what happened in the user's
- * terms. Three sentences, because the user needs to know the reply is incomplete and, from the reason,
- * whether asking again is likely to help.
+ * terms. One sentence per ending that has one, because the user needs to know the reply is incomplete
+ * and, from the reason, whether asking again is likely to help.
  *
  * `model_stop` words nothing and renders nothing. That is the point of the card's existence: the
  * ordinary ending must not look like an incident, and a card under every answer would make the one
@@ -54,6 +54,11 @@ const WORDING: Record<TurnEndCause, string | null> = {
   empty_stop: 'Ended early: the model stopped without saying anything',
   truncated: 'Ended early: the reply was cut off (output limit)',
   stream_error: 'Ended early: the reply was cut off (the connection dropped)',
+  // The one ending nobody needs told it was theirs: the run was stopped, and the person who stopped it
+  // knows. It says so anyway because the same cause covers the ending nobody watched — a window closed
+  // mid-answer — and that user comes back to a card that would otherwise be about a plan with no reason
+  // above it.
+  interrupted: 'Ended early: the run was stopped before it finished',
 }
 
 /** A consent pause the process did not survive, which is not a reply that stopped arriving. */

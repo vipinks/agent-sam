@@ -1570,7 +1570,14 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         fetchImpl: opts.fetchImpl,
         provider: opts.provider,
       })) {
-        if (opts.signal.aborted) return
+        // An abort is an ending, and the one exit that used to have none: returning here left the turn
+        // with no `turn_end` at all, so a plan mid-way through it was dropped with nothing said — the
+        // silent stop this phase exists to remove. It is ended on the way out instead, under the cause
+        // that names what happened, and it is not continuable: a cancelled run is a decision.
+        if (opts.signal.aborted) {
+          yield* finishTurn(plan, 'interrupted', steps, null, continuations, false)
+          return
+        }
 
         if (delta.finishReason) finishReasons.push(delta.finishReason)
 
@@ -1732,7 +1739,18 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // runs the calls in front of the gate and stops dead at it, so nothing behind a call the user has
     // not decided yet runs — exempt or not. A pause ends this stream; `resume` continues the walk from
     // the queue the pause handed over, so the run carries on rather than restarting this round-trip.
+    //
+    // A walk that comes back `aborted` is the cancelled case, and it ends the turn here rather than
+    // returning: the walk saw the abort after running a call, and the plan it had by then is the plan
+    // the user is looking at, so an exit that said nothing would be the silent ending again. It is
+    // announced by the same `finishTurn` every other ending goes through, with the live counters this
+    // side holds — and never nudged, because a cancelled run is a decision. A pause returns before
+    // reaching it, which is what keeps a decision card from being carded as an ending.
     const walked = yield* walkFrame(calls, 0)
+    if (walked === 'aborted') {
+      yield* finishTurn(plan, 'interrupted', steps, null, continuations, false)
+      return
+    }
     if (walked !== 'settled') return
   }
 }
@@ -1825,6 +1843,20 @@ export const agentModule = defineModule({
        */
       mcpSubset: z.array(z.string().min(1).max(MAX_MCP_SERVER_ID_CHARS)).max(MAX_BUDDY_MCP_IDS).optional(),
       /**
+       * The plan the conversation already has in hand, handed over on an ordinary send.
+       *
+       * A send is also how a stopped turn is picked back up: the model quits mid-plan, the user says
+       * "continue", and the turn that answers it declares nothing of its own. The plan it is working
+       * from belongs to the turn above, and the checklist on screen says so — but a run opens with an
+       * empty plan of its own, so without this the one run that continues the work is the one run that
+       * cannot count it, and the turn that stops again reports no unfinished steps at all.
+       *
+       * Validated rather than trusted on the same terms as the resume's: it crosses the IPC boundary,
+       * and the merged plan it becomes is rendered from it. Capped like a declaration, because the two
+       * are the same list seen at two moments.
+       */
+      plan: z.array(planStepSchema).max(MAX_PLAN_STEPS).optional(),
+      /**
        * The descriptor of a provider the user added, when this run's provider is one.
        *
        * `unknown` on purpose: the loop is handed whatever a caller has, and what makes a descriptor
@@ -1857,6 +1889,10 @@ export const agentModule = defineModule({
         // use *and* that are running — the bridge is where those two sets meet.
         rolePrompt: input.rolePrompt,
         mcpSubset: input.mcpSubset,
+        // The plan the conversation holds, so this run is the same work rather than a fresh one. A
+        // nudge turn declares nothing of its own and is judged against what it was handed, which is
+        // what lets a turn that stops again report the steps the checklist is still showing.
+        ...(input.plan ? { plan: input.plan } : {}),
         signal,
       })
     }

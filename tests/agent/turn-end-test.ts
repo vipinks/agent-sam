@@ -445,9 +445,11 @@ async function aReplyThatOnlyAsksForToolsIsNotASilentOne() {
 }
 
 function everyCauseIsAccountedFor() {
-  // The vocabulary is closed, and this suite exercised all of it: a cause added later without a case
-  // here would leave a transcript that could store an ending nothing knows how to word.
-  const seen = ['model_stop', 'empty_stop', 'truncated', 'stream_error']
+  // The vocabulary is closed, and between this suite and `plan-inherit-test.ts` every cause has a case:
+  // a cause added later without one would leave a transcript that could store an ending nothing knows
+  // how to word. `interrupted` is the newest, and it is exercised where an abort can be produced — the
+  // suite beside this one, which cancels a run mid-stream.
+  const seen = ['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted']
   assert.deepEqual([...TURN_END_CAUSES].sort(), [...seen].sort())
   results.push('the causes exercised here are the whole vocabulary')
 }

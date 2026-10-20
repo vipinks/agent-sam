@@ -27,8 +27,15 @@ import type { PlanStep } from './plan'
  *
  * `empty_stop` sits beside `model_stop` rather than behind the two cut-short endings: from the model's
  * side those two are one event that differs only in whether it wrote anything.
+ *
+ * `interrupted` is the one ending the reply did not produce at all. It is the run being stopped from
+ * outside — the user's own Stop, or a window closing mid-answer — and it is here rather than left to
+ * the unwinding because an abort used to leave the loop by the shortest path, with no ending, no
+ * notice and no record: a plan mid-way through a turn vanished from the state while the checklist on
+ * screen still showed it. It is last because it is not evidence about the reply: `turnEndCause` never
+ * returns it, and only the exits that know the run was cancelled can.
  */
-export const TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error'] as const
+export const TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted'] as const
 export type TurnEndCause = (typeof TURN_END_CAUSES)[number]
 
 /**
@@ -165,6 +172,11 @@ export function isReplyCutShort(cause: TurnEndCause): boolean {
  * plainly: the model did stop on its own, but the one thing it did not do is answer, and there is
  * therefore something to continue. What this refuses is not "the model stopped" but "the model
  * finished" — which is why the ordinary ending is the only one it refuses.
+ *
+ * An interrupted turn is resumable on the same terms, and the subtraction is what says so: the run was
+ * cancelled, not answered, and the conversation on the provider's side is exactly as it was a moment
+ * before the abort. The click that picks it back up is the user's, and this predicate is the half of
+ * the card that decides whether to offer one at all.
  */
 export function isResumable(cause: TurnEndCause): boolean {
   return cause !== 'model_stop'
@@ -283,6 +295,11 @@ export const AUTO_CONTINUE_MAX = 8
  */
 export function shouldAutoContinue(cause: TurnEndCause, plan: readonly PlanStep[], usedBudget: number): boolean {
   if (cause === 'stream_error') return false
+  // An abort is a decision, and the one that most obviously is: the person pressed Stop, or closed the
+  // window, and a loop that answered that by asking the model to carry on would be doing the opposite
+  // of what it was told. It is the second cause with a line of its own — not because it is technically
+  // unlike a stop, but because the rule's premise is "the ending nobody chose", and this one was chosen.
+  if (cause === 'interrupted') return false
   if (usedBudget >= AUTO_CONTINUE_MAX) return false
   return unfinishedPlanSteps(plan) > 0
 }
