@@ -16,7 +16,7 @@ import type { BuddiesState } from '@/conveyor/stores/buddies'
 import type { ChatSession } from '@/conveyor/stores/chat-sessions'
 import { AGENT_SAM_ENGINE_NAME, type EngineRow } from '@/conveyor/protocol/engine'
 import { queryClient } from '@/conveyor/client'
-import samMark from '@/resources/build/icon.svg'
+import samMark from '@/resources/build/icon.png'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -452,6 +452,51 @@ describe('the marks the Buddy Select draws', () => {
     expect(chosen.querySelector('[data-slot="buddy-avatar-glyph"] svg')).not.toBeNull()
     expect(chosen.querySelector('[data-slot="buddy-avatar-glyph"]')?.textContent).toBe('')
     expect(chosen.querySelector('img[data-slot="buddy-avatar-logo"]')).toBeNull()
+  })
+})
+
+/**
+ * The identity mark is the logo the app is recognized by: the robot the window icon and the README banner
+ * are drawn from, which lives in `icon.png`. The svg beside it in `resources/build` still holds the red mark
+ * the app used before that logo, and the picker drew the svg — so the trigger and the default row read as the
+ * old mark. These cases pin the asset and the absence of a plate around it; the drawing itself is Boss's eyes
+ * on the running window, in both modes.
+ */
+describe('the identity mark the picker draws', () => {
+  it('draws the recognized logo in the trigger, unwrapped by a repainting plate', async () => {
+    stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
+    renderScreen()
+
+    const trigger = await buddyTrigger()
+    const logo = trigger.querySelector<HTMLImageElement>('img[data-slot="buddy-avatar-logo"]')
+    expect(logo, 'the trigger draws a mark at all').not.toBeNull()
+
+    // The asset rather than merely an image: the png the window and the installers are built from.
+    expect(logo?.getAttribute('src'), 'the recognized logo, not the red mark').toContain('.png')
+    expect(logo?.getAttribute('src')).toBe(samMark)
+
+    // Nothing of the app's own is painted around it: the mark is the image, so no plate repaints the artwork
+    // and no second surface is drawn under it.
+    expect(logo?.closest('[data-slot="buddy-avatar-glyph"]'), 'no repainting plate').toBeNull()
+
+    // The plate size the red mark occupied, rounded the way every other row's badge is.
+    expect(logo?.className.split(/\s+/)).toEqual(expect.arrayContaining(['size-4.5', 'rounded-md', 'shrink-0']))
+  })
+
+  it('draws the same recognized logo in the default row of the open list', async () => {
+    stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
+    renderScreen()
+    await openBuddyPicker()
+
+    const rows = screen.getAllByRole('option')
+    const logo = rows[0].querySelector<HTMLImageElement>('img[data-slot="buddy-avatar-logo"]')
+    expect(logo, 'the default row draws the logo').not.toBeNull()
+    expect(logo?.getAttribute('src')).toContain('.png')
+    expect(logo?.getAttribute('src')).toBe(samMark)
+    expect(logo?.closest('[data-slot="buddy-avatar-glyph"]'), 'no repainting plate').toBeNull()
+
+    // Every other row keeps the glyph its record names, so the logo stays the default entry's alone.
+    expect(rows.slice(1).every((row) => row.querySelector('img[data-slot="buddy-avatar-logo"]') === null)).toBe(true)
   })
 })
 

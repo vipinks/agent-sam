@@ -34,7 +34,7 @@ import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
 import { cn } from '@/lib/utils'
-import samMark from '@/resources/build/icon.svg'
+import samMark from '@/resources/build/icon.png'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
@@ -376,9 +376,11 @@ function engineConsentStep(consent: PendingEngineConsent): ToolStep {
  *
  * `null` rather than a separate flag, because `null` is already how this screen reads the default: an id
  * that resolves to no record is the Agent Sam entry, and it is the one entry with no record to carry a
- * glyph of its own. The mark is then the app's logo from the renderer's own path in the repo — the same
- * file the window, the installers and the app's icon are built from, so a default entry and the app cannot
- * end up with two different marks.
+ * glyph of its own. The mark is then the app's own logo from the renderer's own path in the repo — the png
+ * the window icon, the installers and the README banner are all built from, so a default entry and the app
+ * cannot end up with two different marks. The svg beside it is the mark the app used before that logo and is
+ * nothing's artwork now; reading the png is what keeps the picker drawing the robot rather than the old red
+ * mark.
  *
  * One element for both places it is drawn, because the trigger and the list it opens show the same entry
  * twice: a trigger that marked a Buddy differently from the row it was picked from would be two marks for

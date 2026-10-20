@@ -731,14 +731,15 @@ describe('the MCP servers tab', () => {
   }
 
   /**
-   * The two columns a row's controls sit in, as slots rather than as each control's own width.
+   * The pair is held as one trailing cluster, the way the settings rows hold theirs.
    *
-   * What this pins is the layout rule, not the pixels: the play/stop control and the toggle are two different
-   * components with two independent size variants, so their widths agreeing is arithmetic that can change
-   * under either one — a spinner in a wider button, a glyph that sizes itself, a second switch size. A slot of
-   * its own states the column once, and every row reads the same numbers down the list.
+   * Slots alone are still two flex items: their distance from each other is the row's gap, and their boxes are
+   * whatever each control happens to render — a `size-6` button and a `size=sm` switch do not share a height,
+   * so the two columns do not share a line. The cluster states the pair once: one fixed-width, unshrinkable
+   * flex with a stated gap, both slots in it at the same height, so every row's columns land in the same two
+   * places whatever the row's name or badges hold.
    */
-  it('sets each row’s process control and toggle in the same fixed columns', async () => {
+  it('holds each row’s trailing pair in the same fixed cluster', async () => {
     stubWorkbench()
     renderWorkbench()
     await dockTools()
@@ -746,6 +747,8 @@ describe('the MCP servers tab', () => {
 
     const rows = mcpRows()
     expect(rows.length, 'more than one row, or a column has nothing to line up with').toBeGreaterThan(1)
+
+    const seen = new Set<string>()
 
     for (const row of rows) {
       const process = row.querySelector<HTMLElement>('[data-slot="mcp-panel-process"]')
@@ -758,12 +761,30 @@ describe('the MCP servers tab', () => {
       expect(processSlot?.getAttribute('data-slot')).toBe('mcp-panel-process-slot')
       expect(toggleSlot?.getAttribute('data-slot')).toBe('mcp-panel-enabled-slot')
 
+      // One wrapper, and it is the pair's own: the two columns are siblings in a single trailing cluster
+      // rather than two independent items of the row's own flex line.
+      const cluster = processSlot?.parentElement
+      expect(cluster, 'the row holds its pair in a trailing cluster').not.toBeNull()
+      expect(cluster?.getAttribute('data-slot')).toBe('mcp-panel-actions')
+      expect(toggleSlot?.parentElement, 'both slots in the same cluster').toBe(cluster)
+
+      // The settings rows' pattern: one line that cannot grow and cannot shrink, a stated gap, and a width of
+      // its own — 24 + 8 + 24 — so the cluster is not the arithmetic of the two components inside it.
+      const clusterClasses = (cluster?.className ?? '').split(/\s+/)
+      expect(clusterClasses).toEqual(expect.arrayContaining(['flex', 'flex-none', 'items-center', 'gap-2', 'w-14']))
+      seen.add(clusterClasses.join(' '))
+
       for (const slot of [processSlot, toggleSlot]) {
         const classes = (slot?.className ?? '').split(/\s+/)
         expect(classes, 'one width, stated on the slot').toContain('w-6')
         expect(classes, 'and a column that cannot be squeezed by a long id').toContain('shrink-0')
+        // Both slots are the same height, which is what puts the 24px button and the 14px switch on one line.
+        expect(classes, 'one height, so the pair shares a centre line').toContain('h-6')
       }
     }
+
+    // Every row's cluster is the same cluster: no row states a width of its own.
+    expect(seen.size, 'every row draws the identical cluster').toBe(1)
   })
 
   it('states both tabs with their own counts, and keeps each tab’s narrowing across a switch', async () => {

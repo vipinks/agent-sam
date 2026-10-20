@@ -365,45 +365,48 @@ function McpRowView({
        * status, so no word about it is written here, and the label says what the click will do to which
        * server for everything that cannot see a glyph.
        *
-       * Each sits in a slot of its own rather than directly on the row. The two controls happen to be the same
-       * width today — a `size-6` button and a `size=sm` switch — but that is each control's own variant, and a
-       * row's columns are not allowed to be the arithmetic of two independent components: a glyph that sized
-       * itself, a spinner in a wider button, or a second switch size would move one row's pair and leave every
-       * other row's where it was. The slot states the column once, at `w-6`, so the play/stop glyph and the
-       * toggle line up down the whole list.
+       * The pair sits in one trailing cluster, the way a settings row holds its own — two slots side by side
+       * are still two items of this row's flex line, so their distance apart would be this row's gap and their
+       * boxes whatever each control renders: a `size-6` button and a `size=sm` switch do not share a height, so
+       * the two columns would not share a line. The cluster states the pair once. `w-14` is the two 24px
+       * columns and the gap between them, `flex-none` keeps a long id from squeezing either, and both slots at
+       * one height put the play/stop glyph and the toggle in the same two places on every row, whatever that
+       * row's name or badges hold.
        */}
-      <span data-slot="mcp-panel-process-slot" className="mt-0.5 flex w-6 shrink-0 items-center justify-center">
-        <Button
-          data-slot="mcp-panel-process"
-          data-glyph={control.glyph}
-          data-action={control.action ?? 'none'}
-          size="icon-xs"
-          variant="ghost"
-          aria-label={`${control.word} ${server.id}`}
-          title={`${control.word} ${server.id}`}
-          disabled={!control.enabled}
-          onClick={() => {
-            // A disabled button is handed no pointer in the first place; reading the action here is what keeps
-            // a click that arrives anyway — a synthetic one, or a keyboard activation — from dispatching while
-            // a call is in flight, when there is no action to dispatch.
-            if (control.action) void run(control.action)
-          }}
-          className="shrink-0"
-        >
-          {controlGlyph(control.glyph)}
-        </Button>
-      </span>
+      <span data-slot="mcp-panel-actions" className="mt-0.5 flex w-14 flex-none items-center gap-2">
+        <span data-slot="mcp-panel-process-slot" className="flex h-6 w-6 shrink-0 items-center justify-center">
+          <Button
+            data-slot="mcp-panel-process"
+            data-glyph={control.glyph}
+            data-action={control.action ?? 'none'}
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`${control.word} ${server.id}`}
+            title={`${control.word} ${server.id}`}
+            disabled={!control.enabled}
+            onClick={() => {
+              // A disabled button is handed no pointer in the first place; reading the action here is what keeps
+              // a click that arrives anyway — a synthetic one, or a keyboard activation — from dispatching while
+              // a call is in flight, when there is no action to dispatch.
+              if (control.action) void run(control.action)
+            }}
+            className="shrink-0"
+          >
+            {controlGlyph(control.glyph)}
+          </Button>
+        </span>
 
-      <span data-slot="mcp-panel-enabled-slot" className="mt-0.5 flex w-6 shrink-0 items-center justify-center">
-        <Switch
-          data-slot="mcp-panel-enabled"
-          size="sm"
-          aria-label={`${server.id} is enabled`}
-          checked={server.enabled}
-          disabled={pending}
-          onCheckedChange={() => onToggle(row)}
-          className="shrink-0"
-        />
+        <span data-slot="mcp-panel-enabled-slot" className="flex h-6 w-6 shrink-0 items-center justify-center">
+          <Switch
+            data-slot="mcp-panel-enabled"
+            size="sm"
+            aria-label={`${server.id} is enabled`}
+            checked={server.enabled}
+            disabled={pending}
+            onCheckedChange={() => onToggle(row)}
+            className="shrink-0"
+          />
+        </span>
       </span>
     </li>
   )
