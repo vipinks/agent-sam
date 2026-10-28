@@ -6,6 +6,14 @@ coding assistant.
 
 <br>
 
+## 2026-10-28: v1.14.0 — Phase 103 fixes
+
+- fix(agent): bound run_command on child exit, tree-kill on abort, wall-clock wedge guard
+- fix(turn-end): mid-work notice on a planless tool-using stop; tighten set_plan discipline
+- fix(providers): derive active model from enabledModels; stop on stale/unenabled model
+
+<br>
+
 ## 2026-10-20: v1.13.1 — Controls read against whatever they sit on, and the chrome tells the truth
 
 - **Controls read against whatever they sit on, and the chrome tells the truth.** A new surface module
