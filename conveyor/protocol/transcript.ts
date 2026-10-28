@@ -200,9 +200,13 @@ const turnBaseSchema = z.object({
    * should still say that the turn stopped with work on the plan, which is the one thing about it a
    * reader cannot reconstruct from the reply.
    *
-   * Optional, and neither flag bumped the version for the same reason the plan and the instructions
-   * record did not: a file written before this existed simply has no key, and an absent optional key is
-   * stripped rather than defaulted, so old files stay valid reads.
+   * `midWork` is the planless counterpart: a model stop after enough tool steps to be a mid-work
+   * ending rather than a short answer. It is a boolean rather than a count, because the transcript
+   * already carries the tools and the card says only that the stop happened mid-work.
+   *
+   * Optional, and none of these flags bumped the version for the same reason the plan and the
+   * instructions record did not: a file written before this existed simply has no key, and an absent
+   * optional key is stripped rather than defaulted, so old files stay valid reads.
    */
   endNotice: z
     .object({
@@ -210,6 +214,7 @@ const turnBaseSchema = z.object({
       lostPending: z.boolean().optional(),
       /** Positive by construction: a notice saying zero steps remain is the absent key. */
       unfinishedSteps: z.number().int().positive().optional(),
+      midWork: z.boolean().optional(),
     })
     .optional(),
 })

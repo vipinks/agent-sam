@@ -198,6 +198,29 @@ describe('the model picker', () => {
     expect(payload.provider).toEqual({ ...LLAMA, apiKey: '' })
   })
 
+  it('stops a send whose saved model is no longer offered, and keeps the draft', async () => {
+    const sent: unknown[] = []
+    stubChat({ chatWithTools: (input) => void sent.push(input) })
+    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-retired' })
+    renderChat()
+
+    // Opening the picker waits for the catalogue, so this is the state after a launch that restored a
+    // preference the provider has since outgrown: the old id is not one of the options.
+    await openPicker()
+    expect(optionTexts()).toContain('deepseek-chat')
+    expect(optionTexts()).not.toContain('deepseek-retired')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+
+    const composer = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+    await userEvent.type(composer, 'keep this draft{Enter}')
+
+    // The send is refused before the session is touched or the draft is cleared: no provider round-trip,
+    // no turn to stop, and the words are still there for the user to send with a live model.
+    expect(sent).toHaveLength(0)
+    expect(composer.value).toBe('keep this draft')
+  })
+
   it('carries no descriptor when the pick is one of the predefined providers', async () => {
     const sent: unknown[] = []
     stubChat({ chatWithTools: (input) => void sent.push(input) })

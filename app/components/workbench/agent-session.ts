@@ -7,6 +7,8 @@ import { summarizedIds } from '@/conveyor/protocol/truncate'
 import { liveMessageVersion, saysTheSameVersion } from '@/conveyor/protocol/message-versions'
 import {
   AUTO_CONTINUE_MAX,
+  isResumable,
+  midWorkNotice,
   planUnfinishedNotice,
   TURN_END_CAUSES,
   type TurnEndCause,
@@ -283,6 +285,14 @@ export interface TurnEndNotice {
    * arrived complete and the model simply stopped mid-plan.
    */
   unfinishedSteps?: number
+  /**
+   * A planless stop after enough tool work to be a mid-work ending rather than a short answer.
+   *
+   * The generic notice has no count of its own: the threshold is a floor, and the transcript already
+   * shows the tools that ran. It is separate from `unfinishedSteps` because there is no plan to count,
+   * and separate from the cause copy because `model_stop` is ordinarily the ending that says nothing.
+   */
+  midWork?: boolean
 }
 
 /**
@@ -812,7 +822,13 @@ export function applyAgentChunk(
       // for a turn that owes no such news.
       const unfinishedSteps =
         typeof c.unfinishedSteps === 'number' && c.unfinishedSteps > 0 ? c.unfinishedSteps : undefined
-      const notice: TurnEndNotice = { cause, resumable, ...(unfinishedSteps ? { unfinishedSteps } : {}) }
+      const midWork = c.midWork === true
+      const notice: TurnEndNotice = {
+        cause,
+        resumable,
+        ...(unfinishedSteps ? { unfinishedSteps } : {}),
+        ...(midWork ? { midWork: true } : {}),
+      }
       return {
         turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, endNotice: notice })),
         effect: { turnEndNotice: notice },
@@ -1136,22 +1152,29 @@ export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
  * The renderer's half of the one turn-end path, and the same rule main's `finishTurn` applies — an
  * ending must not depend on which side happened to notice it. It is needed here because two endings
  * never reach main at all: a run the user stopped, which unwinds the stream instead of finishing it,
- * and a denial, which ends the turn where it stands. Both are exactly the case a plan makes visible,
- * and before this a stopped turn mid-plan went entirely unsaid.
+ * and a denial, which ends the turn where it stands. Both used to need a plan to be visible; a stopped
+ * planless turn is the other case, and it now says it was stopped rather than disappearing in silence.
  *
  * A notice already on the turn is left alone: that one is the diagnosis of the reply, and a second
  * card claiming the same ending would be the same news twice. A turn whose plan is finished is left
  * alone too, which is what keeps the card off the ordinary ending.
  *
- * The cause defaults to the ordinary one, and the ordinary one words nothing: for these two endings
- * there is no reply to diagnose, and naming one that did not happen would be worse than saying less.
- * What the card is about in both cases is the work.
+ * The cause defaults to the ordinary one, and the ordinary one words nothing: for a denial or an
+ * ordinary completion there is no reply to diagnose, and naming one that did not happen would be worse
+ * than saying less. An explicit `interrupted` keeps the path Turn A added, and a planless model stop
+ * with real work behind it earns the generic mid-work notice from the same rule main uses. The other
+ * non-ordinary causes arrive with main's notice and are not re-worded here.
  *
  * Neither is an ending the app continues by itself, and the reason is the same as the loop's: a user who
  * stopped a run has said so, and a denial is a decision. The nudge in main is for the ending nobody
  * chose — the model quitting with work still on its plan.
  */
-export function endTurn(turns: AgentTurn[], turnId: string, cause: TurnEndCause = 'model_stop'): AgentTurn[] {
+export function endTurn(
+  turns: AgentTurn[],
+  turnId: string,
+  cause: TurnEndCause = 'model_stop',
+  options: { allowMidWork?: boolean } = {}
+): AgentTurn[] {
   const ended = endTurnPlan(turns, turnId)
   const turn = ended.find((t) => t.id === turnId)
   if (!turn || turn.endNotice) return ended
@@ -1165,12 +1188,39 @@ export function endTurn(turns: AgentTurn[], turnId: string, cause: TurnEndCause 
   // doing.
   const plan = reconcilePlanOnTurnEnd(currentPlan(ended) ?? [])
   const notice = planUnfinishedNotice(plan, cause)
-  if (!notice) return ended
+  if (notice) {
+    return replaceTurn(ended, turnId, (t) => ({
+      ...t,
+      endNotice: { cause: notice.cause, resumable: notice.resumable, unfinishedSteps: notice.unfinishedSteps },
+    }))
+  }
 
-  return replaceTurn(ended, turnId, (t) => ({
-    ...t,
-    endNotice: { cause: notice.cause, resumable: notice.resumable, unfinishedSteps: notice.unfinishedSteps },
-  }))
+  // The existing interrupted path: the run was stopped from outside, and the pane is the side that
+  // knows when the Stop button caused it. The other non-ordinary causes arrive with main's notice;
+  // this pane does not invent a second card for them.
+  if (cause === 'interrupted') {
+    return replaceTurn(ended, turnId, (t) => ({
+      ...t,
+      endNotice: { cause, resumable: isResumable(cause) },
+    }))
+  }
+
+  // A plan is the usual witness that a stopped turn was mid-work, but a planless turn can still have
+  // run enough tools to be one. The pure rule owns the threshold and the set_plan/plan fences; this
+  // side only supplies what the transcript knows. This branch is for `model_stop` alone: every other
+  // ending has already returned above on the terms it had. A caller that already knows the stop was a
+  // different existing ending — the step ceiling or a stream failure — turns this off rather than
+  // teaching the rule to infer a reason it was never given.
+  if (options.allowMidWork === false) return ended
+  const midWork = midWorkNotice({
+    cause,
+    steps: turn.steps.length,
+    sawSetPlan: turn.steps.some((step) => step.tool === 'set_plan'),
+    plan,
+  })
+  if (!midWork) return ended
+
+  return replaceTurn(ended, turnId, (t) => ({ ...t, endNotice: midWork }))
 }
 
 /**

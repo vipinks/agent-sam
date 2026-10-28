@@ -19,6 +19,11 @@
  *
  * The second case is also how the new cause is held to the rest of the vocabulary: the notice chunk and
  * the reducer both read it, so a cause the closed set did not carry would fail here twice over.
+ *
+ * Turn B adds the planless half of the same ending. The Stop button closes the renderer's iterator,
+ * so main never gets to yield its `turn_end_notice`; the pane's `endTurn` is the only place left to
+ * say the run was stopped. Before this it only spoke when a plan existed, which left a planless turn
+ * with tool work on screen and no explanation that the work had ended.
  */
 import { strict as assert } from 'node:assert'
 import {
@@ -95,6 +100,28 @@ function planFrames(callId: string, steps: readonly PlanStep[]): string[] {
       ],
     }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: args } }] } }] }),
+    stopFrame('tool_calls'),
+    '[DONE]',
+  ]
+}
+
+/** A reply asking for several tools at once, as the fragment stream delivers them. */
+function toolFrames(calls: Array<{ id: string; name: string; args: Record<string, unknown> }>): string[] {
+  return [
+    JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: calls.map((call, index) => ({
+              index,
+              id: call.id,
+              type: 'function',
+              function: { name: call.name, arguments: JSON.stringify(call.args) },
+            })),
+          },
+        },
+      ],
+    }),
     stopFrame('tool_calls'),
     '[DONE]',
   ]
@@ -239,6 +266,68 @@ async function anAbortedTurnEndsWithAnInterruptedNotice() {
   results.push('an aborted turn yields an interrupted turn_end with the plan-unfinished notice')
 }
 
+// ---------------------------------------------------------------- C2 / T-D2 in the loop
+
+async function aPlanlessModelStopAfterThreeStepsGetsTheGenericNotice() {
+  const calls = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `read-${index}`,
+      name: 'read_file',
+      args: { path: `file-${index}.txt` },
+    }))
+
+  const three = await runLoop({
+    rounds: [toolFrames(calls(3)), proseFrames('I looked at the files.')],
+  })
+  const midWork = notice(three.chunks)
+  assert.ok(midWork, 'three tool steps and a complete model stop earn the generic mid-work notice')
+  assert.equal(midWork?.cause, 'model_stop', 'under the ordinary cause, not a new one')
+  assert.equal(midWork?.midWork, true, 'and carrying the generic flag rather than a plan count')
+  assert.equal(midWork?.unfinishedSteps, undefined, 'with no plan count to invent')
+  assert.equal(
+    three.chunks.some((chunk) => chunk.type === 'auto_continue'),
+    false,
+    'the app never auto-continues this notice'
+  )
+
+  // The fence: two steps are an ordinary short answer, not a mid-work death.
+  const two = await runLoop({ rounds: [toolFrames(calls(2)), proseFrames('I looked at the files.')] })
+  assert.equal(notice(two.chunks), undefined, 'two steps stay silent')
+  results.push('C2/T-D2: a planless model stop earns the mid-work notice at three steps and not at two')
+}
+
+// ---------------------------------------------------------------- the planless stop
+
+async function aPlanlessStopStillSaysItWasStopped() {
+  const turns: AgentTurn[] = [
+    {
+      id: 'assistant-1',
+      role: 'assistant',
+      content: '',
+      steps: [
+        {
+          callId: 'call-1',
+          tool: 'run_command',
+          args: { command: 'npm test' },
+          status: 'ok',
+          output: 'tests passed',
+        },
+      ],
+    },
+  ]
+
+  const stopped = endTurn(turns, 'assistant-1', 'interrupted')
+  const notice = currentEndNotice(stopped)
+  assert.ok(notice, 'a planless stop still announces that the run ended early')
+  assert.equal(notice?.cause, 'interrupted', 'naming the ending the Stop button produced')
+  assert.equal(notice?.resumable, true, 'as work a person can pick up')
+  assert.equal(notice?.unfinishedSteps, undefined, 'with no plan count to invent')
+
+  // The ordinary ending keeps the old silence: a turn the model finished with no plan is not an incident.
+  assert.equal(currentEndNotice(endTurn(turns, 'assistant-1')), null, 'a plain finish still says nothing')
+  results.push('a planless stop gets an interrupted notice, while an ordinary finish still says nothing')
+}
+
 // ---------------------------------------------------------------- the run
 
 async function main() {
@@ -248,6 +337,11 @@ async function main() {
   const cases: Array<[string, () => Promise<void>]> = [
     ['a nudge turn inherits the plan it is being nudged about', aNudgeTurnInheritsThePlanItIsBeingNudgedAbout],
     ['an aborted turn ends with an interrupted notice', anAbortedTurnEndsWithAnInterruptedNotice],
+    ['a planless stop still says it was stopped', aPlanlessStopStillSaysItWasStopped],
+    [
+      'a planless model stop after three steps gets the generic notice',
+      aPlanlessModelStopAfterThreeStepsGetsTheGenericNotice,
+    ],
   ]
 
   let failed = 0

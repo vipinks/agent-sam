@@ -141,6 +141,46 @@ describe('the turn-end notice', () => {
     await waitFor(() => expect(screen.queryByText(/Ended early/)).toBeNull())
   })
 
+  it('says a planless run was stopped before it finished', async () => {
+    const stub = stubChat()
+    await startRun(stub)
+
+    // Nothing has a plan and nothing arrives from main: the Stop button closes the renderer's stream,
+    // which is exactly the ending that used to leave no card when there was no plan to count.
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }))
+
+    expect(await screen.findByText('Ended early: the run was stopped before it finished')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+  })
+
+  it('says a planless model stop after three tool steps ended mid-work', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    for (let index = 0; index < 3; index += 1) {
+      chunk(stub, channel, {
+        type: 'tool_call_start',
+        callId: `read-${index}`,
+        tool: 'read_file',
+        args: { path: `file-${index}.txt` },
+      })
+      chunk(stub, channel, {
+        type: 'tool_result',
+        callId: `read-${index}`,
+        tool: 'read_file',
+        ok: true,
+        output: 'contents',
+      })
+    }
+
+    // The stream ends without a main-side notice, so the pane judges the turn itself: three steps,
+    // no plan and an ordinary stop are exactly the generic mid-work shape.
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText('Ended mid-work: the model stopped after several steps without a plan')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+  })
+
   it('says the connection dropped, which is the other wording of the same news', async () => {
     const stub = stubChat()
     const channel = await startRun(stub)
@@ -254,6 +294,31 @@ describe('the turn-end notice', () => {
     renderChat()
 
     expect(await screen.findByText('Ended with the plan unfinished — 3 steps remain')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
+  it('says a reopened transcript stopped mid-work, with nothing to click', async () => {
+    const snapshot: TranscriptSnapshot = {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        { id: 'user-1', role: 'user', content: 'refactor the parser', steps: [] },
+        {
+          id: 'assistant-2',
+          role: 'assistant',
+          content: 'I looked at the three files.',
+          steps: [],
+          // The generic flag survives the file: a conversation reopened tomorrow still says that the
+          // planless stop happened mid-work, without offering a run that is gone.
+          endNotice: { cause: 'model_stop', midWork: true },
+        },
+      ],
+    }
+
+    stubChat({ loadTranscript: () => snapshot })
+    renderChat()
+
+    expect(await screen.findByText('Ended mid-work: the model stopped after several steps without a plan')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
 

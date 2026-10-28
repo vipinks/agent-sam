@@ -246,6 +246,59 @@ export function planUnfinishedNotice(plan: readonly PlanStep[], cause: TurnEndCa
 }
 
 /**
+ * How many tool steps make a planless model stop worth a generic notice.
+ *
+ * Turn E's planless death had roughly ten tool steps behind it before the model stopped, so three is
+ * low enough to catch the observed shape and high enough to spare a one- or two-step answer. The
+ * number is deliberately a floor rather than an exact count: the notice says only that the stop
+ * happened mid-work, and a card that counted the tools would be a second, less useful report. Three
+ * balances the two errors a bound like this can make — a miss is one silent two-step ending, while a
+ * false card costs a little attention but no tokens, because this notice never auto-continues.
+ */
+export const MID_WORK_MIN_STEPS = 3
+
+/** The evidence a planless stop is judged against. */
+export interface MidWorkEvidence {
+  /** The ending being judged. Only the ordinary model stop can earn this notice. */
+  cause: TurnEndCause
+  /** How many tool steps this turn ran, whether they succeeded or failed. */
+  steps: number
+  /** Whether any of those steps was `set_plan`, which means the turn had a plan of its own. */
+  sawSetPlan: boolean
+  /** The plan in hand after the turn-end reconciliation. */
+  plan: readonly PlanStep[]
+}
+
+/** What a planless stop after real work says about itself. */
+export interface MidWorkNotice {
+  cause: 'model_stop'
+  midWork: true
+  resumable: true
+}
+
+/**
+ * A generic notice for a planless stop after real work.
+ *
+ * A plan is the usual witness that a turn stopped mid-task, but it is not the only one: a planless
+ * turn can run ten tools, stop on a complete reply, and leave the user with nothing but the last tool
+ * card and no statement that the run is over. This rule gives that shape a card without turning every
+ * one- or two-step answer into an incident. The fenced evidence is the whole rule: an unfinished plan
+ * already has `planUnfinishedNotice`, a `set_plan` step is also a plan-shaped ending, and every cause
+ * other than `model_stop` already has its own copy and handling.
+ *
+ * `shouldAutoContinue` is deliberately not asked here and remains false for this notice: the user gets
+ * the Continue button, but the app does not spend a round-trip on a stop it cannot prove was unfinished.
+ */
+export function midWorkNotice(evidence: MidWorkEvidence): MidWorkNotice | null {
+  if (evidence.cause !== 'model_stop') return null
+  if (evidence.steps < MID_WORK_MIN_STEPS) return null
+  if (evidence.sawSetPlan) return null
+  if (unfinishedPlanSteps(evidence.plan) !== 0) return null
+
+  return { cause: 'model_stop', midWork: true, resumable: true }
+}
+
+/**
  * How many times one turn may continue itself before the user is asked.
  *
  * A cap rather than a preference, and the number is the product decision: a turn that has stopped eight

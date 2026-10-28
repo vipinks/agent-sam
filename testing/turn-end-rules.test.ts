@@ -6,6 +6,7 @@ import {
   isReplyCutShort,
   isResumable,
   isToolCallCut,
+  midWorkNotice,
   planUnfinishedNotice,
   RESUME_MESSAGE,
   shouldAutoContinue,
@@ -227,6 +228,51 @@ describe('planUnfinishedNotice', () => {
     expect(planUnfinishedNotice([step('a', 'done'), step('b', 'done')], 'model_stop')).toBeNull()
     expect(planUnfinishedNotice([], 'truncated')).toBeNull()
     expect(planUnfinishedNotice([], 'model_stop')).toBeNull()
+  })
+})
+
+/**
+ * T-D2 — the generic mid-work notice, fenced so it stays a stop-catcher rather than a card under
+ * every short answer.
+ *
+ * Turn E's planless death had roughly ten tool steps behind it, so three is the observed shape with
+ * room to spare. One and two step answers are ordinary answers and must stay silent; because this
+ * notice never auto-continues, a false card costs no tokens, but it still costs attention. A turn
+ * that declared a plan already has the plan card and is not a planless stop. A turn with unfinished
+ * plan work belongs to `planUnfinishedNotice`, not here.
+ *
+ * The non-model endings are asserted on the same rule so a later reader cannot quietly widen it: the
+ * existing truncated, empty-stop, stream-error and interrupted handling is not this notice's job.
+ */
+describe('midWorkNotice (T-D2)', () => {
+  const empty: PlanStep[] = []
+  const step = (id: string, status: PlanStep['status']): PlanStep => ({ id, text: id, status })
+
+  it('stays silent for zero, one and two steps', () => {
+    for (const steps of [0, 1, 2]) {
+      expect(midWorkNotice({ cause: 'model_stop', steps, sawSetPlan: false, plan: empty })).toBeNull()
+    }
+  })
+
+  it('announces a planless model stop after three steps, without claiming a plan count', () => {
+    expect(midWorkNotice({ cause: 'model_stop', steps: 3, sawSetPlan: false, plan: empty })).toEqual({
+      cause: 'model_stop',
+      resumable: true,
+      midWork: true,
+    })
+  })
+
+  it('does not fire when this turn declared a plan, or when inherited plan work remains', () => {
+    expect(midWorkNotice({ cause: 'model_stop', steps: 4, sawSetPlan: true, plan: empty })).toBeNull()
+    expect(midWorkNotice({ cause: 'model_stop', steps: 4, sawSetPlan: false, plan: [step('a', 'pending')] })).toBeNull()
+  })
+
+  it('leaves every other ending to the handling it already has', () => {
+    for (const cause of ['truncated', 'stream_error', 'empty_stop', 'interrupted'] as const) {
+      expect(midWorkNotice({ cause, steps: 10, sawSetPlan: false, plan: empty })).toBeNull()
+    }
+    // And the generic notice never becomes a reason to spend a round-trip by itself.
+    expect(shouldAutoContinue('model_stop', empty, 0)).toBe(false)
   })
 })
 

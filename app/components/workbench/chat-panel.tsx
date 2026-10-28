@@ -834,6 +834,10 @@ export function ChatPanel() {
   const breakRef = useRef(false)
   // The live iterator, so the Stop button can cancel at the source.
   const iteratorRef = useRef<AsyncIterator<unknown> | null>(null)
+  // The turn the Stop button cancelled, by id. Closing an iterator does not let the main-side loop
+  // yield its `interrupted` ending, so the renderer has to remember why it closed; an id rather than a
+  // boolean keeps that fact attached to the right run if the user starts another before it unwinds.
+  const stoppedTurnRef = useRef<string | null>(null)
 
   const providers = conveyor.settings.listProviders.useQuery()
   // The seeded catalogue: what to offer before a provider has ever been fetched.
@@ -881,6 +885,45 @@ export function ChatPanel() {
    */
   const runProvider = customProviders.find((provider) => provider.id === activeProviderId)
   const isKeyMissing = configured.data !== undefined && !configured.data.includes(activeProviderId)
+
+  /**
+   * Whether the selected pair is still one this window can send to.
+   *
+   * The target is persisted across launches, while the enabled model lists are read from Settings
+   * after that launch. A model can therefore be gone — disabled, renamed by the provider, or carried
+   * in by an older preference — while its id is still the one in the header. Sending it spends a
+   * provider round-trip only to stop with a refusal, so the send is stopped here instead and the user
+   * is asked to choose again.
+   *
+   * Unknown providers are allowed through: the catalogue is still loading, or the provider was
+   * removed and the missing-key warning is already the more specific fact. This guard answers only
+   * the question it can answer from the lists now in hand.
+   */
+  const selectedModelOffered = useMemo(() => {
+    const custom = customProviders.find((provider) => provider.id === activeProviderId)
+    if (custom) {
+      const enabled = configs[custom.id]?.enabledModels
+      const ids = enabled && enabled.length > 0 ? enabled : custom.models
+      return ids.includes(activeModel)
+    }
+
+    if (!providers.data?.some((provider) => provider.id === activeProviderId)) return true
+    const enabled = configs[activeProviderId]?.enabledModels
+    // No enabled list and no seeded catalogue yet is 'not known', not 'nothing offered'.
+    if ((!enabled || enabled.length === 0) && defaultModels.data === undefined) return true
+    const ids =
+      enabled && enabled.length > 0 ? enabled : (defaultModels.data?.[activeProviderId] ?? []).map((m) => m.id)
+    return ids.includes(activeModel)
+  }, [activeModel, activeProviderId, configs, customProviders, defaultModels.data, providers.data])
+
+  /** Stop a send whose saved model no longer exists, and say how to recover. */
+  const stopForStaleModel = useCallback((): boolean => {
+    if (selectedModelOffered) return false
+    toast.error('That model is no longer available', {
+      description: `Choose another model in the header, then send again. (${activeModel})`,
+    })
+    return true
+  }, [activeModel, selectedModelOffered])
 
   //
   // Mentions: the `@` picker's source, and the chip row it fills.
@@ -1311,6 +1354,7 @@ export function ChatPanel() {
   }, [])
 
   const stop = useCallback(() => {
+    stoppedTurnRef.current = streamingTurnIdRef.current
     void iteratorRef.current?.return?.(undefined)
     iteratorRef.current = null
     setIsStreaming(false)
@@ -1332,6 +1376,11 @@ export function ChatPanel() {
       // the turn — the decision resumes it — so the plan must be left alone for the checklist above,
       // while every other way out of this loop ends the turn and reconciles it.
       let paused = false
+      // Whether the ending was one with its own existing handling: the loop's step ceiling, or a stream
+      // failure. Neither may grow a generic mid-work card just because the turn also happened to have
+      // three tool steps behind it.
+      let ceiling = false
+      let failed = false
       // Whether the chunk before this one was prose. The first piece of a run is not a continuation of
       // anything in this stream, so it opens a piece of its own: after a resume the model's prose
       // follows a tool result, and the rule ignores a leading break on an empty message.
@@ -1417,12 +1466,14 @@ export function ChatPanel() {
           }
 
           if (effect.done) {
+            ceiling = effect.done.reason === 'max_steps'
             stickToBottom()
             return
           }
           stickToBottom()
         }
       } catch (err) {
+        failed = true
         const message = streamErrorMessage(err, providerName)
         updateMessages(messagesRef.current.map((t) => (t.id === turnId ? { ...t, error: message } : t)))
         toast.error('The agent stopped', { description: message })
@@ -1433,9 +1484,15 @@ export function ChatPanel() {
         setIsStreaming(false)
         // The turn is over — answered, failed, or stopped — so a plan that still claims a step is in
         // progress is corrected here, at the one place every ending passes through, and a plan with
-        // work left on it gets the notice it has earned. A pause is the exception, because the turn it
-        // belongs to has not ended.
-        if (!paused) updateMessages(endTurn(messagesRef.current, turnId))
+        // work left on it gets the notice it has earned. A planless model stop gets the generic
+        // mid-work notice when it has enough steps behind it; a ceiling or a failure keeps the
+        // handling it already had. A pause is the exception, because the turn it belongs to has not
+        // ended.
+        const cause = stoppedTurnRef.current === turnId ? 'interrupted' : 'model_stop'
+        if (stoppedTurnRef.current === turnId) stoppedTurnRef.current = null
+        if (!paused) {
+          updateMessages(endTurn(messagesRef.current, turnId, cause, { allowMidWork: !ceiling && !failed }))
+        }
       }
     },
     [drainNow, enqueue, providerName, setIsStreaming, stickToBottom, updateMessages]
@@ -1475,6 +1532,11 @@ export function ChatPanel() {
       mcpSubset: string[] | null,
       rewrittenTurnId?: string
     ) => {
+      // An engine brings its own model, so this guard is about the Sam loop alone. It sits ahead of
+      // the stamped root and the new assistant turn: a send that cannot name a live model should not
+      // leave a turn to explain, nor claim the conversation ran in a folder it never reached.
+      if (engineId === null && stopForStaleModel()) return
+
       // A turn is this conversation being used in this window's folder, so its start is what the project
       // is recorded from — and only when that differs from the folder already stored.
       sessionsRef.current.stampRoot(sessionId)
@@ -1599,6 +1661,7 @@ export function ChatPanel() {
       runProvider,
       runStream,
       stickToBottom,
+      stopForStaleModel,
       updateMessages,
     ]
   )
@@ -1644,6 +1707,10 @@ export function ChatPanel() {
     async (raw: string, options: { mentionPaths?: readonly string[]; images?: readonly DraftAttachment[] } = {}) => {
       const text = raw.trim()
       if (!text || isStreaming || pending) return
+
+      // Refused before the session is created, the images are stored, or the draft is cleared: a stale
+      // preference is not a message, and losing what the user typed would be a second fault on top of it.
+      if (chosenEngineId === null && stopForStaleModel()) return
 
       // The chips as they stand: the payload and the transcript both read this one list, so what is sent
       // and what the bubble shows afterwards cannot disagree.
@@ -1693,7 +1760,7 @@ export function ChatPanel() {
         conversationMcpSubset
       )
     },
-    [isStreaming, pending, runAgentTurn, setChips, setDraft, setImages]
+    [chosenEngineId, isStreaming, pending, runAgentTurn, setChips, setDraft, setImages, stopForStaleModel]
   )
 
   /** Send what is in the composer. */
@@ -1906,6 +1973,11 @@ export function ChatPanel() {
       const current = pending
       if (!current || isStreaming) return
 
+      // An approval would resume under the header's current model. If that model has gone away while
+      // the card waited, refuse now and leave the pause standing so the user can choose one and answer
+      // again. A denial needs no model, and still ends the turn.
+      if (approved && stopForStaleModel()) return
+
       // This process is not holding the pause any more, whichever way the decision went. Said here
       // rather than beside the branches: a load of this conversation after this must reconcile nothing,
       // because there is nothing left waiting for an answer.
@@ -1924,7 +1996,11 @@ export function ChatPanel() {
         // frames — so ending here costs nothing and is the honest record of what happened. The ending
         // goes through the one turn-end path, which is what tells the user what the plan was waiting
         // on.
-        updateMessages(endTurn(abandonUndecidedCalls(decided, current.turnId, ABANDONED_PAUSE_CODE), current.turnId))
+        updateMessages(
+          endTurn(abandonUndecidedCalls(decided, current.turnId, ABANDONED_PAUSE_CODE), current.turnId, 'model_stop', {
+            allowMidWork: false,
+          })
+        )
         sessionsRef.current.scheduleSave()
         return
       }
@@ -1973,6 +2049,7 @@ export function ChatPanel() {
       runProvider,
       runStream,
       stickToBottom,
+      stopForStaleModel,
       updateMessages,
     ]
   )

@@ -100,10 +100,13 @@ export async function* runCommand(options: {
   cwd: string
   platform?: NodeJS.Platform
   signal: AbortSignal
+  /** A wall-clock ceiling for this run. Omitted for the user's own terminal, which is unbounded. */
+  timeoutMs?: number
   spawnImpl?: typeof spawn
 }): AsyncGenerator<string, void, undefined> {
   const { command, cwd, signal } = options
   const platform = options.platform ?? process.platform
+  const timeoutMs = options.timeoutMs
   const doSpawn = options.spawnImpl ?? spawn
 
   if (signal.aborted) return
@@ -114,13 +117,18 @@ export async function* runCommand(options: {
     windowsHide: true,
   } as never) as ChildProcessWithoutNullStreams
 
-  // An abort has two jobs. The kill stops the process; the wake is what makes it prompt, because a
-  // command that has been silent leaves the read loop parked on `await`, and a parked `await`
-  // cannot be interrupted from outside — abandoning the iterator only takes effect once the
-  // generator resumes. The escalation covers a child that ignores SIGTERM: without it the stream
-  // would never see `close` and the caller would wait forever on a process that will not die.
+  // Cancellation and the deadline share the same two jobs. The kill stops the process; the wake is
+  // what makes the read loop prompt, because a command that has been silent leaves the loop parked
+  // on `await`, and a parked `await` cannot be interrupted from outside. The escalation covers a
+  // child that ignores SIGTERM: without it the stream would never see `close` and the caller would
+  // wait forever on a process that will not die.
   let escalate: ReturnType<typeof setTimeout> | null = null
-  const onAbort = () => {
+  let deadline: ReturnType<typeof setTimeout> | null = null
+  let wake: (() => void) | null = null
+  let exitCode: number | null = null
+  let timedOut = false
+
+  const stopChild = () => {
     if (!child.killed) child.kill('SIGTERM')
     wake?.()
     escalate = setTimeout(() => {
@@ -129,12 +137,22 @@ export async function* runCommand(options: {
     // Do not hold the event loop open just for the escalation timer.
     escalate.unref?.()
   }
+
+  const onAbort = () => stopChild()
   signal.addEventListener('abort', onAbort, { once: true })
+
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    deadline = setTimeout(() => {
+      deadline = null
+      timedOut = true
+      stopChild()
+    }, timeoutMs)
+    deadline.unref?.()
+  }
 
   // Both streams feed one queue, which preserves the interleaving a terminal is expected to show;
   // buffering them separately would reorder the output.
   const queue: string[] = []
-  let wake: (() => void) | null = null
   const push = (chunk: string) => {
     queue.push(chunk)
     wake?.()
@@ -151,10 +169,15 @@ export async function* runCommand(options: {
   })
 
   let exited = false
-  let exitCode: number | null = null
   child.on('close', (code: number | null) => {
     exited = true
     exitCode = code
+    // A process that closed before its deadline has no timeout left to fire. If the deadline already
+    // fired, `timedOut` stays true and the caller still reads the run as the timeout it was.
+    if (deadline) {
+      clearTimeout(deadline)
+      deadline = null
+    }
     wake?.()
   })
 
@@ -182,9 +205,17 @@ export async function* runCommand(options: {
 
     if (spawnError) throw new ConveyorError('SPAWN_FAILED', (spawnError as Error).message)
 
+    if (timedOut) {
+      throw new ConveyorError(
+        'COMMAND_TIMED_OUT',
+        `The command was stopped after ${Math.ceil((timeoutMs ?? 0) / 1000)} seconds because it exceeded the run_command time limit.`
+      )
+    }
+
     yield `${EXIT_MARKER}${exitCode ?? -1}]`
   } finally {
     if (escalate) clearTimeout(escalate)
+    if (deadline) clearTimeout(deadline)
     signal.removeEventListener('abort', onAbort)
     // If the consumer abandons the generator, the process must not be left running.
     if (!child.killed && exitCode === null) child.kill('SIGTERM')

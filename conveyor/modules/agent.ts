@@ -50,6 +50,7 @@ import {
   isReplyCutShort,
   isResumable,
   isToolCallCut,
+  midWorkNotice,
   planUnfinishedNotice,
   shouldAutoContinue,
   turnEndCause,
@@ -128,6 +129,16 @@ export const MAX_STEPS = 10
 /** Output handed back to the model. A build log should inform it, not exhaust its context. */
 const MAX_TOOL_OUTPUT = 20_000
 
+/**
+ * How long one shell command the model asked for may run.
+ *
+ * The terminal pane deliberately has no such ceiling: a person watching a command can decide when to
+ * stop it. A model cannot, and a silent command that never exits otherwise holds the whole turn open
+ * with no way out but stopping the run. Ten minutes is long enough for the repository's full gate run
+ * and short enough that a hung process is a failed tool call rather than a stuck conversation.
+ */
+export const RUN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
+
 export const TOOL_NAMES = ['read_file', 'write_file', 'run_command', 'set_plan'] as const
 export type AgentToolName = (typeof TOOL_NAMES)[number]
 
@@ -173,8 +184,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'run_command',
-      description:
-        'Run a shell command in the workspace and return its combined output and exit code. Use it for tests, builds, and inspecting the repository.',
+      description: `Run a shell command in the workspace and return its combined output and exit code. Use it for tests, builds, and inspecting the repository. A command is stopped after ${RUN_COMMAND_TIMEOUT_MS / 60_000} minutes.`,
       parameters: {
         type: 'object',
         properties: {
@@ -397,7 +407,13 @@ export async function executeTool(
         // Collected rather than streamed: the model consumes the whole result at once, so there is
         // nothing to gain from handing it a partial picture.
         const chunks: string[] = []
-        for await (const chunk of runCommand({ command, cwd: workingDirectory, signal, spawnImpl })) {
+        for await (const chunk of runCommand({
+          command,
+          cwd: workingDirectory,
+          signal,
+          timeoutMs: RUN_COMMAND_TIMEOUT_MS,
+          spawnImpl,
+        })) {
           chunks.push(chunk)
         }
 
@@ -589,8 +605,18 @@ export type AgentChunk =
    * and two cards would read as two events. Its presence is what tells the card to say the work is not
    * done, and — unlike `resumable` — a complete answer can carry it, because work left undone is a
    * reason to continue that has nothing to do with how the reply ended.
+   *
+   * `midWork` is the planless counterpart: a model stop after at least `MID_WORK_MIN_STEPS` tool steps,
+   * with no `set_plan` and no unfinished plan work. It carries no count; the card says only that the
+   * stop happened mid-work, and the transcript already shows the tools that ran.
    */
-  | { type: 'turn_end_notice'; cause: TurnEndCause; resumable: boolean; unfinishedSteps?: number }
+  | {
+      type: 'turn_end_notice'
+      cause: TurnEndCause
+      resumable: boolean
+      unfinishedSteps?: number
+      midWork?: boolean
+    }
   /**
    * A turn that picked itself up again, and how much of its budget it has now spent.
    *
@@ -854,7 +880,15 @@ async function* finishTurn(
    * calls before it gets here, because a cut reply never runs its own tool calls — so what this is asked
    * about is a frame with no half-request left in it to refuse.
    */
-  continuable: boolean
+  continuable: boolean,
+  /**
+   * The tool work this turn did, supplied only by the ordinary-stop exit.
+   *
+   * Omitted for a denial, the step ceiling, a cut-off reply and an abort so those existing endings keep
+   * their exact handling. C2 is a `model_stop`-only notice; the omission is the caller saying which
+   * stop this is, rather than teaching this function to guess from a count.
+   */
+  midWork?: { steps: number; sawSetPlan: boolean }
 ): AsyncGenerator<AgentChunk, TurnEnding, undefined> {
   const reconciled = reconcilePlanOnTurnEnd(plan)
 
@@ -884,6 +918,9 @@ async function* finishTurn(
     // plan is still the one ending that says nothing: the card exists for the turns that need
     // explaining, and a row under every answer is how it stops being read.
     yield { type: 'turn_end_notice', cause, resumable: isResumable(cause) }
+  } else if (midWork) {
+    const notice = midWorkNotice({ cause, ...midWork, plan: reconciled })
+    if (notice) yield { type: 'turn_end_notice', cause: 'model_stop', resumable: true, midWork: true }
   }
 
   if (reason !== null) yield { type: 'done', reason, steps }
@@ -1142,6 +1179,10 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
    */
   let continuations = opts.continuations ?? 0
 
+  /** How many tool calls this turn actually ran, and whether one of them declared a plan. */
+  let toolSteps = 0
+  let sawSetPlan = false
+
   // The plan in hand, carried across the round-trips of this run so each declaration merges over the
   // last rather than replacing it. A frame that names three of six steps therefore cannot shrink the
   // checklist to three. It is not persisted here: the renderer owns the turn, and a turn is what a
@@ -1388,6 +1429,8 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       }
 
       const outcome = await runCall(tool, call.function.arguments)
+      toolSteps += 1
+      if (tool === 'set_plan') sawSetPlan = true
       if (opts.signal.aborted) return 'aborted'
 
       yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
@@ -1445,6 +1488,13 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
             'The user denied permission to run this tool. Do not retry it. Explain what you were trying to do and ask how they would like to proceed.',
         }
       : await runCall(tool, decided.function.arguments)
+
+    // A denied call never ran, so it is not work this turn did. An approved one is, and a resumed
+    // `set_plan` still means the turn declared a plan.
+    if (!opts.pending.denied) {
+      toolSteps += 1
+      if (tool === 'set_plan') sawSetPlan = true
+    }
 
     // The result is yielded as well as recorded, so the card already on screen can be completed
     // rather than left looking like it is still running.
@@ -1724,7 +1774,10 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // nowhere else: no chunk carries it, so the pane never renders it as something the user typed, and
     // the transcript of this conversation gains no turn from it.
     if (calls.length === 0) {
-      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations, true)
+      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations, true, {
+        steps: toolSteps,
+        sawSetPlan,
+      })
       if (nudge === null) return
 
       // The step budget starts over with the segment, as it does at the ceiling and at a dead reply: the

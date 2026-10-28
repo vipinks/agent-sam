@@ -244,6 +244,30 @@ async function abortKillsTheChild() {
   results.push('aborting kills the child with SIGTERM, flushes buffered output, and still reports an exit')
 }
 
+async function deadlineKillsTheChild() {
+  const child = new FakeChild()
+  const controller = new AbortController()
+  const promise = collect(
+    runCommand({
+      command: 'sleep 100',
+      cwd: process.cwd(),
+      platform: 'linux',
+      signal: controller.signal,
+      timeoutMs: 20,
+      spawnImpl: spawnDouble(child),
+    })
+  )
+
+  child.out('started\n')
+
+  // The deadline ends the process the same way an abort does, but it is not a cancellation: the
+  // caller has to be able to tell the model the tool failed because it ran too long.
+  await assert.rejects(promise, (e: { code?: string }) => e.code === 'COMMAND_TIMED_OUT')
+  assert.equal(child.killed, true, 'the deadline must kill the process')
+  assert.deepEqual(child.killSignals, ['SIGTERM'], 'the deadline kills with SIGTERM before escalating')
+  results.push('a command that outlives its deadline is killed and reported as COMMAND_TIMED_OUT')
+}
+
 async function abortBeforeStart() {
   const child = new FakeChild()
   const controller = new AbortController()
@@ -376,6 +400,7 @@ async function main() {
   await step('non-zero exit', nonZeroExit)
   await step('output flushed after close', outputAfterCloseIsFlushed)
   await step('abort kills the child', abortKillsTheChild)
+  await step('deadline kills the child', deadlineKillsTheChild)
   await step('abort before start', abortBeforeStart)
   await step('abort ends the stream and kills the child', abandoningTheStreamKillsTheChild)
   await step('spawn failure is typed', spawnFailureIsTyped)

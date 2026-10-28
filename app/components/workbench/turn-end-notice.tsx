@@ -17,12 +17,17 @@ import { SurfaceProvider } from '../ui/surface'
  * terms. One sentence per ending that has one, because the user needs to know the reply is incomplete
  * and, from the reason, whether asking again is likely to help.
  *
- * `model_stop` words nothing and renders nothing. That is the point of the card's existence: the
- * ordinary ending must not look like an incident, and a card under every answer would make the one
- * that matters indistinguishable from the noise. It is also the ending a turn no longer stops at:
- * a model that quits with steps still on its plan is nudged along by the loop, up to a budget, and
- * the card appears once that budget is spent — which is why the plan's line below is now the
- * exception rather than the routine.
+ * `model_stop` on its own words nothing and renders nothing. That is the point of the card's
+ * existence: the ordinary ending must not look like an incident, and a card under every answer would
+ * make the one that matters indistinguishable from the noise. It is also the ending a turn no longer
+ * stops at: a model that quits with steps still on its plan is nudged along by the loop, up to a
+ * budget, and the card appears once that budget is spent — which is why the plan's line below is now
+ * the exception rather than the routine.
+ *
+ * A planless `model_stop` can still be a mid-work ending. When the pure rule sees enough tool steps,
+ * no `set_plan` and no plan work left, the notice carries `midWork` and this card speaks for it. The
+ * flag is what keeps the map's ordinary silence intact: three tool steps that end in a completed
+ * answer are work, and a short answer is not an incident.
  *
  * `empty_stop` is the one ending that breaks the pattern above without contradicting it. It is an
  * ordinary stop, so it wards nothing about a failure; but the answer it should have carried never
@@ -61,6 +66,9 @@ const WORDING: Record<TurnEndCause, string | null> = {
   interrupted: 'Ended early: the run was stopped before it finished',
 }
 
+/** A planless stop after real tool work, which the plan count cannot describe. */
+const MID_WORK = 'Ended mid-work: the model stopped after several steps without a plan'
+
 /** A consent pause the process did not survive, which is not a reply that stopped arriving. */
 const LOST_PENDING = 'Ended while waiting for your approval — the app closed before you answered.'
 
@@ -87,6 +95,7 @@ export function TurnEndNotice({
 
   const lines = [
     WORDING[notice.cause],
+    notice.midWork === true ? MID_WORK : null,
     notice.unfinishedSteps === undefined ? null : unfinishedCopy(notice.unfinishedSteps),
     notice.lostPending === true ? LOST_PENDING : null,
   ].filter((line): line is string => line !== null)
