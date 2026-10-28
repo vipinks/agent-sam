@@ -13,7 +13,7 @@ const ChatSessionsContext = createContext<ChatSessions | null>(null)
 
 export function ChatSessionsProvider({ children }: { children: ReactNode }) {
   const providerId = useWorkbenchStore((s) => s.activeProviderId)
-  const model = useWorkbenchStore((s) => s.activeModel)
+  const model = useWorkbenchStore((s) => s.activeModel) ?? ''
   const value = useChatSessions(providerId, model)
   return <ChatSessionsContext.Provider value={value}>{children}</ChatSessionsContext.Provider>
 }

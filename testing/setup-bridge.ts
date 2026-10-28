@@ -1,5 +1,6 @@
 import { afterEach, beforeEach } from 'vitest'
 import { cleanup, configure } from '@testing-library/react'
+import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { createBridgeStub, setActiveStub } from './bridge-stub'
 
 /**
@@ -93,6 +94,10 @@ if (typeof HTMLElement.prototype.scrollIntoView !== 'function') {
 
 beforeEach(() => {
   setActiveStub(createBridgeStub())
+  // The workbench store no longer opens on a hardcoded model: a launch derives one from the catalogue.
+  // These suites drive the composer, not the launch default (T-D3 covers that), so they start from the
+  // pair the stubbed catalogue offers unless the file chooses its own.
+  useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-chat' })
 })
 
 /**

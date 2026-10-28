@@ -441,7 +441,9 @@ function BuddyAvatar({ glyph }: { glyph: string | null }) {
  */
 export function ChatPanel() {
   const activeProviderId = useWorkbenchStore((s) => s.activeProviderId)
-  const activeModel = useWorkbenchStore((s) => s.activeModel)
+  // No model switched on is the empty id in the composer: the picker then shows its placeholder and
+  // the send guard below refuses, rather than sending a model nobody enabled.
+  const activeModel = useWorkbenchStore((s) => s.activeModel) ?? ''
   const setTarget = useWorkbenchStore((s) => s.setTarget)
   // The model each engine runs under, as the header's own control holds it. Read here as well as there because a
   // send has to carry it, and read as the whole map rather than one engine's value because the conversation a
@@ -876,6 +878,19 @@ export function ChatPanel() {
     return provider.models
   }
 
+  // The catalogue lands after the store is built: this is the first moment a remembered target can
+  // be judged, and where a fresh install adopts its first enabled model.
+  const enabledModels = useMemo(
+    () => Object.fromEntries(Object.entries(configs).map(([id, config]) => [id, [...config.enabledModels]])),
+    [configs]
+  )
+
+  useEffect(() => {
+    if (Object.keys(enabledModels).length === 0) return
+    const order = [...(providers.data?.map((provider) => provider.id) ?? []), ...customProviders.map((p) => p.id)]
+    useWorkbenchStore.getState().reconcileTarget(enabledModels, order)
+  }, [customProviders, enabledModels, providers.data])
+
   /**
    * The descriptor this run goes out with, or undefined when the pick is a built-in provider.
    *
@@ -918,6 +933,12 @@ export function ChatPanel() {
 
   /** Stop a send whose saved model no longer exists, and say how to recover. */
   const stopForStaleModel = useCallback((): boolean => {
+    if (activeModel === '') {
+      toast.error('Choose a model to send', {
+        description: 'Switch a model on in Settings, then send again.',
+      })
+      return true
+    }
     if (selectedModelOffered) return false
     toast.error('That model is no longer available', {
       description: `Choose another model in the header, then send again. (${activeModel})`,

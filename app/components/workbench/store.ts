@@ -1,4 +1,4 @@
-import { create } from 'zustand'
+import { create, type StoreApi } from 'zustand'
 import {
   bottomPanelOpenFrom,
   mergeSavedBottomHeight,
@@ -76,10 +76,19 @@ interface WorkbenchState {
   setSelectedFile: (path: string | null) => void
   /** Provider the composer sends to. Paired with `activeModel` below. */
   activeProviderId: string
-  /** Model the composer sends to. */
-  activeModel: string
+  /** Model the composer sends to, or null while no model is switched on. */
+  activeModel: string | null
   /** Switch provider and model together — a provider's default model is not the previous one's. */
   setTarget: (target: { providerId: string; model: string }) => void
+  /**
+   * Check the target against the models that are switched on, once the catalogue has arrived.
+   *
+   * A launch reads the stored pair before the provider config crosses the bridge, so this is the
+   * first moment the pair can be judged rather than trusted. It is deliberately narrow: a provider
+   * with no enabled list is left alone, because in that state the header still offers the seeded
+   * catalogue and an empty list is "nothing recorded yet" rather than "everything switched off".
+   */
+  reconcileTarget: (enabledModels: EnabledModels, providerOrder: readonly string[]) => void
   /**
    * The model each engine runs under, by engine id, as the header's own control holds it.
    *
@@ -257,26 +266,84 @@ interface WorkbenchState {
 
 const TARGET_KEY = 'sam-ai-chat-target'
 
-/** The default target, which is also what an unreadable preference falls back to. */
-const DEFAULT_TARGET = { providerId: 'deepseek', model: 'deepseek-chat' } as const
+/** The models each provider has switched on, by provider id. */
+export type EnabledModels = Record<string, readonly string[]>
 
-/** The last used provider/model, or the default. */
-function initialTarget(): { activeProviderId: string; activeModel: string } {
+/**
+ * What a launch knows when it builds a workbench store.
+ *
+ * `enabledModels` is optional because the catalogue belongs to main and arrives a bridge call after
+ * this module is evaluated. An absent map means "not read yet"; an empty one means "nothing is
+ * switched on". The first must not overwrite a remembered target on every launch, and the second
+ * is exactly the state in which a target has no model to name.
+ */
+export interface TargetSeed {
+  enabledModels?: EnabledModels
+  /** Provider ids in the order the header's picker offers them. Any other key follows. */
+  providerOrder?: readonly string[]
+}
+
+interface ChatTarget {
+  activeProviderId: string
+  activeModel: string | null
+}
+
+/**
+ * The target a launch starts on, from the last used pair and the models now switched on.
+ *
+ * The stored pair is tried first and wins while its model is still enabled — the "last used, still
+ * enabled" half of the rule. A stored model the provider has since switched off falls through to
+ * that provider's first enabled model; a provider with nothing switched on falls through to the
+ * first provider that has something. When no provider has an enabled model the model is null: the
+ * picker then shows no selection, which is the truth, and no turn can be sent under a model nobody
+ * switched on. Null rather than an id from the seeded catalogue, because that catalogue is a list
+ * to choose from, not a choice the user made.
+ */
+export function deriveTarget(
+  stored: ChatTarget,
+  enabledModels: EnabledModels,
+  providerOrder: readonly string[] = []
+): ChatTarget {
+  const order = [...new Set([...providerOrder, ...Object.keys(enabledModels)])].filter((id) => id !== '')
+  const storedEnabled = stored.activeProviderId === '' ? undefined : enabledModels[stored.activeProviderId]
+  if (stored.activeModel !== null && storedEnabled?.includes(stored.activeModel)) {
+    return { activeProviderId: stored.activeProviderId, activeModel: stored.activeModel }
+  }
+  const selected =
+    storedEnabled !== undefined && storedEnabled.length > 0
+      ? stored.activeProviderId
+      : order.find((id) => (enabledModels[id]?.length ?? 0) > 0)
+  if (selected === undefined) {
+    return { activeProviderId: stored.activeProviderId || order[0] || '', activeModel: null }
+  }
+  return { activeProviderId: selected, activeModel: enabledModels[selected]?.[0] ?? null }
+}
+
+/**
+ * The remembered target, read once at module evaluation.
+ *
+ * Without a catalogue this can only honour the stored pair: at launch the provider config is still
+ * a bridge call away, and reading "not read yet" as "nothing enabled" would throw away a valid
+ * choice on every start. `reconcileTarget` is the second half — the first catalogue snapshot checks
+ * the pair against the models actually switched on, which is a rule a module-evaluation read cannot
+ * apply by itself.
+ */
+function initialTarget(seed: TargetSeed): ChatTarget {
   try {
     const saved = localStorage.getItem(TARGET_KEY)
     if (saved) {
       const parsed = JSON.parse(saved) as { providerId?: unknown; model?: unknown }
       if (typeof parsed.providerId === 'string' && typeof parsed.model === 'string') {
-        return { activeProviderId: parsed.providerId, activeModel: parsed.model }
+        const stored = { activeProviderId: parsed.providerId, activeModel: parsed.model }
+        return seed.enabledModels === undefined ? stored : deriveTarget(stored, seed.enabledModels, seed.providerOrder)
       }
     }
   } catch {
-    // Unreadable preference — fall through to the default rather than failing to start.
+    // Unreadable preference — fall through to the derivation rather than failing to start.
   }
-  return { activeProviderId: DEFAULT_TARGET.providerId, activeModel: DEFAULT_TARGET.model }
+  const empty = { activeProviderId: '', activeModel: null }
+  return seed.enabledModels === undefined ? empty : deriveTarget(empty, seed.enabledModels, seed.providerOrder)
 }
-
-export { DEFAULT_TARGET }
 
 const THEME_KEY = 'sam-ai-theme-preference'
 
@@ -455,206 +522,243 @@ function saveWorkbenchPreferences(sets: StoredLayoutSets, flags: StoredWorkbench
  */
 const launchPreferences = initialLayoutPreferences()
 
-export const useWorkbenchStore = create<WorkbenchState>((set) => ({
-  activeActivity: 'chat',
-  setActiveActivity: (activeActivity) => set({ activeActivity }),
-  settingsSection: 'providers',
-  setSettingsSection: (settingsSection) => set({ settingsSection }),
-  settingsReturnView: null,
-  /**
-   * The remembered view is only replaced by a visit that starts outside settings. Opening settings
-   * again while it is already showing keeps what the visit began with, because the rail's settings
-   * control is not a toggle — a second click on it is not a second visit.
-   */
-  openSettings: () =>
-    set((state) => ({
-      activeActivity: 'settings',
-      settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
-    })),
-  /**
-   * The same entry as `openSettings`, plus the section to land on.
-   *
-   * The remembered view is resolved here as well rather than by calling `openSettings` and setting the
-   * section beside it: the two would be two renders and, for a caller that got the order wrong, a visit
-   * that remembered the wrong place to come back to.
-   */
-  openSettingsAt: (settingsSection) =>
-    set((state) => ({
-      activeActivity: 'settings',
-      settingsSection,
-      settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
-    })),
-  /**
-   * Leaving forgets the remembered view, so the next visit records its own. The fallback is the
-   * conversation, which is where a window with nothing chosen belongs — the same answer the drawer gives
-   * a store that was never told which activity to show.
-   */
-  closeSettings: () =>
-    set((state) => ({ activeActivity: state.settingsReturnView ?? 'chat', settingsReturnView: null })),
-  selectedFile: null,
-  setSelectedFile: (selectedFile) => set({ selectedFile }),
-  ...initialTarget(),
-  setTarget: ({ providerId, model }) => {
-    try {
-      localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId, model }))
-    } catch {
-      // A full or blocked localStorage must not break switching models.
-    }
-    set({ activeProviderId: providerId, activeModel: model })
-  },
-  engineModels: {},
-  /**
-   * One engine's model, replaced without disturbing the others': two engines are two questions with two answers,
-   * and a map written whole would make choosing one engine's model clear the other's.
-   */
-  setEngineModel: (engineId, model) => set((state) => ({ engineModels: { ...state.engineModels, [engineId]: model } })),
-  selectedChange: null,
-  setSelectedChange: (selectedChange) => set({ selectedChange }),
-  commitMessage: '',
-  setCommitMessage: (commitMessage) => set({ commitMessage }),
-  editor: { path: null, dirty: false, externalNonce: 0 },
-  rightPanel: null,
-  toggleRightPanel: (id) =>
-    // A stored `null` for the panel that was clicked is what "rail-only" is, and it is the absence of a
-    // resident rather than a fourth id: nothing docks "nothing". The expansion is dropped with it, so
-    // the only state in which the flag is set is one where there is a column for it to widen — which is
-    // what keeps the inner group from being left with no panels in it.
-    set((state) => (state.rightPanel === id ? { rightPanel: null, viewerExpanded: false } : { rightPanel: id })),
-  closeRightPanel: () => set({ rightPanel: null, viewerExpanded: false }),
-  setEditorDirty: (path, dirty) =>
-    set((state) => ({
-      // A different path means the previous buffer is gone, so the flag is replaced rather than kept.
-      editor: { path, dirty, externalNonce: state.editor.path === path ? state.editor.externalNonce : 0 },
-    })),
-  noteExternalChange: (path) =>
-    set((state) => ({
-      editor: { ...state.editor, path, externalNonce: state.editor.externalNonce + 1 },
-    })),
-  viewerExpanded: false,
-  setViewerExpanded: (viewerExpanded) => set({ viewerExpanded }),
-  ...initialThemePreference(),
-  /**
-   * Named `setThemeId` rather than `setTheme` on purpose: the shell's store already has a `setTheme`,
-   * and it takes the *mode*. Two setters with one name, one of which takes a theme id and the other
-   * 'light' or 'dark', is a mistake waiting to be made at a call site.
-   */
-  setThemeId: (themeId) =>
-    set((state) => {
-      saveThemePreference(themeId, state.brightness, state.contrast)
-      return { themeId }
-    }),
-  setBrightness: (brightness) =>
-    set((state) => {
-      const next = clampBrightness(brightness)
-      saveThemePreference(state.themeId, next, state.contrast)
-      return { brightness: next }
-    }),
-  /**
-   * The contrast, written the way the brightness is: by the slider on every step, so the same write that
-   * moves the page is the one that remembers the value — a contrast is chosen and kept at the moment it is
-   * moved rather than at the moment the popover closes.
-   */
-  setContrast: (contrast) =>
-    set((state) => {
-      const next = clampContrast(contrast)
-      saveThemePreference(state.themeId, state.brightness, next)
-      return { contrast: next }
-    }),
-  drawerCollapsed: launchPreferences.drawerCollapsed,
-  /**
-   * The flag is written with the sets beside it, read from the store at the moment of the write rather
-   * than closed over: a collapse and a drag reach this record through the same writer, and neither may
-   * drop the other's half of it.
-   */
-  setDrawerCollapsed: (drawerCollapsed) =>
-    set((current) => {
-      saveWorkbenchPreferences(current.layoutPreferences, {
-        drawerCollapsed,
-        collapsedSessionGroups: current.collapsedSessionGroups,
-        bottomPanelOpen: current.bottomPanelOpen,
-      })
-      return { drawerCollapsed }
-    }),
-  collapsedSessionGroups: launchPreferences.collapsedSessionGroups,
-  /**
-   * The set of put-away groups is resolved by `planGroupCollapse`, not here: which key names a group,
-   * and what opening one does to a key written another way, is a rule about grouping rather than about
-   * storage. Both other halves travel with the write, so putting a group away cannot reopen the drawer
-   * or forget a layout.
-   */
-  setCollapsedSessionGroups: (collapsedSessionGroups) =>
-    set((current) => {
-      saveWorkbenchPreferences(current.layoutPreferences, {
-        drawerCollapsed: current.drawerCollapsed,
-        collapsedSessionGroups,
-        bottomPanelOpen: current.bottomPanelOpen,
-      })
-      return { collapsedSessionGroups }
-    }),
-  // Present even when nothing was ever saved, so a reader always has a record to resolve against rather
-  // than an absent field it would have to treat as an empty one itself.
-  layoutPreferences: launchPreferences.sets,
-  /**
-   * The merge is `mergeSavedLayout`'s, not this setter's: which state a set belongs to, and what happens
-   * to the other state's set, is a rule about layouts rather than about storage, and the pure suite
-   * asserts it directly. The collapse flag travels with the write, so a drag cannot reopen a drawer the
-   * user put away.
-   */
-  saveLayout: (state, sizes) =>
-    set((current) => {
-      const layoutPreferences = mergeSavedLayout(current.layoutPreferences, state, sizes)
-      saveWorkbenchPreferences(layoutPreferences, {
-        drawerCollapsed: current.drawerCollapsed,
-        collapsedSessionGroups: current.collapsedSessionGroups,
-        bottomPanelOpen: current.bottomPanelOpen,
-      })
-      return { layoutPreferences }
-    }),
-  bottomPanelOpen: launchPreferences.bottomPanelOpen,
-  /**
-   * The toggle writes the flag through the record's one writer, reading the halves it is not changing
-   * from the store at the moment of the write rather than closing over them: the glyph, a separator
-   * drag and a collapse all reach that record, and none of them may drop another's half of it.
-   */
-  toggleBottomPanel: () =>
-    set((current) => {
-      const bottomPanelOpen = !current.bottomPanelOpen
-      saveWorkbenchPreferences(current.layoutPreferences, {
-        drawerCollapsed: current.drawerCollapsed,
-        collapsedSessionGroups: current.collapsedSessionGroups,
-        bottomPanelOpen,
-      })
-      return { bottomPanelOpen }
-    }),
-  /**
-   * The way out of the panel from inside it, and the same write the toggle makes when the panel is
-   * open. Closing one that is already closed writes nothing: an absent key is what the closed panel is
-   * stored as, and a record is only worth writing when a value in it changed.
-   */
-  closeBottomPanel: () =>
-    set((current) => {
-      if (!current.bottomPanelOpen) return {}
-      saveWorkbenchPreferences(current.layoutPreferences, {
-        drawerCollapsed: current.drawerCollapsed,
-        collapsedSessionGroups: current.collapsedSessionGroups,
-        bottomPanelOpen: false,
-      })
-      return { bottomPanelOpen: false }
-    }),
-  /**
-   * The height is merged by `mergeSavedBottomHeight`, not by this setter: which window state a height
-   * belongs to, and what happens to the other state's, is a rule about layouts rather than about
-   * storage, and the pure suite asserts it directly. The open flag travels with the write, so dragging
-   * the separator of a panel the user just opened cannot close it.
-   */
-  saveBottomPanelHeight: (state, height) =>
-    set((current) => {
-      const layoutPreferences = mergeSavedBottomHeight(current.layoutPreferences, state, height)
-      saveWorkbenchPreferences(layoutPreferences, {
-        drawerCollapsed: current.drawerCollapsed,
-        collapsedSessionGroups: current.collapsedSessionGroups,
-        bottomPanelOpen: current.bottomPanelOpen,
-      })
-      return { layoutPreferences }
-    }),
-}))
+type WorkbenchSet = StoreApi<WorkbenchState>['setState']
+
+/**
+ * The state one store is built from.
+ *
+ * A function of the launch's seed rather than a literal, so a suite can build a fresh store with
+ * the catalogue it is asserting against instead of racing the bridge for the singleton below.
+ */
+const workbenchState =
+  (seed: TargetSeed) =>
+  (set: WorkbenchSet): WorkbenchState => ({
+    activeActivity: 'chat',
+    setActiveActivity: (activeActivity) => set({ activeActivity }),
+    settingsSection: 'providers',
+    setSettingsSection: (settingsSection) => set({ settingsSection }),
+    settingsReturnView: null,
+    /**
+     * The remembered view is only replaced by a visit that starts outside settings. Opening settings
+     * again while it is already showing keeps what the visit began with, because the rail's settings
+     * control is not a toggle — a second click on it is not a second visit.
+     */
+    openSettings: () =>
+      set((state) => ({
+        activeActivity: 'settings',
+        settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
+      })),
+    /**
+     * The same entry as `openSettings`, plus the section to land on.
+     *
+     * The remembered view is resolved here as well rather than by calling `openSettings` and setting the
+     * section beside it: the two would be two renders and, for a caller that got the order wrong, a visit
+     * that remembered the wrong place to come back to.
+     */
+    openSettingsAt: (settingsSection) =>
+      set((state) => ({
+        activeActivity: 'settings',
+        settingsSection,
+        settingsReturnView: state.activeActivity === 'settings' ? state.settingsReturnView : state.activeActivity,
+      })),
+    /**
+     * Leaving forgets the remembered view, so the next visit records its own. The fallback is the
+     * conversation, which is where a window with nothing chosen belongs — the same answer the drawer gives
+     * a store that was never told which activity to show.
+     */
+    closeSettings: () =>
+      set((state) => ({ activeActivity: state.settingsReturnView ?? 'chat', settingsReturnView: null })),
+    selectedFile: null,
+    setSelectedFile: (selectedFile) => set({ selectedFile }),
+    ...initialTarget(seed),
+    setTarget: ({ providerId, model }) => {
+      try {
+        localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId, model }))
+      } catch {
+        // A full or blocked localStorage must not break switching models.
+      }
+      set({ activeProviderId: providerId, activeModel: model })
+    },
+    reconcileTarget: (enabledModels, providerOrder) =>
+      set((state) => {
+        const enabled = state.activeProviderId === '' ? undefined : enabledModels[state.activeProviderId]
+        // No list is no intent recorded, and the header still offers the seeded catalogue in that
+        // state, so a remembered model is not stale merely because the list is empty.
+        if (state.activeModel !== null && (enabled === undefined || enabled.length === 0)) return {}
+        const next = deriveTarget(
+          { activeProviderId: state.activeProviderId, activeModel: state.activeModel },
+          enabledModels,
+          providerOrder
+        )
+        return next.activeProviderId === state.activeProviderId && next.activeModel === state.activeModel ? {} : next
+      }),
+    engineModels: {},
+    /**
+     * One engine's model, replaced without disturbing the others': two engines are two questions with two answers,
+     * and a map written whole would make choosing one engine's model clear the other's.
+     */
+    setEngineModel: (engineId, model) =>
+      set((state) => ({ engineModels: { ...state.engineModels, [engineId]: model } })),
+    selectedChange: null,
+    setSelectedChange: (selectedChange) => set({ selectedChange }),
+    commitMessage: '',
+    setCommitMessage: (commitMessage) => set({ commitMessage }),
+    editor: { path: null, dirty: false, externalNonce: 0 },
+    rightPanel: null,
+    toggleRightPanel: (id) =>
+      // A stored `null` for the panel that was clicked is what "rail-only" is, and it is the absence of a
+      // resident rather than a fourth id: nothing docks "nothing". The expansion is dropped with it, so
+      // the only state in which the flag is set is one where there is a column for it to widen — which is
+      // what keeps the inner group from being left with no panels in it.
+      set((state) => (state.rightPanel === id ? { rightPanel: null, viewerExpanded: false } : { rightPanel: id })),
+    closeRightPanel: () => set({ rightPanel: null, viewerExpanded: false }),
+    setEditorDirty: (path, dirty) =>
+      set((state) => ({
+        // A different path means the previous buffer is gone, so the flag is replaced rather than kept.
+        editor: { path, dirty, externalNonce: state.editor.path === path ? state.editor.externalNonce : 0 },
+      })),
+    noteExternalChange: (path) =>
+      set((state) => ({
+        editor: { ...state.editor, path, externalNonce: state.editor.externalNonce + 1 },
+      })),
+    viewerExpanded: false,
+    setViewerExpanded: (viewerExpanded) => set({ viewerExpanded }),
+    ...initialThemePreference(),
+    /**
+     * Named `setThemeId` rather than `setTheme` on purpose: the shell's store already has a `setTheme`,
+     * and it takes the *mode*. Two setters with one name, one of which takes a theme id and the other
+     * 'light' or 'dark', is a mistake waiting to be made at a call site.
+     */
+    setThemeId: (themeId) =>
+      set((state) => {
+        saveThemePreference(themeId, state.brightness, state.contrast)
+        return { themeId }
+      }),
+    setBrightness: (brightness) =>
+      set((state) => {
+        const next = clampBrightness(brightness)
+        saveThemePreference(state.themeId, next, state.contrast)
+        return { brightness: next }
+      }),
+    /**
+     * The contrast, written the way the brightness is: by the slider on every step, so the same write that
+     * moves the page is the one that remembers the value — a contrast is chosen and kept at the moment it is
+     * moved rather than at the moment the popover closes.
+     */
+    setContrast: (contrast) =>
+      set((state) => {
+        const next = clampContrast(contrast)
+        saveThemePreference(state.themeId, state.brightness, next)
+        return { contrast: next }
+      }),
+    drawerCollapsed: launchPreferences.drawerCollapsed,
+    /**
+     * The flag is written with the sets beside it, read from the store at the moment of the write rather
+     * than closed over: a collapse and a drag reach this record through the same writer, and neither may
+     * drop the other's half of it.
+     */
+    setDrawerCollapsed: (drawerCollapsed) =>
+      set((current) => {
+        saveWorkbenchPreferences(current.layoutPreferences, {
+          drawerCollapsed,
+          collapsedSessionGroups: current.collapsedSessionGroups,
+          bottomPanelOpen: current.bottomPanelOpen,
+        })
+        return { drawerCollapsed }
+      }),
+    collapsedSessionGroups: launchPreferences.collapsedSessionGroups,
+    /**
+     * The set of put-away groups is resolved by `planGroupCollapse`, not here: which key names a group,
+     * and what opening one does to a key written another way, is a rule about grouping rather than about
+     * storage. Both other halves travel with the write, so putting a group away cannot reopen the drawer
+     * or forget a layout.
+     */
+    setCollapsedSessionGroups: (collapsedSessionGroups) =>
+      set((current) => {
+        saveWorkbenchPreferences(current.layoutPreferences, {
+          drawerCollapsed: current.drawerCollapsed,
+          collapsedSessionGroups,
+          bottomPanelOpen: current.bottomPanelOpen,
+        })
+        return { collapsedSessionGroups }
+      }),
+    // Present even when nothing was ever saved, so a reader always has a record to resolve against rather
+    // than an absent field it would have to treat as an empty one itself.
+    layoutPreferences: launchPreferences.sets,
+    /**
+     * The merge is `mergeSavedLayout`'s, not this setter's: which state a set belongs to, and what happens
+     * to the other state's set, is a rule about layouts rather than about storage, and the pure suite
+     * asserts it directly. The collapse flag travels with the write, so a drag cannot reopen a drawer the
+     * user put away.
+     */
+    saveLayout: (state, sizes) =>
+      set((current) => {
+        const layoutPreferences = mergeSavedLayout(current.layoutPreferences, state, sizes)
+        saveWorkbenchPreferences(layoutPreferences, {
+          drawerCollapsed: current.drawerCollapsed,
+          collapsedSessionGroups: current.collapsedSessionGroups,
+          bottomPanelOpen: current.bottomPanelOpen,
+        })
+        return { layoutPreferences }
+      }),
+    bottomPanelOpen: launchPreferences.bottomPanelOpen,
+    /**
+     * The toggle writes the flag through the record's one writer, reading the halves it is not changing
+     * from the store at the moment of the write rather than closing over them: the glyph, a separator
+     * drag and a collapse all reach that record, and none of them may drop another's half of it.
+     */
+    toggleBottomPanel: () =>
+      set((current) => {
+        const bottomPanelOpen = !current.bottomPanelOpen
+        saveWorkbenchPreferences(current.layoutPreferences, {
+          drawerCollapsed: current.drawerCollapsed,
+          collapsedSessionGroups: current.collapsedSessionGroups,
+          bottomPanelOpen,
+        })
+        return { bottomPanelOpen }
+      }),
+    /**
+     * The way out of the panel from inside it, and the same write the toggle makes when the panel is
+     * open. Closing one that is already closed writes nothing: an absent key is what the closed panel is
+     * stored as, and a record is only worth writing when a value in it changed.
+     */
+    closeBottomPanel: () =>
+      set((current) => {
+        if (!current.bottomPanelOpen) return {}
+        saveWorkbenchPreferences(current.layoutPreferences, {
+          drawerCollapsed: current.drawerCollapsed,
+          collapsedSessionGroups: current.collapsedSessionGroups,
+          bottomPanelOpen: false,
+        })
+        return { bottomPanelOpen: false }
+      }),
+    /**
+     * The height is merged by `mergeSavedBottomHeight`, not by this setter: which window state a height
+     * belongs to, and what happens to the other state's, is a rule about layouts rather than about
+     * storage, and the pure suite asserts it directly. The open flag travels with the write, so dragging
+     * the separator of a panel the user just opened cannot close it.
+     */
+    saveBottomPanelHeight: (state, height) =>
+      set((current) => {
+        const layoutPreferences = mergeSavedBottomHeight(current.layoutPreferences, state, height)
+        saveWorkbenchPreferences(layoutPreferences, {
+          drawerCollapsed: current.drawerCollapsed,
+          collapsedSessionGroups: current.collapsedSessionGroups,
+          bottomPanelOpen: current.bottomPanelOpen,
+        })
+        return { layoutPreferences }
+      }),
+  })
+
+/**
+ * A workbench store of its own, seeded with what the caller knows.
+ *
+ * The app builds the singleton from no seed, because the catalogue is not here yet; a suite builds
+ * one with the enabled models it is asserting against, and gets the same derivation a live launch
+ * applies when the catalogue lands.
+ */
+export function createWorkbenchStore(seed: TargetSeed = {}) {
+  return create<WorkbenchState>(workbenchState(seed))
+}
+
+export const useWorkbenchStore = createWorkbenchStore()
