@@ -484,8 +484,8 @@ export function ChatPanel() {
    *
    * Derived from the transcript for the same reason the plan is, and that is also what settles the
    * one question the card has to answer: whether to offer the button. A live run writes `resumable`
-   * onto the turn; a transcript read back from disk never does, so a reopened conversation shows the
-   * reason and nothing to click.
+   * onto the turn, and the load path derives it again from the persisted cause and work flags, so a
+   * reopened conversation offers the same Continue the ending did.
    */
   const endNotice = currentEndNotice(messages)
 

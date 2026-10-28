@@ -218,14 +218,18 @@ function thawTurn(turn: TranscriptTurn): AgentTurn {
     ...(turn.continuations !== undefined && turn.continuations.length > 0
       ? { continuations: turn.continuations.map((mark) => ({ ...mark })) }
       : {}),
-    // Carried back as history: the card says how the answer stopped and offers nothing to click,
-    // because the run behind it is not in this process any more. `false` rather than absent, so the
-    // card has one flag to read and no third state to handle.
+    // Carried back as the live card's input: the cause says how the answer stopped, and the two work
+    // flags say whether there is anything left to continue. Actionability is derived here from the
+    // same rule the live path used rather than stored, so a reopened card offers the same click while
+    // the record keeps only facts about the turn.
     ...(turn.endNotice !== undefined
       ? {
           endNotice: {
             cause: turn.endNotice.cause,
-            resumable: false,
+            resumable:
+              turn.endNotice.cause !== 'model_stop' ||
+              turn.endNotice.midWork === true ||
+              (turn.endNotice.unfinishedSteps ?? 0) > 0,
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
             ...(turn.endNotice.midWork ? { midWork: true } : {}),
             ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),

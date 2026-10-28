@@ -205,10 +205,11 @@ async function aCleanStopMidPlanAnnouncesItself() {
   )
   assert.equal(saved.turns[0].endNotice?.unfinishedSteps, 2, 'and the notice is part of the record')
 
-  // And the card read back from it is history: same news, nothing to click.
+  // And the card read back from it carries the same news and the same offer: the run is gone, but
+  // the plan, the conversation and the work left on it are not.
   const restored = rehydrateTranscript(saved)
   assert.equal(currentEndNotice(restored.turns)?.unfinishedSteps, 2, 'a reopened conversation still says so')
-  assert.equal(currentEndNotice(restored.turns)?.resumable, false, 'without offering to continue a run that is gone')
+  assert.equal(currentEndNotice(restored.turns)?.resumable, true, 'and still offers Continue')
 
   results.push('a model that stops cleanly mid-plan yields a notice naming the unfinished steps')
 }

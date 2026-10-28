@@ -15,7 +15,8 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  * continued — is tested directly in `turn-end-rules.test.ts` and through the loop in the node suite.
  * What is left here is the part a rule test cannot see: that the chunk the loop sends reaches the
  * card, that each cause is worded for the user, that Continue sends the resume text as a user
- * message, and that a transcript read back from disk shows the reason without offering the button.
+ * message, and that a transcript read back from disk shows the reason and re-derives the same offer
+ * from the cause and flags the record kept.
  *
  * The transport is the real conveyor client over a stubbed bridge, and the resume is asserted on the
  * payload the transport received — because "the button sends the message" is exactly the claim that
@@ -272,7 +273,7 @@ describe('the turn-end notice', () => {
     expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
   })
 
-  it('says a reopened transcript stopped with work on the plan, with nothing to click', async () => {
+  it('offers Continue on a reopened transcript that stopped with work on the plan', async () => {
     const snapshot: TranscriptSnapshot = {
       version: TRANSCRIPT_VERSION,
       interrupted: false,
@@ -283,21 +284,24 @@ describe('the turn-end notice', () => {
           role: 'assistant',
           content: 'I have started on the table.',
           steps: [],
-          // What a transcript keeps: the notice without the live flag, so what is read back is news
-          // about a turn that ended rather than an offer about a run that is gone.
+          // What a transcript keeps: the cause and the work left on the plan. The Continue offer is
+          // derived again at load, from the same facts the live card read.
           endNotice: { cause: 'model_stop', unfinishedSteps: 3 },
         },
       ],
     }
 
-    stubChat({ loadTranscript: () => snapshot })
+    const stub = stubChat({ loadTranscript: () => snapshot })
     renderChat()
 
     expect(await screen.findByText('Ended with the plan unfinished — 3 steps remain')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(starts(stub).length).toBe(1))
+    expect(starts(stub)[0].input?.messages?.at(-1)).toEqual({ role: 'user', content: RESUME_MESSAGE })
   })
 
-  it('says a reopened transcript stopped mid-work, with nothing to click', async () => {
+  it('offers Continue on a reopened transcript that stopped mid-work', async () => {
     const snapshot: TranscriptSnapshot = {
       version: TRANSCRIPT_VERSION,
       interrupted: false,
@@ -309,20 +313,23 @@ describe('the turn-end notice', () => {
           content: 'I looked at the three files.',
           steps: [],
           // The generic flag survives the file: a conversation reopened tomorrow still says that the
-          // planless stop happened mid-work, without offering a run that is gone.
+          // planless stop happened mid-work, and the load path turns the flag back into the offer.
           endNotice: { cause: 'model_stop', midWork: true },
         },
       ],
     }
 
-    stubChat({ loadTranscript: () => snapshot })
+    const stub = stubChat({ loadTranscript: () => snapshot })
     renderChat()
 
     expect(await screen.findByText('Ended mid-work: the model stopped after several steps without a plan')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(starts(stub).length).toBe(1))
+    expect(starts(stub)[0].input?.messages?.at(-1)).toEqual({ role: 'user', content: RESUME_MESSAGE })
   })
 
-  it('shows the reason a reopened transcript stored, with nothing to click', async () => {
+  it('shows the reason a reopened transcript stored, and offers Continue', async () => {
     const snapshot: TranscriptSnapshot = {
       version: TRANSCRIPT_VERSION,
       interrupted: false,
@@ -333,19 +340,21 @@ describe('the turn-end notice', () => {
           role: 'assistant',
           content: 'The parser works by',
           steps: [],
-          // The cause alone, which is all a transcript keeps: a stored notice is history.
+          // The cause alone, which is all a transcript keeps: the load path derives the offer.
           endNotice: { cause: 'stream_error' },
         },
       ],
     }
 
-    stubChat({ loadTranscript: () => snapshot })
+    const stub = stubChat({ loadTranscript: () => snapshot })
     renderChat()
 
     expect(await screen.findByText('The parser works by')).toBeTruthy()
     expect(await screen.findByText('Ended early: the reply was cut off (the connection dropped)')).toBeTruthy()
-    // History is a record, not a thing to click: the run behind this notice is not in this process.
-    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(starts(stub).length).toBe(1))
+    expect(starts(stub)[0].input?.messages?.at(-1)).toEqual({ role: 'user', content: RESUME_MESSAGE })
   })
 
   it('says the model stopped without saying anything, and continues from there', async () => {
@@ -393,7 +402,7 @@ describe('the turn-end notice', () => {
     expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
   })
 
-  it('shows a reopened transcript that stopped on an empty reply, with nothing to click', async () => {
+  it('shows a reopened transcript that stopped on an empty reply, and offers Continue', async () => {
     const snapshot: TranscriptSnapshot = {
       version: TRANSCRIPT_VERSION,
       interrupted: false,
@@ -411,10 +420,49 @@ describe('the turn-end notice', () => {
       ],
     }
 
-    stubChat({ loadTranscript: () => snapshot })
+    const stub = stubChat({ loadTranscript: () => snapshot })
     renderChat()
 
     expect(await screen.findByText('Ended early: the model stopped without saying anything')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(starts(stub).length).toBe(1))
+    expect(starts(stub)[0].input?.messages?.at(-1)).toEqual({ role: 'user', content: RESUME_MESSAGE })
+  })
+
+  it('offers Continue for a thawed interrupted notice and a thawed mid-work notice', async () => {
+    const cases: Array<{ label: string; notice: TranscriptSnapshot['turns'][number]['endNotice']; wording: string }> = [
+      {
+        label: 'interrupted',
+        notice: { cause: 'interrupted' },
+        wording: 'Ended early: the run was stopped before it finished',
+      },
+      {
+        label: 'mid-work',
+        notice: { cause: 'model_stop', midWork: true },
+        wording: 'Ended mid-work: the model stopped after several steps without a plan',
+      },
+    ]
+
+    for (const { label, notice, wording } of cases) {
+      const snapshot: TranscriptSnapshot = {
+        version: TRANSCRIPT_VERSION,
+        interrupted: false,
+        turns: [
+          { id: 'user-1', role: 'user', content: 'refactor the parser', steps: [] },
+          { id: 'assistant-2', role: 'assistant', content: '', steps: [], endNotice: notice },
+        ],
+      }
+
+      const stub = stubChat({ loadTranscript: () => snapshot })
+      const view = renderChat()
+
+      expect(await screen.findByText(wording), label).toBeTruthy()
+      await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+      await waitFor(() => expect(starts(stub).length, label).toBe(1))
+      expect(starts(stub)[0].input?.messages?.at(-1), label).toEqual({ role: 'user', content: RESUME_MESSAGE })
+
+      view.unmount()
+    }
   })
 })

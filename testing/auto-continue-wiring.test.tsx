@@ -371,8 +371,9 @@ describe('bounded auto-continue', () => {
     expect(await screen.findByText(`Auto-continuing after the output cap — 1 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
     expect(await screen.findByText(`Auto-continuing after a plain stop — 2 of ${AUTO_CONTINUE_MAX}`)).toBeTruthy()
     expect(await screen.findByText('Ended with the plan unfinished — 2 steps remain')).toBeTruthy()
-    // History is not actionable, and neither is a seam: the run those lines belong to is gone.
-    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    // The seams stay drawn, and the card remains actionable: the load path re-derives Continue from
+    // the persisted work, exactly as it does for every other continuable notice.
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
   })
 
   it('draws one line per continuation when the loop stopped at its own step ceiling', async () => {

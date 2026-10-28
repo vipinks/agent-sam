@@ -278,10 +278,11 @@ async function cutOffByTheOutputLimit() {
   )
   assert.equal(snapshot.turns[0].endNotice?.cause, 'truncated', 'the ending is part of the record')
 
-  // Read back as history: the card shows the reason, and it is not actionable.
+  // Read back from disk: the card still shows the reason and now offers the same Continue the
+  // live ending did. The run is gone, but the conversation and the work left on the plan are not.
   const reopened = rehydrateTranscript(snapshot)
   assert.equal(currentEndNotice(reopened.turns)?.cause, 'truncated')
-  assert.equal(currentEndNotice(reopened.turns)?.resumable, false, 'a stored notice offers no button')
+  assert.equal(currentEndNotice(reopened.turns)?.resumable, true, 'a stored notice still offers Continue')
 
   // The live turn, by contrast, is actionable — which is what the Continue button reads.
   let live: AgentTurn[] = [{ id: 'assistant-1', role: 'assistant', content: '', steps: [] }]
@@ -408,7 +409,7 @@ async function aStopThatSaysNothingIsNamed() {
   assert.equal(snapshot.turns[0].endNotice?.cause, 'empty_stop', 'the ending is part of the record')
   const reopened = rehydrateTranscript(snapshot)
   assert.equal(currentEndNotice(reopened.turns)?.cause, 'empty_stop')
-  assert.equal(currentEndNotice(reopened.turns)?.resumable, false, 'a stored notice offers no button')
+  assert.equal(currentEndNotice(reopened.turns)?.resumable, true, 'a stored notice still offers Continue')
 
   results.push('a reply that says nothing ends the turn with an empty-stop notice')
 }
