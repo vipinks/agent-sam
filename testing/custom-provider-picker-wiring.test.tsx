@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
@@ -145,6 +146,7 @@ async function pick(text: string): Promise<void> {
 beforeEach(() => {
   localStorage.clear()
   useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-chat', selectedFile: null })
+  vi.spyOn(toast, 'error').mockImplementation(() => '')
 })
 
 describe('the model picker', () => {
@@ -198,25 +200,100 @@ describe('the model picker', () => {
     expect(payload.provider).toEqual({ ...LLAMA, apiKey: '' })
   })
 
-  it('stops a send whose saved model is no longer offered, and keeps the draft', async () => {
+  it('allows a remembered model when the provider config mirror has no record yet', async () => {
     const sent: unknown[] = []
     stubChat({ chatWithTools: (input) => void sent.push(input) })
-    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-retired' })
     renderChat()
 
-    // Opening the picker waits for the catalogue, so this is the state after a launch that restored a
-    // preference the provider has since outgrown: the old id is not one of the options.
+    // The catalogue answer is what used to judge this model: it names only the seeded deepseek-chat, so
+    // the old validator stopped a model the persisted config had not actually ruled out. Waiting for the
+    // picker loads that answer before the remembered pair is restored, which is the post-restart state
+    // CHECK 1b describes.
     await openPicker()
     expect(optionTexts()).toContain('deepseek-chat')
-    expect(optionTexts()).not.toContain('deepseek-retired')
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-reasoner' })
+
+    const composer = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+    await userEvent.type(composer, 'send the remembered model{Enter}')
+
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect((sent[0] as { model?: string }).model).toBe('deepseek-reasoner')
+    expect(composer.value).toBe('')
+  })
+
+  it('allows a remembered model when the provider record has an empty enabled list', async () => {
+    const sent: unknown[] = []
+    const stub = stubChat({ chatWithTools: (input) => void sent.push(input) })
+    stubStore(stub, 'provider-config', {
+      providers: { deepseek: { enabledModels: [], fetchedModels: [] } },
+      customProviders: [],
+    })
+    renderChat()
+
+    await openPicker()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-reasoner' })
+
+    await userEvent.type(await screen.findByLabelText('Message'), 'send the remembered model{Enter}')
+
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect((sent[0] as { model?: string }).model).toBe('deepseek-reasoner')
+  })
+
+  it('stops a send whose saved model is absent from a non-empty enabled list, and keeps the draft', async () => {
+    const sent: unknown[] = []
+    const stub = stubChat({ chatWithTools: (input) => void sent.push(input) })
+    stubStore(stub, 'provider-config', {
+      providers: { deepseek: { enabledModels: ['deepseek-chat'], fetchedModels: [] } },
+      customProviders: [],
+    })
+    renderChat()
+
+    // Opening the picker waits for the catalogue. The reconcile effect has already corrected the launched
+    // pair to a live model by then; putting the retired id back afterwards reaches the guard itself, which
+    // is the fail-closed half under test rather than the startup repair that precedes it.
+    await openPicker()
+    expect(optionTexts()).toContain('deepseek-chat')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-retired' })
 
     const composer = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
     await userEvent.type(composer, 'keep this draft{Enter}')
 
     // The send is refused before the session is touched or the draft is cleared: no provider round-trip,
     // no turn to stop, and the words are still there for the user to send with a live model.
+    expect(sent).toHaveLength(0)
+    expect(composer.value).toBe('keep this draft')
+    expect(toast.error).toHaveBeenCalledWith(
+      'That model is no longer available',
+      expect.objectContaining({ description: expect.stringContaining('deepseek-retired') })
+    )
+  })
+
+  it('refuses a send with no selected model and keeps the fresh-install message', async () => {
+    const sent: unknown[] = []
+    stubChat({ chatWithTools: (input) => void sent.push(input) })
+    renderChat()
+
+    await openPicker()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: null })
+    expect(useWorkbenchStore.getState().activeModel).toBeNull()
+
+    const composer = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+    await userEvent.type(composer, 'keep this draft{Enter}')
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'Choose a model to send',
+        expect.objectContaining({ description: 'Switch a model on in Settings, then send again.' })
+      )
+    )
     expect(sent).toHaveLength(0)
     expect(composer.value).toBe('keep this draft')
   })

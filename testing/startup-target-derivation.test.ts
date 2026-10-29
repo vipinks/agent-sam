@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createWorkbenchStore } from '@/app/components/workbench/store'
+import { setBootTargetSeed } from '@/app/components/workbench/boot-target-seed'
 
 /**
  * T-D3's startup half: what a launch opens on before anyone has picked a model in the header.
@@ -31,6 +32,26 @@ describe('T-D3 startup target derivation', () => {
     const store = createWorkbenchStore({ enabledModels: { deepseek: [] }, providerOrder: ['deepseek'] })
 
     expect(store.getState().activeModel).toBeNull()
+  })
+
+  it('keeps a remembered model when the provider record is present but empty', () => {
+    localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId: 'deepseek', model: 'deepseek-reasoner' }))
+
+    const store = createWorkbenchStore({ enabledModels: { deepseek: [] }, providerOrder: ['deepseek'] })
+
+    // An empty list is "not read yet" here too, exactly as `reconcileTarget` reads it: the remembered
+    // pair is not stale just because Settings has no enabled models on record.
+    expect(store.getState()).toMatchObject({ activeProviderId: 'deepseek', activeModel: 'deepseek-reasoner' })
+  })
+
+  it('reapplies the provider-config boot seed after the mirror resolves', () => {
+    localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId: 'deepseek', model: 'deepseek-reasoner' }))
+    const store = createWorkbenchStore()
+
+    setBootTargetSeed({ deepseek: ['deepseek-flash'] })
+    store.getState().seedTarget()
+
+    expect(store.getState()).toMatchObject({ activeProviderId: 'deepseek', activeModel: 'deepseek-flash' })
   })
 
   it('drops a stored model the provider has since switched off', () => {

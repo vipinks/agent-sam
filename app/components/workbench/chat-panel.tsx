@@ -915,21 +915,22 @@ export function ChatPanel() {
    * the question it can answer from the lists now in hand.
    */
   const selectedModelOffered = useMemo(() => {
+    // The config mirror is the only judge. An absent record or an empty enabled list is "not known"
+    // — the same reading `reconcileTarget` uses — so a remembered model is allowed while the
+    // persisted intent has not arrived. DEFAULT_MODELS is a picker catalogue, never validation
+    // authority: it may populate the dropdown, but it did not record a choice the user made.
     const custom = customProviders.find((provider) => provider.id === activeProviderId)
     if (custom) {
       const enabled = configs[custom.id]?.enabledModels
-      const ids = enabled && enabled.length > 0 ? enabled : custom.models
-      return ids.includes(activeModel)
+      if (!enabled || enabled.length === 0) return true
+      return enabled.includes(activeModel)
     }
 
     if (!providers.data?.some((provider) => provider.id === activeProviderId)) return true
     const enabled = configs[activeProviderId]?.enabledModels
-    // No enabled list and no seeded catalogue yet is 'not known', not 'nothing offered'.
-    if ((!enabled || enabled.length === 0) && defaultModels.data === undefined) return true
-    const ids =
-      enabled && enabled.length > 0 ? enabled : (defaultModels.data?.[activeProviderId] ?? []).map((m) => m.id)
-    return ids.includes(activeModel)
-  }, [activeModel, activeProviderId, configs, customProviders, defaultModels.data, providers.data])
+    if (!enabled || enabled.length === 0) return true
+    return enabled.includes(activeModel)
+  }, [activeModel, activeProviderId, configs, customProviders, providers.data])
 
   /** Stop a send whose saved model no longer exists, and say how to recover. */
   const stopForStaleModel = useCallback((): boolean => {

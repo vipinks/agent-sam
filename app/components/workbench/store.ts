@@ -13,6 +13,7 @@ import {
 import type { RightPanelId } from './right-rail'
 import { BRIGHTNESS_DEFAULT, CONTRAST_DEFAULT, clampBrightness, clampContrast } from './theme-engine'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
+import { bootTargetSeed as readBootTargetSeed, setBootTargetSeed } from './boot-target-seed'
 
 /**
  * The sections of the settings screen, in the order the section row offers them.
@@ -80,6 +81,12 @@ interface WorkbenchState {
   activeModel: string | null
   /** Switch provider and model together — a provider's default model is not the previous one's. */
   setTarget: (target: { providerId: string; model: string }) => void
+  /**
+   * Re-apply the boot seed once the provider-config mirror answers. The renderer cannot hand the
+   * persisted config to module evaluation — the store is built before the bridge resolves — so the
+   * first snapshot re-runs the same `initialTarget` derivation the factory would have used.
+   */
+  seedTarget: () => void
   /**
    * Check the target against the models that are switched on, once the catalogue has arrived.
    *
@@ -335,7 +342,12 @@ function initialTarget(seed: TargetSeed): ChatTarget {
       const parsed = JSON.parse(saved) as { providerId?: unknown; model?: unknown }
       if (typeof parsed.providerId === 'string' && typeof parsed.model === 'string') {
         const stored = { activeProviderId: parsed.providerId, activeModel: parsed.model }
-        return seed.enabledModels === undefined ? stored : deriveTarget(stored, seed.enabledModels, seed.providerOrder)
+        if (seed.enabledModels === undefined) return stored
+        const enabled = seed.enabledModels[stored.activeProviderId]
+        // The same "not known" reading `reconcileTarget` uses: an absent or empty record is not a
+        // statement that the remembered model was switched off.
+        if (stored.activeModel !== null && (enabled === undefined || enabled.length === 0)) return stored
+        return deriveTarget(stored, seed.enabledModels, seed.providerOrder)
       }
     }
   } catch {
@@ -344,6 +356,8 @@ function initialTarget(seed: TargetSeed): ChatTarget {
   const empty = { activeProviderId: '', activeModel: null }
   return seed.enabledModels === undefined ? empty : deriveTarget(empty, seed.enabledModels, seed.providerOrder)
 }
+
+import { bootTargetSeed } from './boot-target-seed'
 
 const THEME_KEY = 'sam-ai-theme-preference'
 
@@ -579,8 +593,12 @@ const workbenchState =
       }
       set({ activeProviderId: providerId, activeModel: model })
     },
-    reconcileTarget: (enabledModels, providerOrder) =>
-      set((state) => {
+    seedTarget: () => set(initialTarget(bootTargetSeed())),
+    reconcileTarget: (enabledModels, providerOrder) => {
+      // This is the first moment the persisted provider-config snapshot reaches the renderer. Keep
+      // it as the boot seed for any later store construction, then reconcile the live pair below.
+      setBootTargetSeed(enabledModels)
+      return set((state) => {
         const enabled = state.activeProviderId === '' ? undefined : enabledModels[state.activeProviderId]
         // No list is no intent recorded, and the header still offers the seeded catalogue in that
         // state, so a remembered model is not stale merely because the list is empty.
@@ -591,7 +609,8 @@ const workbenchState =
           providerOrder
         )
         return next.activeProviderId === state.activeProviderId && next.activeModel === state.activeModel ? {} : next
-      }),
+      })
+    },
     engineModels: {},
     /**
      * One engine's model, replaced without disturbing the others': two engines are two questions with two answers,
@@ -753,12 +772,12 @@ const workbenchState =
 /**
  * A workbench store of its own, seeded with what the caller knows.
  *
- * The app builds the singleton from no seed, because the catalogue is not here yet; a suite builds
- * one with the enabled models it is asserting against, and gets the same derivation a live launch
- * applies when the catalogue lands.
+ * The app hands the persisted provider-config snapshot in through the boot seed: the first mirror
+ * reconcile installs it, and `initialTarget` derives from those records instead of localStorage
+ * alone. A suite builds one with the models it is asserting against and gets the same derivation.
  */
 export function createWorkbenchStore(seed: TargetSeed = {}) {
   return create<WorkbenchState>(workbenchState(seed))
 }
 
-export const useWorkbenchStore = createWorkbenchStore()
+export const useWorkbenchStore = createWorkbenchStore(readBootTargetSeed())
