@@ -473,6 +473,15 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   // The last snapshot written for the on-screen transcript, for the dirty check. Null until a
   // session is loaded.
   const savedRef = useRef<ReturnType<typeof serializeTranscript> | null>(null)
+  // A save that resolves after this hook is gone must not record its snapshot as written: the
+  // component that could retry it no longer exists, so the write is left unacknowledged.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const [transcript, setTranscriptState] = useState<TranscriptState>({ turns: [], interrupted: false })
   const [error, setError] = useState<SessionError | null>(null)
@@ -620,6 +629,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
 
     try {
       await conveyor.sessions.saveTranscript({ id, snapshot })
+      if (!mountedRef.current) return
       savedRef.current = snapshot
     } catch {
       // A failed save must not interrupt the conversation. The next turn boundary tries again, and
@@ -630,6 +640,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const debounced = useRef(createDebouncedSave(() => void saveNow()))
   useEffect(() => {
     debounced.current = createDebouncedSave(() => void saveNow())
+    return () => debounced.current.cancel()
   }, [saveNow])
 
   /** Queue the post-turn save. */
@@ -1161,6 +1172,9 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       }
 
       if (start.saveFirst) await saveNow()
+      // A timer queued for the transcript being left must not survive the switch and write whichever
+      // transcript is active when it wakes.
+      debounced.current.cancel()
       setActive({ id })
       activeIdRef.current = id
       await load(id)
