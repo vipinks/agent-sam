@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ConveyorError } from 'electron-conveyor/renderer'
@@ -182,9 +182,13 @@ function group(label: string): HTMLElement {
   return screen.getByRole('region', { name: label })
 }
 
-/** One row's destinations, as its menu draws them. */
+/** One row's destinations, as its submenu draws them. */
 async function openMoveMenu(title: string): Promise<HTMLElement> {
-  await userEvent.click(screen.getByLabelText(`Move ${title}`))
+  const trigger = screen.getByLabelText(`Session actions for ${title}`)
+  trigger.focus()
+  await userEvent.keyboard('{Enter}')
+  const menu = await screen.findByRole('menu')
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Move to project' }))
   return screen.findByRole('menu', { name: 'Move to project' })
 }
 

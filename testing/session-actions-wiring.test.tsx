@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
@@ -51,6 +51,7 @@ function renderPanel(
   options: {
     onRename?: (id: string, title: string) => void
     onExport?: (id: string, format: ExportFormat, title: string) => void
+    onDelete?: (id: string) => void
     stub?: BridgeStub
   } = {}
 ) {
@@ -60,6 +61,7 @@ function renderPanel(
 
   const onRename = options.onRename ?? vi.fn()
   const onExport = options.onExport ?? vi.fn()
+  const onDelete = options.onDelete ?? vi.fn()
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
   const view = render(
@@ -70,7 +72,7 @@ function renderPanel(
           onOpen={vi.fn()}
           onRename={onRename}
           onExport={onExport}
-          onDelete={vi.fn()}
+          onDelete={onDelete}
           onMove={vi.fn()}
           error={null}
           notice={null}
@@ -79,7 +81,7 @@ function renderPanel(
     </QueryClientProvider>
   )
 
-  return { view, stub, onRename, onExport }
+  return { view, stub, onRename, onExport, onDelete }
 }
 
 /**
@@ -93,12 +95,28 @@ async function ready() {
   await screen.findByText('the parser drops newlines')
 }
 
+/** Open one row's actions menu from the trigger, using the keyboard path jsdom can drive. */
+async function openActions(title: string): Promise<HTMLElement> {
+  const trigger = screen.getByLabelText(`Session actions for ${title}`)
+  trigger.focus()
+  await userEvent.keyboard('{Enter}')
+  return screen.findByRole('menu')
+}
+
+/** Open one row's Export submenu and return its menu. */
+async function openExportMenu(title: string): Promise<HTMLElement> {
+  const menu = await openActions(title)
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Export' }))
+  return screen.findByRole('menu', { name: 'Export' })
+}
+
 describe('session rename wiring', () => {
   it('renames through the panel when the editor commits on Enter', async () => {
     const { onRename } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Rename the parser drops newlines'))
+    const menu = await openActions('the parser drops newlines')
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
     const field = await screen.findByLabelText('Session title')
     await userEvent.clear(field)
     await userEvent.type(field, 'newlines investigation{Enter}')
@@ -114,7 +132,8 @@ describe('session rename wiring', () => {
     const { onRename } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Rename the parser drops newlines'))
+    const menu = await openActions('the parser drops newlines')
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
     const field = await screen.findByLabelText('Session title')
     await userEvent.clear(field)
     await userEvent.type(field, 'discard me')
@@ -131,7 +150,8 @@ describe('session rename wiring', () => {
     const { onRename } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Rename the parser drops newlines'))
+    const menu = await openActions('the parser drops newlines')
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
     const field = await screen.findByLabelText('Session title')
     await userEvent.clear(field)
     await userEvent.type(field, '   {Enter}')
@@ -147,7 +167,8 @@ describe('session rename wiring', () => {
     const { onRename } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Rename the parser drops newlines'))
+    const menu = await openActions('the parser drops newlines')
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
     const field = await screen.findByLabelText('Session title')
     await userEvent.clear(field)
     await userEvent.type(field, 'committed by blur')
@@ -155,6 +176,23 @@ describe('session rename wiring', () => {
     await userEvent.tab()
 
     await waitFor(() => expect(onRename).toHaveBeenCalledWith(SESSION_ID, 'committed by blur'))
+  })
+})
+
+describe('session delete wiring', () => {
+  it('confirms through the actions menu before reporting the delete', async () => {
+    const { onDelete } = renderPanel()
+    await ready()
+
+    const menu = await openActions('the parser drops newlines')
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Delete' }))
+
+    // Nothing is removed until the confirmation is answered.
+    expect(onDelete).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(onDelete).toHaveBeenCalledWith(SESSION_ID)
   })
 })
 
@@ -367,8 +405,8 @@ describe('session export wiring', () => {
     const { onExport } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Export the parser drops newlines'))
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Markdown (.md)' }))
+    const exportMenu = await openExportMenu('the parser drops newlines')
+    await userEvent.click(within(exportMenu).getByRole('menuitem', { name: 'Markdown' }))
 
     expect(onExport).toHaveBeenCalledWith(SESSION_ID, 'markdown', 'the parser drops newlines')
   })
@@ -377,21 +415,22 @@ describe('session export wiring', () => {
     const { onExport } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Export unrelated subject entirely'))
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'JSON (.json)' }))
+    const exportMenu = await openExportMenu('unrelated subject entirely')
+    await userEvent.click(within(exportMenu).getByRole('menuitem', { name: 'JSON' }))
 
     expect(onExport).toHaveBeenCalledWith(OTHER_ID, 'json', 'unrelated subject entirely')
   })
 
-  it('closes the format menu on Escape', async () => {
+  it('closes the actions menu on Escape', async () => {
     renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Export the parser drops newlines'))
-    expect(await screen.findByRole('menu', { name: 'Export format' })).toBeTruthy()
+    const menu = await openActions('the parser drops newlines')
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Export' }))
+    expect(await screen.findByRole('menu', { name: 'Export' })).toBeTruthy()
 
     await userEvent.keyboard('{Escape}')
-    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Export format' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   })
 })
 
@@ -403,8 +442,8 @@ describe('session export naming', () => {
     const { onExport } = renderPanel()
     await ready()
 
-    await userEvent.click(screen.getByLabelText('Export the parser drops newlines'))
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Markdown (.md)' }))
+    const exportMenu = await openExportMenu('the parser drops newlines')
+    await userEvent.click(within(exportMenu).getByRole('menuitem', { name: 'Markdown' }))
 
     expect(onExport).toHaveBeenCalledWith(SESSION_ID, 'markdown', 'the parser drops newlines')
   })

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { SessionListPanel } from '@/app/components/workbench/session-list-panel'
@@ -8,12 +7,11 @@ import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore } from './bridge-stub'
 
 /**
- * The conversation row's two alignments: under the project it belongs to, and under its own actions.
+ * The conversation row's alignment: under its project, and beside its always-visible actions.
  *
- * jsdom lays nothing out, so this suite pins structure rather than pixels. What it can hold is the
- * contract the running window then draws: the row indents by the group header's chevron column, the
- * title keeps the full row width, and the action cluster is taken out of that flow and laid over the
- * title's tail. The icons themselves are verified by eye in the running window.
+ * jsdom lays nothing out, so this suite pins the structural contract the running window draws. The
+ * kebab is a sibling in the row's flow rather than an absolutely positioned overlay, so the title keeps
+ * the space that is left and the trigger can never become a hidden hit target over its tail.
  */
 
 const PROJECT_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -88,9 +86,9 @@ function titleButtonFor(title: string): HTMLElement {
   return screen.getByText(title).closest('button') as HTMLElement
 }
 
-/** The hover cluster: the Rename control's parent, which is the row's action surface. */
-function clusterFor(title: string): HTMLElement {
-  return screen.getByLabelText(`Rename ${title}`).parentElement as HTMLElement
+/** The always-visible action trigger, named for its row. */
+function triggerFor(title: string): HTMLElement {
+  return screen.getByLabelText(`Session actions for ${title}`)
 }
 
 /** Class tokens, so an assertion names the utility rather than a substring of the string. */
@@ -110,124 +108,47 @@ describe('the session row aligns under its project and its actions', () => {
     expect(tokens(rowFor('before projects existed'))).toContain('pl-8')
   })
 
-  it("leaves the title the row's full width and overlays the actions at its tail", async () => {
+  it('keeps the title flexible and the action trigger beside it in the row flow', async () => {
     renderPanel()
     const title = await screen.findByText('project work')
     const button = titleButtonFor('project work')
-    const cluster = clusterFor('project work')
+    const trigger = triggerFor('project work')
 
-    // The title is the in-flow child that takes the whole row; the cluster is out of that flow and
-    // pinned to the right edge, vertically centred, so it overlays the title rather than sitting in
-    // a gutter beside it.
+    // The title is the in-flow child that shrinks first; the trigger is its sibling, not an overlay
+    // pinned over the title's tail.
     expect(tokens(button)).toContain('flex-1')
     expect(tokens(button)).toContain('min-w-0')
-    expect(cluster.parentElement).toBe(button.parentElement)
-    expect(tokens(cluster)).toContain('absolute')
-    expect(tokens(cluster)).toContain('right-3')
-    expect(tokens(cluster)).toContain('top-1/2')
-    expect(tokens(cluster)).toContain('-translate-y-1/2')
-    expect(tokens(cluster)).not.toContain('shrink-0')
+    expect(trigger.parentElement).toBe(button.parentElement)
+    expect(tokens(trigger)).toContain('shrink-0')
+    expect(tokens(trigger)).toContain('self-center')
+    expect(tokens(trigger)).not.toContain('absolute')
+    expect(tokens(trigger)).not.toContain('opacity-0')
     expect(tokens(title)).toContain('truncate')
   })
 
-  it('keeps the title truncating underneath the cluster when the row is hovered', async () => {
-    renderPanel()
-    const title = await screen.findByText('project work')
-    const before = title.className
-
-    // Hover only reveals the actions; it must not reflow the title or reserve width for them.
-    await userEvent.hover(rowFor('project work'))
-
-    expect(title.className).toBe(before)
-    expect(tokens(title)).toContain('truncate')
-  })
-
-  it('paints the cluster from the opaque token, not from inheritance', async () => {
+  it('removes the hover-only cluster and its fade from the row', async () => {
     renderPanel()
     await screen.findByText('project work')
 
-    // A borrowed background is only as opaque as the row's current state; the plate carries the
-    // solid token itself, so no resting tint or transparent ancestor can thin it.
-    const cluster = tokens(clusterFor('project work'))
-    expect(cluster).toContain('bg-accent')
-    expect(cluster).not.toContain('bg-inherit')
+    const row = rowFor('project work')
+    // The old surface was guarded by `group relative`, revealed by group-hover, and painted an
+    // absolutely positioned plate with a gradient fence. None of it has a job now that the kebab is
+    // visible in flow.
+    expect(tokens(row)).not.toContain('group')
+    expect(tokens(row)).not.toContain('relative')
+    expect(row.querySelector('div.absolute.opacity-0')).toBeNull()
+    expect(row.querySelector('span[aria-hidden="true"].h-6')).toBeNull()
+    expect(tokens(row)).toContain('hover:bg-accent')
+    expect(tokens(row)).toContain('focus-within:bg-accent')
   })
 
-  it("agrees with the row's two opaque states and with the fade's end", async () => {
+  it("keeps the selected row's tint while the actions stay visible", async () => {
     renderPanel(PROJECT_ID)
     await screen.findByText('project work')
 
-    // One token, four declarations: the plate, the two row states that reveal it, and the gradient
-    // the fade resolves to must name the same colour, so the plate and the fade cannot drift apart.
-    const row = tokens(rowFor('project work'))
-    const strip = (prefix: string) => (token: string) => (token.startsWith(prefix) ? token.slice(prefix.length) : null)
-    const fade = tokens(clusterFor('project work').firstElementChild as HTMLElement)
-
-    expect(row.map(strip('hover:bg-')).filter(Boolean)).toEqual(['accent'])
-    expect(row.map(strip('focus-within:bg-')).filter(Boolean)).toEqual(['accent'])
-    expect(fade.map(strip('to-')).filter(Boolean)).toEqual(['accent'])
-    expect(tokens(clusterFor('project work'))).toContain('bg-accent')
-  })
-})
-
-describe('the action cluster hides the title beneath it opaquely', () => {
-  it('paints an opaque row background in the two states that reveal the cluster', async () => {
-    renderPanel()
-    await screen.findByText('project work')
-
-    // The resting row stays bare, but the two states that reveal the actions resolve to the solid
-    // accent token, so the cluster inherits a colour the title cannot show through.
-    const row = tokens(rowFor('project work'))
-    expect(row).toContain('hover:bg-accent')
-    expect(row).toContain('focus-within:bg-accent')
-  })
-
-  it('resolves the opaque state over the selected tint too', async () => {
-    renderPanel(PROJECT_ID)
-    await screen.findByText('project work')
-
-    // The selected tint is translucent over the panel, so it cannot be the colour the cluster
-    // inherits while the actions are up: the hover and focus states must win on a selected row.
+    // Selection remains a row state, not a reason to hide the way out of the row's menu.
     const row = tokens(rowFor('project work'))
     expect(row).toContain('bg-brand-soft')
-    expect(row).toContain('hover:bg-accent')
-    expect(row).toContain('focus-within:bg-accent')
-  })
-
-  it('keeps the cluster painting that background itself, out of the title flow', async () => {
-    renderPanel()
-    await screen.findByText('project work')
-
-    const cluster = tokens(clusterFor('project work'))
-    expect(cluster).toContain('bg-accent')
-    expect(cluster).not.toContain('bg-inherit')
-    expect(cluster).toContain('absolute')
-    expect(cluster).toContain('right-3')
-    expect(cluster).toContain('top-1/2')
-    expect(cluster).toContain('-translate-y-1/2')
-  })
-
-  it('keeps the plate opaque on the selected row rather than taking its tint', async () => {
-    renderPanel(PROJECT_ID)
-    await screen.findByText('project work')
-
-    // The selected tint is 13% coral; the plate must not inherit it, in either theme.
-    expect(tokens(rowFor('project work'))).toContain('bg-brand-soft')
-    expect(tokens(clusterFor('project work'))).toContain('bg-accent')
-    expect(tokens(clusterFor('project work'))).not.toContain('bg-inherit')
-  })
-
-  it('fades the title into the cluster along its left edge', async () => {
-    renderPanel()
-    await screen.findByText('project work')
-
-    // A filler, not an action: the cluster's first child is the strip that carries the row colour
-    // out to transparent, so the last visible glyph softens instead of meeting a hard edge.
-    const fade = clusterFor('project work').firstElementChild as HTMLElement
-    expect(fade.tagName).toBe('SPAN')
-    expect(fade.getAttribute('aria-hidden')).toBe('true')
-    expect(tokens(fade)).toContain('bg-linear-to-r')
-    expect(tokens(fade)).toContain('from-transparent')
-    expect(tokens(fade)).toContain('to-accent')
+    expect(tokens(triggerFor('project work'))).not.toContain('opacity-0')
   })
 })

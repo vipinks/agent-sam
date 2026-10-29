@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -6,6 +6,7 @@ import {
   Download,
   FolderInput,
   MessageSquare,
+  MoreVertical,
   Pencil,
   Plus,
   Trash2,
@@ -20,6 +21,15 @@ import { rootTail } from '@/conveyor/protocol/recent-roots'
 import type { ExportFormat } from '@/conveyor/protocol/export'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu'
 import { Input } from '../ui/input'
 import {
   AlertDialog,
@@ -30,10 +40,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '../ui/alert-dialog'
 import { CardSurface } from '../ui/surface'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { PaneHeader } from './pane-header'
 import { DrawerClose, activityById } from './icon-rail'
 import { useWorkbenchStore } from './store'
@@ -340,10 +348,9 @@ export function SessionListPanel({
                         <li key={session.id}>
                           <div
                             className={cn(
-                              // The states that reveal the actions paint the same solid accent the plate
-                              // carries, so the row's own colour agrees with the plate laid over it. The
-                              // selected tint alone is 13% of the theme's accent and is never what the plate shows.
-                              'group relative flex items-start gap-2 rounded-xl py-2 pr-3 pl-8 transition-colors hover:bg-accent focus-within:bg-accent',
+                              // The row's own hover and focus states stay solid, so the always-visible trigger
+                              // never has to paint a plate over the title's tail.
+                              'flex items-start gap-2 rounded-xl py-2 pr-3 pl-8 transition-colors hover:bg-accent focus-within:bg-accent',
                               isActive && 'bg-brand-soft'
                             )}
                           >
@@ -393,78 +400,106 @@ export function SessionListPanel({
                               </button>
                             )}
 
-                            {/* Row actions. Hidden until hover, but revealed on focus as well so they are
-                      reachable by keyboard rather than being a pointer-only affordance. */}
+                            {/* Row actions. The kebab is always visible and in the row's flow, so the
+                                affordance does not depend on hover and the menu is not clipped by the
+                                scrolling list. */}
                             {editingId !== session.id && (
-                              <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 bg-accent opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                                {/* The cluster's own left edge, carrying the plate colour out to
-                                    transparent so the title's last glyph dissolves into the icons
-                                    instead of stopping against a hard boundary. */}
-                                <span
-                                  aria-hidden="true"
-                                  className="h-6 w-5 shrink-0 bg-linear-to-r from-transparent to-accent"
-                                />
-                                <IconButton
-                                  label={`Rename ${session.title}`}
-                                  tooltip="Rename"
-                                  onClick={() => {
-                                    setDraft(session.title)
-                                    setEditingId(session.id)
-                                  }}
-                                >
-                                  <Pencil />
-                                </IconButton>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="shrink-0 self-center"
+                                    aria-label={`Session actions for ${session.title}`}
+                                  >
+                                    <MoreVertical />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" sideOffset={4} collisionPadding={8} className="w-44">
+                                  <DropdownMenuItem
+                                    onSelect={() => {
+                                      setDraft(session.title)
+                                      setEditingId(session.id)
+                                    }}
+                                  >
+                                    <Pencil />
+                                    Rename
+                                  </DropdownMenuItem>
 
-                                {/* Offered beside the pencil, on the row's own action surface, and only
-                                    when there is somewhere to move to. */}
-                                {targets.length > 0 && (
-                                  <MoveButton
-                                    title={session.title}
-                                    targets={targets}
-                                    onMove={(destination) => onMove(session.id, destination)}
-                                  />
-                                )}
+                                  {/* Offered only when there is somewhere to move to, matching the rule
+                                      that a menu with no destinations is not an offer. */}
+                                  {targets.length > 0 && (
+                                    <DropdownMenuSub>
+                                      <DropdownMenuSubTrigger>
+                                        <FolderInput />
+                                        Move to project
+                                      </DropdownMenuSubTrigger>
+                                      <DropdownMenuSubContent className="w-48">
+                                        {targets.map((destination) => (
+                                          <DropdownMenuItem
+                                            key={destination}
+                                            title={destination}
+                                            onSelect={() => onMove(session.id, destination)}
+                                          >
+                                            <span className="truncate">{rootTail(destination)}</span>
+                                          </DropdownMenuItem>
+                                        ))}
+                                      </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                  )}
 
-                                <ExportButton
-                                  title={session.title}
-                                  onExport={(format) => onExport(session.id, format, session.title)}
-                                />
-
-                                <AlertDialog
-                                  open={pendingDelete === session.id}
-                                  onOpenChange={(open) => setPendingDelete(open ? session.id : null)}
-                                >
-                                  <AlertDialogTrigger asChild>
-                                    <IconButton
-                                      label={`Delete ${session.title}`}
-                                      tooltip="Delete"
-                                      className="data-[state=open]:opacity-100"
-                                    >
-                                      <Trash2 />
-                                    </IconButton>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        “{session.title}” and its transcript will be removed. This cannot be undone.
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                      <AlertDialogAction
-                                        onClick={() => {
-                                          setPendingDelete(null)
-                                          onDelete(session.id)
-                                        }}
+                                  <DropdownMenuSub>
+                                    <DropdownMenuSubTrigger>
+                                      <Download />
+                                      Export
+                                    </DropdownMenuSubTrigger>
+                                    <DropdownMenuSubContent className="w-40">
+                                      <DropdownMenuItem
+                                        onSelect={() => onExport(session.id, 'markdown', session.title)}
                                       >
-                                        Delete
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </div>
+                                        Markdown
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onSelect={() => onExport(session.id, 'json', session.title)}>
+                                        JSON
+                                      </DropdownMenuItem>
+                                    </DropdownMenuSubContent>
+                                  </DropdownMenuSub>
+
+                                  <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onSelect={() => setPendingDelete(session.id)}
+                                  >
+                                    <Trash2 />
+                                    Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             )}
+
+                            <AlertDialog
+                              open={pendingDelete === session.id}
+                              onOpenChange={(open) => setPendingDelete(open ? session.id : null)}
+                            >
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    “{session.title}” and its transcript will be removed. This cannot be undone.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => {
+                                      setPendingDelete(null)
+                                      onDelete(session.id)
+                                    }}
+                                  >
+                                    Delete
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
                           </div>
 
                           {match && match.snippets.length > 0 && (
@@ -542,231 +577,6 @@ function RenameField({
       aria-label="Session title"
       className="min-w-0 flex-1 rounded-sm border border-ring bg-background px-1 py-0.5 text-[12.5px] font-medium outline-none"
     />
-  )
-}
-
-/**
- * The export control: one download icon, and the format chosen from it.
- *
- * A single button with a two-item menu rather than two buttons, because the row is 250 pixels wide
- * and already holding a pencil and a trash can; and rather than a dialog, because the format is the
- * only decision and a dialog for one choice is a heavier interruption than the task deserves.
- *
- * Built the way the titlebar's menus are — an absolutely positioned list, outside-click and Escape to
- * close — rather than on a portal, so it stays inside this row's stacking context and behaves in a
- * DOM test the way it behaves in the app.
- */
-function ExportButton({ title, onExport }: { title: string; onExport: (format: ExportFormat) => void }) {
-  const [open, setOpen] = useState(false)
-  const wrapper = useRef<HTMLDivElement>(null)
-
-  return (
-    <div ref={wrapper} className="relative">
-      <IconButton
-        label={`Export ${title}`}
-        tooltip="Export"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((was) => !was)}
-      >
-        <Download />
-      </IconButton>
-
-      {open && (
-        <ExportMenu
-          onClose={() => setOpen(false)}
-          onPick={(format) => {
-            setOpen(false)
-            onExport(format)
-          }}
-          wrapper={wrapper}
-        />
-      )}
-    </div>
-  )
-}
-
-/** The two formats, as a small menu anchored to the export button. */
-function ExportMenu({
-  onPick,
-  onClose,
-  wrapper,
-}: {
-  onPick: (format: ExportFormat) => void
-  onClose: () => void
-  wrapper: React.RefObject<HTMLDivElement | null>
-}) {
-  const menu = useRef<HTMLDivElement>(null)
-
-  // Open state owns the listeners, so they exist exactly while the menu does.
-  useMenuDismiss(menu, wrapper, onClose)
-
-  return (
-    <div
-      ref={menu}
-      role="menu"
-      aria-label="Export format"
-      className="absolute top-full right-0 z-50 mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-lg"
-    >
-      {(['markdown', 'json'] as const).map((format) => (
-        <button
-          key={format}
-          type="button"
-          role="menuitem"
-          onClick={() => onPick(format)}
-          className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-accent"
-        >
-          {format === 'markdown' ? 'Markdown (.md)' : 'JSON (.json)'}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-/**
- * The move control: one folder icon, and the project to file the conversation under chosen from it.
- *
- * Built the way the export control beside it is — a button and an absolutely positioned menu, dismissed
- * on an outside click or Escape — rather than as a dialog, because the destinations are a short list and
- * the choice is one click. It lives on the row's own action surface, where renaming already is, so the
- * row itself gains no new affordance.
- *
- * The list is the rule's (`moveTargets`), not this control's: the remembered folders minus the row's own
- * project, with the open folder first. A row with nowhere to go draws no control at all — which is the
- * same rule reading as an empty menu, reported as nothing rather than as an offer that cannot be taken.
- */
-function MoveButton({
-  title,
-  targets,
-  onMove,
-}: {
-  title: string
-  targets: string[]
-  onMove: (destination: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const wrapper = useRef<HTMLDivElement>(null)
-
-  return (
-    <div ref={wrapper} className="relative">
-      <IconButton
-        label={`Move ${title}`}
-        tooltip="Move to project"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((was) => !was)}
-      >
-        <FolderInput />
-      </IconButton>
-
-      {open && (
-        <MoveMenu
-          targets={targets}
-          onClose={() => setOpen(false)}
-          onPick={(destination) => {
-            setOpen(false)
-            onMove(destination)
-          }}
-          wrapper={wrapper}
-        />
-      )}
-    </div>
-  )
-}
-
-/** The folders one row may be moved into, as a menu anchored to the move button. */
-function MoveMenu({
-  targets,
-  onPick,
-  onClose,
-  wrapper,
-}: {
-  targets: string[]
-  onPick: (destination: string) => void
-  onClose: () => void
-  wrapper: React.RefObject<HTMLDivElement | null>
-}) {
-  const menu = useRef<HTMLDivElement>(null)
-
-  // Open state owns the listeners, so they exist exactly while the menu does.
-  useMenuDismiss(menu, wrapper, onClose)
-
-  return (
-    <div
-      ref={menu}
-      role="menu"
-      aria-label="Move to project"
-      className="absolute top-full right-0 z-50 mt-1 w-48 rounded-md border border-border bg-popover p-1 shadow-lg"
-    >
-      {targets.map((destination) => (
-        <button
-          key={destination}
-          type="button"
-          role="menuitem"
-          // The whole path on the item, so the segment it shows is never the only spelling of the folder
-          // on offer.
-          title={destination}
-          onClick={() => onPick(destination)}
-          className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-accent"
-        >
-          {/* The last segment, the way a group header names a folder. */}
-          <span className="truncate">{rootTail(destination)}</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-/**
- * Close the menu on an outside click or Escape.
- *
- * The listener is on `mousedown` rather than `click`, matching the titlebar menus: a menu that closes
- * after the click lands has already let the click through to whatever was underneath.
- */
-function useMenuDismiss(
-  menu: React.RefObject<HTMLDivElement | null>,
-  trigger: React.RefObject<HTMLDivElement | null>,
-  onClose: () => void
-) {
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node
-      // A click on the trigger is the trigger's own business — closing here as well would reopen the
-      // menu on the next click and make the button feel broken.
-      if (trigger.current?.contains(target)) return
-      if (menu.current && !menu.current.contains(target)) onClose()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [menu, trigger, onClose])
-}
-
-/** A row action: an icon button that says what it does, on hover and to a screen reader. */
-function IconButton({
-  label,
-  tooltip,
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof Button> & { label: string; tooltip: string }) {
-  return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-xs" aria-label={label} className={className} {...props}>
-            {children}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{tooltip}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
   )
 }
 
