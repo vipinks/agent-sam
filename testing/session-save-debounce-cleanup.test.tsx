@@ -78,7 +78,7 @@ function SessionProbe({ capture }: { capture: (sessions: ChatSessions) => void }
   return <div data-testid="open-session">{sessions.openId ?? 'none'}</div>
 }
 
-function renderSessions(saveTranscript?: (input: unknown) => unknown) {
+function renderSessions(saveTranscript?: (input: unknown) => unknown, deleteTranscript?: (input: unknown) => unknown) {
   const files: Record<string, TranscriptSnapshot> = {
     [FIRST_ID]: snapshot([FIRST_TURN]),
     [SECOND_ID]: snapshot([SECOND_TURN]),
@@ -92,6 +92,7 @@ function renderSessions(saveTranscript?: (input: unknown) => unknown) {
         files[id] = written
         return undefined
       }),
+    deleteTranscript: deleteTranscript ?? (() => undefined),
   })
   stubStore(stub, CHAT_SESSIONS_STORE_ID, sessionStore())
   setActiveStub(stub)
@@ -186,5 +187,57 @@ describe('a debounced session save that outlives its render', () => {
     await afterDebounce()
 
     expect(saveCalls(stub).map((call) => call.id)).toEqual([FIRST_ID])
+  })
+
+  it('T1: cancels a pre-home timer before it can write the next conversation', async () => {
+    const { api, stub } = renderSessions()
+    await hydrated(api)
+
+    changeMessage(api, 'queued before going home', true)
+    act(() => {
+      api.current?.goHome()
+    })
+    expect(api.current?.openId).toBeNull()
+
+    // `goHome` writes the conversation it is leaving immediately. That write is not the stale one;
+    // every call after this point would be the timer waking against something it was not queued for.
+    const callsAtHome = saveCalls(stub).length
+
+    // Start another conversation inside the first timer's window. Without a cancel, the timer wakes
+    // with this conversation's id and transcript, or with the old id if the store broadcast has not
+    // landed yet, and writes a snapshot its schedule never belonged to.
+    act(() => {
+      api.current?.createSession()
+    })
+    changeMessage(api, 'written after going home', false)
+    await afterDebounce()
+
+    expect(saveCalls(stub).slice(callsAtHome)).toEqual([])
+  })
+
+  it('T2: cancels the active-session timer before deleting that session', async () => {
+    let finishDelete: (() => void) | undefined
+    const deletion = new Promise<void>((resolve) => {
+      finishDelete = resolve
+    })
+    const { api, stub } = renderSessions(undefined, () => deletion)
+    await hydrated(api)
+
+    changeMessage(api, 'queued before deleting the conversation', true)
+
+    let deleting: Promise<void> | undefined
+    act(() => {
+      deleting = api.current?.deleteSession(FIRST_ID)
+    })
+
+    // Main is still deleting while the original debounce deadline arrives. The metadata command has
+    // already removed the row, so a save here would recreate the file of a conversation that is gone.
+    await afterDebounce()
+    expect(saveCalls(stub)).toHaveLength(0)
+
+    await act(async () => {
+      finishDelete?.()
+      await deleting
+    })
   })
 })

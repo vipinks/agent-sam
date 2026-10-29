@@ -1036,6 +1036,9 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
    */
   const goHome = useCallback(() => {
     void saveNow()
+    // The immediate save above owns the conversation being left. A timer already queued for it must
+    // not survive into the next conversation and write a snapshot it was never scheduled for.
+    debounced.current.cancel()
     setActive({ id: null })
     activeIdRef.current = null
     savedRef.current = null
@@ -1215,6 +1218,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
 
   const deleteSession = useCallback(
     async (id: string) => {
+      // Only the active session has a pending timer that can write this row: every save reads
+      // `activeIdRef` when it wakes. Deleting another row must leave the open conversation's queued
+      // write alone.
+      if (activeIdRef.current === id) debounced.current.cancel()
       removeSession({ id })
       try {
         await conveyor.sessions.deleteTranscript({ id })
