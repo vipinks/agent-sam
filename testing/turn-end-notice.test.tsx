@@ -107,6 +107,52 @@ function chunk(stub: BridgeStub, channel: string, value: unknown): void {
   stub.emit(channel, { type: 'data', value })
 }
 
+/** Three tool calls as one batched model round-trip leaves them in the transcript. */
+function emitToolWork(stub: BridgeStub, channel: string, count: number): void {
+  const calls = Array.from({ length: count }, (_, index) => ({
+    callId: `read-${index}`,
+    tool: 'read_file',
+    args: { path: `file-${index}.txt` },
+  }))
+
+  // Every call is announced before its result: the model asked for the batch in one frame, and the
+  // pane persists one step per call it was told about, not one step per model round-trip.
+  for (const call of calls) chunk(stub, channel, { type: 'tool_call_start', ...call })
+  for (const call of calls) chunk(stub, channel, { type: 'tool_result', ...call, ok: true, output: 'contents' })
+}
+
+/** Capture every transcript write so the assertion is about what was persisted, not only what was drawn. */
+function captureSaves(): {
+  snapshots: TranscriptSnapshot[]
+  saveTranscript: (input: unknown) => undefined
+} {
+  const snapshots: TranscriptSnapshot[] = []
+  return {
+    snapshots,
+    saveTranscript: (input: unknown) => {
+      const { snapshot } = input as { snapshot: TranscriptSnapshot }
+      snapshots.push(snapshot)
+      return undefined
+    },
+  }
+}
+
+/** The persisted mid-work ending, once the debounced save has written one. */
+async function persistedMidWork(
+  snapshots: TranscriptSnapshot[]
+): Promise<TranscriptSnapshot['turns'][number]['endNotice']> {
+  await waitFor(() => {
+    const saved = snapshots.some((snapshot) =>
+      snapshot.turns.some((turn) => turn.endNotice?.cause === 'model_stop' && turn.endNotice.midWork === true)
+    )
+    if (!saved) throw new Error('the mid-work notice has not been persisted yet')
+  })
+
+  return snapshots
+    .flatMap((snapshot) => snapshot.turns.map((turn) => turn.endNotice))
+    .find((notice) => notice?.cause === 'model_stop' && notice.midWork === true)
+}
+
 /** Every stream start the panel made, in order. */
 function starts(stub: BridgeStub): Array<{ input?: { messages?: Array<{ role: string; content: string }> } }> {
   return stub.calls
@@ -154,32 +200,94 @@ describe('the turn-end notice', () => {
     expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
   })
 
-  it('says a planless model stop after three tool steps ended mid-work', async () => {
-    const stub = stubChat()
+  it('says a batched planless model stop ended mid-work and persists it', async () => {
+    const saves = captureSaves()
+    const stub = stubChat({ saveTranscript: saves.saveTranscript })
     const channel = await startRun(stub)
 
-    for (let index = 0; index < 3; index += 1) {
-      chunk(stub, channel, {
-        type: 'tool_call_start',
-        callId: `read-${index}`,
-        tool: 'read_file',
-        args: { path: `file-${index}.txt` },
-      })
-      chunk(stub, channel, {
-        type: 'tool_result',
-        callId: `read-${index}`,
-        tool: 'read_file',
-        ok: true,
-        output: 'contents',
-      })
-    }
+    emitToolWork(stub, channel, 3)
 
-    // The stream ends without a main-side notice, so the pane judges the turn itself: three steps,
-    // no plan and an ordinary stop are exactly the generic mid-work shape.
+    // The stream ends without a main-side notice, so the pane judges the turn itself: three persisted
+    // tool steps, no plan and an ordinary stop are exactly the generic mid-work shape.
     stub.emit(channel, { type: 'end' })
 
     expect(await screen.findByText('Ended mid-work: the model stopped after several steps without a plan')).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+    expect(await persistedMidWork(saves.snapshots)).toEqual({ cause: 'model_stop', midWork: true })
+  })
+
+  it('says a planless step-ceiling stop ended mid-work and persists it', async () => {
+    const saves = captureSaves()
+    const stub = stubChat({ saveTranscript: saves.saveTranscript })
+    const channel = await startRun(stub)
+
+    emitToolWork(stub, channel, 3)
+    chunk(stub, channel, { type: 'turn_end', cause: 'model_stop' })
+    chunk(stub, channel, { type: 'done', reason: 'max_steps', steps: 10 })
+    stub.emit(channel, { type: 'end' })
+
+    // The ceiling is the loop stopping, not the model finishing: a planless turn with real work behind
+    // it owes the same card the ordinary mid-work stop does, and the record has to keep that flag.
+    expect(await screen.findByText('Ended mid-work: the model stopped after several steps without a plan')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+    expect(await persistedMidWork(saves.snapshots)).toEqual({ cause: 'model_stop', midWork: true })
+  })
+
+  it('keeps a two-step ordinary stop silent', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    emitToolWork(stub, channel, 2)
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByLabelText('Send message')).toBeTruthy()
+    expect(screen.queryByText(/Ended mid-work/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
+  it('keeps a finished-plan ceiling silent', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, { type: 'plan', plan: [{ id: 'read', text: 'Read the parser', status: 'done' }] })
+    emitToolWork(stub, channel, 3)
+    chunk(stub, channel, { type: 'turn_end', cause: 'model_stop' })
+    chunk(stub, channel, { type: 'done', reason: 'max_steps', steps: 10 })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByLabelText('Send message')).toBeTruthy()
+    expect(screen.queryByText(/Ended mid-work/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
+  it('keeps a planless denial silent', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    emitToolWork(stub, channel, 3)
+    chunk(stub, channel, {
+      type: 'awaiting_approval',
+      callId: 'write-1',
+      tool: 'write_file',
+      args: { path: 'a.ts' },
+      calls: [
+        {
+          id: 'write-1',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"a.ts","content":"x"}' },
+        },
+      ],
+      messages: [],
+      steps: 4,
+      continuations: 0,
+      plan: [],
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Deny' }))
+
+    expect(await screen.findByLabelText('denied')).toBeTruthy()
+    expect(screen.queryByText(/Ended mid-work/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
 
   it('says the connection dropped, which is the other wording of the same news', async () => {

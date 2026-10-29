@@ -1506,13 +1506,17 @@ export function ChatPanel() {
         // The turn is over — answered, failed, or stopped — so a plan that still claims a step is in
         // progress is corrected here, at the one place every ending passes through, and a plan with
         // work left on it gets the notice it has earned. A planless model stop gets the generic
-        // mid-work notice when it has enough steps behind it; a ceiling or a failure keeps the
-        // handling it already had. A pause is the exception, because the turn it belongs to has not
-        // ended.
+        // mid-work notice when it has enough steps behind it, and a planless ceiling gets that same
+        // card; a ceiling with a plan keeps the plan handling and a failure keeps its own. A pause is
+        // the exception, because the turn it belongs to has not ended.
         const cause = stoppedTurnRef.current === turnId ? 'interrupted' : 'model_stop'
         if (stoppedTurnRef.current === turnId) stoppedTurnRef.current = null
         if (!paused) {
-          updateMessages(endTurn(messagesRef.current, turnId, cause, { allowMidWork: !ceiling && !failed }))
+          updateMessages(
+            endTurn(messagesRef.current, turnId, cause, {
+              allowMidWork: !failed && (!ceiling || currentPlan(messagesRef.current) === null),
+            })
+          )
         }
       }
     },
