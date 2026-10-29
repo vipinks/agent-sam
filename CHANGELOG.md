@@ -6,6 +6,12 @@ coding assistant.
 
 <br>
 
+## 2026-10-29: v1.14.2 — Session-row kebab menu
+
+- fix(ui): replace hover-only session-row action cluster with an always-visible kebab menu
+
+<br>
+
 ## 2026-10-29: v1.14.1 — Phase 104 fixes
 
 - fix(turn-end): rehydrate continue on persisted turn-end notices
