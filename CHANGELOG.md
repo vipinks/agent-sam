@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-10-29: v1.14.3 — Lint temp ignore and session-save teardown
+
+- chore: ignore temp scratch directory in eslint gate
+- fix: cancel debounced session save on hook unmount and session switch
+
+<br>
+
 ## 2026-10-29: v1.14.2 — Session-row kebab menu
 
 - fix(ui): replace hover-only session-row action cluster with an always-visible kebab menu
