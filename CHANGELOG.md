@@ -6,6 +6,14 @@ coding assistant.
 
 <br>
 
+## 2026-10-29: v1.14.1 — Phase 104 fixes
+
+- fix(turn-end): rehydrate continue on persisted turn-end notices
+- fix(turn-end): mid-work notice reaches planless step-ceiling stops
+- fix(providers): boot-seed renderer validation from persisted enabledModels; align remembered-model fallback
+
+<br>
+
 ## 2026-10-28: v1.14.0 — Phase 103 fixes
 
 - fix(agent): bound run_command on child exit, tree-kill on abort, wall-clock wedge guard
