@@ -16,6 +16,7 @@ export default [
       // Ignored here as well as deleted, so a future scratch area cannot silently poison the gate
       // the way this one did — an ignored path cannot contribute errors even if it grows again.
       '.preview/**',
+      'temp/**', // agent scratch directory: gitignored, never part of the app
 
       '.vscode/**',
       '.git/**',
