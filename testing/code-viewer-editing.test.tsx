@@ -124,6 +124,9 @@ describe('edit mode', () => {
     await openFile()
     const area = await startEditing()
 
+    // Entering edit mode focuses on the next animation frame. Dispatch only once it lands, or the
+    // Tab goes to whatever held focus before the toggle instead of the editor.
+    await waitFor(() => expect(document.activeElement).toBe(area))
     area.setSelectionRange(0, 0)
     await userEvent.keyboard('{Tab}')
 
