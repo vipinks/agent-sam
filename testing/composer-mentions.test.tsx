@@ -265,7 +265,9 @@ describe('the chips', () => {
     expect((sent[0] as { mentionPaths?: string[] }).mentionPaths).toEqual(['src/lib/utils.ts'])
   })
 
-  it('refuses past the cap from both the picker and the attach button, saying so', async () => {
+  // Twenty sequential selections cross the real query and key handling; the default timeout is a
+  // loaded-run budget, not part of the cap this test is about, so keep the cap and widen the budget.
+  it('refuses past the cap from both the picker and the attach button, saying so', { timeout: 60000 }, async () => {
     // Zero-padded so each query matches exactly one file: the names are the test's, not the app's.
     const many = Array.from({ length: MAX_MENTION_PATHS }, (_, i) => `file-${String(i + 1).padStart(2, '0')}.ts`)
     useWorkbenchStore.setState({ selectedFile: 'one-too-many.ts' })
@@ -320,10 +322,14 @@ describe('sending with mentions', () => {
     renderChat()
 
     const area = await composer()
-    await userEvent.type(area, '@app{Enter}')
+    await userEvent.type(area, '@app')
+    await screen.findByRole('option', { name: 'src/app.tsx' })
+    await userEvent.type(area, '{Enter}')
     await userEvent.type(area, 'what does this file do{Enter}')
 
-    await waitFor(() => expect(sent.length).toBe(1))
+    // The transcript bubble is observable proof that the send was committed; reading the bridge payload
+    // before it appears raced the send under a loaded runner.
+    expect(await screen.findByText('what does this file do')).toBeTruthy()
     // The payload main validates and reads the files from. Paths, and only paths.
     expect((sent[0] as { mentionPaths?: string[] }).mentionPaths).toEqual(['src/app.tsx'])
 
