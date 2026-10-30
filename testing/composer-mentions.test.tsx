@@ -228,7 +228,10 @@ describe('the chips', () => {
     stubWorkspace()
     renderChat()
 
-    await userEvent.type(await composer(), '@app{Enter}')
+    const area = await composer()
+    await userEvent.type(area, '@app')
+    await screen.findByRole('option', { name: 'src/app.tsx' })
+    await userEvent.type(area, '{Enter}')
 
     const chip = await screen.findByTitle('src/app.tsx')
     expect(chip.textContent).toBe('app.tsx')
@@ -239,8 +242,12 @@ describe('the chips', () => {
     renderChat()
 
     const area = await composer()
-    await userEvent.type(area, '@app{Enter}')
-    await userEvent.type(area, '@app{Enter}')
+    await userEvent.type(area, '@app')
+    await screen.findByRole('option', { name: 'src/app.tsx' })
+    await userEvent.type(area, '{Enter}')
+    await userEvent.type(area, '@app')
+    await screen.findByRole('option', { name: 'src/app.tsx' })
+    await userEvent.type(area, '{Enter}')
 
     expect(await screen.findByText('That file is already attached.')).toBeTruthy()
     // One remove control, so one chip: the duplicate collapsed rather than stacking.
@@ -253,15 +260,19 @@ describe('the chips', () => {
     renderChat()
 
     const area = await composer()
-    await userEvent.type(area, '@app{Enter}')
-    await userEvent.type(area, '@utils{Enter}')
+    await userEvent.type(area, '@app')
+    await screen.findByRole('option', { name: 'src/app.tsx' })
+    await userEvent.type(area, '{Enter}')
+    await userEvent.type(area, '@utils')
+    await screen.findByRole('option', { name: 'src/lib/utils.ts' })
+    await userEvent.type(area, '{Enter}')
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove src/app.tsx' }))
     expect(screen.queryByTitle('src/app.tsx')).toBeNull()
 
     await userEvent.type(area, 'explain it{Enter}')
-    await waitFor(() => expect(sent.length).toBe(1))
 
+    expect(await screen.findByText('explain it')).toBeTruthy()
     expect((sent[0] as { mentionPaths?: string[] }).mentionPaths).toEqual(['src/lib/utils.ts'])
   })
 
@@ -345,7 +356,7 @@ describe('sending with mentions', () => {
 
     await userEvent.type(await composer(), 'no files attached{Enter}')
 
-    await waitFor(() => expect(sent.length).toBe(1))
+    expect(await screen.findByText('no files attached')).toBeTruthy()
     expect((sent[0] as { mentionPaths?: string[] }).mentionPaths).toBeUndefined()
   })
 
