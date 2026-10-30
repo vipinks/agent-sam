@@ -1,11 +1,13 @@
 /**
  * The install a quit performs: the same act, the same two arguments, and the guard that keeps it one.
  *
- * A downloaded update installs when the app quits — that is what makes the flow a background one, and it
- * is why the Updates section can offer an install *now* as an alternative rather than as the only way to
- * get one. What the quit path must not do is differ from the button: a quit that ran the installer with
- * the wizard, while the button ran it silently, would be two different installs of one update depending on
- * how the user happened to leave.
+ * A downloaded update installs when the app quits — on a signed build, which is the only build whose quit
+ * registers the listener (`buildIsSigned` gates both it and `autoInstallOnAppQuit`). That is what makes the
+ * flow a background one, and it is why the Updates section can offer an install *now* as an alternative
+ * rather than as the only way to get one. What the quit path must not do is differ from the button: a quit
+ * that ran the installer with the wizard, while the button ran it silently, would be two different installs
+ * of one update depending on how the user happened to leave. The unsigned half — a quit installs nothing — is
+ * asserted beside this suite, in `updates-recovery-test.ts`.
  *
  * The two arguments are therefore asserted here exactly as they are beside this file, against the call
  * `quitAndInstall` receives. The pair is load-bearing at both ends: electron-updater turns `isSilent` into
@@ -28,6 +30,9 @@
  * cycle, one release after this ships.
  */
 import { strict as assert } from 'node:assert'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { startUpdateSchedule } from '../../conveyor/modules/updates'
 import { armUpdaterHarness, type RecordedInstall } from './updates-module-harness'
 
@@ -35,6 +40,14 @@ const results: string[] = []
 
 /** The pair every install this app performs is performed with. Stated, not imported: this is the claim. */
 const EXPECTED: RecordedInstall = { isSilent: true, isForceRunAfter: true }
+
+// A signed build, arranged before the schedule is armed: the quit-time listener is registered only when
+// app-update.yml names a publisher, which is the gate this suite is the signed half of. The real resources
+// directory is put back at the end, so the other suites' environment is left as it was.
+const resources = mkdtempSync(join(tmpdir(), 'sam-ai-signed-resources-'))
+writeFileSync(join(resources, 'app-update.yml'), 'provider: github\npublisherName: Agent Sam\n', 'utf8')
+const realResourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath
+;(process as unknown as { resourcesPath?: string }).resourcesPath = resources
 
 // One schedule, armed once, before either step: both steps are about the same listener, and starting the
 // updater twice would subscribe the mirror's six events twice over.
@@ -81,6 +94,10 @@ function main() {
     step('quit with an update', theQuitInstallsSilentlyAndOnlyOnce)
   } finally {
     harness.restore()
+    const holder = process as unknown as { resourcesPath?: string }
+    if (realResourcesPath === undefined) delete holder.resourcesPath
+    else holder.resourcesPath = realResourcesPath
+    rmSync(resources, { recursive: true, force: true })
   }
 
   console.log('update install on quit: ' + results.length + ' passed')

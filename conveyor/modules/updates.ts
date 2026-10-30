@@ -1,4 +1,6 @@
-import { app } from 'electron'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { app, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { ConveyorError } from 'electron-conveyor/main'
 import { sweepDownloadedInstallers, UPDATE_CACHE_SWEEP_RETRY_MS, updaterCacheDir } from '@/lib/main/update-cache'
@@ -7,13 +9,14 @@ import {
   DEFAULT_AUTO_DOWNLOAD,
   updateFailureCode,
   UPDATES_DISABLED_IN_DEV,
+  type PendingInstall,
   type UpdateErrorCode,
   type UpdateState,
 } from '../protocol/updates'
 
 /**
- * The updater: a packaged-only check schedule, a background download governed by one preference, and the three
- * acts a surface can ask for.
+ * The updater: a packaged-only check schedule, a background download governed by one preference, and the acts
+ * a surface can ask for.
  *
  * electron-updater does the work; this module is the part that decides *when* it runs and what it is allowed
  * to do, and the part that keeps the renderer's mirror of it honest. Nothing here is reachable in
@@ -62,6 +65,7 @@ export interface UpdateStatusSink {
   startDownloading: () => void
   recordReady: (version: string) => void
   recordError: (code: UpdateErrorCode) => void
+  recordPendingInstall: (install: PendingInstall) => void
 }
 
 let statusSink: UpdateStatusSink | null = null
@@ -103,8 +107,77 @@ export function setAutoDownloadSource(read: () => boolean): void {
 export const UPDATES_INSTALL_IS_SILENT = true
 export const UPDATES_INSTALL_IS_FORCE_RUN_AFTER = true
 
+/** The file in userData that records an install this launch started and could not finish. */
+const PENDING_INSTALL_FILE = 'pending-update.json'
+
+/** The updater's own log, beside the marker: `%APPDATA%\era\logs\updater.log` in a packaged app. */
+const UPDATER_LOG_DIR = 'logs'
+const UPDATER_LOG_FILE = 'updater.log'
+
+/** The file electron-builder writes into the packaged app, and electron-updater reads for its feed. */
+const APP_UPDATE_CONFIG = 'app-update.yml'
+
 /** Whether this process has already asked for an install. Read and written by `installUpdateNow`. */
 let installRequested = false
+
+/** The install a previous launch started, held for this process once the marker file has been read. */
+let pendingInstall: PendingInstall | null = null
+
+/** The downloaded update's version and installer, recorded by `update-downloaded` for the marker. */
+let downloadedUpdate: { version: string; installerPath: string } | null = null
+
+/** The marker's path: one file in the app's own data directory, never a path chosen by a caller. */
+function pendingInstallPath(): string {
+  return join(app.getPath('userData'), PENDING_INSTALL_FILE)
+}
+
+/** The log's path, in the same directory tree, for the same reason. */
+function updaterLogPath(): string {
+  return join(app.getPath('userData'), UPDATER_LOG_DIR, UPDATER_LOG_FILE)
+}
+
+/**
+ * Append one line to the updater's log.
+ *
+ * electron-updater otherwise writes to `console`, which a packaged Windows app has nowhere to show: the
+ * schedule is quiet by design, so a failed check would be invisible. A write that fails is swallowed — a
+ * diagnostic that could not be written is not a reason for the updater to fail.
+ */
+function appendUpdaterLog(level: 'info' | 'warn' | 'error' | 'debug', message: string): void {
+  try {
+    const file = updaterLogPath()
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${new Date().toISOString()} [${level}] ${message}\n`, { flag: 'a' })
+  } catch {
+    // A diagnostic that could not be written is not a reason for the updater to fail.
+  }
+}
+
+/** The object assigned to `autoUpdater.logger`: four methods, one file, no new dependency. */
+const updaterLogger = {
+  info: (message: string) => appendUpdaterLog('info', message),
+  warn: (message: string) => appendUpdaterLog('warn', message),
+  error: (message: string) => appendUpdaterLog('error', message),
+  debug: (message: string) => appendUpdaterLog('debug', message),
+}
+
+/**
+ * Whether this build is signed, read from `app-update.yml`'s publisher.
+ *
+ * electron-updater's Windows signature check is driven by the `publisherName` in that file: with one, its
+ * `verifySignature` compares the installer's signer against it; without one there is nothing to check. Asking
+ * the file the same question the updater asks keeps this from becoming a second flag that must be edited when
+ * signing lands. A missing or unreadable file is unsigned — the answer every build before signing gives.
+ */
+export function buildIsSigned(): boolean {
+  try {
+    const config = readFileSync(join(process.resourcesPath, APP_UPDATE_CONFIG), 'utf8')
+    const publisher = /^publisherName:\s*(.+)$/m.exec(config)?.[1]?.trim() ?? ''
+    return publisher.replace(/^['"]|['"]$/g, '').length > 0
+  } catch {
+    return false
+  }
+}
 
 /** Whether the updater can do anything at all in this build. False in development and in unpackaged builds. */
 function isPackaged(): boolean {
@@ -124,6 +197,102 @@ function requirePackaged(): void {
   }
 }
 
+/** Whether a value read off disk really is the marker this module wrote. */
+function isPendingInstall(value: unknown): value is PendingInstall {
+  if (typeof value !== 'object' || value === null) return false
+  const marker = value as Record<string, unknown>
+  return (
+    typeof marker.version === 'string' &&
+    marker.version.length > 0 &&
+    typeof marker.installerPath === 'string' &&
+    marker.installerPath.length > 0 &&
+    typeof marker.at === 'number' &&
+    Number.isFinite(marker.at)
+  )
+}
+
+/** The marker file's contents, or null when it is absent, unreadable, or not a marker this module wrote. */
+function readPendingInstallMarker(): PendingInstall | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(pendingInstallPath(), 'utf8'))
+    return isPendingInstall(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/** Remove the marker file. Best effort: once surfaced, the notice is this process's own memory. */
+function clearPendingInstallMarker(): void {
+  try {
+    rmSync(pendingInstallPath(), { force: true })
+  } catch {
+    // Leaving the file for the next launch is the harmless half of this failure.
+  }
+}
+
+/** Record the install intent before the app quits into an installer that may never draw a window. */
+function rememberPendingInstall(): void {
+  const update = downloadedUpdate
+  if (update === null) return
+
+  try {
+    const file = pendingInstallPath()
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ ...update, at: Date.now() }), 'utf8')
+  } catch (error) {
+    updaterLogger.warn(`could not record the install intent: ${String(error)}`)
+  }
+}
+
+/**
+ * Compare two dotted versions numerically.
+ *
+ * A string comparison would call 1.10 older than 1.9: the question is only whether the build that started the
+ * install is older than the build the installer would add. Prerelease and build suffixes are ignored — an
+ * install that crossed from a beta to its release is still unfinished if the release never landed.
+ */
+export function compareUpdateVersions(left: string, right: string): number {
+  const parse = (version: string): number[] =>
+    version
+      .split(/[-+]/, 1)[0]
+      .split('.')
+      .map((part) => Number.parseInt(part, 10) || 0)
+
+  const a = parse(left)
+  const b = parse(right)
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const x = a[index] ?? 0
+    const y = b[index] ?? 0
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return 0
+}
+
+/**
+ * Take the previous launch's install intent, once, as this launch starts.
+ *
+ * Read before the packaged gate: the marker is a fact about the last launch, not this build's capability.
+ * Cleared once the mirror has it, so this process holds the only copy and the next launch stays quiet; a
+ * marker that cannot be read is cleared too, because it can never become a notice.
+ */
+export function restorePendingInstall(): PendingInstall | null {
+  const marker = readPendingInstallMarker()
+  pendingInstall = null
+  if (marker === null) {
+    // Nothing to surface, and a file that could not be read must not be re-read on every launch.
+    clearPendingInstallMarker()
+    return null
+  }
+  if (compareUpdateVersions(app.getVersion(), marker.version) >= 0) {
+    clearPendingInstallMarker()
+    return null
+  }
+  pendingInstall = marker
+  statusSink?.recordPendingInstall(marker)
+  clearPendingInstallMarker()
+  return marker
+}
+
 /**
  * Configure the updater and subscribe to its report.
  *
@@ -133,8 +302,9 @@ function requirePackaged(): void {
  * - `allowPrerelease` false keeps this build on the non-prerelease channel. electron-updater would otherwise
  *   infer the channel from the running version's own prerelease tag, and a beta build would then be offered
  *   betas as a matter of course.
- * - `autoInstallOnAppQuit` true makes the flow a background one: a downloaded update installs when the app
- *   quits, without a window having to be found in the moment.
+ * - `autoInstallOnAppQuit` is true only on a signed build: an unsigned installer is what a machine's
+ *   app-control policy blocks, so the quit path does not attempt one. The explicit install is the other arm
+ *   of that gate, and it is the only path an unsigned build takes.
  * - `autoDownload` follows the user's preference, and is re-applied before every check for the reason
  *   `setAutoDownloadSource` explains.
  *
@@ -143,8 +313,9 @@ function requirePackaged(): void {
  * and the code that travels instead is decided by the phase the failure happened in.
  */
 function wireUpdater(): void {
+  autoUpdater.logger = updaterLogger
   autoUpdater.allowPrerelease = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = buildIsSigned()
   autoUpdater.autoDownload = autoDownloadSource()
 
   statusSink?.setCurrentVersion(app.getVersion())
@@ -170,6 +341,7 @@ function wireUpdater(): void {
   })
 
   autoUpdater.on('update-downloaded', (event) => {
+    downloadedUpdate = { version: event.version, installerPath: event.downloadedFile }
     statusSink?.recordReady(event.version)
   })
 
@@ -219,6 +391,10 @@ export function installUpdateNow(): void {
   if (statusSink?.read() !== 'ready' || installRequested) return
 
   installRequested = true
+  // The explicit click is the second arm of the signedness gate: an unsigned build never installs on its own
+  // quit, but a user who pressed Install has asked for this one.
+  autoUpdater.autoInstallOnAppQuit = true
+  rememberPendingInstall()
   autoUpdater.quitAndInstall(UPDATES_INSTALL_IS_SILENT, UPDATES_INSTALL_IS_FORCE_RUN_AFTER)
 }
 
@@ -254,23 +430,24 @@ function sweepUpdaterCacheOnStartup(): void {
  * configured at all — and before any window exists, so the mirror already carries this build's version by the
  * time a renderer reads it.
  *
- * Inert in development: nothing is wired, no timer is armed, and the three actions refuse with their own code.
+ * Inert in development: nothing is wired, no timer is armed, and the acts refuse with their own code.
  * The first check is delayed by `UPDATES_FIRST_CHECK_DELAY_MS` rather than run here, because a check is
  * network work and the launch belongs to the window: ten seconds in, the app is up and a slow feed cannot be
  * felt. The interval is not a retry — a failed check waits for the next four-hourly one rather than looping,
  * because the failure the user sees is the status word, not a spinner.
  */
 export function startUpdateSchedule(): void {
+  // The previous launch's install intent is read before the packaged gate: a marker is a fact about the last
+  // launch, not about this build's update capability, and an unpackaged launch still owes the pointer.
+  restorePendingInstall()
+
   if (!isPackaged()) return
 
   wireUpdater()
 
-  // The quit-time install, registered with the same condition the rest of this file is behind — and once,
-  // at the start, rather than when a download completes: a quit can arrive in the same turn as the download
-  // that made it worth performing. electron-updater's own install-on-quit is left exactly as it was
-  // (`autoInstallOnAppQuit` stays true); this handler runs first, and asking with the pair above claims the
-  // flow, so the updater's own handler finds nothing left to do.
-  app.on('before-quit', installUpdateNow)
+  // The quit-time install, registered only when the build is signed — the setting above and the listener
+  // are one decision, and an unsigned build's only install path is the explicit button.
+  if (buildIsSigned()) app.on('before-quit', installUpdateNow)
 
   // What the last update left behind, removed — but only while nothing is downloading. A launch starts
   // `idle` and the first check is ten seconds away, so the first pass can never race the fetch it would
@@ -284,14 +461,16 @@ export function startUpdateSchedule(): void {
 }
 
 /**
- * The updater's three acts.
+ * The updater's acts.
  *
  * Each refuses outside a packaged build with `UPDATES_DISABLED_IN_DEV` before touching the updater, and none of
  * them writes the mirror: the transitions come from the updater's own events, so what the surface reports is
  * what the updater did rather than what the call was asked to do. `download` is the manual half of the
  * auto-download preference, and `install` is the act the quit-time install performs — both routes reach
  * `installUpdateNow`, so the button and the quit cannot install two different ways. Both install silently and
- * bring the app back up; the pair is named once, at `UPDATES_INSTALL_IS_SILENT`.
+ * bring the app back up; the pair is named once, at `UPDATES_INSTALL_IS_SILENT`. The recovery pair is
+ * `showInstaller` (the previous attempt's installer, opened in the file manager) and `installVisible` (the same
+ * update with `/S` dropped, so the NSIS wizard shows).
  */
 export const updatesModule = defineModule({
   check: command(async () => {
@@ -307,5 +486,17 @@ export const updatesModule = defineModule({
   install: command(() => {
     requirePackaged()
     installUpdateNow()
+  }),
+
+  showInstaller: command(() => {
+    if (pendingInstall === null) return
+    shell.showItemInFolder(pendingInstall.installerPath)
+  }),
+
+  installVisible: command(() => {
+    requirePackaged()
+    if (installRequested) return
+    installRequested = true
+    autoUpdater.quitAndInstall(false, true)
   }),
 })

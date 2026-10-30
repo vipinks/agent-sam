@@ -50,6 +50,7 @@ function statusState(over: Partial<UpdateStatusState> = {}): UpdateStatusState {
     currentVersion: '1.2.0',
     lastCheckedAt: null,
     errorCode: null,
+    pendingInstall: null,
     ...over,
   }
 }

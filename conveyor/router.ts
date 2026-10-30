@@ -300,6 +300,7 @@ setUpdateStatusSink({
   startDownloading: () => router.stores['update-status'].dispatch('startDownloading'),
   recordReady: (version) => router.stores['update-status'].dispatch('recordReady', { version }),
   recordError: (code) => router.stores['update-status'].dispatch('recordError', { code }),
+  recordPendingInstall: (install) => router.stores['update-status'].dispatch('recordPendingInstall', install),
 })
 
 /**

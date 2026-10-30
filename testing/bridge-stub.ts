@@ -236,6 +236,15 @@ const MANIFEST: Record<string, Record<string, string>> = {
   // so it happens in main. Listed by kind for the reason the entries around it are — the client refuses an
   // unlisted member rather than dispatching it, so a picker whose read was absent here could not dispatch.
   engine: { answerConsent: 'command', setBinaryPath: 'command', turn: 'stream' },
+  // The updater's surface: the three acts the settings section and the notice offer, plus the recovery pair the
+  // notice's second face uses. Listed by kind so the client dispatches each the way main registered it.
+  updates: {
+    check: 'command',
+    download: 'command',
+    install: 'command',
+    showInstaller: 'command',
+    installVisible: 'command',
+  },
   git: {
     status: 'query',
     branch: 'query',

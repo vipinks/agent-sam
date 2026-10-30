@@ -28,7 +28,7 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { setAutoDownloadSource, setUpdateStatusSink } from '../../conveyor/modules/updates'
-import type { UpdateState } from '../../conveyor/protocol/updates'
+import type { PendingInstall, UpdateState } from '../../conveyor/protocol/updates'
 
 /** One recorded install, exactly as the module handed it over — arguments included when it passed none. */
 export interface RecordedInstall {
@@ -45,6 +45,10 @@ export interface UpdaterHarness {
   events: Map<string, Set<(...args: unknown[]) => void>>
   /** Emit an app event, as Electron would. */
   emit: (event: string) => void
+  /** Emit one of the updater's own events, as electron-updater would, with its payload. */
+  emitUpdater: (event: string, ...args: unknown[]) => void
+  /** The install intent the module last handed the mirror, or null while it handed over none. */
+  pendingInstall: () => PendingInstall | null
   /** The version the module recorded for the running build, or undefined while it recorded none. */
   currentVersion: () => string | undefined
   /** Put the process back: real timers, the caller's environment, and the temp cache directory gone. */
@@ -89,6 +93,7 @@ export function armUpdaterHarness(): UpdaterHarness {
 
   let mirror: UpdateState = 'idle'
   let current: string | undefined
+  let pending: PendingInstall | null = null
 
   setUpdateStatusSink({
     read: () => mirror,
@@ -101,6 +106,9 @@ export function armUpdaterHarness(): UpdaterHarness {
     startDownloading: () => undefined,
     recordReady: () => undefined,
     recordError: () => undefined,
+    recordPendingInstall: (install) => {
+      pending = install
+    },
   })
 
   // The shipped default, stated rather than assumed: a check downloads unless a user said otherwise.
@@ -113,6 +121,10 @@ export function armUpdaterHarness(): UpdaterHarness {
     installs: updater.__installs,
     events: updater.__events,
     emit: (event) => appStub().__emit(event),
+    emitUpdater: (event, ...args) => {
+      for (const handler of updater.__events.get(event) ?? []) handler(...args)
+    },
+    pendingInstall: () => pending,
     currentVersion: () => current,
     restore: () => {
       globalThis.setTimeout = realTimeout

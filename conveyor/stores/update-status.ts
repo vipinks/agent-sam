@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
-import { UPDATE_ERROR_CODES, type UpdateErrorCode, type UpdateState } from '../protocol/updates'
+import { UPDATE_ERROR_CODES, type PendingInstall, type UpdateErrorCode, type UpdateState } from '../protocol/updates'
 
 /**
  * What the updater is doing, mirrored to every window.
@@ -34,6 +34,14 @@ export interface UpdateStatusState {
   lastCheckedAt: number | null
   /** The code a failure carries, or null while nothing has failed. Never a message. */
   errorCode: UpdateErrorCode | null
+  /**
+   * The install a previous launch started and could not confirm, or null.
+   *
+   * A launch-scoped fact like the rest of this store: the marker file it is read from is removed as soon as
+   * the launch has taken it, so this field is the only copy for the rest of the process — which is exactly
+   * what lets the notice survive a window opening later without the file reappearing on the next launch.
+   */
+  pendingInstall: PendingInstall | null
 }
 
 export const updateStatusStore = defineStore('update-status', {
@@ -43,6 +51,7 @@ export const updateStatusStore = defineStore('update-status', {
     currentVersion: '',
     lastCheckedAt: null,
     errorCode: null,
+    pendingInstall: null,
   } as UpdateStatusState,
 
   // Payloads cross the trust boundary, so each action's argument type comes from its schema: a state the rule
@@ -53,6 +62,7 @@ export const updateStatusStore = defineStore('update-status', {
     recordUpToDate: z.object({ at: z.number() }),
     recordReady: z.object({ version: z.string() }),
     recordError: z.object({ code: z.enum(UPDATE_ERROR_CODES) }),
+    recordPendingInstall: z.object({ version: z.string(), installerPath: z.string(), at: z.number() }),
   },
 
   actions: {
@@ -123,6 +133,18 @@ export const updateStatusStore = defineStore('update-status', {
     recordError: (state, { code }) => {
       state.state = 'error'
       state.errorCode = code
+    },
+
+    /**
+     * A previous launch's install attempt is recoverable: this launch owes the user a pointer to it.
+     *
+     * Dispatched once, while the app is becoming ready, from the marker the last launch wrote before quitting
+     * into the installer. Not an updater transition and deliberately kept apart from `state`: the recovery
+     * notice speaks about the *previous* attempt, and the status line about this launch's check — one dying
+     * install must not make a fresh launch claim the updater is in `ready`.
+     */
+    recordPendingInstall: (state, install) => {
+      state.pendingInstall = install
     },
   },
 })

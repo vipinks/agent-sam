@@ -164,6 +164,14 @@ const SUITES = [
     src: 'updates/updates-cache-lock-test.ts',
   },
   {
+    name: 'update recovery (marker read, signedness gate, logger, shell hand-off)',
+    src: 'updates/updates-recovery-test.ts',
+  },
+  {
+    name: 'update install intent (marker written before the installer, silent pair unchanged)',
+    src: 'updates/updates-intent-test.ts',
+  },
+  {
     name: 'engine spawn law (allowlist, arg array, refusal codes, version probe)',
     src: 'engines/engine-spawn-test.ts',
   },

@@ -59,9 +59,9 @@ function configuredUpdater() {
  * The updater is configured the way the design names, and no other way.
  *
  * Three settings, and each is a decision rather than a default: `allowPrerelease` false keeps a beta build
- * from being offered betas as a matter of course, `autoInstallOnAppQuit` true is what makes the flow a
- * background one, and `autoDownload` follows the user's preference. A fourth is not asserted because it is
- * not applied: nothing here touches the publish configuration or the feed.
+ * from being offered betas as a matter of course, `autoInstallOnAppQuit` is false on this unsigned build so a
+ * quit cannot start an installer the machine may block, and `autoDownload` follows the user's preference. A
+ * fourth is not asserted because it is not applied: nothing here touches the publish configuration or the feed.
  */
 function theUpdaterIsConfiguredForABackgroundFlow() {
   const harness = armUpdaterHarness()
@@ -69,7 +69,7 @@ function theUpdaterIsConfiguredForABackgroundFlow() {
 
   const configured = configuredUpdater()
   assert.equal(configured.allowPrerelease, false, 'the non-prerelease channel is stated, not inferred')
-  assert.equal(configured.autoInstallOnAppQuit, true, 'a downloaded update installs when the app quits')
+  assert.equal(configured.autoInstallOnAppQuit, false, 'an unsigned build does not install on its own quit')
   assert.equal(configured.autoDownload, true, 'and the download is not held back behind another click')
 
   // The running build's version is recorded before any check, which is the state the app spends most of
@@ -111,6 +111,11 @@ function theInstallIsSilentAndRelaunches() {
 
   assert.equal(harness.installs.length, 1, 'one request is one install')
   assert.deepEqual(harness.installs[0], EXPECTED, 'and it is performed silently, bringing the app back up')
+  assert.equal(
+    configuredUpdater().autoInstallOnAppQuit,
+    true,
+    'the explicit install is the other arm of the signedness gate'
+  )
 
   // A second press cannot be a second installer: the first one has already claimed the flow, and a second
   // spawn would install the same build twice while the first is still running.

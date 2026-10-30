@@ -45,6 +45,24 @@ export const UPDATE_STATES = [
 
 export type UpdateState = (typeof UPDATE_STATES)[number]
 
+/**
+ * What a launch that quit into an installer leaves for the next one.
+ *
+ * Written immediately before `quitAndInstall`, and read once at the next launch: the app can be gone before
+the installer it started has drawn a window, and a silent install that a machine's app-control policy blocks
+leaves nothing on screen to say so. The marker is the pointer back — the version that was being installed,
+the installer's own file, and when the attempt was made. It carries paths rather than a message because the
+next launch's notice is built from these fields, and a sentence would have to be parsed to recover them.
+ */
+export interface PendingInstall {
+  /** The version the installer would have installed. */
+  version: string
+  /** The downloaded installer on disk — what the notice's "Show installer" opens. */
+  installerPath: string
+  /** Epoch ms of the attempt, for a reader that wants to order two attempts. */
+  at: number
+}
+
 /** The module's refusal when a check, download or install is asked for outside a packaged build. */
 export const UPDATES_DISABLED_IN_DEV = 'UPDATES_DISABLED_IN_DEV'
 /** A check that did not complete — a lost network, a bad feed, a release that cannot be read. */
