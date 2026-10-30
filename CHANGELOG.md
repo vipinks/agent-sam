@@ -6,6 +6,12 @@ coding assistant.
 
 <br>
 
+## 2026-10-30: v1.14.5 — composer-mentions load-timeout hardening
+
+- test: harden composer-mentions against load-timeout flake
+
+<br>
+
 ## 2026-10-30: v1.14.4 — goHome and session-delete debounce cancel
 
 - fix: cancel pending debounce on goHome and session delete
