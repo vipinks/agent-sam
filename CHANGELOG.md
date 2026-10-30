@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-10-30: v1.14.6 — updater blocked-install recovery
+
+- fix(updates): recover from blocked silent install with a pointer to the pending installer
+- test: harden composer-mentions against load-timeout flake
+
+<br>
+
 ## 2026-10-30: v1.14.5 — composer-mentions load-timeout hardening
 
 - test: harden composer-mentions against load-timeout flake
