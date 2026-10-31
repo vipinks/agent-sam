@@ -6,6 +6,17 @@ coding assistant.
 
 <br>
 
+## 2026-10-31: v1.14.7 — cost accounting, SAC install warning, and test hardening
+
+- fix(cost): capture Anthropic usage and price OpenRouter catalogue rows
+- feat(updates): warn when Smart App Control enforcement will block the silent install
+- test: raise ACP lifecycle injected call bound to 2s for load tolerance
+- test: fix code-viewer Tab focus race
+- test: harden five composer-mentions constructs
+- chore: ignore .kun harness scratch
+
+<br>
+
 ## 2026-10-30: v1.14.6 — updater blocked-install recovery
 
 - fix(updates): recover from blocked silent install with a pointer to the pending installer
