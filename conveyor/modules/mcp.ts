@@ -2,8 +2,8 @@
  * MCP server configuration, trust, and secret storage, on the disk.
  *
  * The rules live in `conveyor/protocol/mcp.ts`; this file is the part that touches the filesystem and
- * Electron. Two config files, one trust file, and seven commands — and no runtime: nothing here starts
- * a process or exposes a tool. That is the point of this phase, and the reason every function below
+ * Electron. Two config files, one trust file, and the commands that read and write them — and no runtime:
+ * nothing here exposes a tool. That is the point of this phase, and the reason every function below
  * takes its paths as arguments: the node suites drive the real decisions against seeded temp
  * directories instead of a reimplementation that could pass while the shipped code disagrees.
  *
@@ -30,7 +30,7 @@
  * that never had `args` does not acquire one. A file that cannot be parsed is never overwritten at all:
  * refusing is what keeps a hand-broken config from losing every server the user typed into it.
  */
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { app, safeStorage } from 'electron'
 import { z } from 'zod'
@@ -48,6 +48,7 @@ import {
   MCP_SECRET_CRYPTO_FAILED,
   MCP_SERVER_DUPLICATE,
   MCP_SERVER_NOT_FOUND,
+  MCP_SERVER_NOT_RUNNING,
   MCP_TRANSPORT_STDIO,
   parseMcpConfigText,
   secretEnvListing,
@@ -57,6 +58,7 @@ import {
   type McpServerConfig,
   type McpServerConfigError,
   type McpServerEntry,
+  type McpServerPatch,
   type McpServerRaw,
   type McpTrustState,
 } from '../protocol/mcp'
@@ -213,12 +215,28 @@ export async function readMcpTrustFile(path: string): Promise<McpTrustRead> {
   return { document: parsed, roots }
 }
 
+/** A suffix that cannot collide inside one process, even when two writes start in the same millisecond. */
+let atomicWriteSequence = 0
+
+/** Write one text file through a sibling temporary, so a reader sees the old bytes or the new ones. */
+async function writeTextAtomically(path: string, text: string): Promise<void> {
+  const temporary = `${path}.${process.pid}.${atomicWriteSequence++}.tmp`
+  try {
+    await writeFile(temporary, text, 'utf8')
+    await rename(temporary, path)
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined)
+    throw error
+  }
+}
+
 /**
  * Write a config file back, changing nothing but the `servers` list.
  *
  * The document is spread rather than rebuilt, so every key the user or a future version put in the file
  * comes back unchanged. `version` is added only when there was no file, which is the one case where
- * there are no existing keys to preserve.
+ * there are no existing keys to preserve. The sibling-then-rename is what makes the write atomic: a
+ * reader sees the old config or the new one, never a half-written list.
  */
 async function writeConfigFile(
   path: string,
@@ -227,7 +245,7 @@ async function writeConfigFile(
 ): Promise<void> {
   const next = document === null ? { version: MCP_CONFIG_VERSION, servers } : { ...document, servers }
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(next, null, 2), 'utf8')
+  await writeTextAtomically(path, JSON.stringify(next, null, 2))
 }
 
 /** Write the trust file back, the same way: `roots` replaced, everything else preserved. */
@@ -425,6 +443,89 @@ export async function addMcpServer(
   return { id: entry.config.id }
 }
 
+/** The refusal a secret name earns when it could not become an environment variable. */
+function secretNameRefusal(name: string): string {
+  return `"${name}" is not a usable secret name: it becomes an environment variable, so it must start with a letter or underscore and hold only letters, digits and underscores.`
+}
+
+/** Refuse one secret name at the boundary that would otherwise store it. */
+function assertSafeSecretName(name: string): void {
+  if (!isSafeMcpSecretKey(name)) throw new ConveyorError(MCP_CONFIG_INVALID, secretNameRefusal(name))
+}
+
+/**
+ * Merge one patch into the record as the file holds it.
+ *
+ * Only a field the patch names is touched: a record that never had `cwd` or `autoApprove` does not gain
+ * one because a form sent the rest of its fields. The merged record then goes through the same
+ * validator the add path uses, so a command, arguments, directory, environment or flag rule cannot be
+ * enforced in one write and not the other. The id is deliberately not a patch field; the record's own
+ * id is carried through untouched.
+ */
+function patchServerRecord(
+  entry: McpServerEntry,
+  patch: McpServerPatch,
+  scope: McpScope,
+  index: number
+): McpServerEntry {
+  const next: McpServerRaw = { ...entry.raw }
+  if (Object.prototype.hasOwnProperty.call(patch, 'command')) next.command = patch.command
+  if (Object.prototype.hasOwnProperty.call(patch, 'args')) next.args = patch.args
+  if (Object.prototype.hasOwnProperty.call(patch, 'cwd')) next.cwd = patch.cwd
+  if (Object.prototype.hasOwnProperty.call(patch, 'env')) next.env = patch.env
+  if (Object.prototype.hasOwnProperty.call(patch, 'autoApprove')) next.autoApprove = patch.autoApprove
+
+  const checked = validateMcpServerRecord(next, scope, index)
+  if (!checked.ok) throw new ConveyorError(checked.error.code, checked.error.message)
+
+  // `secretEnv` is preserved whole, but its names are still environment names: an update must not
+  // launder a hand-edited name that `setSecret` would refuse into a freshly written record.
+  for (const name of Object.keys(checked.entry.config.secretEnv)) assertSafeSecretName(name)
+  return checked.entry
+}
+
+/**
+ * Update one stored server in place, stopping it before the new configuration lands.
+ *
+ * The stop is injected the same way a start's runtime is, which is what lets a suite prove the old bytes
+ * are still on disk when the process goes away. A server that is not running is the desired state, so
+ * its own code is swallowed; any other stop failure aborts before the write, because a process still
+ * running the old configuration is the one outcome this ordering exists to prevent.
+ *
+ * A project grant is cleared before the write as well: the update is a configuration change, and a
+ * grant never covers a server whose command, arguments, directory, environment or auto-approve flag has
+ * changed. The user scope has no trust record to clear.
+ */
+export async function updateMcpServer(
+  env: McpEnv,
+  input: { scope: McpScope; rootPath: string | null; serverId: string; patch: McpServerPatch },
+  stop: (serverId: string) => Promise<void>
+): Promise<{ id: string }> {
+  const path = configPathFor(env, input.scope, input.rootPath)
+  const loaded = await loadForWrite(path, input.scope)
+  const entry = requireEntry(loaded.entries, input.scope, input.serverId)
+  const index = indexOfId(loaded.entries, input.serverId)
+  const updated = patchServerRecord(entry, input.patch, input.scope, index)
+
+  try {
+    await stop(input.serverId)
+  } catch (error) {
+    if (!(error instanceof ConveyorError && error.code === MCP_SERVER_NOT_RUNNING)) throw error
+  }
+
+  if (input.scope === 'project' && input.rootPath) {
+    await clearMcpTrustRecord(env, input.rootPath, input.serverId)
+  }
+
+  await writeConfigFile(
+    path,
+    loaded.document,
+    loaded.entries.map((record) => (record.config.id === input.serverId ? updated.raw : record.raw))
+  )
+
+  return { id: input.serverId }
+}
+
 /** Remove one server, and any trust record that named it. */
 export async function removeMcpServer(
   env: McpEnv,
@@ -585,12 +686,7 @@ export async function setMcpServerSecret(
   env: McpEnv,
   input: { scope: McpScope; rootPath: string | null; serverId: string; name: string; value: string }
 ): Promise<{ id: string; name: string }> {
-  if (!isSafeMcpSecretKey(input.name)) {
-    throw new ConveyorError(
-      MCP_CONFIG_INVALID,
-      `"${input.name}" is not a usable secret name: it becomes an environment variable, so it must start with a letter or underscore and hold only letters, digits and underscores.`
-    )
-  }
+  assertSafeSecretName(input.name)
 
   const path = configPathFor(env, input.scope, input.rootPath)
   const loaded = await loadForWrite(path, input.scope)
@@ -839,6 +935,18 @@ const serverInputSchema = z.object({
 })
 
 /**
+ * The fields an update may change. The id is not among them: it is the record's identity and the key a
+ * trust record and a Buddy's `mcpSubset` use, so renaming is delete-plus-add rather than a patch.
+ */
+const serverPatchSchema = z.object({
+  command: z.string().min(1, 'A command is required').optional(),
+  args: z.array(z.string()).optional(),
+  cwd: z.string().nullable().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  autoApprove: z.boolean().optional(),
+})
+
+/**
  * The MCP surface: configuration, trust and secrets on disk, and the four calls that run a server.
  *
  * Every command here is main-process and code-branched. Reading is a query; anything that writes, or
@@ -864,6 +972,28 @@ export const mcpModule = defineModule({
         rootPath: input.rootPath ?? null,
         server: input.server,
       })
+    }
+  ),
+
+  /**
+   * Update one server in place.
+   *
+   * The record keeps its id and every key the patch does not name. A project server is stopped and its
+   * grant cleared before the new bytes land; a user server has no grant to clear.
+   */
+  updateServer: command(
+    z.object({ scope: scopeSchema, rootPath: rootPathSchema, serverId: serverIdSchema, patch: serverPatchSchema }),
+    async ({ input }) => {
+      return updateMcpServer(
+        mcpEnv(),
+        {
+          scope: input.scope,
+          rootPath: input.rootPath ?? null,
+          serverId: input.serverId,
+          patch: input.patch,
+        },
+        getMcpRuntime().stopServer
+      )
     }
   ),
 

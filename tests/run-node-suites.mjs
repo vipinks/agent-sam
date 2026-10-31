@@ -99,6 +99,7 @@ const SUITES = [
   { name: 'buddy glyphs (palette, built-in marks, fallback, glyph bound)', src: 'buddies/buddies-glyphs-test.ts' },
   { name: 'mcp config rules', src: 'mcp/mcp-rules-test.ts' },
   { name: 'mcp servers (files, trust, secrets)', src: 'mcp/mcp-servers-test.ts' },
+  { name: 'mcp server update (raw record, trust, stop-before-write)', src: 'mcp/mcp-server-update-test.ts' },
   { name: 'mcp runtime (spawn, tools, stderr)', src: 'mcp/mcp-runtime-test.ts' },
   { name: 'mcp bridge (tool list, consent, failures)', src: 'mcp/mcp-bridge-test.ts' },
   { name: 'mcp settings rules (running, trust, start gate)', src: 'mcp/mcp-settings-rules-test.ts' },

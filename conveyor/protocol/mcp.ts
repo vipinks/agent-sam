@@ -53,6 +53,12 @@ export const MCP_CONFIG_VERSION = 1
 export const MCP_CONFIG_INVALID = 'MCP_CONFIG_INVALID'
 export const MCP_SERVER_DUPLICATE = 'MCP_SERVER_DUPLICATE'
 export const MCP_SERVER_NOT_FOUND = 'MCP_SERVER_NOT_FOUND'
+
+/**
+ * The update command's name for a missing id. It is the same code the rest of the module already uses,
+ * so a caller may import either name and the UI keeps one branch.
+ */
+export const MCP_NOT_FOUND = MCP_SERVER_NOT_FOUND
 export const MCP_SECRET_CRYPTO_FAILED = 'MCP_SECRET_CRYPTO_FAILED'
 export const MCP_TRUST_MISMATCH = 'MCP_TRUST_MISMATCH'
 
@@ -158,6 +164,15 @@ export interface McpServerConfig {
    * one that does not.
    */
   autoApprove: boolean
+}
+
+/** One server's editable fields, as a caller may describe them. */
+export interface McpServerPatch {
+  command?: string
+  args?: string[]
+  cwd?: string | null
+  env?: Record<string, string>
+  autoApprove?: boolean
 }
 
 /** A record that passed the rules: the raw object to write back, and its normalized meaning. */

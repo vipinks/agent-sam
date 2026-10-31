@@ -41,8 +41,17 @@ const SERVER = {
   autoApprove: true,
 }
 
-/** The cluster's controls, in the order the row has always drawn them. */
-const CONTROLS = ['mcp-enabled', 'mcp-auto-approve', 'mcp-start', 'mcp-stop', 'mcp-secrets', 'mcp-logs', 'mcp-delete']
+/** The cluster's controls, in the approved order: edit sits between the log viewer and delete. */
+const CONTROLS = [
+  'mcp-enabled',
+  'mcp-auto-approve',
+  'mcp-start',
+  'mcp-stop',
+  'mcp-secrets',
+  'mcp-logs',
+  'mcp-edit',
+  'mcp-delete',
+]
 
 /** Main's answers for this suite, and the section over them once the first refresh has landed. */
 async function openSection(): Promise<void> {
@@ -140,7 +149,7 @@ describe('the MCP server row at every width', () => {
     expect(line().contains(group)).toBe(true)
     expect(row().contains(group)).toBe(true)
     // Movable: it wraps onto another line inside the card, and `max-w-full` is what stops the cluster
-    // itself — seven controls at their natural size — from being wider than the card it lives in.
+    // itself — eight controls at their natural size — from being wider than the card it lives in.
     expect(group.className).toContain('flex-wrap')
     expect(group.className).toContain('max-w-full')
 

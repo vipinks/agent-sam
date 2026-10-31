@@ -40,6 +40,8 @@ interface FakeServer {
   secrets?: Array<{ name: string; set: boolean }>
   /** Absent in the file is off, and the view normalizes it — see `listing`. */
   autoApprove?: boolean
+  /** A test-only marker: main never sends this, and the edit form must never paint it. */
+  storedSecret?: string
 }
 
 /** Main's half of the section: both files, the running registry, and the log buffers. */
@@ -105,6 +107,32 @@ function fakeMcp(stub: BridgeStub, initial: FakeState): { state: FakeState } {
     const { scope, server } = input as { scope: 'user' | 'project'; server: { id: string } }
     file(scope).push({ ...(server as FakeServer), trust: 'absent', secrets: [] })
     return { id: server.id }
+  })
+
+  stub.on('updateServer', (input) => {
+    const { scope, serverId, patch } = input as {
+      scope: 'user' | 'project'
+      serverId: string
+      patch: {
+        command?: string
+        args?: string[]
+        cwd?: string | null
+        env?: Record<string, string>
+        autoApprove?: boolean
+      }
+    }
+    const server = file(scope).find((candidate) => candidate.id === serverId)
+    if (server) {
+      if ('command' in patch) server.command = patch.command as string
+      if ('args' in patch) server.args = patch.args
+      if ('cwd' in patch) server.cwd = patch.cwd
+      if ('env' in patch) server.env = patch.env
+      if ('autoApprove' in patch) server.autoApprove = patch.autoApprove
+      // The real command stops a running server and clears a project grant before the write.
+      if (scope === 'project') server.trust = 'absent'
+    }
+    delete state.tools[serverId]
+    return { id: serverId }
   })
 
   stub.on('removeServer', (input) => {
@@ -735,6 +763,152 @@ describe('the add dialog and the flag', () => {
       .filter((call) => call.method === 'addServer')
       .map((call) => call.args[0] as Record<string, unknown>)
     expect((adds[1].server as Record<string, unknown>).autoApprove).toBe(true)
+  })
+})
+
+describe('the edit dialog', () => {
+  const editableProject = {
+    id: 'docs',
+    command: 'node',
+    args: ['tools/docs.js', '--watch'],
+    cwd: 'C:/w/tools',
+    env: { LOG_LEVEL: 'debug' },
+    enabled: true,
+    autoApprove: true,
+    trust: 'matched' as const,
+    secrets: [
+      { name: 'TOKEN', set: true },
+      { name: 'API_KEY', set: false },
+    ],
+    storedSecret: 'plaintext-never-on-screen',
+  }
+
+  async function openEdit(id = 'docs'): Promise<void> {
+    await userEvent.click(within(row(id)).getByRole('button', { name: `Edit ${id}` }))
+    await screen.findByText(`Edit ${id}`)
+  }
+
+  it('prefills the stored record, keeps the id read-only, and never paints a stored secret', async () => {
+    stubSettings({ project: [editableProject] })
+    renderSettings()
+    await openMcp()
+    await openEdit()
+
+    expect(((await field('Server id')) as HTMLInputElement).value).toBe('docs')
+    expect(((await field('Server id')) as HTMLInputElement).readOnly).toBe(true)
+    expect(((await field('Command')) as HTMLInputElement).value).toBe('node')
+    expect(((await field('Arguments')) as HTMLTextAreaElement).value).toBe('tools/docs.js\n--watch')
+    expect(((await field('Working directory')) as HTMLInputElement).value).toBe('C:/w/tools')
+    expect(((await field('Environment name 1')) as HTMLInputElement).value).toBe('LOG_LEVEL')
+    expect(((await field('Environment value 1')) as HTMLInputElement).value).toBe('debug')
+    expect(
+      (screen.getByRole('checkbox', { name: /Auto-approve tools/ }) as HTMLElement).getAttribute('data-state')
+    ).toBe('checked')
+
+    const token = (await field('New value for TOKEN')) as HTMLInputElement
+    expect(token.type).toBe('password')
+    expect(token.value).toBe('')
+    expect(token.placeholder).toBe('Leave blank to keep, type to replace')
+    expect(((await field('New value for API_KEY')) as HTMLInputElement).value).toBe('')
+
+    // The id is a key, not a draft: renaming is delete-plus-add, and the dialog says so once.
+    expect(screen.getByText('To change the id, delete the server and add it again')).toBeTruthy()
+
+    // Main never sends the stored value, and the form never invents one to paint.
+    expect(document.body.textContent ?? '').not.toContain(editableProject.storedSecret)
+    expect(screen.queryByDisplayValue(editableProject.storedSecret)).toBeNull()
+  })
+
+  it('sends the config first, then the secret rows in order, and never puts a secret in the patch', async () => {
+    const { stub } = stubSettings({ project: [editableProject] })
+    renderSettings()
+    await openMcp()
+    await openEdit()
+
+    await userEvent.clear(await field('Command'))
+    await type('Command', 'node-next')
+    await userEvent.clear(await field('Environment value 1'))
+    await type('Environment value 1', 'trace')
+    await userEvent.click(screen.getByRole('checkbox', { name: /Auto-approve tools/ }))
+
+    await type('New value for TOKEN', 'replacement-token')
+    await userEvent.click(screen.getByRole('button', { name: 'Clear API_KEY' }))
+    await press('Save changes')
+
+    await waitFor(() => expect(mcpMethods(stub)).toContain('updateServer'))
+    expect(mcpMethods(stub)).toEqual([
+      'listServers',
+      'listRunningTools',
+      'updateServer',
+      'setSecret',
+      'clearSecret',
+      'listServers',
+      'listRunningTools',
+    ])
+
+    // Only the fields that changed travel. An untouched cwd, args list or flag is not restated, so the
+    // record keeps the absence the file had rather than acquiring a normalized copy of it.
+    expect(inputOf(stub, 'updateServer')).toEqual({
+      scope: 'project',
+      rootPath: ROOT,
+      serverId: 'docs',
+      patch: {
+        command: 'node-next',
+        env: { LOG_LEVEL: 'trace' },
+        autoApprove: false,
+      },
+    })
+    expect(JSON.stringify(inputOf(stub, 'updateServer'))).not.toContain('replacement-token')
+
+    const secrets = stub.calls
+      .filter((call) => call.method === 'setSecret' || call.method === 'clearSecret')
+      .map((call) => [call.method, call.args[0]])
+    expect(secrets).toEqual([
+      ['setSecret', { scope: 'project', rootPath: ROOT, serverId: 'docs', name: 'TOKEN', value: 'replacement-token' }],
+      ['clearSecret', { scope: 'project', rootPath: ROOT, serverId: 'docs', name: 'API_KEY' }],
+    ])
+  })
+
+  it('leaves the config untouched when the edit is cancelled', async () => {
+    const { stub, state } = stubSettings({ project: [editableProject] })
+    renderSettings()
+    await openMcp()
+    await openEdit()
+
+    await userEvent.clear(await field('Command'))
+    await type('Command', 'node-next')
+    await press('Cancel')
+
+    expect(mcpMethods(stub)).not.toContain('updateServer')
+    expect(mcpMethods(stub)).not.toContain('setSecret')
+    expect(mcpMethods(stub)).not.toContain('clearSecret')
+    expect(state.project[0].command).toBe('node')
+  })
+
+  it('refuses a blank command and a bad stored secret name on their own fields', async () => {
+    const { stub } = stubSettings({
+      project: [
+        {
+          ...editableProject,
+          secrets: [{ name: 'API-TOKEN', set: true }],
+        },
+      ],
+    })
+    renderSettings()
+    await openMcp()
+    await openEdit()
+
+    await userEvent.clear(await field('Command'))
+    await press('Save changes')
+    expect(fieldErrors().some((text) => text === 'A command is required — this is what gets run.')).toBe(true)
+    expect(mcpMethods(stub)).not.toContain('updateServer')
+
+    await type('Command', 'node-next')
+    await press('Save changes')
+    expect(
+      fieldErrors().some((text) => text === 'Secret names become environment variables: "API-TOKEN" is not one.')
+    ).toBe(true)
+    expect(mcpMethods(stub)).not.toContain('updateServer')
   })
 })
 

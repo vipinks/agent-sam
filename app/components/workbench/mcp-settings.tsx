@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { KeyRound, Loader2, Play, Plus, RefreshCw, ScrollText, Square, Trash2, Zap } from 'lucide-react'
+import { KeyRound, Loader2, Pencil, Play, Plus, RefreshCw, ScrollText, Square, Trash2, Zap } from 'lucide-react'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
 import { workspaceStore } from '@/conveyor/stores/workspace'
@@ -39,9 +39,8 @@ import { actionErrorMessage, readErrorMessage } from './mcp-notices'
  * wiring: which call a button makes, and what a failure says.
  *
  * Failures are said in this section's own words, branched on the error *code* and never on main's
- * message — the message is for a log, and the code is the contract. Editing is delete-plus-add, exactly
- * as it is for a custom provider: a server's command is not a field that can be edited in place without
- * a rule for what happens to the trust granted against the old one.
+ * message — the message is for a log, and the code is the contract. Editing reopens the same form the
+ * add path uses, with the id read-only: a server's id is its identity, so renaming is delete-plus-add.
  */
 export function McpServersSection() {
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath) ?? null
@@ -404,6 +403,8 @@ function ServerRow({
             </Button>
           </LogsDialog>
 
+          <EditServerDialog server={server} rootPath={rootPath} onChanged={onChanged} />
+
           <Button
             data-slot="mcp-delete"
             size="icon-sm"
@@ -446,7 +447,7 @@ function ServerRow({
             <AlertDialogDescription>
               {isRunning
                 ? `${server.id} is running, so it is stopped first. Its configuration and its stored secrets are then removed from the ${server.scope} config file.`
-                : `Its configuration and its stored secrets are removed from the ${server.scope} config file. To change a server, remove it and add it again.`}
+                : `Its configuration and its stored secrets are removed from the ${server.scope} config file. To rename a server, remove it and add it again.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -474,76 +475,88 @@ function commandSummary(server: McpServerListing): string {
 interface DraftRow {
   name: string
   value: string
+  /** Edit mode only: the row is queued for `clearSecret` when the form is submitted. */
+  clear?: boolean
 }
 
 /**
- * The form that describes a server before it exists.
+ * The form that describes a server before it exists, and the same form once it does.
  *
- * Saving does two things in one gesture, because a user who types a secret means it to be used: the
- * server joins its file, and then each secret row is stored against it through `mcp.setSecret` — the
- * call that encrypts. The order is the point: a secret can never name a server that is not there yet,
- * and nothing in the config payload is a secret, in plaintext or in ciphertext. The store's own words
- * for a refusal are derived from the code main rejects with, never from its message.
+ * One component, two modes. Add writes a new record through `mcp.addServer` and then stores each secret
+ * row through `mcp.setSecret`; edit patches the stored record through `mcp.updateServer` and then walks
+ * the declared secret rows in order, clearing the ones marked for removal and replacing the ones with a
+ * typed value. In both modes the config call comes first: a secret can never name a server that is not
+ * there yet, and the patch never carries a secret in plaintext or ciphertext.
  *
- * The rules are applied here *and* again in main. Here so a refusal lands on the field it belongs to
- * rather than being discovered after a round trip; there because that is where the file is written and
- * where the list the id must be unique against actually lives.
+ * The id is a field in add and a read-only fact in edit. It is the key a trust record and a Buddy's
+ * `mcpSubset` use, so renaming is deliberately delete-plus-add. The rules are applied here *and* again
+ * in main: here so a refusal lands on the field it belongs to, there because that is where the file is.
  */
-function AddServerDialog({
+function ServerFormDialog({
+  open,
+  mode,
   rootPath,
   listing,
-  onAdded,
+  server,
+  onOpenChange,
+  onSaved,
+  onChanged,
 }: {
+  open: boolean
+  mode: 'add' | 'edit'
   rootPath: string | null
   listing: { user: McpServerListing[]; project: McpServerListing[] } | null
-  onAdded: (id: string) => void
+  server?: McpServerListing | null
+  onOpenChange: (open: boolean) => void
+  onSaved: (id: string) => void
+  onChanged: (id: string) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const [scope, setScope] = useState<'user' | 'project'>('user')
-  const [id, setId] = useState('')
-  const [command, setCommand] = useState('')
-  const [args, setArgs] = useState('')
-  const [cwd, setCwd] = useState('')
-  const [envRows, setEnvRows] = useState<DraftRow[]>([])
-  const [secretRows, setSecretRows] = useState<DraftRow[]>([])
+  const editing = mode === 'edit'
+  const stored = editing ? (server ?? null) : null
+  const [scope, setScope] = useState<'user' | 'project'>(stored?.scope ?? 'user')
+  const [id, setId] = useState(stored?.id ?? '')
+  const [command, setCommand] = useState(stored?.command ?? '')
+  const [args, setArgs] = useState(stored ? stored.args.join('\n') : '')
+  const [cwd, setCwd] = useState(stored?.cwd ?? '')
+  const [envRows, setEnvRows] = useState<DraftRow[]>(
+    stored ? Object.entries(stored.env).map(([name, value]) => ({ name, value })) : []
+  )
+  const [secretRows, setSecretRows] = useState<DraftRow[]>(
+    stored ? stored.secrets.map((secret) => ({ name: secret.name, value: '', clear: false })) : []
+  )
   /**
-   * Whether the server being added is flagged from the moment it exists, off in every new dialog.
+   * Whether the server is flagged as running its tools without asking.
    *
-   * Reset on close like every other field: this one decides whether the server's calls will be put to
-   * the user, so it is never carried over from a draft that was abandoned.
+   * Off in every new dialog, and prefilled in edit. It is part of the trust hash, so changing it on a
+   * project server is a configuration change like any other.
    */
-  const [autoApprove, setAutoApprove] = useState(false)
+  const [autoApprove, setAutoApprove] = useState(stored?.autoApprove ?? false)
   const [error, setError] = useState<{ field: 'id' | 'command' | 'secrets' | 'form'; message: string } | null>(null)
 
   const addServer = conveyor.mcp.addServer.useMutation()
+  const updateServer = conveyor.mcp.updateServer.useMutation()
   const setSecret = conveyor.mcp.setSecret.useMutation()
+  const clearSecret = conveyor.mcp.clearSecret.useMutation()
 
-  const close = () => {
-    setOpen(false)
-    setId('')
-    setCommand('')
-    setArgs('')
-    setCwd('')
-    setEnvRows([])
-    setSecretRows([])
-    setError(null)
-    setScope('user')
-    setAutoApprove(false)
-  }
+  const close = () => onOpenChange(false)
 
   const onSave = async () => {
-    const trimmedId = id.trim()
-    const duplicate = (scope === 'user' ? listing?.user : listing?.project)?.some((server) => server.id === trimmedId)
-    if (!isSafeMcpServerId(trimmedId)) {
-      setError({
-        field: 'id',
-        message: 'Server ids are lower-case slugs — letters, digits, dots, dashes or underscores — and never a path.',
-      })
-      return
-    }
-    if (duplicate) {
-      setError({ field: 'id', message: 'A server with this id already exists in this scope.' })
-      return
+    const trimmedId = editing && stored ? stored.id : id.trim()
+    if (!editing) {
+      const duplicate = (scope === 'user' ? listing?.user : listing?.project)?.some(
+        (candidate) => candidate.id === trimmedId
+      )
+      if (!isSafeMcpServerId(trimmedId)) {
+        setError({
+          field: 'id',
+          message: 'Server ids are lower-case slugs — letters, digits, dots, dashes or underscores — and never a path.',
+        })
+        return
+      }
+      if (duplicate) {
+        setError({ field: 'id', message: 'A server with this id already exists in this scope.' })
+        return
+      }
     }
     if (command.trim() === '') {
       setError({ field: 'command', message: 'A command is required — this is what gets run.' })
@@ -563,6 +576,53 @@ function AddServerDialog({
     const env = Object.fromEntries(
       envRows.filter((row) => row.name.trim() !== '').map((row) => [row.name.trim(), row.value])
     )
+
+    if (editing && stored) {
+      const cwdValue = cwd.trim() === '' ? null : cwd.trim()
+      const patch: {
+        command?: string
+        args?: string[]
+        cwd?: string | null
+        env?: Record<string, string>
+        autoApprove?: boolean
+      } = {}
+      if (command.trim() !== stored.command) patch.command = command.trim()
+      if (!sameStringList(splitLines(args), stored.args)) patch.args = splitLines(args)
+      if (cwdValue !== stored.cwd) patch.cwd = cwdValue
+      if (!sameStringMap(env, stored.env)) patch.env = env
+      if (autoApprove !== stored.autoApprove) patch.autoApprove = autoApprove
+
+      try {
+        if (Object.keys(patch).length > 0) {
+          await updateServer.mutateAsync({ scope, rootPath, serverId: stored.id, patch })
+        }
+      } catch (err) {
+        setError({ field: 'form', message: `The server was not updated. ${actionErrorMessage(err)}` })
+        return
+      }
+
+      for (const row of secrets) {
+        const name = row.name.trim()
+        try {
+          if (row.clear) {
+            await clearSecret.mutateAsync({ scope, rootPath, serverId: stored.id, name })
+          } else if (row.value !== '') {
+            await setSecret.mutateAsync({ scope, rootPath, serverId: stored.id, name, value: row.value })
+          }
+        } catch (err) {
+          setError({
+            field: 'secrets',
+            message: `The server was updated, but a secret was not changed. ${actionErrorMessage(err)}`,
+          })
+          onChanged(stored.id)
+          return
+        }
+      }
+
+      close()
+      onSaved(stored.id)
+      return
+    }
 
     try {
       await addServer.mutateAsync({
@@ -600,45 +660,46 @@ function AddServerDialog({
           field: 'secrets',
           message: `The server was added, but a secret was not stored. ${actionErrorMessage(err)}`,
         })
-        onAdded(trimmedId)
+        onChanged(trimmedId)
         return
       }
     }
 
     close()
-    onAdded(trimmedId)
+    onSaved(trimmedId)
   }
 
+  const slot = editing ? 'mcp-edit' : 'mcp-add'
+  const busy = addServer.isPending || updateServer.isPending || setSecret.isPending || clearSecret.isPending
+
   return (
-    <>
-      <Button
-        data-slot="mcp-add-open"
-        size="sm"
-        variant="outline"
-        className="shrink-0"
-        disabled={rootPath === null}
-        title={rootPath === null ? 'Open a folder to add a project server' : undefined}
-        onClick={() => setOpen(true)}
-      >
-        <Plus aria-hidden="true" />
-        Add Server
-      </Button>
+    <AlertDialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
+      <AlertDialogContent className="max-h-[85vh] overflow-auto">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{editing && stored ? `Edit ${stored.id}` : 'Add a server'}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {editing ? (
+              <>
+                Change how this server is launched. The id stays fixed, so a grant and any Buddy that names this server
+                keep pointing at the same record; the changed configuration is trusted again from scratch.
+              </>
+            ) : (
+              <>
+                A program this app runs over stdio and asks for tools. Nothing runs until you switch the server on and —
+                for a project server — trust the configuration as it stands.
+              </>
+            )}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
 
-      <AlertDialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
-        <AlertDialogContent className="max-h-[85vh] overflow-auto">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Add a server</AlertDialogTitle>
-            <AlertDialogDescription>
-              A program this app runs over stdio and asks for tools. Nothing runs until you switch the server on and —
-              for a project server — trust the configuration as it stands.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <div className="flex flex-col gap-3.5">
-            <div className="flex flex-col gap-1.5">
-              <Label>Scope</Label>
-              {/* Two pressed buttons rather than a picker: the choice is one of two, it is stated in full
-                  by both labels, and a select would hide one of the two behind a popup for no gain. */}
+        <div className="flex flex-col gap-3.5">
+          <div className="flex flex-col gap-1.5">
+            <Label>Scope</Label>
+            {editing ? (
+              <p data-slot="mcp-edit-scope" className="text-[12px] text-muted-foreground">
+                {scope === 'user' ? 'User' : 'Project'} scope — fixed for this server
+              </p>
+            ) : (
               <div className="flex items-center gap-2">
                 {(['user', 'project'] as const).map((candidate) => (
                   <Button
@@ -654,96 +715,109 @@ function AddServerDialog({
                   </Button>
                 ))}
               </div>
-            </div>
+            )}
+          </div>
 
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="mcp-add-id">Server id</Label>
-              <Input
-                id="mcp-add-id"
-                value={id}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="filesystem"
-                onChange={(event) => setId(event.target.value)}
-                className="h-8 font-mono text-[12px]"
-              />
-              {error?.field === 'id' && (
-                <p data-slot="mcp-add-id-error" role="alert" className="text-[12px] text-destructive">
-                  {error.message}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="mcp-add-command">Command</Label>
-              <Input
-                id="mcp-add-command"
-                value={command}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="npx"
-                onChange={(event) => setCommand(event.target.value)}
-                className="h-8 font-mono text-[12px]"
-              />
-              {error?.field === 'command' && (
-                <p data-slot="mcp-add-command-error" role="alert" className="text-[12px] text-destructive">
-                  {error.message}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="mcp-add-args">Arguments</Label>
-              <Textarea
-                id="mcp-add-args"
-                value={args}
-                spellCheck={false}
-                rows={3}
-                placeholder={'One per line\n-y\n@modelcontextprotocol/server-filesystem'}
-                onChange={(event) => setArgs(event.target.value)}
-                className="font-mono text-[12px]"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="mcp-add-cwd">Working directory</Label>
-              <Input
-                id="mcp-add-cwd"
-                value={cwd}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="Leave empty to run in the open folder"
-                onChange={(event) => setCwd(event.target.value)}
-                className="h-8 font-mono text-[12px]"
-              />
-            </div>
-
-            {/* Off by default, and worded as what it does rather than what it is called: this is the
-                one field in the dialog that decides whether the server's calls are put to the user, and a
-                tick made by accident is the whole of a server running unattended. It does not start the
-                server — nothing in this dialog does, and the row's Start is what does. */}
-            <div className="flex items-start gap-2">
-              <Checkbox
-                id="mcp-add-auto-approve"
-                data-slot="mcp-add-auto-approve"
-                className="mt-0.5"
-                checked={autoApprove}
-                onCheckedChange={(value) => setAutoApprove(value === true)}
-              />
-              <Label htmlFor="mcp-add-auto-approve" className="text-[12.5px] font-normal">
-                Auto-approve tools — its calls run without asking, in every conversation
-              </Label>
-            </div>
-
-            <KeyValueRows
-              legend="Environment"
-              hint="Plain configuration. Visible here and stored in the config file."
-              addLabel="Add environment variable"
-              nameLabel="Environment"
-              rows={envRows}
-              onChange={setEnvRows}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${slot}-id`}>Server id</Label>
+            <Input
+              id={`${slot}-id`}
+              value={id}
+              readOnly={editing}
+              aria-readonly={editing || undefined}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="filesystem"
+              onChange={(event) => {
+                if (!editing) setId(event.target.value)
+              }}
+              className={`h-8 font-mono text-[12px]${editing ? ' bg-muted/40' : ''}`}
             />
+            {editing && (
+              <p data-slot="mcp-edit-id-hint" className="text-[11.5px] text-muted-foreground">
+                To change the id, delete the server and add it again
+              </p>
+            )}
+            {!editing && error?.field === 'id' && (
+              <p data-slot="mcp-add-id-error" role="alert" className="text-[12px] text-destructive">
+                {error.message}
+              </p>
+            )}
+          </div>
 
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${slot}-command`}>Command</Label>
+            <Input
+              id={`${slot}-command`}
+              value={command}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="npx"
+              onChange={(event) => setCommand(event.target.value)}
+              className="h-8 font-mono text-[12px]"
+            />
+            {error?.field === 'command' && (
+              <p data-slot={`${slot}-command-error`} role="alert" className="text-[12px] text-destructive">
+                {error.message}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${slot}-args`}>Arguments</Label>
+            <Textarea
+              id={`${slot}-args`}
+              value={args}
+              spellCheck={false}
+              rows={3}
+              placeholder={'One per line\n-y\n@modelcontextprotocol/server-filesystem'}
+              onChange={(event) => setArgs(event.target.value)}
+              className="font-mono text-[12px]"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${slot}-cwd`}>Working directory</Label>
+            <Input
+              id={`${slot}-cwd`}
+              value={cwd}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Leave empty to run in the open folder"
+              onChange={(event) => setCwd(event.target.value)}
+              className="h-8 font-mono text-[12px]"
+            />
+          </div>
+
+          {/* Off by default, and worded as what it does rather than what it is called: this is the
+              one field in the dialog that decides whether the server's calls are put to the user, and a
+              tick made by accident is the whole of a server running unattended. It does not start the
+              server — nothing in this dialog does, and the row's Start is what does. */}
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id={`${slot}-auto-approve`}
+              data-slot={`${slot}-auto-approve`}
+              className="mt-0.5"
+              checked={autoApprove}
+              onCheckedChange={(value) => setAutoApprove(value === true)}
+            />
+            <Label htmlFor={`${slot}-auto-approve`} className="text-[12.5px] font-normal">
+              Auto-approve tools — its calls run without asking, in every conversation
+            </Label>
+          </div>
+
+          <KeyValueRows
+            legend="Environment"
+            hint="Plain configuration. Visible here and stored in the config file."
+            addLabel="Add environment variable"
+            nameLabel="Environment"
+            rows={envRows}
+            onChange={setEnvRows}
+          />
+
+          {editing ? (
+            <EditSecretRows rows={secretRows} onChange={setSecretRows} />
+          ) : (
             <KeyValueRows
               legend="Secrets"
               hint="Encrypted with your operating system keychain. Typed once, never shown again."
@@ -752,27 +826,114 @@ function AddServerDialog({
               rows={secretRows}
               onChange={setSecretRows}
             />
-            {error?.field === 'secrets' && (
-              <p data-slot="mcp-add-secrets-error" role="alert" className="text-[12px] text-destructive">
-                {error.message}
-              </p>
-            )}
-            {error?.field === 'form' && (
-              <p data-slot="mcp-add-form-error" role="alert" className="text-[12px] text-destructive">
-                {error.message}
-              </p>
-            )}
-          </div>
+          )}
+          {error?.field === 'secrets' && (
+            <p data-slot={`${slot}-secrets-error`} role="alert" className="text-[12px] text-destructive">
+              {error.message}
+            </p>
+          )}
+          {error?.field === 'form' && (
+            <p data-slot={`${slot}-form-error`} role="alert" className="text-[12px] text-destructive">
+              {error.message}
+            </p>
+          )}
+        </div>
 
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={close}>Cancel</AlertDialogCancel>
-            <Button size="sm" disabled={addServer.isPending || setSecret.isPending} onClick={() => void onSave()}>
-              {(addServer.isPending || setSecret.isPending) && <Loader2 className="animate-spin" />}
-              Save server
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={close}>Cancel</AlertDialogCancel>
+          <Button size="sm" disabled={busy} onClick={() => void onSave()}>
+            {busy && <Loader2 className="animate-spin" />}
+            {editing ? 'Save changes' : 'Save server'}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+/** The add entry point: a trigger that owns whether the shared form is mounted. */
+function AddServerDialog({
+  rootPath,
+  listing,
+  onAdded,
+}: {
+  rootPath: string | null
+  listing: { user: McpServerListing[]; project: McpServerListing[] } | null
+  onAdded: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <>
+      <Button
+        data-slot="mcp-add-open"
+        size="sm"
+        variant="outline"
+        className="shrink-0"
+        disabled={rootPath === null}
+        title={rootPath === null ? 'Open a folder to add a project server' : undefined}
+        onClick={() => setOpen(true)}
+      >
+        <Plus aria-hidden="true" />
+        Add Server
+      </Button>
+      {open && (
+        <ServerFormDialog
+          open={open}
+          mode="add"
+          rootPath={rootPath}
+          listing={listing}
+          onOpenChange={setOpen}
+          onSaved={(id) => {
+            setOpen(false)
+            onAdded(id)
+          }}
+          onChanged={(id) => onAdded(id)}
+        />
+      )}
+    </>
+  )
+}
+
+/** The row's edit entry point: the same form, prefilled from this row's stored record. */
+function EditServerDialog({
+  server,
+  rootPath,
+  onChanged,
+}: {
+  server: McpServerListing
+  rootPath: string | null
+  onChanged: () => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <>
+      <Button
+        data-slot="mcp-edit"
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Edit ${server.id}`}
+        title="Edit server"
+        onClick={() => setOpen(true)}
+      >
+        <Pencil />
+      </Button>
+      {open && (
+        <ServerFormDialog
+          open={open}
+          mode="edit"
+          server={server}
+          rootPath={rootPath}
+          listing={null}
+          onOpenChange={setOpen}
+          onSaved={() => {
+            setOpen(false)
+            onChanged()
+          }}
+          onChanged={() => onChanged()}
+        />
+      )}
     </>
   )
 }
@@ -845,6 +1006,74 @@ function KeyValueRows({
       <p className="text-[11.5px] text-muted-foreground">{hint}</p>
     </div>
   )
+}
+
+/**
+ * The edit mode's secret block: one row per declared name, with no way to invent a name.
+ *
+ * A blank field is not an instruction; it is the absence of one. A row marked Clear is queued for
+ * `clearSecret` and its typed value is discarded, so the two actions cannot disagree. Neither action is
+ * sent until the form is submitted, after the config call, which is what keeps the order the same as
+ * the add path.
+ */
+function EditSecretRows({ rows, onChange }: { rows: DraftRow[]; onChange: (rows: DraftRow[]) => void }) {
+  const replace = (index: number, patch: Partial<DraftRow>) =>
+    onChange(rows.map((row, at) => (at === index ? { ...row, ...patch } : row)))
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>Secrets</Label>
+      {rows.length === 0 ? (
+        <p className="text-[11.5px] text-muted-foreground">This server declares no secrets.</p>
+      ) : (
+        rows.map((row, index) => (
+          <div key={row.name} className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-[12px]">{row.name}</span>
+              {row.clear && <span className="text-[11px] text-muted-foreground">Will be cleared</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label={`New value for ${row.name}`}
+                type="password"
+                value={row.value}
+                autoComplete="new-password"
+                spellCheck={false}
+                placeholder="Leave blank to keep, type to replace"
+                onChange={(event) => replace(index, { value: event.target.value, clear: false })}
+                className="h-8 flex-1 font-mono text-[12px]"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant={row.clear ? 'secondary' : 'ghost'}
+                aria-label={`Clear ${row.name}`}
+                aria-pressed={row.clear}
+                onClick={() => replace(index, { clear: !row.clear, value: '' })}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+        ))
+      )}
+      <p className="text-[11.5px] text-muted-foreground">
+        A blank field keeps the stored value. Clearing removes it when you save.
+      </p>
+    </div>
+  )
+}
+
+/** Compare the two argument lists the form and the record hold. */
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+/** Compare two string maps without depending on key order. */
+function sameStringMap(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) => right[key] === left[key])
 }
 
 /** One argument per line, with blank lines dropped: the file holds a list, and a typist writes lines. */
