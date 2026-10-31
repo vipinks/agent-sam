@@ -3,7 +3,13 @@
  * Loads the real `conveyor/modules/models-engine.ts` so what is tested is what ships.
  */
 import { strict as assert } from 'node:assert'
-import { fetchModels, parseModels, ANTHROPIC_CURATED_MODELS } from '../../conveyor/modules/models-engine'
+import {
+  fetchModels,
+  parseCatalogue,
+  parseModels,
+  ANTHROPIC_CURATED_MODELS,
+} from '../../conveyor/modules/models-engine'
+import { resolveRates } from '../../conveyor/protocol/session-usage'
 
 const results: string[] = []
 
@@ -65,9 +71,47 @@ function anthropicFormat() {
 // ---------------------------------------------------------------- other accepted shapes
 
 function tolerantShapes() {
-  // OpenRouter labels with `name`.
-  const openrouter = parseModels('openrouter', { data: [{ id: 'anthropic/claude-3.5', name: 'Claude 3.5' }] })
-  assert.equal(openrouter[0].name, 'Claude 3.5')
+  // OpenRouter labels with `name`, and its catalogue is also where a model's prices are published.
+  const openrouter = parseCatalogue('openrouter', {
+    data: [
+      {
+        id: 'anthropic/claude-3.5',
+        name: 'Claude 3.5',
+        pricing: { prompt: '0.00003', completion: '0.00006', input_cache_read: '0.000003' },
+      },
+    ],
+  })
+  assert.equal(openrouter.models[0].name, 'Claude 3.5')
+  assert.deepEqual(openrouter.rates['anthropic/claude-3.5'], {
+    inputRate: 30,
+    cacheHitRate: 3,
+    outputRate: 60,
+  })
+  assert.deepEqual(resolveRates({ model: 'anthropic/claude-3.5', catalogueRates: openrouter.rates }), {
+    input: 30_000_000,
+    cacheHit: 3_000_000,
+    output: 60_000_000,
+  })
+  // A user's own declaration is above the catalogue, not merged with it.
+  assert.deepEqual(
+    resolveRates({
+      model: 'anthropic/claude-3.5',
+      modelRates: {
+        'anthropic/claude-3.5': { inputRate: 1, cacheHitRate: 0.5, outputRate: 2 },
+      },
+      catalogueRates: openrouter.rates,
+    }),
+    { input: 1_000_000, cacheHit: 500_000, output: 2_000_000 }
+  )
+  // A catalogue entry short of its cache-hit side is not a declaration, and it does not reach the
+  // shipped table for the missing side either: that model stays unpriced.
+  assert.equal(
+    resolveRates({
+      model: 'gpt-4o-mini',
+      catalogueRates: { 'gpt-4o-mini': { inputRate: 1, outputRate: 2 } },
+    }),
+    null
+  )
 
   // A bare array of ids, which some gateways return.
   assert.deepEqual(
@@ -130,13 +174,28 @@ async function httpProviders() {
     ['opencode', 'https://opencode.ai/zen/v1/models'],
     ['openrouter', 'https://openrouter.ai/api/v1/models'],
   ]) {
-    const mock = mockFetch(json({ data: [{ id: 'm-1' }, { id: 'm-2' }] }))
-    const models = await fetchModels(providerId, 'sk-test', mock.fn)
+    const mock = mockFetch(
+      json({
+        data: [
+          {
+            id: 'm-1',
+            pricing: { prompt: '0.000001', completion: '0.000002', input_cache_read: '0.0000005' },
+          },
+          { id: 'm-2' },
+        ],
+      })
+    )
+    const catalogue = await fetchModels(providerId, 'sk-test', mock.fn)
     assert.equal(mock.calls[0].url, expectedUrl, `${providerId} url`)
     assert.equal((mock.calls[0].init.headers as Record<string, string>).authorization, 'Bearer sk-test')
     assert.deepEqual(
-      models.map((m) => m.id),
+      catalogue.map((m) => m.id),
       ['m-1', 'm-2']
+    )
+    assert.deepEqual(
+      catalogue[0].rates,
+      providerId === 'openrouter' ? { inputRate: 1, cacheHitRate: 0.5, outputRate: 2 } : undefined,
+      `${providerId} catalogue prices`
     )
   }
   results.push('each OpenAI-compatible provider hits its own /v1/models with the bearer key')

@@ -3,7 +3,8 @@
  * Loads the real `conveyor/modules/llm-engine.ts` so what is tested is what ships.
  */
 import { strict as assert } from 'node:assert'
-import { buildRequest, extractDelta, mapHttpError, streamChat } from '../../conveyor/modules/llm-engine'
+import { buildRequest, extractDelta, mapHttpError, streamChat, streamDeltas } from '../../conveyor/modules/llm-engine'
+import { costMicros, resolveRates, type UsageCounters } from '../../conveyor/protocol/session-usage'
 
 const results: string[] = []
 
@@ -74,7 +75,34 @@ function deltaExtraction() {
     extractDelta('anthropic', '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}'),
     { text: 'Hi' }
   )
-  assert.equal(extractDelta('anthropic', '{"type":"message_start"}'), null)
+  assert.deepEqual(
+    extractDelta(
+      'anthropic',
+      JSON.stringify({
+        type: 'message_start',
+        message: {
+          usage: {
+            input_tokens: 100,
+            cache_read_input_tokens: 50,
+            cache_creation_input_tokens: 10,
+            output_tokens: 1,
+          },
+        },
+      })
+    ),
+    { usage: { prompt: 160, completion: 0, cached: 50 } }
+  )
+  assert.deepEqual(
+    extractDelta(
+      'anthropic',
+      JSON.stringify({
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn' },
+        usage: { output_tokens: 30 },
+      })
+    ),
+    { finishReason: 'end_turn', usage: { prompt: 0, completion: 30 } }
+  )
   assert.equal(extractDelta('anthropic', '{"type":"message_stop"}'), null)
 
   // A tool call arrives in fragments: the id and name with the first frame, the JSON arguments
@@ -209,6 +237,33 @@ async function anthropicStreamParsing() {
   results.push('anthropic sse stream (event lines, lf)')
 }
 
+async function anthropicUsageCapture() {
+  const body = sse(
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":50,"cache_creation_input_tokens":10,"output_tokens":1}}}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":30}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+  )
+  const mock = mockFetch(new Response(body, { status: 200 }))
+
+  let lastUsage: UsageCounters | undefined
+  for await (const delta of streamDeltas({
+    providerId: 'anthropic',
+    apiKey: 'sk-ant',
+    model: 'claude-3-5-sonnet-latest',
+    messages: [{ role: 'user', content: 'hi' }],
+    signal: new AbortController().signal,
+    fetchImpl: mock.fn,
+  })) {
+    if (delta.usage) lastUsage = delta.usage
+  }
+
+  assert.deepEqual(lastUsage, { prompt: 160, completion: 30, cached: 50 })
+  const rates = resolveRates({ model: 'claude-3-5-sonnet-latest' })
+  assert.ok(rates)
+  assert.equal(costMicros(lastUsage!, rates), 795)
+  results.push('anthropic usage events become one priced counter set')
+}
+
 async function httpFailures() {
   const unauthorized = mockFetch(jsonResponse(401, '{"error":{"message":"Invalid key"}}'))
   await assert.rejects(
@@ -333,6 +388,7 @@ async function main() {
   errorMapping()
   await openAiStreamParsing()
   await anthropicStreamParsing()
+  await anthropicUsageCapture()
   await httpFailures()
   await networkFailure()
   await emptyBody()

@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
 import { appendCustom, newProviderId, validateProviderDraft, type CustomProvider } from '../protocol/custom-provider'
 import type { ModelWindows } from '../protocol/context-window'
-import type { ModelRates } from '../protocol/session-usage'
+import type { CatalogueRates, ModelRates } from '../protocol/session-usage'
 
 /**
  * Per-provider model choices: which models a provider offers, and which of those the user has
@@ -53,6 +53,17 @@ export interface ProviderConfig {
    */
   modelRates?: ModelRates
   /**
+   * What the provider's own catalogue published for its models, by model id.
+   *
+   * Kept apart from `modelRates` above because the two have different owners: this map is replaced by
+   * a refresh and the declaration map is edited by the user. Neither action may overwrite the other, and
+   * `resolveRates` reads the declaration first, then this map, then the shipped table.
+   *
+   * A catalogue entry missing a side is stored as it was published; the pricing rule refuses to bill it
+   * rather than inventing the missing side or falling through to the shipped table for part of a model.
+   */
+  catalogueRates?: CatalogueRates
+  /**
    * How many tokens each of this provider's models accepts, as the user declared it, by model id.
    *
    * Additive and optional beside `modelRates` above, and keyed by the model for the same reason a price
@@ -94,6 +105,12 @@ export interface ProviderConfigState {
 
 const modelSchema = z.object({ id: z.string(), name: z.string().optional() })
 
+const rateDeclarationSchema = z.object({
+  inputRate: z.number().nonnegative().optional(),
+  cacheHitRate: z.number().nonnegative().optional(),
+  outputRate: z.number().nonnegative().optional(),
+})
+
 export const providerConfigStore = defineStore('provider-config', {
   state: { providers: {}, customProviders: [] } as ProviderConfigState,
 
@@ -126,7 +143,11 @@ export const providerConfigStore = defineStore('provider-config', {
       modelId: z.string().min(1),
       window: z.number().int().positive().optional(),
     }),
-    setFetchedModels: z.object({ providerId: z.string().min(1), models: z.array(modelSchema) }),
+    setFetchedModels: z.object({
+      providerId: z.string().min(1),
+      models: z.array(modelSchema),
+      catalogueRates: z.record(z.string(), rateDeclarationSchema).optional(),
+    }),
     setEnabledModels: z.object({ providerId: z.string().min(1), modelIds: z.array(z.string()) }),
     addCustomProvider: z.object({ name: z.string().min(1), baseUrl: z.string().min(1) }),
     removeCustomProvider: z.object({ id: z.string().min(1) }),
@@ -167,6 +188,9 @@ export const providerConfigStore = defineStore('provider-config', {
             // And the declared windows travel with them, for the same reason one key over: a switch about
             // images must not reset what a model's window was said to be.
             ...(current.modelWindows !== undefined ? { modelWindows: current.modelWindows } : {}),
+            // The catalogue prices travel too: they belong to the provider's last fetch, not to this
+            // image switch, and dropping them would make a priced gateway read as unpriced.
+            ...(current.catalogueRates !== undefined ? { catalogueRates: current.catalogueRates } : {}),
           }
     },
 
@@ -204,6 +228,7 @@ export const providerConfigStore = defineStore('provider-config', {
         fetchedModels: current.fetchedModels,
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
         ...(current.modelWindows !== undefined ? { modelWindows: current.modelWindows } : {}),
+        ...(current.catalogueRates !== undefined ? { catalogueRates: current.catalogueRates } : {}),
         ...(Object.keys(modelRates).length > 0 ? { modelRates } : {}),
       }
     },
@@ -228,6 +253,7 @@ export const providerConfigStore = defineStore('provider-config', {
         fetchedModels: current.fetchedModels,
         ...(current.supportsImages === true ? { supportsImages: true } : {}),
         ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
+        ...(current.catalogueRates !== undefined ? { catalogueRates: current.catalogueRates } : {}),
         ...(Object.keys(modelWindows).length > 0 ? { modelWindows } : {}),
       }
     },
@@ -237,9 +263,17 @@ export const providerConfigStore = defineStore('provider-config', {
      * the user has switched on, though any enabled id the provider no longer lists is dropped so
      * the chat dropdown cannot offer a model that no longer exists.
      */
-    setFetchedModels: (state, { providerId, models }) => {
+    setFetchedModels: (state, { providerId, models, catalogueRates }) => {
       const current = state.providers[providerId] ?? { enabledModels: [], fetchedModels: [] }
       const available = new Set(models.map((m) => m.id))
+      // A refresh without a catalogue map leaves the old one alone; an explicit empty map is a provider
+      // that published no prices this time, and clearing the old map is the honest update.
+      const nextCatalogueRates =
+        catalogueRates !== undefined
+          ? Object.keys(catalogueRates).length > 0
+            ? catalogueRates
+            : undefined
+          : current.catalogueRates
       state.providers[providerId] = {
         fetchedModels: models,
         enabledModels: current.enabledModels.filter((id) => available.has(id)),
@@ -251,6 +285,9 @@ export const providerConfigStore = defineStore('provider-config', {
         // not silently reprice every model at the shipped table. The map goes across whole, so the
         // half-typed row a user is in the middle of keeps its sides too.
         ...(current.modelRates !== undefined ? { modelRates: current.modelRates } : {}),
+        // The provider's own prices are a separate map: a refresh replaces this one and leaves the
+        // user's declarations untouched above it.
+        ...(nextCatalogueRates !== undefined ? { catalogueRates: nextCatalogueRates } : {}),
         // And the declared windows, for the third time and the same reason: what a provider says it
         // offers has no bearing on how much one of its models accepts.
         ...(current.modelWindows !== undefined ? { modelWindows: current.modelWindows } : {}),
@@ -280,12 +317,13 @@ export const providerConfigStore = defineStore('provider-config', {
       for (const [providerId, record] of Object.entries(state.providers)) {
         const stale = record as unknown as Record<string, unknown>
         if (!retired.some((key) => key in stale)) continue
-        const { enabledModels, fetchedModels, supportsImages, modelRates, modelWindows } = record
+        const { enabledModels, fetchedModels, supportsImages, modelRates, catalogueRates, modelWindows } = record
         state.providers[providerId] = {
           enabledModels,
           fetchedModels,
           ...(supportsImages === true ? { supportsImages: true } : {}),
           ...(modelRates !== undefined ? { modelRates } : {}),
+          ...(catalogueRates !== undefined ? { catalogueRates } : {}),
           // A record being normalised for the retired keys keeps everything else it says, this
           // included — the pass is about three keys that are gone, not about the ones that are here.
           ...(modelWindows !== undefined ? { modelWindows } : {}),

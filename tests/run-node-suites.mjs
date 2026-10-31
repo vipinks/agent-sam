@@ -8,6 +8,7 @@
  * non-zero if any suite fails, so it works as a gate.
  *
  * Run: node tests/run-node-suites.mjs
+ * One suite: node tests/run-node-suites.mjs llm/engine-test.ts (or a unique part of its name)
  *
  * Electron is stubbed for the suites that need it (see `tests/stubs/`), because a suite must not
  * touch the real user's app data — several of them delete files by id.
@@ -229,12 +230,23 @@ const SUITES = [
 
 mkdirSync(outDir, { recursive: true })
 
+// The full list is the gate. Arguments narrow it to the suites a turn touched, so an isolated run is
+// still one npm-script invocation rather than a hand-bundled one-off.
+const requested = process.argv.slice(2)
+const selected =
+  requested.length === 0
+    ? SUITES
+    : SUITES.filter((suite) =>
+        requested.some((needle) => suite.src === needle || suite.name.toLowerCase().includes(needle.toLowerCase()))
+      )
+if (selected.length === 0) throw new Error(`No node suite matches ${requested.join(', ')}`)
+
 // `electron` and `electron-conveyor/main` are external (they cannot load outside electron), and are
 // redirected to the stubs by a `--require` preload rather than by editing each suite.
 const requireShim = join(here, 'stubs', 'register.cjs')
 
 let failed = 0
-for (const suite of SUITES) {
+for (const suite of selected) {
   const entry = join(here, suite.src)
   const out = join(outDir, suite.src.replace(/[\\/]/g, '-').replace(/\.ts$/, '.cjs'))
 
@@ -316,4 +328,4 @@ if (failed) {
   console.error(`\n${failed} node suite(s) failed`)
   process.exit(1)
 }
-console.log(`\nall ${SUITES.length} node suites passed`)
+console.log(`\nall ${selected.length} node suites passed`)

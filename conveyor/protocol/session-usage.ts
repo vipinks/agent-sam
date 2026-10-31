@@ -47,7 +47,8 @@ export interface UsageCounters {
  * content frame — is null. Null is what keeps a turn that reported nothing from moving a total.
  *
  * The dialect is the OpenAI one: a frame bearing `usage` and no content delta is the accounting frame
- * that closes a reply. Anthropic reports the same facts on its own events and is not read here.
+ * that closes a reply. Anthropic reports the same facts on its own `message_start` and `message_delta`
+ * events; `llm-engine` maps those into this shape before they reach the session total.
  */
 export function parseUsage(chunk: unknown): UsageCounters | null {
   if (!chunk || typeof chunk !== 'object') return null
@@ -187,15 +188,29 @@ export interface RateRule {
    * priced carries no map, and an older file has no such key.
    */
   modelRates?: ModelRates | null
+  /**
+   * What the provider's own catalogue published, by model id, before any user declaration.
+   *
+   * A separate layer on purpose: a catalogue is refreshed wholesale and a declaration is typed by a
+   * person, so a refresh must not erase one, and a typed price must not be overwritten by one. The
+   * entry for `model` wins over the shipped table only when all three sides are present.
+   */
+  catalogueRates?: CatalogueRates | null
 }
 
 /**
  * The rates to price a model with, or null when nothing knows the model.
  *
- * Three layers, and the order is the whole rule: what was declared for this model, then the table this
- * build ships, then nothing. A declaration wins because a user who typed a price is not argued with, and
- * it wins for *its* model only - the row beside it in the same provider is priced as it was, which is
- * the reason a price belongs to a model rather than to the provider that happens to serve it.
+ * Three layers, and the order is the whole rule: what was declared for this model, then what the
+ * provider's catalogue published for it, then the table this build ships. A declaration wins because a
+ * user who typed a price is not argued with, and it wins for *its* model only - the row beside it in the
+ * same provider is priced as it was, which is the reason a price belongs to a model rather than to the
+ * provider that happens to serve it.
+ *
+ * A catalogue entry short of a side is not a price either. Its model stays unpriced rather than falling
+ * back to the shipped table for the missing side: a cache read that was not published is not a cache
+ * read at the input rate, and it is not free. A model the catalogue says nothing about still reaches the
+ * shipped table, which is the ordinary fallback for providers that publish no prices at all.
  *
  * There is deliberately no fourth layer and no default rate: a model nothing has priced is priced as
  * *unknown*, which is what turns into an em dash rather than into a confident zero.
@@ -203,6 +218,10 @@ export interface RateRule {
 export function resolveRates(rule: RateRule): Rates | null {
   const declared = declaredRates(rule.modelRates?.[rule.model])
   if (declared) return declared
+
+  const catalogue = rule.catalogueRates?.[rule.model]
+  if (catalogue !== undefined) return declaredRates(catalogue)
+
   return RATES[rule.model] ?? null
 }
 
@@ -304,6 +323,15 @@ export interface RateDeclaration {
  */
 export type ModelRates = Record<string, RateDeclaration>
 
+/**
+ * A provider catalogue's prices, keyed by the model each belongs to.
+ *
+ * The same shape as `ModelRates` and deliberately a different name: a catalogue entry is published by
+ * the provider and has no user behind it, while a declaration is something a person typed. Keeping the
+ * maps apart in the provider record is what lets a refresh replace one without touching the other.
+ */
+export type CatalogueRates = Record<string, RateDeclaration>
+
 /** A usable number, or null. One a person typed, and only when every side is there. */
 function declaredMicros(value: number | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
@@ -311,13 +339,16 @@ function declaredMicros(value: number | undefined): number | null {
 }
 
 /**
- * A model's declared prices as rates this app can bill with, or null when it has declared none.
+ * A model's prices as rates this app can bill with, or null when it has not declared all three.
  *
  * All or nothing, and that is the load-bearing part: a declaration short of a side is not a cheap model,
  * it is an un-priced one. Reading a missing side as free would bill those tokens at nothing, and reading
  * a missing cache-hit rate as the input rate would overstate every warm session - either way looking like
  * a measurement, which is the one thing the em dash exists to prevent. So a user who knows two sides of
  * three has still not priced the model, and the Cost tile says so until they know all three.
+ *
+ * The same all-or-nothing read prices a catalogue entry in `resolveRates`; the map it came from decides
+ * whether an incomplete entry is allowed to fall through to the shipped table.
  *
  * That is also the migration for a record written before a cached token had a rate of its own: its input
  * and output survive the read whole, because they are still what the user typed, but the declaration is

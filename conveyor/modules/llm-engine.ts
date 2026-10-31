@@ -302,7 +302,7 @@ export interface ToolCallFragment {
 
 /**
  * Pull everything useful out of one decoded SSE `data:` payload. Returns null for payloads that
- * carry nothing — pings, role openers, the terminating `[DONE]`, and Anthropic's non-delta events.
+ * carry nothing — pings, role openers, the terminating `[DONE]`, and Anthropic's unrelated events.
  */
 export function extractDelta(providerId: string, payload: string): StreamDelta | null {
   if (payload === '[DONE]') return null
@@ -321,10 +321,21 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
       const delta = e.delta as Record<string, unknown> | undefined
       if (delta && typeof delta.text === 'string') return { text: delta.text }
     }
-    // Anthropic says why it stopped on a `message_delta` of its own, after the text is done.
+    // Anthropic opens with what the prompt cost. The cache reads and writes are prompt tokens too,
+    // and the API reports them beside `input_tokens` rather than inside it.
+    if (e.type === 'message_start') {
+      const message = e.message as Record<string, unknown> | undefined
+      const usage = anthropicPromptUsage(message?.usage)
+      if (usage) return { usage }
+    }
+    // And it says why it stopped and what the completion cost on a `message_delta` of its own.
     if (e.type === 'message_delta') {
+      const result: StreamDelta = {}
       const delta = e.delta as Record<string, unknown> | undefined
-      if (delta && typeof delta.stop_reason === 'string') return { finishReason: delta.stop_reason }
+      if (delta && typeof delta.stop_reason === 'string') result.finishReason = delta.stop_reason
+      const usage = anthropicCompletionUsage(e.usage)
+      if (usage) result.usage = usage
+      if (result.finishReason !== undefined || result.usage !== undefined) return result
     }
     return null
   }
@@ -373,6 +384,58 @@ export function extractDelta(providerId: string, payload: string): StreamDelta |
     : null
 }
 
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined
+}
+
+/**
+ * The prompt half of an Anthropic `message_start` usage report.
+ *
+ * `input_tokens` is the uncached prompt; both cache counters are additional prompt tokens. Adding all
+ * three is load-bearing because `costMicros` subtracts the cached count from the prompt without a clamp,
+ * so a prompt that left the cache counters out would make that subtraction understate the fresh share.
+ * The completion figure is deliberately zero here: `message_delta` carries the final output count, and
+ * adding the start event's placeholder would double-count it.
+ */
+function anthropicPromptUsage(value: unknown): UsageCounters | null {
+  if (!value || typeof value !== 'object') return null
+  const usage = value as Record<string, unknown>
+  const input = tokenCount(usage.input_tokens)
+  const cacheRead = tokenCount(usage.cache_read_input_tokens)
+  const cacheCreation = tokenCount(usage.cache_creation_input_tokens)
+  if (input === undefined && cacheRead === undefined && cacheCreation === undefined) return null
+
+  return {
+    prompt: (input ?? 0) + (cacheRead ?? 0) + (cacheCreation ?? 0),
+    completion: 0,
+    ...(cacheRead !== undefined ? { cached: cacheRead } : {}),
+  }
+}
+
+/** The completion half of an Anthropic `message_delta` usage report. */
+function anthropicCompletionUsage(value: unknown): UsageCounters | null {
+  if (!value || typeof value !== 'object') return null
+  const completion = tokenCount((value as Record<string, unknown>).output_tokens)
+  return completion === undefined ? null : { prompt: 0, completion }
+}
+
+/**
+ * Fold Anthropic's two usage events into one report.
+ *
+ * Each event knows one side of the bill, while `StreamDelta.usage` and the session total expect one
+ * counter set per reply. Max rather than addition because Anthropic's `output_tokens` is cumulative
+ * across `message_delta` frames; a repeated or later report replaces the earlier value instead of
+ * inflating it.
+ */
+function mergeAnthropicUsage(previous: UsageCounters | undefined, next: UsageCounters): UsageCounters {
+  const cached = next.cached ?? previous?.cached
+  return {
+    prompt: Math.max(previous?.prompt ?? 0, next.prompt),
+    completion: Math.max(previous?.completion ?? 0, next.completion),
+    ...(cached !== undefined ? { cached } : {}),
+  }
+}
+
 /** An error object embedded in a 200 response body, e.g. `{"error":{"message":"..."}}`. */
 function inStreamError(error: unknown): ConveyorError {
   const message =
@@ -395,6 +458,17 @@ export async function* parseSse(
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let anthropicUsage: UsageCounters | undefined
+
+  // Anthropic splits the prompt and completion counters across two events. They are folded before the
+  // delta is yielded, so a consumer that keeps only the last usage frame (the agent loop does) still
+  // receives both sides together.
+  const decode = (payload: string): StreamDelta | null => {
+    const delta = extractDelta(providerId, payload)
+    if (!delta?.usage || providerId !== 'anthropic') return delta
+    anthropicUsage = mergeAnthropicUsage(anthropicUsage, delta.usage)
+    return { ...delta, usage: anthropicUsage }
+  }
 
   try {
     for (;;) {
@@ -410,7 +484,7 @@ export async function* parseSse(
 
         const text = readDataLines(frame)
         if (text !== null) {
-          const delta = extractDelta(providerId, text)
+          const delta = decode(text)
           if (delta) yield delta
         }
 
@@ -421,7 +495,7 @@ export async function* parseSse(
     // A final frame without a trailing blank line still counts.
     const tail = readDataLines(buffer)
     if (tail !== null) {
-      const delta = extractDelta(providerId, tail)
+      const delta = decode(tail)
       if (delta) yield delta
     }
   } finally {

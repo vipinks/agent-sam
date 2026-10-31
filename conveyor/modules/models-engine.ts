@@ -1,4 +1,5 @@
 import { ConveyorError } from 'electron-conveyor/main'
+import type { CatalogueRates, RateDeclaration } from '../protocol/session-usage'
 
 /**
  * Model listing plumbing: where each provider's catalogue lives, and how to read it back.
@@ -12,6 +13,21 @@ export interface ModelOption {
   id: string
   /** Human-readable label when the API offers one; the UI falls back to the id. */
   name?: string
+  /**
+   * What this model's provider published for it, when its catalogue did.
+   *
+   * The fetched row carries the price so the array-shaped `fetchModels` contract can stay compatible
+   * with Settings, while the provider store lifts it into its own map keyed by id. It is not a user
+   * declaration and is never merged into one.
+   */
+  rates?: RateDeclaration
+}
+
+/** A provider's models, plus any prices its own catalogue published for them. */
+export interface ModelCatalogue {
+  models: ModelOption[]
+  /** Published in the same dollars-per-million fields a user declaration uses. */
+  rates: CatalogueRates
 }
 
 /** OpenAI-compatible `/v1/models` endpoints. */
@@ -89,7 +105,80 @@ export async function fetchModels(
     throw new ConveyorError('PROVIDER_ERROR', `${hostOf(url)} returned a catalogue this app could not read.`)
   }
 
-  return parseModels(providerId, payload)
+  return modelsWithCatalogue(parseCatalogue(providerId, payload))
+}
+
+/**
+ * Attach each catalogue price to its model row.
+ *
+ * `fetchModels` keeps returning the array Settings already expects; the price rides the row that owns
+ * it, and the store lifts the rows into its separate `catalogueRates` map. The map stays the source of
+ * truth for pricing; this is only how it crosses the command boundary without changing its shape.
+ */
+function modelsWithCatalogue(catalogue: ModelCatalogue): ModelOption[] {
+  return catalogue.models.map((model) => {
+    const rates = catalogue.rates[model.id]
+    return rates === undefined ? model : { ...model, rates }
+  })
+}
+
+/**
+ * The models and the prices from one catalogue response.
+ *
+ * Kept beside `parseModels` because a caller needs both halves from the same response: parsing twice
+ * would let a refresh pair one payload's ids with another payload's prices.
+ */
+export function parseCatalogue(providerId: string, payload: unknown): ModelCatalogue {
+  return {
+    models: parseModels(providerId, payload),
+    rates: parseCatalogueRates(providerId, payload),
+  }
+}
+
+/**
+ * Read the prices an OpenRouter `/models` response publishes, keyed by model id.
+ *
+ * OpenRouter quotes dollars per token as strings; this app's rate declarations quote dollars per million,
+ * so each side is converted once here. A row missing a side is still stored with the sides it has: the
+ * pricing rule must see that the catalogue spoke about the model and left a side unpriced, rather than
+ * seeing no entry at all and filling the gap from the shipped table.
+ */
+export function parseCatalogueRates(providerId: string, payload: unknown): CatalogueRates {
+  if (providerId !== 'openrouter') return {}
+
+  const rates: CatalogueRates = {}
+  for (const row of extractRows(payload)) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const record = row as Record<string, unknown>
+    if (typeof record.id !== 'string') continue
+
+    const pricing = record.pricing as Record<string, unknown> | undefined
+    if (!pricing || typeof pricing !== 'object') continue
+
+    const inputRate = pricePerMillion(pricing.prompt)
+    const cacheHitRate = pricePerMillion(pricing.input_cache_read)
+    const outputRate = pricePerMillion(pricing.completion)
+    if (inputRate === undefined && cacheHitRate === undefined && outputRate === undefined) continue
+
+    rates[record.id] = {
+      ...(inputRate !== undefined ? { inputRate } : {}),
+      ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),
+      ...(outputRate !== undefined ? { outputRate } : {}),
+    }
+  }
+  return rates
+}
+
+/**
+ * One published price as dollars per million, or undefined when it is not a usable number.
+ *
+ * The rounding keeps the conversion back to micros in `declaredRates` exact for the decimal strings a
+ * catalogue publishes; without it a value like `0.00003` can arrive as `30.000000000000004`.
+ */
+function pricePerMillion(value: unknown): number | undefined {
+  const raw = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN
+  if (!Number.isFinite(raw) || raw < 0) return undefined
+  return Math.round(raw * 1_000_000 * 1_000_000) / 1_000_000
 }
 
 /**
