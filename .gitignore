@@ -12,6 +12,7 @@ temp
 .vscode/
 # Agent scratch directories: in-flight state, never part of the app
 .freebuff/
+.kun/
 .kun-canvas/
 # The whiteboard's own image scratch: a generated picture lands here before it is placed on a board
 img/
