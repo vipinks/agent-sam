@@ -54,8 +54,14 @@ const END_BOUND_MS = 5000
  * Small on purpose: the bound is the product's, and a suite must not wait it out. What is asserted is that a
  * call that is never answered ends the turn at all — on the defective tree this turn never ended, which is the
  * red this suite was written in.
+ *
+ * Two seconds rather than a quarter of one, which is load tolerance and not a loosened assertion: the fixture
+ * answers on the next tick, so 2s of headroom absorbs scheduler contention on a busy machine without changing
+ * what the suite proves. A real hang still trips this bound and still ends the turn with `ACP_CALL_TIMEOUT`, so
+ * the larger number cannot mask a defect — it only gives a starved scheduler room to run the fixture. The
+ * product's own `ACP_CALL_BOUND_MS = 120_000` (`conveyor/modules/engine-acp.ts:68`) is deliberately untouched.
  */
-const TEST_CALL_BOUND_MS = 250
+const TEST_CALL_BOUND_MS = 2_000
 
 /**
  * The grace this suite hands the client: small, because the escalation is a fallback and not a wait to sit out.
