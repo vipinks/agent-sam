@@ -6,6 +6,12 @@ coding assistant.
 
 <br>
 
+## 2026-10-31: v1.14.8 — MCP server inline edit
+
+- feat(mcp): inline edit for MCP servers reusing the add form
+
+<br>
+
 ## 2026-10-31: v1.14.7 — cost accounting, SAC install warning, and test hardening
 
 - fix(cost): capture Anthropic usage and price OpenRouter catalogue rows
