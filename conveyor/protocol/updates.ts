@@ -46,6 +46,27 @@ export const UPDATE_STATES = [
 export type UpdateState = (typeof UPDATE_STATES)[number]
 
 /**
+ * What the Smart App Control probe can learn about this machine.
+ *
+ * The read is advisory and session-scoped: `enforcing` is the one value a surface warns on, `off` and `eval`
+ * are silent, and `unknown` is every failure to read — a different Windows build, an absent value, a spawn
+ * error, a timeout. Keeping `unknown` in the set is what makes fail-open a value rather than a branch.
+ */
+export const SAC_POLICY_STATES = ['enforcing', 'off', 'eval', 'unknown'] as const
+
+export type SacPolicyState = (typeof SAC_POLICY_STATES)[number]
+
+/**
+ * The one advisory line both update surfaces show while Smart App Control is enforcing.
+ *
+ * The install stays available: this explains why it may not finish, and names the two routes a user still
+ * has. It is exported here so the ready card and the Updates section cannot drift into two slightly different
+ * warnings about the same blocked install.
+ */
+export const SAC_POLICY_WARNING =
+  'Smart App Control is enforcing on this machine — the silent install will be blocked. Turn it off in Windows Security (App & browser control), or install the setup from the release page by hand.'
+
+/**
  * What a launch that quit into an installer leaves for the next one.
  *
  * Written immediately before `quitAndInstall`, and read once at the next launch: the app can be gone before

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { CircleArrowUp, X } from 'lucide-react'
 import { useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
+import { SAC_POLICY_WARNING } from '@/conveyor/protocol/updates'
 import { updateStatusStore } from '@/conveyor/stores/update-status'
 import { Button } from '../ui/button'
 
@@ -41,6 +42,7 @@ export function UpdateReadyNotice() {
   const state = useConveyorStore(updateStatusStore, (s) => s.state)
   const availableVersion = useConveyorStore(updateStatusStore, (s) => s.availableVersion)
   const pendingInstall = useConveyorStore(updateStatusStore, (s) => s.pendingInstall)
+  const sacPolicyState = useConveyorStore(updateStatusStore, (s) => s.sacPolicyState)
   const [dismissed, setDismissed] = useState(false)
   const [recoveryDismissed, setRecoveryDismissed] = useState(false)
 
@@ -57,58 +59,68 @@ export function UpdateReadyNotice() {
     <section
       data-slot={recovering ? 'update-recovery-notice' : 'update-ready-notice'}
       aria-label={recovering ? 'Update did not finish' : 'Update ready'}
-      className="pointer-events-auto flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 shadow-lg"
+      className="pointer-events-auto flex flex-col gap-1.5 rounded-md border border-border bg-card px-2.5 py-2 shadow-lg"
     >
-      <CircleArrowUp aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[11.5px] leading-snug text-muted-foreground">
-          {recovering && pendingInstall !== null
-            ? `Update to ${pendingInstall.version} didn't finish — open the installer`
-            : 'Update ready — restart to install'}
+      {!recovering && sacPolicyState === 'enforcing' ? (
+        <span
+          data-slot="sac-policy-warning"
+          className="text-[11.5px] leading-snug text-orange-600 dark:text-orange-400"
+        >
+          {SAC_POLICY_WARNING}
         </span>
-        {recovering ? (
+      ) : null}
+      <div className="flex w-full items-center gap-2">
+        <CircleArrowUp aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-[11.5px] leading-snug text-muted-foreground">
-            Try visible install if no installer appeared; strict app-control policies may still block it.
+            {recovering && pendingInstall !== null
+              ? `Update to ${pendingInstall.version} didn't finish — open the installer`
+              : 'Update ready — restart to install'}
           </span>
-        ) : availableVersion === null ? null : (
-          <span className="text-[11.5px] leading-snug text-muted-foreground">Version {availableVersion}</span>
+          {recovering ? (
+            <span className="text-[11.5px] leading-snug text-muted-foreground">
+              Try visible install if no installer appeared; strict app-control policies may still block it.
+            </span>
+          ) : availableVersion === null ? null : (
+            <span className="text-[11.5px] leading-snug text-muted-foreground">Version {availableVersion}</span>
+          )}
+        </div>
+        {recovering ? (
+          <Button size="xs" disabled={showInstaller.isPending} onClick={() => void showInstaller.mutateAsync()}>
+            Show installer
+          </Button>
+        ) : null}
+        {recovering ? (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={installVisible.isPending}
+            onClick={() => void installVisible.mutateAsync()}
+          >
+            Try visible install
+          </Button>
+        ) : null}
+        {recovering ? null : (
+          <Button
+            size="sm"
+            // The same act, and therefore the same dispatcher, as the Updates section's own install button: two
+            // surfaces offering one thing must not be two implementations of it.
+            disabled={install.isPending}
+            onClick={() => void install.mutateAsync()}
+          >
+            Install and restart
+          </Button>
         )}
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={recovering ? 'Dismiss update recovery notice' : 'Dismiss update notice'}
+          title="Dismiss"
+          onClick={() => (recovering ? setRecoveryDismissed(true) : setDismissed(true))}
+        >
+          <X />
+        </Button>
       </div>
-      {recovering ? (
-        <Button size="xs" disabled={showInstaller.isPending} onClick={() => void showInstaller.mutateAsync()}>
-          Show installer
-        </Button>
-      ) : null}
-      {recovering ? (
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={installVisible.isPending}
-          onClick={() => void installVisible.mutateAsync()}
-        >
-          Try visible install
-        </Button>
-      ) : null}
-      {recovering ? null : (
-        <Button
-          size="sm"
-          // The same act, and therefore the same dispatcher, as the Updates section's own install button: two
-          // surfaces offering one thing must not be two implementations of it.
-          disabled={install.isPending}
-          onClick={() => void install.mutateAsync()}
-        >
-          Install and restart
-        </Button>
-      )}
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        aria-label={recovering ? 'Dismiss update recovery notice' : 'Dismiss update notice'}
-        title="Dismiss"
-        onClick={() => (recovering ? setRecoveryDismissed(true) : setDismissed(true))}
-      >
-        <X />
-      </Button>
     </section>
   )
 }

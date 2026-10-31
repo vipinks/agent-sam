@@ -1,6 +1,13 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
-import { UPDATE_ERROR_CODES, type PendingInstall, type UpdateErrorCode, type UpdateState } from '../protocol/updates'
+import {
+  SAC_POLICY_STATES,
+  UPDATE_ERROR_CODES,
+  type PendingInstall,
+  type SacPolicyState,
+  type UpdateErrorCode,
+  type UpdateState,
+} from '../protocol/updates'
 
 /**
  * What the updater is doing, mirrored to every window.
@@ -13,8 +20,10 @@ import { UPDATE_ERROR_CODES, type PendingInstall, type UpdateErrorCode, type Upd
  * electron-updater reports it.
  *
  * The fields are the module's own report and nothing more: the state, the version an update would install,
- * the version this build is, when a check last completed, and the code a failure carries. No message travels
- * with the code — that is the rule's subject, and `protocol/updates` is where a code becomes a word.
+ * the version this build is, when a check last completed, the code a failure carries, and — once an install
+ * offer exists — the machine's Smart App Control answer. No message travels with the code — that is the rule's
+ * subject, and `protocol/updates` is where a code becomes a word. The Smart App Control answer is advisory:
+ * no transition or offer is decided from it.
  *
  * The definition is pure (no electron, no react) because both processes import it: main registers it and
  * dispatches the transitions, the renderer mirrors it through `useConveyorStore`. The ids of the states and
@@ -35,6 +44,15 @@ export interface UpdateStatusState {
   /** The code a failure carries, or null while nothing has failed. Never a message. */
   errorCode: UpdateErrorCode | null
   /**
+   * What this launch learned about Smart App Control, or `unknown` until the first offer reads it.
+   *
+   * A session-scoped fact like the rest of this store: the probe runs once, lazily, and its answer is what
+   * lets the ready card warn about a silent install the machine is expected to block. It is advisory only;
+   * no install decision reads it.
+   */
+  sacPolicyState: SacPolicyState
+
+  /**
    * The install a previous launch started and could not confirm, or null.
    *
    * A launch-scoped fact like the rest of this store: the marker file it is read from is removed as soon as
@@ -52,6 +70,7 @@ export const updateStatusStore = defineStore('update-status', {
     lastCheckedAt: null,
     errorCode: null,
     pendingInstall: null,
+    sacPolicyState: 'unknown',
   } as UpdateStatusState,
 
   // Payloads cross the trust boundary, so each action's argument type comes from its schema: a state the rule
@@ -63,6 +82,7 @@ export const updateStatusStore = defineStore('update-status', {
     recordReady: z.object({ version: z.string() }),
     recordError: z.object({ code: z.enum(UPDATE_ERROR_CODES) }),
     recordPendingInstall: z.object({ version: z.string(), installerPath: z.string(), at: z.number() }),
+    recordSacPolicyState: z.object({ state: z.enum(SAC_POLICY_STATES) }),
   },
 
   actions: {
@@ -145,6 +165,16 @@ export const updateStatusStore = defineStore('update-status', {
      */
     recordPendingInstall: (state, install) => {
       state.pendingInstall = install
+    },
+
+    /**
+     * Record the launch's one Smart App Control answer.
+     *
+     * Written only after an install offer exists, by the module's lazy probe. `unknown` is a real answer
+     * rather than an absence, so a surface can distinguish "nothing was read" from "the policy is off".
+     */
+    recordSacPolicyState: (state, { state: policyState }) => {
+      state.sacPolicyState = policyState
     },
   },
 })

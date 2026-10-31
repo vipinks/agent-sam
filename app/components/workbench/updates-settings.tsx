@@ -1,6 +1,6 @@
 import { useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
-import { updateAvailability } from '@/conveyor/protocol/updates'
+import { updateAvailability, SAC_POLICY_WARNING } from '@/conveyor/protocol/updates'
 import { updatePreferencesStore } from '@/conveyor/stores/update-preferences'
 import { updateStatusStore } from '@/conveyor/stores/update-status'
 import { Badge } from '../ui/badge'
@@ -46,6 +46,7 @@ export function UpdatesSection() {
   const errorCode = useConveyorStore(updateStatusStore, (s) => s.errorCode)
   const currentVersion = useConveyorStore(updateStatusStore, (s) => s.currentVersion)
   const lastCheckedAt = useConveyorStore(updateStatusStore, (s) => s.lastCheckedAt)
+  const sacPolicyState = useConveyorStore(updateStatusStore, (s) => s.sacPolicyState)
   const autoDownload = useConveyorStore(updatePreferencesStore, (s) => s.autoDownload)
   const { setAutoDownload } = useConveyorStore(updatePreferencesStore)
 
@@ -99,6 +100,17 @@ export function UpdatesSection() {
             {availability.statusWord}
           </Badge>
         </p>
+
+        {/* The same advisory the ready card carries. The probe has only run because an install offer
+            exists, so this line cannot appear before there is a blocked install to describe. */}
+        {sacPolicyState === 'enforcing' ? (
+          <p
+            data-slot="updates-sac-warning"
+            className="rounded-md border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-[12.5px] leading-relaxed text-orange-700 dark:text-orange-300"
+          >
+            {SAC_POLICY_WARNING}
+          </p>
+        ) : null}
 
         {/* The one preference. It is read by the updater as it applies its settings before each check, so
             flipping it governs the next check rather than one already in flight — which is also why the

@@ -28,7 +28,7 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { setAutoDownloadSource, setUpdateStatusSink } from '../../conveyor/modules/updates'
-import type { PendingInstall, UpdateState } from '../../conveyor/protocol/updates'
+import type { PendingInstall, SacPolicyState, UpdateState } from '../../conveyor/protocol/updates'
 
 /** One recorded install, exactly as the module handed it over — arguments included when it passed none. */
 export interface RecordedInstall {
@@ -51,6 +51,8 @@ export interface UpdaterHarness {
   pendingInstall: () => PendingInstall | null
   /** The version the module recorded for the running build, or undefined while it recorded none. */
   currentVersion: () => string | undefined
+  /** The Smart App Control answer the module published, or undefined while it published none. */
+  sacPolicyState: () => SacPolicyState | undefined
   /** Put the process back: real timers, the caller's environment, and the temp cache directory gone. */
   restore: () => void
 }
@@ -94,6 +96,7 @@ export function armUpdaterHarness(): UpdaterHarness {
   let mirror: UpdateState = 'idle'
   let current: string | undefined
   let pending: PendingInstall | null = null
+  let sacPolicy: SacPolicyState | undefined
 
   setUpdateStatusSink({
     read: () => mirror,
@@ -108,6 +111,9 @@ export function armUpdaterHarness(): UpdaterHarness {
     recordError: () => undefined,
     recordPendingInstall: (install) => {
       pending = install
+    },
+    recordSacPolicyState: (state) => {
+      sacPolicy = state
     },
   })
 
@@ -126,6 +132,7 @@ export function armUpdaterHarness(): UpdaterHarness {
     },
     pendingInstall: () => pending,
     currentVersion: () => current,
+    sacPolicyState: () => sacPolicy,
     restore: () => {
       globalThis.setTimeout = realTimeout
       globalThis.setInterval = realInterval

@@ -172,6 +172,10 @@ const SUITES = [
     src: 'updates/updates-intent-test.ts',
   },
   {
+    name: 'update SAC policy (reg arguments, value mapping, fail-open)',
+    src: 'updates/updates-sac-policy-test.ts',
+  },
+  {
     name: 'engine spawn law (allowlist, arg array, refusal codes, version probe)',
     src: 'engines/engine-spawn-test.ts',
   },

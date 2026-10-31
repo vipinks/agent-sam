@@ -1,3 +1,4 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, shell } from 'electron'
@@ -10,6 +11,7 @@ import {
   updateFailureCode,
   UPDATES_DISABLED_IN_DEV,
   type PendingInstall,
+  type SacPolicyState,
   type UpdateErrorCode,
   type UpdateState,
 } from '../protocol/updates'
@@ -44,6 +46,100 @@ export const UPDATES_FIRST_CHECK_DELAY_MS = 10_000
 export const UPDATES_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
 /**
+ * The machine-policy read behind the Smart App Control warning.
+ *
+ * `reg` is spawned directly, with an argument array and no shell, for the reason the git module uses
+ * `execFile`: an argument this app supplies must never be re-read as a command. The read is bounded so a
+ * wedged registry process cannot outlive the offer it is meant to annotate, and only Windows is asked —
+ * everywhere else the key does not exist.
+ */
+export const SAC_POLICY_TIMEOUT_MS = 3_000
+export const SAC_POLICY_REG_ARGS = [
+  'query',
+  'HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy',
+  '/v',
+  'VerifiedAndReputablePolicyState',
+] as const
+
+export interface SacPolicyReadOptions {
+  /** Defaults to the running platform; the non-Windows answer is `unknown` without a child. */
+  platform?: NodeJS.Platform
+  /** Injectable only so a node suite can observe the spawn without asking the suite machine's registry. */
+  spawn?: typeof spawn
+  /** Defaults to `SAC_POLICY_TIMEOUT_MS`; a shorter bound keeps timeout coverage fast. */
+  timeoutMs?: number
+}
+
+/**
+ * What a `reg query` dump says about Smart App Control.
+ *
+ * The comments on the mapping are the machine evidence, not a reading of the widely-circulated registry
+ * article: on the machine this warning was designed against, `VerifiedAndReputablePolicyState` read 1 while
+ * installs were being blocked, and read 0 after Smart App Control was turned off in Windows Settings. The
+ * article that circulates in forum posts inverts those two values; trusting it here would warn on a machine
+ * with the policy off and stay silent on the one that blocks every silent install.
+ */
+export function parseSacPolicyState(output: string): SacPolicyState {
+  const match = /\bVerifiedAndReputablePolicyState\s+REG_DWORD\s+(0x[0-9a-f]+|\d+)\b/i.exec(output)
+  if (match === null) return 'unknown'
+
+  const raw = match[1]
+  const value = raw.toLowerCase().startsWith('0x') ? Number.parseInt(raw.slice(2), 16) : Number.parseInt(raw, 10)
+
+  if (value === 1) return 'enforcing'
+  if (value === 0) return 'off'
+  if (value === 2) return 'eval'
+  return 'unknown'
+}
+
+/** Read the policy once, fail-open: every failure to read is `unknown`, never a rejected update flow. */
+export function readSacPolicyState(options: SacPolicyReadOptions = {}): Promise<SacPolicyState> {
+  const platform = options.platform ?? process.platform
+  if (platform !== 'win32') return Promise.resolve('unknown')
+
+  const spawnProcess = options.spawn ?? spawn
+  const timeoutMs = options.timeoutMs ?? SAC_POLICY_TIMEOUT_MS
+
+  return new Promise((resolve) => {
+    let settled = false
+
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawnProcess('reg', [...SAC_POLICY_REG_ARGS], { shell: false, windowsHide: true })
+    } catch {
+      resolve('unknown')
+      return
+    }
+
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try {
+        child.kill()
+      } catch {
+        // A child that has already exited has nothing left to kill.
+      }
+      resolve('unknown')
+    }, timeoutMs)
+
+    const finish = (state: SacPolicyState): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(state)
+    }
+
+    let output = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      output += chunk
+    })
+    child.on('error', () => finish('unknown'))
+    child.on('close', (code) => finish(code === 0 ? parseSacPolicyState(output) : 'unknown'))
+  })
+}
+
+/**
  * What the module tells the status store, and the one thing it asks it.
  *
  * A two-way port rather than a list of callbacks because one decision needs the mirror's own answer: the
@@ -66,6 +162,7 @@ export interface UpdateStatusSink {
   recordReady: (version: string) => void
   recordError: (code: UpdateErrorCode) => void
   recordPendingInstall: (install: PendingInstall) => void
+  recordSacPolicyState: (state: SacPolicyState) => void
 }
 
 let statusSink: UpdateStatusSink | null = null
@@ -87,6 +184,27 @@ let autoDownloadSource: () => boolean = () => DEFAULT_AUTO_DOWNLOAD
  */
 export function setAutoDownloadSource(read: () => boolean): void {
   autoDownloadSource = read
+}
+
+/**
+ * The launch's one Smart App Control read, started when the first install offer appears.
+ *
+ * Lazy rather than at startup: a launch that never downloads an update has no reason to run `reg`, and the
+ * offer is the only moment the answer is useful. Cached as a promise rather than a boolean so two ready
+ * transitions in the same launch cannot start two probes; every later call joins the first one. The warning
+ * is advisory, so a read or a store write that fails is swallowed rather than allowed to disturb the updater.
+ */
+let sacPolicyRead: Promise<SacPolicyState> | null = null
+
+function ensureSacPolicyWarning(): void {
+  if (sacPolicyRead !== null) return
+
+  sacPolicyRead = readSacPolicyState().catch((): SacPolicyState => 'unknown')
+  void sacPolicyRead
+    .then((state) => statusSink?.recordSacPolicyState(state))
+    .catch(() => {
+      // Advisory only: a warning that cannot be recorded must not alter the install flow.
+    })
 }
 
 /**
@@ -343,6 +461,7 @@ function wireUpdater(): void {
   autoUpdater.on('update-downloaded', (event) => {
     downloadedUpdate = { version: event.version, installerPath: event.downloadedFile }
     statusSink?.recordReady(event.version)
+    ensureSacPolicyWarning()
   })
 
   autoUpdater.on('error', () => {

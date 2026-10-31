@@ -51,6 +51,7 @@ function statusState(over: Partial<UpdateStatusState> = {}): UpdateStatusState {
     lastCheckedAt: null,
     errorCode: null,
     pendingInstall: null,
+    sacPolicyState: 'unknown',
     ...over,
   }
 }
