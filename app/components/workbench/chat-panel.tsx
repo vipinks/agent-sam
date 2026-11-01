@@ -1512,7 +1512,11 @@ export function ChatPanel() {
         // the exception, because the turn it belongs to has not ended.
         const cause = stoppedTurnRef.current === turnId ? 'interrupted' : 'model_stop'
         if (stoppedTurnRef.current === turnId) stoppedTurnRef.current = null
-        if (!paused) {
+        // A recorded ending always wins. The engine path writes one from its failure notice before the
+        // stream settles, and the ordinary `model_stop` default must not overwrite it with a cause that
+        // says the turn finished — that would leave a failed turn looking like a quiet one.
+        const endingRecorded = messagesRef.current.some((turn) => turn.id === turnId && turn.endNotice !== undefined)
+        if (!paused && !endingRecorded) {
           updateMessages(
             endTurn(messagesRef.current, turnId, cause, {
               allowMidWork: !failed && (!ceiling || currentPlan(messagesRef.current) === null),

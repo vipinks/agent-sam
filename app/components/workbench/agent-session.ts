@@ -259,6 +259,23 @@ export interface AutoContinueMark {
 }
 
 /**
+ * The evidence a failed engine turn left behind.
+ *
+ * It is carried on the notice rather than folded into its cause because the cause vocabulary is the
+ * turn's ending (a dead child is still a `stream_error`) and this is its diagnosis: which code the
+ * child exited on, or which code word a refused spawn answered with, and what it last wrote on stderr.
+ * Kept as codes plus a bounded tail so the panel words it, rather than trusting an engine's sentence.
+ */
+export interface TurnEndFailure {
+  /** The exit code, when a child actually ran and the OS reported one. */
+  exitCode: number | null
+  /** The spawn/refusal code word, when the failure happened before a child could exit. */
+  code?: string
+  /** The bounded stderr tail, already collapsed by the runner to five lines or 500 bytes. */
+  tail: string
+}
+
+/**
  * What a turn says about its own ending, on the turn and in the card above the composer.
  *
  * `cause` is the diagnosis of the reply — the model finished, or it was cut off, or it stopped without
@@ -270,6 +287,13 @@ export interface AutoContinueMark {
 export interface TurnEndNotice {
   cause: TurnEndCause
   resumable: boolean
+  /**
+   * Present only when the ending was an engine failure rather than an ordinary stop.
+   *
+   * The card's copy and the bubble's error line are both built from it, so a reopened conversation
+   * still says which code killed the turn instead of falling back to the generic `stream_error` line.
+   */
+  failure?: TurnEndFailure
   /**
    * A consent pause this process did not survive, recorded when the transcript is read back.
    *
@@ -816,7 +840,11 @@ export function applyAgentChunk(
       // card, and the fallback is the same forward compatibility the default case below relies on.
       const cause = asTurnEndCause(c.cause)
       if (!cause) return { turns, effect: {} }
-      const resumable = c.resumable === true
+      // The engine's half of the notice: a dead child or a refused spawn carries the code it ended on and
+      // the bounded tail. It is read through a guard because the chunk crosses IPC, and the failure is what
+      // makes the ending resumable — the Continue affordance must be offered for it.
+      const failure = readTurnEndFailure(c.failure)
+      const resumable = c.resumable === true || failure !== null
       // The plan's half of the notice, when it came with one. Read as a count only: a chunk claiming
       // no unfinished steps is the same as one that said nothing, so it cannot put a card on screen
       // for a turn that owes no such news.
@@ -826,11 +854,19 @@ export function applyAgentChunk(
       const notice: TurnEndNotice = {
         cause,
         resumable,
+        ...(failure === null ? {} : { failure }),
         ...(unfinishedSteps ? { unfinishedSteps } : {}),
         ...(midWork ? { midWork: true } : {}),
       }
       return {
-        turns: replaceTurn(turns, turnId, (turn) => ({ ...turn, endNotice: notice })),
+        turns: replaceTurn(turns, turnId, (turn) => ({
+          ...turn,
+          // The error line is the transcript's own copy of the cause, and it is what keeps the empty
+          // bubble from drawing `Thinking…` for a turn that is over. A notice without a failure leaves
+          // whatever error the turn already carried alone.
+          ...(failure === null ? {} : { error: engineFailureText(failure) }),
+          endNotice: notice,
+        })),
         effect: { turnEndNotice: notice },
       }
     }
@@ -1234,6 +1270,65 @@ export function endTurn(
  */
 export function currentEndNotice(turns: readonly AgentTurn[]): TurnEndNotice | null {
   return turns[turns.length - 1]?.endNotice ?? null
+}
+
+/** How much of a failure tail the copy shows. The runner already bounds it; this is the display bound. */
+export const ENGINE_FAILURE_TAIL_MAX_CHARS = 240
+
+/**
+ * A failure tail as one line, bounded.
+ *
+ * The tail is a process's stderr: it has newlines, carriage returns, and often a stack of indentation.
+ * The card has one line for it, so every run of whitespace becomes one space and the result is cut at
+ * the stated bound. It is a display rule rather than a transcript rule — the stored tail is untouched.
+ */
+export function collapseFailureTail(tail: string): string {
+  return tail.replace(/\s+/g, ' ').trim().slice(0, ENGINE_FAILURE_TAIL_MAX_CHARS)
+}
+
+/**
+ * Read the engine's failure evidence out of a notice chunk.
+ *
+ * A chunk crosses IPC, so every field is read rather than trusted. The code is what makes the failure
+ * identifiable: an exit code (including zero, which is why it is tested against `null`) or a code word.
+ * A notice without either is a notice this build cannot word, and it is left as the ordinary ending.
+ */
+function readTurnEndFailure(value: unknown): TurnEndFailure | null {
+  if (!value || typeof value !== 'object') return null
+  const failure = value as Record<string, unknown>
+  const exitCode = typeof failure.exitCode === 'number' && Number.isInteger(failure.exitCode) ? failure.exitCode : null
+  const code = typeof failure.code === 'string' && failure.code !== '' ? failure.code : undefined
+  const tail = typeof failure.tail === 'string' ? failure.tail : ''
+  if (exitCode === null && code === undefined) return null
+  return { exitCode, ...(code === undefined ? {} : { code }), tail }
+}
+
+/** The short identity a failure is named by: the exit code, or the code word a refusal carried. */
+function failureIdentity(failure: TurnEndFailure): string {
+  return failure.exitCode !== null ? `exit ${failure.exitCode}` : (failure.code ?? 'unknown')
+}
+
+/**
+ * The transcript's error line for a failed engine turn.
+ *
+ * Branched on the code the runner carried, never on a message string: the same sentence wraps either an
+ * exit code or a spawn code, and the tail is what the engine itself said. This is what the bubble draws
+ * instead of `Thinking…`; the card above the composer draws the longer Continue copy.
+ */
+export function engineFailureText(failure: TurnEndFailure): string {
+  const tail = collapseFailureTail(failure.tail)
+  return `The engine failed (${failureIdentity(failure)})${tail ? `: ${tail}` : ''}`
+}
+
+/**
+ * The Continue affordance's copy for a failed turn (D4).
+ *
+ * `N` is the exit code when a child ran, or the spawn/refusal code word when nothing started. The tail
+ * is single-line-collapsed and bounded by the same rule as the error line.
+ */
+export function engineFailureContinueCopy(failure: TurnEndFailure): string {
+  const tail = collapseFailureTail(failure.tail)
+  return `Continue after failure (${failureIdentity(failure)})${tail ? `: ${tail}` : ''}`
 }
 
 /**

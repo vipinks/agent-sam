@@ -129,6 +129,7 @@ function freezeTurn(turn: AgentTurn): TranscriptTurn {
       ? {
           endNotice: {
             cause: turn.endNotice.cause,
+            ...(turn.endNotice.failure === undefined ? {} : { failure: { ...turn.endNotice.failure } }),
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
             ...(turn.endNotice.midWork ? { midWork: true } : {}),
             ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),
@@ -227,9 +228,11 @@ function thawTurn(turn: TranscriptTurn): AgentTurn {
           endNotice: {
             cause: turn.endNotice.cause,
             resumable:
+              turn.endNotice.failure !== undefined ||
               turn.endNotice.cause !== 'model_stop' ||
               turn.endNotice.midWork === true ||
               (turn.endNotice.unfinishedSteps ?? 0) > 0,
+            ...(turn.endNotice.failure === undefined ? {} : { failure: { ...turn.endNotice.failure } }),
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
             ...(turn.endNotice.midWork ? { midWork: true } : {}),
             ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),

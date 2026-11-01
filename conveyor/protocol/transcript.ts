@@ -215,6 +215,20 @@ const turnBaseSchema = z.object({
       /** Positive by construction: a notice saying zero steps remain is the absent key. */
       unfinishedSteps: z.number().int().positive().optional(),
       midWork: z.boolean().optional(),
+      /**
+       * The engine failure this notice ended: the exit code (or spawn code word) and the bounded tail.
+       * Stored for the same reason the cause is — a reopened conversation still says which code killed
+       * the turn, rather than falling back to the generic stream_error sentence. The tail is bounded by
+       * the runner at five lines or 500 bytes; the schema repeats the byte bound so a hand-edited file
+       * cannot put an unbounded process log back on screen.
+       */
+      failure: z
+        .object({
+          exitCode: z.number().int().nullable(),
+          code: z.string().optional(),
+          tail: z.string().max(500),
+        })
+        .optional(),
     })
     .optional(),
 })

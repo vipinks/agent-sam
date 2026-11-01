@@ -1,8 +1,11 @@
 import { spawn } from 'child_process'
-import { readdirSync, statSync } from 'fs'
+import { appendFileSync, mkdirSync, readdirSync, statSync } from 'fs'
+import { dirname, join } from 'path'
+import { app } from 'electron'
 import { ConveyorError } from 'electron-conveyor/main'
 import {
   ENGINE_INSTALL_PATTERNS,
+  ENGINE_SPAWN_CODES,
   engineLaunchArgs,
   expandInstallDir,
   resolveEngineSpawn,
@@ -22,9 +25,11 @@ import { codexTranscriptChunks, type EngineTranscriptChunk } from '../protocol/c
  *
  * The turn is one child and one prompt. `codex exec` is a non-interactive surface: the prompt is an argument,
  * the events are JSONL on stdout, and the process ends when the answer does — which is why the exit is what the
- * turn's ending is read from rather than a message on the wire. stdout is the only stream read: the JSONL
+ * turn's ending is read from rather than a message on the wire. stdout is the only stream parsed: the JSONL
  * dialect is stdout's, and the CLI writes its own notes ("Reading additional input from stdin...") to stderr,
- * where parsing them as events would report a line the mapper cannot read on every run.
+ * where parsing them as events would report a line the mapper cannot read on every run. stderr is still read,
+ * into a bounded tail, because when the child dies that tail is the only evidence left of why — it is never
+ * parsed as a turn event, and it is carried only by a failure chunk.
  *
  * stdin is not a stream this client holds open, and that is load-bearing rather than tidy. `codex exec` appends
  * a *piped* stdin to the prompt it was given and waits for that pipe to end before it prints anything, so a
@@ -38,6 +43,8 @@ import { codexTranscriptChunks, type EngineTranscriptChunk } from '../protocol/c
 /** A child process, as this client uses it: stdout, the two events, and the two halves of a kill. */
 export interface CodexChild {
   stdout: { on: (event: 'data', listener: (chunk: Buffer | string) => void) => unknown }
+  /** Present on a real child; absent on a fake that has nothing to say. Read only for the failure tail. */
+  stderr?: { on: (event: 'data', listener: (chunk: Buffer | string) => void) => unknown }
   on: {
     (event: 'error', listener: (error: NodeJS.ErrnoException) => void): unknown
     (event: 'close', listener: (code: number | null) => void): unknown
@@ -67,6 +74,81 @@ export type CodexSpawnImpl = (
 
 /** How long a child is given to die politely before it is killed outright. */
 const KILL_GRACE_MS = 2000
+
+/**
+ * How much of stderr a failed turn carries: the last five lines, capped at 500 bytes.
+ *
+ * Both bounds are stated because either alone is the wrong shape. A line bound keeps a log-shaped tail
+ * readable and cannot grow with a single enormous line; a byte bound keeps that one line from becoming the
+ * whole transcript. The smaller of the two wins, which is why they are applied together rather than as a
+ * choice. The tail is evidence, not the turn: it travels on a failure chunk and in the engine log, and it
+ * is never parsed.
+ */
+export const CODEX_STDERR_TAIL_LINES = 5
+export const CODEX_STDERR_TAIL_BYTES = 500
+
+/** The engine's own failure log, beside the updater's: `userData/logs/engine-codex.log`. */
+const CODEX_FAILURE_LOG_DIR = 'logs'
+export const CODEX_FAILURE_LOG_FILE = 'engine-codex.log'
+
+/** What a failed turn carries before it becomes a chunk: the code it ended on and what stderr said. */
+export interface CodexFailure {
+  exitCode: number | null
+  code?: string
+  tail: string
+}
+
+/**
+ * Keep the last five lines, capped at 500 bytes.
+ *
+ * Applied to the whole accumulated tail on every read rather than to each chunk, because a chunk boundary
+ * is not a line boundary: a cap applied per chunk would keep five fragments of five lines rather than five
+ * lines. The byte cut can split a multi-byte character; the replacement that results is still evidence,
+ * and a decoder dependency would be more machinery than a diagnostic tail is worth.
+ */
+function boundedStderrTail(text: string): string {
+  const bytes = Buffer.from(text, 'utf8')
+  const bounded =
+    bytes.length > CODEX_STDERR_TAIL_BYTES ? bytes.subarray(bytes.length - CODEX_STDERR_TAIL_BYTES) : bytes
+  const lines = bounded
+    .toString('utf8')
+    .replace(/[\r\n]+$/, '')
+    .split(/\r?\n/)
+  return lines.slice(-CODEX_STDERR_TAIL_LINES).join('\n')
+}
+
+/**
+ * The code word for a spawn that was refused.
+ *
+ * A `ConveyorError` is the law's own refusal and its code is the branch. A native spawn error is the OS's,
+ * and its `code` (`ENOENT`, `EACCES`) is the only stable thing it says — the message is a sentence that
+ * changes by platform and must never be branched on. A value with neither is the generic spawn failure.
+ */
+function spawnFailureCode(error: unknown): string {
+  if (error instanceof ConveyorError) return error.code
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' && code !== '' ? code : ENGINE_SPAWN_CODES.ENGINE_SPAWN_FAILED
+}
+
+/**
+ * Append one line per failed Codex turn to the engine log.
+ *
+ * The precedent is the updater's logger: a packaged Windows app has nowhere to show a console line, and a
+ * failed turn is exactly what a user cannot reproduce on request. One line, bounded by the tail's own
+ * bound and collapsed to a single line so the log stays a log; a write that fails is swallowed, because a
+ * diagnostic that could not be written is not a reason for the turn to fail again.
+ */
+export function appendCodexFailureLog(failure: CodexFailure): void {
+  try {
+    const file = join(app.getPath('userData'), CODEX_FAILURE_LOG_DIR, CODEX_FAILURE_LOG_FILE)
+    mkdirSync(dirname(file), { recursive: true })
+    const status = failure.exitCode === null ? `code=${failure.code ?? 'unknown'}` : `exit=${failure.exitCode}`
+    const tail = failure.tail.replace(/\s+/g, ' ').trim().slice(0, CODEX_STDERR_TAIL_BYTES)
+    appendFileSync(file, `${new Date().toISOString()} ${status} tail=${tail}\n`)
+  } catch {
+    // A diagnostic that could not be written is not a reason for the turn to fail again.
+  }
+}
 
 export interface CodexKillDeps {
   graceMs?: number
@@ -238,7 +320,13 @@ export function runCodexTurn(
   })
 
   if (!resolution.ok) {
-    return Promise.reject(new ConveyorError(resolution.code, 'The engine could not be resolved to a binary.'))
+    // A refusal is still an ending the user has to see. It never reaches a child, so there is no exit code
+    // and no stderr: the code word itself is the evidence, and it stays a code (never a message) because
+    // that is the only part of a refusal that is stable enough to branch on in the pane.
+    const failure: CodexFailure = { exitCode: null, code: resolution.code, tail: '' }
+    onChunk({ type: 'turn_end_notice', cause: 'stream_error', resumable: true, failure })
+    appendCodexFailureLog(failure)
+    return Promise.resolve({ exitCode: null, cancelled: false, cause: 'stream_error' })
   }
 
   const spawnImpl: CodexSpawnImpl = deps.spawnImpl ?? (spawn as unknown as CodexSpawnImpl)
@@ -247,12 +335,19 @@ export function runCodexTurn(
     let threadId: string | null = null
     let buffer = ''
     let sawText = false
+    let sawCompletion = false
+    let stderrTail = ''
+    let spawnError: NodeJS.ErrnoException | null = null
+    let childExitCode: number | null = null
     let settled = false
     let timer: unknown
 
     const emit = (updates: readonly CodexUpdate[]): void => {
       for (const chunk of codexTranscriptChunks(updates, input.engineId)) {
         if (chunk.type === 'text_delta' && chunk.text.trim() !== '') sawText = true
+        // `turn.completed` is the only update that carries usage, so the usage chunk is also the turn's
+        // completion marker. A failure seen after it is a failure after the answer, not an answer lost.
+        if (chunk.type === 'usage') sawCompletion = true
         onChunk(chunk)
       }
     }
@@ -263,6 +358,21 @@ export function runCodexTurn(
       if (timer !== undefined) clearTimeout(timer as ReturnType<typeof setTimeout>)
       input.signal?.removeEventListener('abort', onAbort)
       resolve(outcome)
+    }
+
+    /**
+     * Report one failed turn: a visible chunk, one log line, and an ending.
+     *
+     * This is the replacement for the three paths that used to call `finish` alone. A chunk is written
+     * before the ending so the pane has the cause when the stream's finally block runs; the log line is
+     * written even in a packaged app where stderr has nowhere to go.
+     */
+    const emitFailure = (failure: CodexFailure): void => {
+      if (settled) return
+      onChunk({ type: 'turn_end_notice', cause: 'stream_error', resumable: true, failure })
+      appendCodexFailureLog(failure)
+      emit([{ type: 'turn_end', sessionId: threadId ?? '', cause: 'stream_error' }])
+      finish({ exitCode: failure.exitCode, cancelled: false, cause: 'stream_error' })
     }
 
     function onAbort(): void {
@@ -285,10 +395,16 @@ export function runCodexTurn(
         // stdin is a `codex exec` waiting for a pipe that will never end.
         stdio: CODEX_STDIO,
       })
-    } catch {
-      finish({ exitCode: null, cancelled: false, cause: 'stream_error' })
+    } catch (error) {
+      emitFailure({ exitCode: null, code: spawnFailureCode(error), tail: '' })
       return
     }
+
+    // stderr is evidence, not input: it is accumulated only so a failure can carry the last thing the child
+    // said, and it is read through the same bounded tail on every chunk so a chatty child cannot grow it.
+    child.stderr?.on('data', (chunk) => {
+      stderrTail = boundedStderrTail(`${stderrTail}${String(chunk)}`)
+    })
 
     child.stdout.on('data', (chunk) => {
       const framed = mapCodexChunk(buffer, String(chunk), threadId)
@@ -297,15 +413,28 @@ export function runCodexTurn(
       emit(framed.updates)
     })
 
-    child.on('error', () => {
-      emit([{ type: 'turn_end', sessionId: threadId ?? '', cause: 'stream_error' }])
-      finish({ exitCode: null, cancelled: false, cause: 'stream_error' })
+    child.on('error', (error) => {
+      spawnError = error
+      emitFailure({ exitCode: null, code: spawnFailureCode(error), tail: stderrTail })
     })
 
     child.on('close', (code) => {
+      if (settled) return
+      childExitCode = code
+      // A non-zero exit before the completion marker is the case this chunk exists for. The child may have
+      // said something on stderr, or nothing at all; either way the code and the tail travel together.
+      if (!sawCompletion && code !== 0) {
+        const codeWord = spawnError === null ? undefined : spawnFailureCode(spawnError)
+        emitFailure({
+          exitCode: childExitCode,
+          ...(codeWord === undefined ? {} : { code: codeWord }),
+          tail: stderrTail,
+        })
+        return
+      }
       const cause = codexTurnEndCause(code, sawText)
       emit([{ type: 'turn_end', sessionId: threadId ?? '', cause }])
-      finish({ exitCode: code, cancelled: false, cause })
+      finish({ exitCode: childExitCode, cancelled: false, cause })
     })
 
     if (input.signal === undefined) return

@@ -199,6 +199,10 @@ const SUITES = [
     src: 'engines/engine-codex-test.ts',
   },
   {
+    name: 'codex failure visibility (stderr tail, exit code, coded refusals, probe baseline)',
+    src: 'engines/engine-codex-failure-test.ts',
+  },
+  {
     name: 'engine preferences (mode to sandbox flag, path override order, refused probe)',
     src: 'engines/engine-preferences-test.ts',
   },

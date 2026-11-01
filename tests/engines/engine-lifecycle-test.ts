@@ -220,11 +220,22 @@ async function aSilentChildEndsItsTurnWithATracedCause() {
 
     const broken = await oneTurn(failed, 'a question that broke')
     assert.equal(broken.ended, true, 'a child that fails does not leave the turn thinking either')
-    assert.deepEqual(typesOf(broken.chunks), ['turn_end'])
+    assert.deepEqual(
+      typesOf(broken.chunks),
+      ['turn_end_notice', 'turn_end'],
+      'the failure notice, then the ending it belongs to'
+    )
     assert.equal(broken.outcome?.exitCode, 3)
     assert.equal(broken.outcome?.cause, 'stream_error', 'which is a stream that stopped mid-sentence')
+    const notice = broken.chunks[0]
+    assert.equal(notice?.type === 'turn_end_notice' ? notice.cause : '', 'stream_error', 'and the notice says so')
     assert.equal(
-      broken.chunks[0]?.type === 'turn_end' ? broken.chunks[0].cause : '',
+      notice?.type === 'turn_end_notice' ? notice.failure?.exitCode : null,
+      3,
+      'with the exit code the child left behind'
+    )
+    assert.equal(
+      broken.chunks[1]?.type === 'turn_end' ? broken.chunks[1].cause : '',
       'stream_error',
       'and the transcript is told the same thing the outcome is'
     )

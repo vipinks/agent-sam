@@ -23,6 +23,33 @@ export type EngineTranscriptChunk =
   | { type: 'tool_result'; callId: string; ok: boolean; output: string; code?: string }
   | { type: 'usage'; prompt: number; completion: number; cached?: number }
   | { type: 'turn_end'; cause: CodexTurnEndCause }
+  /**
+   * A turn that died before it answered, with the evidence the process left behind.
+   *
+   * This is the transcript's existing `turn_end_notice`, not a new event: the panel already records it as
+   * the turn's ending, and the engine path is reusing it so the renderer has one notice shape whichever
+   * side produced the turn. `failure` is the engine's addition — the two facts a CLI leaves on its exit,
+   * the code it exited on or the code word a refused spawn answered with, and the bounded stderr tail.
+   *
+   * It is a chunk rather than an exception because the pane words every other ending from the stream, and
+   * a failure that travels as a rejection is a failure the transcript never sees — exactly the bare
+   * `Thinking…` this chunk exists to make impossible.
+   *
+   * `cause` is the turn's ending, not its diagnosis: a dead child is a stream that stopped arriving, so
+   * the cause is `stream_error` and the code word travels beside it. `exitCode` is `null` when no child
+   * ever ran; `code` is absent when a real exit code is the whole story.
+   */
+  | {
+      type: 'turn_end_notice'
+      cause: CodexTurnEndCause
+      resumable: boolean
+      failure?: {
+        exitCode: number | null
+        code?: string
+        /** The last of stderr, already bounded by the runner: five lines or 500 bytes, never more. */
+        tail: string
+      }
+    }
 
 /**
  * The tool kinds this app can name in its own words.

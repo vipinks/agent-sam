@@ -1,5 +1,5 @@
 import { TriangleAlert } from 'lucide-react'
-import type { TurnEndNotice as TurnEndNoticeData } from './agent-session'
+import { engineFailureContinueCopy, type TurnEndNotice as TurnEndNoticeData } from './agent-session'
 import type { TurnEndCause } from '@/conveyor/protocol/turn-end'
 import { Button } from '../ui/button'
 import { SurfaceProvider } from '../ui/surface'
@@ -94,7 +94,9 @@ export function TurnEndNotice({
   if (!notice) return null
 
   const lines = [
-    WORDING[notice.cause],
+    // A failure's own copy replaces the generic stream_error sentence: "the connection dropped" is not
+    // what a non-zero exit means, and the exit code plus the tail is what the user can act on.
+    notice.failure === undefined ? WORDING[notice.cause] : engineFailureContinueCopy(notice.failure),
     notice.midWork === true ? MID_WORK : null,
     notice.unfinishedSteps === undefined ? null : unfinishedCopy(notice.unfinishedSteps),
     notice.lostPending === true ? LOST_PENDING : null,
