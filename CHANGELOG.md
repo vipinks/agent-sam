@@ -6,6 +6,12 @@ coding assistant.
 
 <br>
 
+## 2026-11-01: v1.14.9 — Codex failure visibility
+
+- fix(engine): surface a failed Codex turn with its exit code and stderr tail
+
+<br>
+
 ## 2026-10-31: v1.14.8 — MCP server inline edit
 
 - feat(mcp): inline edit for MCP servers reusing the add form
