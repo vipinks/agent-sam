@@ -6,6 +6,12 @@ coding assistant.
 
 <br>
 
+## 2026-11-01: v1.14.10 — Codex turn binary resolution
+
+- fix(engine): spawn the probed Codex binary at turn time, never a bare-name PATH search
+
+<br>
+
 ## 2026-11-01: v1.14.9 — Codex failure visibility
 
 - fix(engine): surface a failed Codex turn with its exit code and stderr tail
