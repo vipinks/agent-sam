@@ -6,6 +6,18 @@ coding assistant.
 
 <br>
 
+## 2026-11-02: v1.15.0 — Look & Feel: motion pass, startup splash, palette contrast
+
+- test(motion): pin the Phase 1 arrival contract
+- feat(motion): apply Phase 1 look-and-feel motion
+- test(splash): pin the startup splash contract
+- feat(splash): land SplashScreen with main-process handoff
+- fix(splash): raise minimum-visible floor to 3000 ms
+- test(theme): pin forest and amber light keyword contrast
+- fix(theme): raise forest and amber light keyword contrast
+
+<br>
+
 ## 2026-11-01: v1.14.10 — Codex turn binary resolution
 
 - fix(engine): spawn the probed Codex binary at turn time, never a bare-name PATH search
