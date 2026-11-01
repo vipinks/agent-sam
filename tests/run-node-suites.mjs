@@ -69,6 +69,10 @@ const SUITES = [
     name: 'window shortcuts (six accelerators, field refusal, no menu)',
     src: 'ui/window-shortcuts-test.ts',
   },
+  {
+    name: 'startup splash (400 ms floor, 5000 ms cap, failure, idempotency, cancellation)',
+    src: 'splash/splash-controller-test.ts',
+  },
   { name: 'terminal pty sessions', src: 'terminal/terminal-pty-test.ts' },
   { name: 'terminal preferences (bounds + store)', src: 'terminal/terminal-preferences-test.ts' },
   { name: 'terminal wire (chunk framing)', src: 'terminal/terminal-wire-test.ts' },
