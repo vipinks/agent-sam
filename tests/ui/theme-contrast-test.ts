@@ -283,6 +283,51 @@ function everyDarkForegroundTokenReads(): void {
   }
 }
 
+/**
+ * The syntax keyword on the two light palettes this pass retunes.
+ *
+ * `syntax-keyword` is a semantic token, not a surface, so brightness leaves it where the palette authored
+ * it while the page under it moves. The floor is therefore pinned only at brightness 0 and +20: at -20
+ * the light page darkens under an unchanged dark keyword, and every light palette fails 4.5 there — not
+ * just forest and amber, but crimson, ocean and violet too. That systemic light-mode gap is parked, not
+ * fixed by this pass, and the absence of -20 here is deliberate rather than an oversight.
+ *
+ * Each case is registered as its own claim so a red run reports how many of the twelve assertions fail,
+ * not only the first one in the block.
+ */
+const LIGHT_SYNTAX_KEYWORD_PIN_THEMES = ['forest', 'amber'] as const
+const LIGHT_SYNTAX_KEYWORD_PIN_SURFACES = ['background', 'muted', 'card'] as const
+const LIGHT_SYNTAX_KEYWORD_PIN_BRIGHTNESSES = [0, 20] as const
+
+type LightSyntaxKeywordPinSurface = (typeof LIGHT_SYNTAX_KEYWORD_PIN_SURFACES)[number]
+type LightSyntaxKeywordPinBrightness = (typeof LIGHT_SYNTAX_KEYWORD_PIN_BRIGHTNESSES)[number]
+
+function pinLightSyntaxKeyword(
+  themeId: (typeof LIGHT_SYNTAX_KEYWORD_PIN_THEMES)[number],
+  surface: LightSyntaxKeywordPinSurface,
+  brightness: LightSyntaxKeywordPinBrightness
+): void {
+  const where = `${themeId} light brightness ${brightness}`
+  const vars = resolveThemeVars(themeId, 'light', brightness)
+  const ratio = contrastRatio(vars['syntax-keyword'], vars[surface])
+  assert.ok(
+    ratio >= MIN_CONTRAST,
+    `${where}: --syntax-keyword (${vars['syntax-keyword']}) on --${surface} (${vars[surface]}) measured ${ratio}, under the ${MIN_CONTRAST} floor`
+  )
+}
+
+function registerLightSyntaxKeywordPins(): void {
+  for (const themeId of LIGHT_SYNTAX_KEYWORD_PIN_THEMES) {
+    for (const surface of LIGHT_SYNTAX_KEYWORD_PIN_SURFACES) {
+      for (const brightness of LIGHT_SYNTAX_KEYWORD_PIN_BRIGHTNESSES) {
+        claim(`${themeId} light: --syntax-keyword clears the floor on --${surface} at brightness ${brightness}`, () =>
+          pinLightSyntaxKeyword(themeId, surface, brightness)
+        )
+      }
+    }
+  }
+}
+
 function theTerminalFollowsByTheSameRoute(): void {
   for (const theme of THEMES) {
     for (const mode of THEME_MODES satisfies readonly ThemeMode[]) {
@@ -321,6 +366,7 @@ async function main(): Promise<void> {
   claim('every dark foreground token clears the floor on the canvas, the plate and the popover', () =>
     everyDarkForegroundTokenReads()
   )
+  registerLightSyntaxKeywordPins()
   claim('the terminal follows the contrast by the route it follows the brightness', () =>
     theTerminalFollowsByTheSameRoute()
   )
