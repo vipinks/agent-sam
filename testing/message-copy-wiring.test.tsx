@@ -97,6 +97,19 @@ describe('copy on a message bubble', () => {
     expect(screen.getByRole('button', { name: 'Copy reply' })).toBeTruthy()
   })
 
+  it('gives the copy control its colour transition and the keyed glyph its arrival', () => {
+    render(<MessageBubble message={userTurn()} />)
+
+    const button = screen.getByRole('button', { name: 'Copy message' })
+    const classes = button.className.split(/\s+/).filter(Boolean)
+    expect(classes).toEqual(expect.arrayContaining(['transition-colors', 'duration-150', 'ease-out']))
+
+    const glyph = button.querySelector('svg.lucide-copy')
+    expect(glyph?.getAttribute('class')?.split(/\s+/).filter(Boolean)).toEqual(
+      expect.arrayContaining(['animate-in', 'fade-in', 'zoom-in-50', 'duration-150', 'motion-reduce:animate-none'])
+    )
+  })
+
   it('reaches the copy button by keyboard', async () => {
     const { user } = withClipboard()
     render(<MessageBubble message={userTurn()} />)

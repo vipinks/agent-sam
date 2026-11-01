@@ -2,6 +2,9 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AlertDialog, AlertDialogContent, AlertDialogTitle } from '@/app/components/ui/alert-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/app/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/app/components/ui/popover'
 import { AgentActionCard } from '@/app/components/workbench/agent-action-card'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { IconRail } from '@/app/components/workbench/icon-rail'
@@ -251,6 +254,96 @@ describe('the icon rail’s active indicator', () => {
       })
     })
   }
+})
+
+describe('the overlay surfaces’ arrival', () => {
+  it('gives the alert dialog its zoom, slide and reduced-motion guard', () => {
+    render(
+      <AlertDialog open>
+        <AlertDialogContent>
+          <AlertDialogTitle>Motion probe</AlertDialogTitle>
+        </AlertDialogContent>
+      </AlertDialog>
+    )
+
+    const content = document.querySelector('[data-slot="alert-dialog-content"]')
+    expect(tokens(content)).toEqual(
+      expect.arrayContaining([
+        'duration-200',
+        'ease-out',
+        'data-[state=open]:animate-in',
+        'data-[state=open]:zoom-in-95',
+        'data-[state=open]:slide-in-from-top-2',
+        'data-[state=closed]:slide-out-to-top-1',
+        'motion-reduce:animate-none',
+      ])
+    )
+  })
+
+  it('slows the alert dialog overlay to the surface duration', () => {
+    render(
+      <AlertDialog open>
+        <AlertDialogContent>
+          <AlertDialogTitle>Overlay probe</AlertDialogTitle>
+        </AlertDialogContent>
+      </AlertDialog>
+    )
+
+    const overlay = document.querySelector('[data-slot="alert-dialog-overlay"]')
+    expect(tokens(overlay)).toContain('duration-200')
+  })
+
+  it('gives the dropdown menu its zoom and side-aware slide', () => {
+    render(
+      <DropdownMenu open>
+        <DropdownMenuTrigger asChild>
+          <button type="button">Open menu</button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <span>Item</span>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
+
+    const content = document.querySelector('[data-slot="dropdown-menu-content"]')
+    expect(tokens(content)).toEqual(
+      expect.arrayContaining([
+        'duration-150',
+        'ease-out',
+        'zoom-in-95',
+        'zoom-out-95',
+        'data-[state=open]:animate-in',
+        'data-[side=bottom]:slide-in-from-top-2',
+        'data-[side=top]:slide-in-from-bottom-2',
+        'motion-reduce:animate-none',
+      ])
+    )
+  })
+
+  it('gives the popover its zoom and side-aware slide', () => {
+    render(
+      <Popover open>
+        <PopoverTrigger asChild>
+          <button type="button">Open popover</button>
+        </PopoverTrigger>
+        <PopoverContent>Contents</PopoverContent>
+      </Popover>
+    )
+
+    const content = document.querySelector('[data-slot="popover-content"]')
+    expect(tokens(content)).toEqual(
+      expect.arrayContaining([
+        'duration-150',
+        'ease-out',
+        'zoom-in-95',
+        'zoom-out-95',
+        'data-[state=open]:animate-in',
+        'data-[side=bottom]:slide-in-from-top-2',
+        'data-[side=top]:slide-in-from-bottom-2',
+        'motion-reduce:animate-none',
+      ])
+    )
+  })
 })
 
 describe('the session group header', () => {

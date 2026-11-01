@@ -367,6 +367,32 @@ describe('the title bar’s toggle', () => {
 })
 
 describe('the panel’s own place in the layout', () => {
+  it('animates the panel wrapper on arrival and leaves the terminal canvas still', async () => {
+    const stub = stubWorkbench()
+    const root = freshRoot()
+    stub.on('create', () => ({ rootPath: root, pid: 4242, cwd: root, lines: [] }))
+    stub.on('read', () => ({ rootPath: root, pid: 4242, cwd: root, lines: [] }))
+    const { container } = renderApp(stub, root)
+
+    await openFromGlyph(container)
+
+    const wrapper = container.querySelector('[data-slot="terminal-panel"]')
+    expect(wrapper?.className.split(/\s+/).filter(Boolean)).toEqual(
+      expect.arrayContaining([
+        'animate-in',
+        'fade-in-0',
+        'slide-in-from-bottom-1',
+        'duration-200',
+        'ease-out',
+        'motion-reduce:animate-none',
+      ])
+    )
+
+    // The host moves xterm’s element into this slot, so animating the slot itself would replay the
+    // canvas on every attach. The arrival belongs to the panel chrome and stops at this boundary.
+    expect(terminalPane(container)?.className.split(/\s+/).filter(Boolean)).not.toContain('animate-in')
+  })
+
   it('nests a vertical split inside the chat column, leaving the row to the rail', async () => {
     const stub = stubWorkbench()
     const root = freshRoot()
