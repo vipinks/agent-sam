@@ -3,7 +3,7 @@
 import { identity } from './identity'
 import { app, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { openAppWindow } from './app'
+import { openAppWindow, openStartupWindows, windows } from './app'
 import { registerResourcesProtocol } from './protocols'
 import { startUpdateSchedule } from '@/conveyor/modules/updates'
 
@@ -13,10 +13,26 @@ import { startUpdateSchedule } from '@/conveyor/modules/updates'
 // falls back on its own. Must run before the app is ready.
 if (process.platform === 'linux') app.commandLine.appendSwitch('password-store', 'gnome-libsecret')
 
+// One app instance owns the windows. A second launch still reaches the running app through the
+// second-instance event below, but creates no renderer and no window of its own.
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) app.quit()
+if (primaryInstance) {
+  app.on('second-instance', () => {
+    const mainWindow = windows.get('main')
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  if (!primaryInstance) return
+
   // Set app user model id for windows. Kept in step with the appId in electron-builder.yml, so the
   // Windows taskbar/notification identity, the installer entry and the window title all agree.
   electronApp.setAppUserModelId('com.agentsam.desktop')
@@ -34,8 +50,8 @@ app.whenReady().then(() => {
   // unpackaged build has no update feed to read, and the module refuses every update action there.
   startUpdateSchedule()
 
-  // Open the main window.
-  openAppWindow()
+  // Open the startup pair: hidden main plus the splash that owns the visible handoff.
+  openStartupWindows()
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
