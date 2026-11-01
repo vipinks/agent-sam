@@ -11,8 +11,11 @@
  * desktop for a frame, which is the one thing a startup splash exists to prevent.
  */
 
-/** How long the splash must remain visible after it is shown, even if the main window is ready sooner. */
-export const SPLASH_MIN_VISIBLE_MS = 400
+/**
+ * How long the splash must remain visible after it is shown, even if the main window is ready sooner.
+ * Keep it below `SPLASH_MAX_VISIBLE_MS`, or the cap would fire before the floor.
+ */
+export const SPLASH_MIN_VISIBLE_MS = 3000
 
 /** The hard cap: dismiss the splash and reveal main even when ready-to-show never arrives. */
 export const SPLASH_MAX_VISIBLE_MS = 5000

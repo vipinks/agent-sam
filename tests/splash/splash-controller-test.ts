@@ -4,7 +4,7 @@
  * The controller owns the one ordering that matters at launch: the splash is visible, the main window
  * stays hidden until it can paint, and no timer can leave a running app with no window on screen. A real
  * Electron window would make that claim untestable; the ports here record what the controller asked the
- * windows to do, and the fake clock makes the 400 ms floor and the 5000 ms cap exact rather than timing
+ * windows to do, and the fake clock makes the 3000 ms floor and the 5000 ms cap exact rather than timing
  * dependent.
  */
 import { strict as assert } from 'node:assert'
@@ -21,7 +21,7 @@ function step(label: string, fn: () => void): void {
  * A controller wired to a fake clock and recording ports.
  *
  * Timers fire in due order, and `now` is moved to each timer's due time before its callback runs. That is
- * what lets the suites below say the splash closed *at* 400 ms, not merely after advancing the clock past
+ * what lets the suites below say the splash closed *at* 3000 ms, not merely after advancing the clock past
  * it.
  */
 function harness() {
@@ -72,8 +72,11 @@ function harness() {
   }
 }
 
-/** Ready before the floor: the close waits until 400 ms from the splash becoming visible. */
+/** Ready before the floor: the close waits until 3000 ms from the splash becoming visible. */
 function readyBeforeFloorWaits() {
+  const expectedFloorMs = 3000
+  assert.equal(SPLASH_MIN_VISIBLE_MS, expectedFloorMs, 'the minimum-visible floor is 3000 ms')
+
   const h = harness()
   h.controller.start()
   h.advance(100)
@@ -82,20 +85,20 @@ function readyBeforeFloorWaits() {
   assert.equal(h.at('closeSplash'), undefined, 'the splash is still up before the floor')
   assert.equal(h.pending(), 1, 'one floor timer is pending')
 
-  h.advance(SPLASH_MIN_VISIBLE_MS - 100 - 1)
+  h.advance(expectedFloorMs - 100 - 1)
   assert.equal(h.at('closeSplash'), undefined, 'the splash is still up one millisecond before the floor')
 
   h.advance(1)
-  assert.equal(h.at('closeSplash'), SPLASH_MIN_VISIBLE_MS, 'the splash closes exactly at the floor')
+  assert.equal(h.at('closeSplash'), expectedFloorMs, 'the splash closes exactly at the floor')
   assert.deepEqual(
     h.calls.filter((call) => call.name === 'showMain' || call.name === 'closeSplash'),
     [
-      { name: 'showMain', at: SPLASH_MIN_VISIBLE_MS },
-      { name: 'closeSplash', at: SPLASH_MIN_VISIBLE_MS },
+      { name: 'showMain', at: expectedFloorMs },
+      { name: 'closeSplash', at: expectedFloorMs },
     ],
     'the main window is shown before the splash is closed'
   )
-  results.push('ready before floor waits 400 ms, then shows main before closing splash')
+  results.push('ready before floor waits 3000 ms, then shows main before closing splash')
 }
 
 /** Ready after the floor: no artificial delay remains, so dismissal is immediate. */
@@ -181,8 +184,8 @@ function closedAndQuitCancelTimers() {
 // ---------------------------------------------------------------- harness
 
 function main(): void {
-  step('floor: ready-to-show before 400 ms waits', readyBeforeFloorWaits)
-  step('floor: ready-to-show after 400 ms closes now', readyAfterFloorClosesImmediately)
+  step('floor: ready-to-show before 3000 ms waits', readyBeforeFloorWaits)
+  step('floor: ready-to-show after 3000 ms closes now', readyAfterFloorClosesImmediately)
   step('cap: 5000 ms dismissal', capDismisses)
   step('failure: load/renderer failure dismisses', failureDismisses)
   step('idempotency: double dismissal', doubleDismissIsNoOp)
