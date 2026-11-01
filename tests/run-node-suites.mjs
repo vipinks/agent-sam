@@ -199,6 +199,10 @@ const SUITES = [
     src: 'engines/engine-codex-test.ts',
   },
   {
+    name: 'codex turn binary (saved override, PATH order, shims only, PATH .exe)',
+    src: 'engines/engine-codex-binary-test.ts',
+  },
+  {
     name: 'codex failure visibility (stderr tail, exit code, coded refusals, probe baseline)',
     src: 'engines/engine-codex-failure-test.ts',
   },

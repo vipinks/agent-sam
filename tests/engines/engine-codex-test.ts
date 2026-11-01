@@ -37,6 +37,7 @@ import { codexTranscriptChunks, type EngineTranscriptChunk } from '../../conveyo
 
 const results: string[] = []
 const CODEX = 'codex'
+const CODEX_BINARY = 'C:/tools/codex.exe'
 const FIXTURES = join(process.cwd(), 'tests', 'engines', 'fixtures')
 
 function captureLines(name: string): string[] {
@@ -232,7 +233,7 @@ async function theCapturedRunBecomesTheTranscript() {
 
   const turn = runCodexTurn(
     { engineId: CODEX, prompt: 'Run the shell command echo hello.', cwd: 'C:/work' },
-    { spawnImpl: spawn.impl },
+    { spawnImpl: spawn.impl, binaryOverride: CODEX_BINARY },
     (chunk) => chunks.push(chunk)
   )
   await new Promise((resolve) => setImmediate(resolve))
@@ -241,7 +242,7 @@ async function theCapturedRunBecomesTheTranscript() {
 
   assert.equal(spawn.calls.length, 1, 'one child, for one turn')
   assert.equal(spawn.calls[0].shell, false, 'started without a shell')
-  assert.equal(spawn.calls[0].command, CODEX, 'by the allowlisted name, since no override was handed it')
+  assert.equal(spawn.calls[0].command, CODEX_BINARY, 'by the absolute path the caller resolved')
   assert.deepEqual(spawn.calls[0].args.slice(0, 2), ['exec', '--json'], 'in the dialect the mapper reads')
   assert.equal(spawn.calls[0].args[spawn.calls[0].args.length - 1].includes('echo hello'), true, 'with the prompt last')
 
@@ -290,7 +291,7 @@ async function cancellingTheTurnKillsTheChild() {
 
   const turn = runCodexTurn(
     { engineId: CODEX, prompt: 'a long job', cwd: 'C:/work', signal: controller.signal },
-    { spawnImpl: spawn.impl, graceMs: 50, setTimer: (fn) => timers.push(fn) },
+    { spawnImpl: spawn.impl, binaryOverride: CODEX_BINARY, graceMs: 50, setTimer: (fn) => timers.push(fn) },
     (chunk) => chunks.push(chunk)
   )
   await new Promise((resolve) => setImmediate(resolve))
@@ -357,7 +358,7 @@ async function theArgvNeverCarriesAModelFlag() {
         // case reads is the runner's own answer to a model being present on the turn at all.
         model: parsed.data.model ?? '',
       },
-      { spawnImpl: spawn.impl },
+      { spawnImpl: spawn.impl, binaryOverride: CODEX_BINARY },
       () => undefined
     )
     await new Promise((resolve) => setImmediate(resolve))

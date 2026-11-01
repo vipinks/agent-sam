@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import { appendFileSync, mkdirSync, readdirSync, statSync } from 'fs'
-import { dirname, join } from 'path'
+import { delimiter, dirname, isAbsolute, join } from 'path'
 import { app } from 'electron'
 import { ConveyorError } from 'electron-conveyor/main'
 import {
@@ -248,6 +248,48 @@ function isFile(path: string): boolean {
   }
 }
 
+/**
+ * The Codex binary a turn starts: the saved path, then the install pattern, then the probe's own fallback.
+ *
+ * The stored path is asked first because it is the user's answer about this machine, but only after `isFile`
+ * says something is really there. That guard is load-bearing: a stale saved path must fall through to the
+ * pattern and then to the no-spawn notice, rather than reproducing the ENOENT the saved value would cause.
+ *
+ * The fallback is the one at `engine.ts:142-149` made explicit: when neither the saved path nor the pattern
+ * answers, the probe hands `resolveEngineSpawn` no override, so the law names the allowlisted `codex` and the
+ * OS would search `PATH` at spawn time. This side performs that same PATH lookup itself and returns the
+ * absolute `.exe` it finds. It never returns a bare name, and on Windows it never returns an extensionless
+ * shim or a `.cmd`: neither can be started under the no-shell law. A machine with only those files therefore
+ * has no Codex binary this app can run, which is a state the turn reports by code rather than by ENOENT.
+ */
+export function resolveCodexTurnBinary(
+  savedPath: string | null,
+  env: Readonly<Record<string, string | undefined>> = process.env
+): string | undefined {
+  if (savedPath !== null && isAbsolute(savedPath) && isFile(savedPath)) return savedPath
+
+  const installed = installedBinaryFor('codex', { env })
+  if (installed !== undefined && isAbsolute(installed)) return installed
+
+  const fallback = resolveEngineSpawn({ engineId: 'codex', args: [] })
+  if (!fallback.ok) return undefined
+  if (isAbsolute(fallback.command)) return isFile(fallback.command) ? fallback.command : undefined
+  if (fallback.command.includes('/') || fallback.command.includes('\\')) return undefined
+
+  const executable = process.platform === 'win32' ? `${fallback.command.replace(/\.exe$/i, '')}.exe` : fallback.command
+  const pathValue = env.PATH ?? env.Path ?? env.path ?? ''
+
+  for (const entry of pathValue.split(delimiter)) {
+    const dir = entry.trim().replace(/^"(.*)"$/, '$1')
+    if (dir === '' || !isAbsolute(dir)) continue
+
+    const candidate = join(dir, executable)
+    if (isAbsolute(candidate) && isFile(candidate)) return candidate
+  }
+
+  return undefined
+}
+
 export interface CodexTurnInput {
   engineId: string
   prompt: string
@@ -276,8 +318,14 @@ export interface CodexTurnInput {
 export interface CodexTurnDeps {
   /** Left out in the app: the real `child_process.spawn`. Supplied by the suites that watch it. */
   spawnImpl?: CodexSpawnImpl
-  /** An absolute path the allowlist sanctions, resolved by the caller that owns the environment. */
-  binaryOverride?: string
+  /**
+   * The absolute path the caller resolved, or `null`/absent when the resolver found nothing this app may start.
+   * Both absences are normalized to `undefined` at the runner seam, so this is never a nullable string.
+   *
+   * The explicit absence is the missing binary: it must become a coded notice, never a bare-name spawn, so the
+   * runner never falls back to the OS search that would reach an extensionless shim or a `.cmd`.
+   */
+  binaryOverride?: string | null
   graceMs?: number
   setTimer?: (listener: () => void, ms: number) => unknown
 }
@@ -313,21 +361,12 @@ export function runCodexTurn(
   // The prompt, and nothing between the launch config and the prompt: the model this turn runs is Codex's own to
   // resolve, so no flag is built here from `input.model` — see that field's note above.
   args.push(input.prompt)
-  const resolution = resolveEngineSpawn({
-    engineId: input.engineId,
-    args,
-    ...(deps.binaryOverride === undefined ? {} : { binaryOverride: deps.binaryOverride }),
-  })
 
-  if (!resolution.ok) {
-    // A refusal is still an ending the user has to see. It never reaches a child, so there is no exit code
-    // and no stderr: the code word itself is the evidence, and it stays a code (never a message) because
-    // that is the only part of a refusal that is stable enough to branch on in the pane.
-    const failure: CodexFailure = { exitCode: null, code: resolution.code, tail: '' }
-    onChunk({ type: 'turn_end_notice', cause: 'stream_error', resumable: true, failure })
-    appendCodexFailureLog(failure)
-    return Promise.resolve({ exitCode: null, cancelled: false, cause: 'stream_error' })
-  }
+  // The caller's resolver answers `null` (or nothing for Codex) when there is no file this app may start.
+  // Both absences are normalized here, at the seam: the spawn law's override is a string or nothing, and a
+  // nullable value must not reach a request whose field is `string | undefined`. Every later decision is a
+  // test of this one value, so the spawn path can only ever be handed a string.
+  const binaryOverride = deps.binaryOverride ?? undefined
 
   const spawnImpl: CodexSpawnImpl = deps.spawnImpl ?? (spawn as unknown as CodexSpawnImpl)
 
@@ -373,6 +412,29 @@ export function runCodexTurn(
       appendCodexFailureLog(failure)
       emit([{ type: 'turn_end', sessionId: threadId ?? '', cause: 'stream_error' }])
       finish({ exitCode: failure.exitCode, cancelled: false, cause: 'stream_error' })
+    }
+
+    // D3: a resolver that answered nothing is the missing binary, and it is stated here — before the law is
+    // asked and before a child exists. `resolveEngineSpawn` is deliberately not consulted for an absence: it
+    // would name the allowlisted bare binary, which is the PATH search this turn must never fall back to.
+    // The named code is what lets a shims-only machine draw a card instead of a raw ENOENT.
+    if (binaryOverride === undefined) {
+      const code =
+        input.engineId === 'codex' ? ENGINE_SPAWN_CODES.ENGINE_NOT_INSTALLED : ENGINE_SPAWN_CODES.ENGINE_UNKNOWN
+      emitFailure({ exitCode: null, code, tail: '' })
+      return
+    }
+
+    const resolution = resolveEngineSpawn({ engineId: input.engineId, args, binaryOverride })
+    if (!resolution.ok) {
+      // A refusal is still an ending the user has to see. It never reaches a child, so there is no exit code
+      // and no stderr: the code word itself is the evidence, and it stays a code (never a message) because
+      // that is the only part of a refusal that is stable enough to branch on in the pane.
+      const failure: CodexFailure = { exitCode: null, code: resolution.code, tail: '' }
+      onChunk({ type: 'turn_end_notice', cause: 'stream_error', resumable: true, failure })
+      appendCodexFailureLog(failure)
+      finish({ exitCode: null, cancelled: false, cause: 'stream_error' })
+      return
     }
 
     function onAbort(): void {

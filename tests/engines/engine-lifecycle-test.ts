@@ -39,6 +39,7 @@ import type { EngineTranscriptChunk } from '../../conveyor/protocol/codex-turn'
 
 const results: string[] = []
 const CODEX = 'codex'
+const CODEX_BINARY = 'C:/tools/codex.exe'
 const FIXTURE = join(process.cwd(), 'tests', 'engines', 'fixtures', 'codex-exec-stdin-child.cjs')
 const CWD = process.cwd()
 
@@ -94,7 +95,7 @@ async function oneTurn(run: FixtureRun, prompt: string): Promise<TurnResult> {
   const seen: { outcome: CodexTurnOutcome | null } = { outcome: null }
   const turn = runCodexTurn(
     { engineId: CODEX, prompt, cwd: CWD, signal: controller.signal },
-    { spawnImpl: run.impl },
+    { spawnImpl: run.impl, binaryOverride: CODEX_BINARY },
     (chunk) => chunks.push(chunk)
   )
   void turn.then((value) => {
@@ -254,7 +255,7 @@ async function cancelKillsTheChildAndEndsTheTurn() {
     const controller = new AbortController()
     const turn = runCodexTurn(
       { engineId: CODEX, prompt: 'a long job', cwd: CWD, signal: controller.signal },
-      { spawnImpl: run.impl },
+      { spawnImpl: run.impl, binaryOverride: CODEX_BINARY },
       (chunk) => chunks.push(chunk)
     )
 

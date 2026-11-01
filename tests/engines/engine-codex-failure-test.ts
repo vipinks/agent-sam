@@ -22,6 +22,7 @@ import { codexTranscriptChunks, type EngineTranscriptChunk } from '../../conveyo
 
 const results: string[] = []
 const CODEX = 'codex'
+const CODEX_BINARY = 'C:/tools/codex.exe'
 /** The bounds D1 names in the product: the last five lines, capped at 500 bytes. */
 const TAIL_LINES = 5
 const TAIL_BYTES = 500
@@ -148,7 +149,7 @@ async function aNonZeroExitCarriesItsCodeAndTail() {
   const chunks: EngineTranscriptChunk[] = []
   const turn = runCodexTurn(
     { engineId: CODEX, prompt: 'a question', cwd: 'C:/work' },
-    { spawnImpl: spawnOf(script.child) },
+    { spawnImpl: spawnOf(script.child), binaryOverride: CODEX_BINARY },
     (chunk) => chunks.push(chunk)
   )
 
@@ -183,7 +184,7 @@ async function aChildErrorCarriesItsCodeAndTail() {
   const chunks: EngineTranscriptChunk[] = []
   const turn = runCodexTurn(
     { engineId: CODEX, prompt: 'a question', cwd: 'C:/work' },
-    { spawnImpl: spawnOf(script.child) },
+    { spawnImpl: spawnOf(script.child), binaryOverride: CODEX_BINARY },
     (chunk) => chunks.push(chunk)
   )
 
@@ -210,6 +211,7 @@ async function aSynchronousSpawnFailureEmitsItsCode() {
       spawnImpl: () => {
         throw Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })
       },
+      binaryOverride: CODEX_BINARY,
     },
     (chunk) => chunks.push(chunk)
   )

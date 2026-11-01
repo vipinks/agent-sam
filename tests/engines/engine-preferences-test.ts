@@ -48,6 +48,7 @@ import { enginePreferencesStore, type EnginePreferencesState } from '../../conve
 
 const results: string[] = []
 const CODEX = 'codex'
+const CODEX_BINARY = 'C:/tools/codex.exe'
 
 /** A child that answers however a case needs it to, without starting anything. */
 function fakeChild(script: { stdout?: string; error?: NodeJS.ErrnoException; exit?: number | null }): EngineSpawned {
@@ -160,7 +161,7 @@ async function theChosenModeReachesTheSpawnedArgs() {
   const spawn = recordingSpawn([fakeChild({ stdout: '', exit: 0 })])
   await runCodexTurn(
     { engineId: CODEX, prompt: 'a prompt', cwd: 'C:/work', permissionMode: 'read-only' },
-    { spawnImpl: spawn.impl as unknown as CodexSpawnImpl },
+    { spawnImpl: spawn.impl as unknown as CodexSpawnImpl, binaryOverride: CODEX_BINARY },
     () => undefined
   )
 
@@ -171,7 +172,7 @@ async function theChosenModeReachesTheSpawnedArgs() {
   const fallback = recordingSpawn([{ ...(fakeChild({ stdout: '', exit: 0 }) as CodexChild) }])
   await runCodexTurn(
     { engineId: CODEX, prompt: 'a prompt', cwd: 'C:/work' },
-    { spawnImpl: fallback.impl as unknown as CodexSpawnImpl },
+    { spawnImpl: fallback.impl as unknown as CodexSpawnImpl, binaryOverride: CODEX_BINARY },
     () => undefined
   )
   assert.equal(

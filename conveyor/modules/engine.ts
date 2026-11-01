@@ -23,7 +23,7 @@ import {
   type StoredEnginePreference,
 } from '../protocol/engine'
 import type { AcpModelCatalogue, AcpPermissionRequest } from '../protocol/acp'
-import { installedBinaryFor, runCodexTurn } from './engine-codex'
+import { installedBinaryFor, resolveCodexTurnBinary, runCodexTurn, type CodexSpawnImpl } from './engine-codex'
 import { runAcpTurn } from './engine-acp-turn'
 import type { EngineTranscriptChunk } from '../protocol/codex-turn'
 
@@ -425,6 +425,16 @@ export const engineTurnInputSchema = z.object({
   model: z.string().max(ENGINE_MODEL_MAX_LENGTH).optional(),
 })
 
+/** What a turn accepts from its caller: the spawn a suite watches, and the environment it resolves against. */
+export interface EngineTurnDeps {
+  /** Left out in the app: the real `child_process.spawn`. Supplied by the suites that watch it. */
+  spawnImpl?: CodexSpawnImpl
+  /** The environment the install pattern and fallback are resolved against. */
+  env?: Readonly<Record<string, string | undefined>>
+}
+
+let turnDeps: EngineTurnDeps = {}
+
 /**
  * The engine rail's whole IPC surface.
  *
@@ -474,12 +484,17 @@ export const engineModule = defineModule({
    * one and no turn is left claiming to be thinking.
    */
   turn: stream(engineTurnInputSchema, async function* ({ input, signal }) {
-    const installed = installedBinaryFor(input.engineId)
     // The mode is read here rather than sent with the turn, which is what keeps the choice a *setting*: the
     // conversation does not carry it, a resumed turn runs under today's choice rather than the one that was
     // current when it was written, and the pane that starts a turn needs to know nothing about sandboxes.
     // The store is the only writer, and its schema accepts only the three traced values.
     const preference = preferenceFor(input.engineId)
+    const installed =
+      input.engineId === 'codex'
+        ? resolveCodexTurnBinary(preference.binaryPath, turnDeps.env ?? process.env)
+        : installedBinaryFor(input.engineId, {
+            ...(turnDeps.env === undefined ? {} : { env: turnDeps.env }),
+          })
     const queue: EngineTranscriptChunk[] = []
     let wake: (() => void) | null = null
     let finished = false
@@ -534,7 +549,14 @@ export const engineModule = defineModule({
             },
             onChunk
           )
-        : runCodexTurn(turnInput, binary, onChunk)
+        : runCodexTurn(
+            turnInput,
+            {
+              binaryOverride: installed ?? null,
+              ...(turnDeps.spawnImpl === undefined ? {} : { spawnImpl: turnDeps.spawnImpl }),
+            },
+            onChunk
+          )
 
     // A turn that never started is an ending rather than a stream that went quiet, and the ending the pane has
     // for a run that failed is the turn's own error line — the one place it words a cause. So the failure is
@@ -569,3 +591,23 @@ export const engineModule = defineModule({
     }
   }),
 })
+
+/**
+ * Drive one registered turn with the process boundary supplied by a suite.
+ *
+ * The module's stream is still the only turn body: this only lends the spawn and environment to it for the
+ * duration of one run, and restores the empty defaults afterwards. Nothing in the app calls it with deps.
+ */
+export async function* runEngineTurn(
+  input: z.infer<typeof engineTurnInputSchema>,
+  signal: AbortSignal,
+  deps: EngineTurnDeps = {}
+): AsyncGenerator<EngineTranscriptChunk> {
+  const previous = turnDeps
+  turnDeps = deps
+  try {
+    yield* engineModule.record.turn.resolver({ input, ctx: {} as never, signal })
+  } finally {
+    turnDeps = previous
+  }
+}
