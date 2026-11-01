@@ -29,7 +29,7 @@ export function ControlButton({
       type="button"
       aria-label={label}
       className={cn(
-        'flex h-10 w-10 items-center justify-center text-foreground/60 transition-colors',
+        'flex h-10 w-10 items-center justify-center text-foreground/60 transition-[color,background-color,transform] duration-150 ease-out active:scale-95 motion-reduce:transition-none',
         destructive ? 'hover:bg-destructive hover:text-white' : 'hover:bg-accent hover:text-foreground',
         className
       )}

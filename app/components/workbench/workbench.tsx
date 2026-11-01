@@ -199,24 +199,29 @@ function WorkbenchLayout() {
       maxSize={520}
       groupResizeBehavior="preserve-pixel-size"
     >
-      {activeActivity === 'chat' ? (
-        <SessionListPanel
-          onCreate={() => sessions.goHome()}
-          onOpen={(id) => void sessions.openSession(id)}
-          onRename={sessions.renameSession}
-          // The move is the session layer's, and so is the sentence when it is refused: the destination
-          // has to be a folder that exists, and moving the open conversation takes the window with it.
-          onMove={(id, destination) => void sessions.moveSession(id, destination)}
-          onExport={runSessionExport}
-          onDelete={(id) => void sessions.deleteSession(id)}
-          error={sessions.error}
-          notice={sessions.notice}
-        />
-      ) : activeActivity === 'git' ? (
-        <GitPanel />
-      ) : (
-        <ExplorerPanel onAttach={attachRowToDraft} />
-      )}
+      <div
+        data-slot="secondary-panel-content"
+        className="h-full animate-in fade-in-0 slide-in-from-left-1 duration-200 ease-out motion-reduce:animate-none"
+      >
+        {activeActivity === 'chat' ? (
+          <SessionListPanel
+            onCreate={() => sessions.goHome()}
+            onOpen={(id) => void sessions.openSession(id)}
+            onRename={sessions.renameSession}
+            // The move is the session layer's, and so is the sentence when it is refused: the destination
+            // has to be a folder that exists, and moving the open conversation takes the window with it.
+            onMove={(id, destination) => void sessions.moveSession(id, destination)}
+            onExport={runSessionExport}
+            onDelete={(id) => void sessions.deleteSession(id)}
+            error={sessions.error}
+            notice={sessions.notice}
+          />
+        ) : activeActivity === 'git' ? (
+          <GitPanel />
+        ) : (
+          <ExplorerPanel onAttach={attachRowToDraft} />
+        )}
+      </div>
     </ResizablePanel>
   )
 
@@ -391,15 +396,26 @@ function WorkbenchLayout() {
                   defaultSize={viewerExpanded ? percentSize(100) : percentSize(sizes.main.viewer)}
                   minSize={280}
                 >
-                  {rightPanel === 'code' ? (
-                    <CodeViewer />
-                  ) : rightPanel === 'preview' ? (
-                    <PreviewPanel />
-                  ) : rightPanel === 'overview' ? (
-                    <OverviewPanel />
-                  ) : (
-                    <ToolsPanel />
-                  )}
+                  <div
+                    data-slot="right-resident"
+                    className="h-full animate-in fade-in-0 slide-in-from-right-1 duration-200 ease-out motion-reduce:animate-none"
+                  >
+                    <div
+                      key={rightPanel}
+                      data-slot="right-resident-view"
+                      className="h-full animate-in fade-in-0 duration-150 ease-out motion-reduce:animate-none"
+                    >
+                      {rightPanel === 'code' ? (
+                        <CodeViewer />
+                      ) : rightPanel === 'preview' ? (
+                        <PreviewPanel />
+                      ) : rightPanel === 'overview' ? (
+                        <OverviewPanel />
+                      ) : (
+                        <ToolsPanel />
+                      )}
+                    </div>
+                  </div>
                 </ResizablePanel>
               )}
             </ResizablePanelGroup>

@@ -116,7 +116,12 @@ describe('the row a bubble carries at its bottom', () => {
     expect([...group.classList]).toContain('group')
     expect([...row.classList]).toContain('group-hover:opacity-100')
     expect([...row.classList]).toContain('focus-within:opacity-100')
-    expect([...row.classList]).toContain('transition-opacity')
+    expect([...row.classList]).toContain('transition-[opacity,transform]')
+    expect([...row.classList]).toContain('duration-150')
+    expect([...row.classList]).toContain('ease-out')
+    expect([...row.classList]).toContain('translate-y-0.5')
+    expect([...row.classList]).toContain('group-hover:translate-y-0')
+    expect([...row.classList]).toContain('focus-within:translate-y-0')
 
     // The keyboard half, as far as it can be observed: focus arriving inside the row is what
     // `focus-within` answers, and both controls are reachable in turn.

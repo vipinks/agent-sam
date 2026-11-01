@@ -2435,7 +2435,7 @@ export function ChatPanel() {
               onScroll={syncEdges}
               // The pane's own `flex-1` and `min-h-0` are on the box above, so the scroll region keeps the
               // height it had as the pane's flex child — it is now the full height of that box instead.
-              className="h-full overflow-y-auto overflow-x-hidden"
+              className="h-full animate-in overflow-x-hidden overflow-y-auto fade-in-0 duration-200 ease-out motion-reduce:animate-none"
             >
               {messages.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
@@ -2566,7 +2566,7 @@ export function ChatPanel() {
         has been written yet, and a card in the history would have no turn to belong to.
       */}
         {engineConsent !== null && (
-          <div className="shrink-0 border-t border-border px-3 py-2">
+          <div className="shrink-0 animate-in border-t border-border px-3 py-2 fade-in-0 slide-in-from-bottom-1 duration-200 ease-out motion-reduce:animate-none">
             <AgentActionCard
               step={engineConsentStep(engineConsent)}
               onApprove={() => answerEngineConsent(engineConsent, true)}
@@ -2578,7 +2578,7 @@ export function ChatPanel() {
         <div
           ref={composerRef}
           className={cn(
-            'relative p-4',
+            'relative p-4 transition-[background-color,box-shadow,border-color] duration-200 ease-out motion-reduce:transition-none',
             atHome
               ? 'mx-auto w-full max-w-3xl shrink-0 rounded-xl bg-card shadow-sm backdrop-blur-sm'
               : 'shrink-0 border-t border-border'
@@ -2634,7 +2634,7 @@ export function ChatPanel() {
                     />
                   )}
                   {mentionPaths.length > 0 && (
-                    <MentionChipRow paths={mentionPaths} onRemove={removeMention} className="mb-2" />
+                    <MentionChipRow paths={mentionPaths} onRemove={removeMention} animateOnMount className="mb-2" />
                   )}
                   {/*
                 The images the next send will carry, beside the files for the same reason the files are
@@ -2745,7 +2745,7 @@ export function ChatPanel() {
                   ) : (
                     <Button
                       size="icon-sm"
-                      className="absolute right-11 bottom-2 disabled:opacity-40"
+                      className="absolute right-11 bottom-2 transition-[background-color,opacity,transform] duration-150 ease-out active:scale-95 disabled:opacity-40 disabled:transition-none motion-reduce:transition-none"
                       aria-label="Send message"
                       disabled={!draft.trim() || pending !== null}
                       onClick={() => void sendDraft()}

@@ -99,7 +99,7 @@ export function ModelList({
         onClick={() => setIsOpen((open) => !open)}
         className="flex w-full items-center gap-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
       >
-        <ChevronDown className={cn('size-3.5 transition-transform', isOpen && 'rotate-180')} />
+        <ChevronDown className={cn('size-3.5 transition-transform duration-150 ease-out', isOpen && 'rotate-180')} />
         {models.length} models available
         <span className="ml-auto font-mono text-[10.5px]">{enabled.length} on</span>
       </button>

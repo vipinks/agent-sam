@@ -394,7 +394,7 @@ export const MessageBubble = memo(function MessageBubble({
         */}
         <div
           data-slot="message-actions"
-          className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+          className="flex translate-y-0.5 items-center gap-0.5 opacity-0 transition-[opacity,transform] duration-150 ease-out focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 motion-reduce:transition-none"
         >
           {/* The user's own half of the row, in the order the transcript has always drawn it: the
               control that rewrites the message, then the one that copies it. */}
@@ -551,9 +551,19 @@ function CopyMessageButton({ value, label }: { value: string; label: string }) {
       type="button"
       aria-label={label}
       onClick={() => void copy()}
-      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
     >
-      {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+      {copied ? (
+        <Check
+          key="check"
+          className="size-3.5 animate-in text-success fade-in zoom-in-50 duration-150 ease-out motion-reduce:animate-none"
+        />
+      ) : (
+        <Copy
+          key="copy"
+          className="size-3.5 animate-in fade-in zoom-in-50 duration-150 ease-out motion-reduce:animate-none"
+        />
+      )}
     </button>
   )
 }

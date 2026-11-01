@@ -38,7 +38,7 @@ export function HomeHero() {
     // One item in the home stack, not a block that swallows the window's leftover height: the stack
     // centres as a whole, so extra height is distributed above and below it rather than opening a gap
     // between the headline and the composer.
-    <div className="flex shrink-0 flex-col items-center gap-2 px-8 text-center">
+    <div className="flex shrink-0 animate-in flex-col items-center gap-2 px-8 text-center fade-in-0 slide-in-from-bottom-1 duration-200 ease-out motion-reduce:animate-none">
       {/* The screen's one heading, and a real one: this is what the view is, and a screen reader
           landing here should be told that rather than being read a styled paragraph. */}
       <h1 className="text-[19px] font-semibold tracking-tight text-foreground">{HOME_HEADLINE}</h1>

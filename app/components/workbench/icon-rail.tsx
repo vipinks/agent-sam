@@ -225,7 +225,7 @@ export function IconRail() {
         aria-current={atHome ? 'page' : undefined}
         onClick={goHome}
         className={cn(
-          'flex items-center justify-center rounded-xl outline-none transition-colors',
+          'flex items-center justify-center rounded-xl outline-none transition-[color,background-color,transform] duration-150 ease-out active:scale-95 motion-reduce:transition-none',
           CHROME_RAIL_ICON,
           'focus-visible:ring-2 focus-visible:ring-ring',
           atHome ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -234,7 +234,7 @@ export function IconRail() {
         <House className="size-4.5" />
       </button>
 
-      <DrawerOpen className="mb-1 flex size-8 items-center justify-center rounded-md border border-brand/35 bg-brand-soft text-brand outline-none transition-colors hover:bg-brand-soft/80 focus-visible:ring-2 focus-visible:ring-ring" />
+      <DrawerOpen className="mb-1 flex size-8 items-center justify-center rounded-md border border-brand/35 bg-brand-soft text-brand outline-none transition-[color,background-color,transform] duration-150 ease-out hover:bg-brand-soft/80 focus-visible:ring-2 focus-visible:ring-ring active:scale-95 motion-reduce:transition-none" />
 
       {ACTIVITIES.map((activity) => {
         const Icon = activity.icon
@@ -248,7 +248,7 @@ export function IconRail() {
             aria-pressed={isActive}
             onClick={() => choose(activity.id)}
             className={cn(
-              'flex items-center justify-center rounded-xl outline-none transition-colors',
+              'flex items-center justify-center rounded-xl outline-none transition-[color,background-color,transform] duration-150 ease-out active:scale-95 motion-reduce:transition-none',
               CHROME_RAIL_ICON,
               'focus-visible:ring-2 focus-visible:ring-ring',
               isActive ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -266,7 +266,7 @@ export function IconRail() {
         aria-pressed={activeActivity === 'settings'}
         onClick={openSettings}
         className={cn(
-          'mt-auto flex items-center justify-center rounded-xl outline-none transition-colors',
+          'mt-auto flex items-center justify-center rounded-xl outline-none transition-[color,background-color,transform] duration-150 ease-out active:scale-95 motion-reduce:transition-none',
           CHROME_RAIL_ICON,
           'focus-visible:ring-2 focus-visible:ring-ring',
           activeActivity === 'settings'

@@ -91,7 +91,10 @@ export function TerminalPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div
+      data-slot="terminal-panel"
+      className="flex h-full animate-in flex-col bg-background fade-in-0 slide-in-from-bottom-1 duration-200 ease-out motion-reduce:animate-none"
+    >
       <PaneHeader icon={SquareTerminal} title="Terminal">
         <span
           className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground"
@@ -123,7 +126,13 @@ export function TerminalPanel() {
           folder and come back — and the pane is what they are looking at.
         */}
         {status.phase === 'ended' && (
-          <Button data-slot="terminal-restart" size="sm" variant="outline" onClick={startNewShell}>
+          <Button
+            data-slot="terminal-restart"
+            size="sm"
+            variant="outline"
+            className="animate-in fade-in-0 slide-in-from-bottom-1 duration-150 ease-out motion-reduce:animate-none"
+            onClick={startNewShell}
+          >
             <RotateCw aria-hidden="true" />
             Start a new shell
           </Button>

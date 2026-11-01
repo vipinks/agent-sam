@@ -106,7 +106,7 @@ export function RightRail() {
             aria-pressed={isDocked}
             onClick={() => toggleRightPanel(resident.id)}
             className={cn(
-              'flex items-center justify-center rounded-md outline-none transition-colors',
+              'flex items-center justify-center rounded-md outline-none transition-[color,background-color,transform] duration-150 ease-out active:scale-95 motion-reduce:transition-none',
               CHROME_RAIL_ICON,
               'focus-visible:ring-2 focus-visible:ring-ring',
               isDocked ? 'bg-brand-soft text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'

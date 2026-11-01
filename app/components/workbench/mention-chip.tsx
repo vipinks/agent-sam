@@ -14,11 +14,24 @@ import { mentionTail } from './mentions'
  * measurement per row of a scrolling list — the cost this app's rendering rules exist to avoid — for
  * a label that the platform already shows on hover.
  */
-export function MentionChip({ path, onRemove }: { path: string; onRemove?: (path: string) => void }) {
+export function MentionChip({
+  path,
+  onRemove,
+  animateOnMount = false,
+}: {
+  path: string
+  onRemove?: (path: string) => void
+  /** Composer chips arrive; chips in a virtualized transcript reappear on scroll and must stay still. */
+  animateOnMount?: boolean
+}) {
   return (
     <span
       title={path}
-      className="inline-flex max-w-56 min-w-0 items-center gap-1 rounded-md bg-background py-0.5 pr-0.5 pl-1.5 font-mono text-[11px] text-foreground shadow-sm"
+      className={cn(
+        'inline-flex max-w-56 min-w-0 items-center gap-1 rounded-md bg-background py-0.5 pr-0.5 pl-1.5 font-mono text-[11px] text-foreground shadow-sm',
+        animateOnMount &&
+          'animate-in fade-in zoom-in-95 slide-in-from-left-1 duration-150 ease-out motion-reduce:animate-none'
+      )}
     >
       <span className="truncate">{mentionTail(path)}</span>
       {onRemove && (
@@ -41,16 +54,18 @@ export function MentionChip({ path, onRemove }: { path: string; onRemove?: (path
 export function MentionChipRow({
   paths,
   onRemove,
+  animateOnMount = false,
   className,
 }: {
   paths: readonly string[]
   onRemove?: (path: string) => void
+  animateOnMount?: boolean
   className?: string
 }) {
   return (
     <div className={cn('flex flex-wrap gap-1', className)}>
       {paths.map((path) => (
-        <MentionChip key={path} path={path} onRemove={onRemove} />
+        <MentionChip key={path} path={path} onRemove={onRemove} animateOnMount={animateOnMount} />
       ))}
     </div>
   )

@@ -122,7 +122,10 @@ export function CollapsibleSection({
             is not one a test can point at. */}
         <ChevronRight
           data-slot="section-chevron"
-          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')}
+          className={cn(
+            'size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ease-out',
+            expanded && 'rotate-90'
+          )}
         />
         {icon}
         <span className="min-w-0 flex-1 truncate font-medium">{summary}</span>
@@ -131,7 +134,15 @@ export function CollapsibleSection({
 
       {/* Mounted either way; `hidden` is what folds it. Not `hidden` as a utility class and not a
           conditional render — an attribute a test can read, and a body that is still there. */}
-      <div data-slot={`${slot}-body`} hidden={!expanded} className={bodyClassName}>
+      <div
+        data-slot={`${slot}-body`}
+        data-expanded={expanded}
+        hidden={!expanded}
+        className={cn(
+          'data-[expanded=true]:animate-in data-[expanded=true]:fade-in-0 data-[expanded=true]:slide-in-from-top-1 data-[expanded=true]:duration-150 data-[expanded=true]:ease-out motion-reduce:animate-none',
+          bodyClassName
+        )}
+      >
         {children}
       </div>
     </section>

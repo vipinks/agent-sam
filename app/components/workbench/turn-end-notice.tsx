@@ -113,7 +113,7 @@ export function TurnEndNotice({
   return (
     <section
       aria-label="Turn ended early"
-      className="mb-2 flex items-center gap-2 rounded-md bg-card px-2 py-1.5 shadow-sm"
+      className="mb-2 flex animate-in items-center gap-2 rounded-md bg-card px-2 py-1.5 shadow-sm fade-in-0 slide-in-from-bottom-1 duration-200 ease-out motion-reduce:animate-none"
     >
       <TriangleAlert aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col">

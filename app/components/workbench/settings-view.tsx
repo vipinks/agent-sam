@@ -96,7 +96,7 @@ export function SettingsView() {
   const closeSettings = useWorkbenchStore((s) => s.closeSettings)
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full animate-in flex-col bg-background fade-in-0 duration-200 ease-out motion-reduce:animate-none">
       <PaneHeader
         icon={SettingsIcon}
         title="Settings"

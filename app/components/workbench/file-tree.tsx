@@ -148,7 +148,10 @@ function DirectoryNode({
         )}
       >
         <ChevronRight
-          className={cn('size-3 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}
+          className={cn(
+            'size-3 shrink-0 text-muted-foreground transition-transform duration-150 ease-out',
+            isOpen && 'rotate-90'
+          )}
         />
         <Icon className={cn('size-3.5 shrink-0', isOpen ? 'text-brand' : 'text-muted-foreground')} />
         <span className="truncate">{entry.name}</span>
