@@ -240,6 +240,10 @@ const SUITES = [
     name: 'session row (engine name, Sam pair, unnamed engine)',
     src: 'sessions/session-row-test.ts',
   },
+  {
+    name: 'memory v1 (index, sanitizer, fan-out, supersede/restore, mtime skip, zero-LLM)',
+    src: 'memory/memory-test.ts',
+  },
 ]
 
 mkdirSync(outDir, { recursive: true })

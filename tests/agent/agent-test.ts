@@ -24,6 +24,9 @@ import {
 } from '../../conveyor/protocol/context'
 import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
 import { resolveWorkspacePath } from '../../conveyor/modules/workspace-paths'
+import { app } from 'electron'
+import { memoryRoot } from '../../conveyor/modules/memory'
+import { assembleMemorySection } from '../../conveyor/protocol/memory'
 
 const results: string[] = []
 
@@ -1341,6 +1344,52 @@ async function aConversationWithNoRoleIsUnchanged() {
   }
 }
 
+/**
+ * A project with a memory subtree sends its memory as the last standing-context section.
+ *
+ * The one new claim here is the position: the base prompt and the project instructions stay exactly as
+ * they are, and the memory section is appended after them, closest to the conversation it governs. The
+ * section's own internal order is the pure rule's, pinned in the DOM suite.
+ */
+async function theMemorySectionIsAppendedAtTheEndOfStandingContext() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    const instructions = '# House rules\nAlways run the tests.'
+    writeFileSync(join(root, 'AGENTS.md'), instructions, 'utf8')
+
+    const memRoot = memoryRoot(app.getPath('appData'), root)
+    mkdirSync(memRoot, { recursive: true })
+    writeFileSync(join(memRoot, 'handoff.md'), 'Ship the small release.', 'utf8')
+
+    const log: unknown[] = []
+    await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'hello' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: oneRoundFetch(log) as never,
+      })
+    )
+
+    assert.deepEqual(
+      systemMessages(log),
+      [
+        HOST_AGENT_PROMPT,
+        assembleSystemContext(instructions)?.content,
+        assembleMemorySection({ handoff: 'Ship the small release.', vetoes: '', decisions: '', quirks: '' })?.content,
+      ],
+      'the memory section is appended at the end of the standing-context block'
+    )
+    results.push('the memory section is appended at the end of standing context')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 /** The system messages of the first request in a log, in order. */
 function systemMessages(log: unknown[]): string[] {
   const body = (log[0] as { body: { messages: Array<{ role: string; content: string }> } }).body
@@ -1570,6 +1619,7 @@ async function main() {
   await step('win32 is told its shell', windowsIsToldItsShell)
   await step('the role section joins after the base prompt', theRoleSectionJoinsAfterTheBasePrompt)
   await step('no role, unchanged assembly', aConversationWithNoRoleIsUnchanged)
+  await step('memory section lands at the end', theMemorySectionIsAppendedAtTheEndOfStandingContext)
   await step('consent rules', approvalRules)
   await step('ReAct loop with a mocked provider', reactLoop)
   await step('write_file tool', writeThenRead)

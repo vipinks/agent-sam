@@ -257,6 +257,18 @@ const MANIFEST: Record<string, Record<string, string>> = {
     discardWorktree: 'command',
     checkoutBranch: 'command',
   },
+  // The memory panel: its three reads and four writes. Listed by kind for the reason the entries
+  // around it are — the client refuses a member missing from this map before any handler is reached,
+  // so a panel whose read was absent here could not dispatch at all.
+  memory: {
+    listPages: 'query',
+    readPage: 'query',
+    search: 'query',
+    writePage: 'command',
+    supersedePage: 'command',
+    restorePage: 'command',
+    importHandoff: 'command',
+  },
 }
 
 /**
