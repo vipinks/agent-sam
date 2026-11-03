@@ -30,7 +30,6 @@ const results: string[] = []
 function step(label: string, fn: () => void): void {
   process.stdout.write(`... ${label}\n`)
   fn()
-  results.push(label)
 }
 
 // ------------------------------------------------------------------ contrast
@@ -43,11 +42,7 @@ function parseColour(value: string): Rgb {
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text)
   if (hex) {
     const digits = hex[1].length === 3 ? hex[1].replace(/./g, (d) => d + d) : hex[1]
-    return [
-      parseInt(digits.slice(0, 2), 16),
-      parseInt(digits.slice(2, 4), 16),
-      parseInt(digits.slice(4, 6), 16),
-    ]
+    return [parseInt(digits.slice(0, 2), 16), parseInt(digits.slice(2, 4), 16), parseInt(digits.slice(4, 6), 16)]
   }
 
   const hsl = /^hsl\(\s*([\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%\s*\)$/i.exec(text)
@@ -261,10 +256,7 @@ function theContrastFloor() {
     const fill = baseFill(iconText(key))
     for (const surface of surfacesToCheck) {
       const ratio = contrast(parseColour(fill), surface.colour)
-      assert.ok(
-        ratio >= 2,
-        `${key}'s ${fill} is ${ratio.toFixed(2)}:1 on the ${surface.label}, below the 2:1 floor`
-      )
+      assert.ok(ratio >= 2, `${key}'s ${fill} is ${ratio.toFixed(2)}:1 on the ${surface.label}, below the 2:1 floor`)
     }
   }
   results.push('every shipped base fill clears 2:1 on page and card, in both modes')

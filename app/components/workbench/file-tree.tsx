@@ -3,8 +3,10 @@ import { ChevronRight, FileText, Folder, FolderOpen, Loader2 } from 'lucide-reac
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError } from 'electron-conveyor/react'
 import { CODE_RESIDENT, doubleClickDocksViewer } from '@/conveyor/protocol/dock'
+import { fileIconKey, folderIconKey } from '@/conveyor/protocol/file-icons'
 import { cn } from '@/lib/utils'
 import { useWorkbenchStore } from './store'
+import { fileIconUrls } from './file-icon-assets'
 import type { RowMenuRequest } from './explorer-row-menu'
 
 /** A directory child, derived from the router type — no main-only code is imported to get it. */
@@ -127,8 +129,11 @@ function DirectoryNode({
     retry: false,
   })
 
-  const Icon = expanded ? FolderOpen : Folder
+  // Open means expanded *and* settled: a folder whose listing is still in flight has not opened yet,
+  // so the glyph, the chevron and aria-expanded all describe the same state.
   const isOpen = expanded && !listing.isLoading
+  const Icon = isOpen ? FolderOpen : Folder
+  const folderKey = folderIconKey(entry.name)
 
   const toggle = () => {
     setHasExpanded(true)
@@ -153,7 +158,18 @@ function DirectoryNode({
             isOpen && 'rotate-90'
           )}
         />
-        <Icon className={cn('size-3.5 shrink-0', isOpen ? 'text-brand' : 'text-muted-foreground')} />
+        {folderKey ? (
+          <img
+            src={fileIconUrls[folderKey]}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            data-slot="file-icon"
+            className="size-3.5 shrink-0"
+          />
+        ) : (
+          <Icon className={cn('size-3.5 shrink-0', isOpen ? 'text-brand' : 'text-muted-foreground')} />
+        )}
         <span className="truncate">{entry.name}</span>
       </button>
 
@@ -186,6 +202,7 @@ function FileNode({
   const rightPanel = useWorkbenchStore((s) => s.rightPanel)
   const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel)
   const isSelected = selectedFile === entry.path
+  const iconKey = fileIconKey(entry.name)
 
   /**
    * Point the viewer at this file.
@@ -226,7 +243,18 @@ function FileNode({
         isSelected ? 'bg-brand-soft text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
       )}
     >
-      <FileText className={cn('size-3.5 shrink-0', isSelected ? 'text-brand' : 'text-muted-foreground/70')} />
+      {iconKey ? (
+        <img
+          src={fileIconUrls[iconKey]}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          data-slot="file-icon"
+          className="size-3.5 shrink-0"
+        />
+      ) : (
+        <FileText className={cn('size-3.5 shrink-0', isSelected ? 'text-brand' : 'text-muted-foreground/70')} />
+      )}
       <span className="truncate">{entry.name}</span>
     </button>
   )

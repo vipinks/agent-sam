@@ -1,0 +1,132 @@
+Material Icon Theme — license and provenance
+=============================================
+
+The file-type icons in app/assets/file-icons/ are vendored from the Material Icon
+Theme. They live under resources/ so this notice ships with the packaged app:
+electron-builder.yml includes resources/** and excludes app/**.
+
+Upstream: material-extensions/vscode-material-icon-theme
+Tag:      v5.40.0
+Icons:    commit e8982b8
+
+MIT License
+
+Copyright (c) 2025 Material Extensions
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Source file names (71)
+----------------------
+
+File icons:
+javascript.svg (ships as js.svg)
+mdx.svg
+database.svg
+json.svg
+lock.svg
+favicon.svg
+svg.svg
+toml.svg
+editorconfig.svg
+nodejs.svg
+table.svg
+xml.svg
+changelog.svg
+typescript.svg
+readme.svg
+tailwindcss.svg
+vite.svg
+tsconfig.svg
+docker.svg
+markdown.svg
+css.svg
+sass.svg
+html.svg
+react.svg
+vue.svg
+astro.svg
+python.svg
+java.svg
+go.svg
+rust.svg
+ruby.svg
+php.svg
+c.svg
+cpp.svg
+csharp.svg
+swift.svg
+powershell.svg
+yaml.svg
+git.svg
+license.svg
+pdf.svg
+word.svg
+image.svg
+console.svg
+settings.svg
+jsconfig.svg
+graphql.svg
+prisma.svg
+npm.svg
+eslint.svg
+prettier.svg
+
+Folder icons:
+folder-src.svg
+folder-lib.svg
+folder-components.svg
+folder-resource.svg
+folder-api.svg
+folder-database.svg
+folder-dist.svg
+folder-git.svg
+folder-github.svg
+folder-test.svg
+folder-docs.svg
+folder-config.svg
+folder-public.svg
+folder-scripts.svg
+folder-images.svg
+folder-font.svg
+folder-app.svg
+folder-client.svg
+folder-utils.svg
+folder-template.svg
+
+Modification record (18 recolours)
+----------------------------------
+
+js:                 #ffca28 -> #ff8f00
+mdx:                #ffca28 -> #ff8f00
+database:           #ffca28 -> #ff8f00
+folder-database:    #ffca28 -> #ff8f00
+json:               #f9a825 -> #f57f17
+lock:               #ffd54f -> #ff8f00
+favicon:            #ffd54f -> #ff8f00
+svg:                #ffb300 -> #ff8f00
+toml:               #cfd8dc -> #78909c
+editorconfig:       #ede7f6 -> #78909c
+nodejs:             #8bc34a -> #689f38
+table:              #8bc34a -> #689f38
+xml:                #8bc34a -> #689f38
+changelog:          #8bc34a -> #689f38
+folder-lib:         #c0ca33 -> #9e9d24
+folder-components:  #c0ca33 -> #9e9d24
+folder-resource:    #fbc02d -> #f57f17
+folder-api:         #fbc02d -> #f57f17
