@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-11-03: v1.15.1 — Explorer Material file-type icons
+
+- test(explorer): pin file-type icon rules and row glyphs
+- feat(explorer): land Material file-type icons for known rows — a vendored MIT subset of Material Icon Theme v5.40.0 (18 recolours, attribution shipped under resources/third-party/)
+
+<br>
+
 ## 2026-11-02: v1.15.0 — Look & Feel: motion pass, startup splash, palette contrast
 
 - test(motion): pin the Phase 1 arrival contract
