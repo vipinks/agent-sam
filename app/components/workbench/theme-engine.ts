@@ -102,10 +102,34 @@ export const PAIR_SURFACES: Record<ReadablePair, readonly ThemeVariable[]> = {
   primary: ['primary'],
 }
 
+/**
+ * The two accent inks the pass holds to the floor, by the names it reports them under.
+ *
+ * Exported as the pass's own list rather than restated in the suites, for the same reason `PAIR_SURFACES`
+ * is: what the engine checks and what the pin measures are one list. `--brand`, `--success` and the
+ * `--syntax-*` hues that are not text are absent on purpose — they are signals and decoration, not ink a
+ * sentence is read in — and so is `--brand-soft`, whose tint composite is parked rather than rescued.
+ */
+export const ACCENT_INK_FOREGROUNDS = ['brand-text', 'syntax-keyword'] as const
+
+/** A pair name the accent rescue reports: the two accents above, and nothing else. */
+export type AccentInkPair = (typeof ACCENT_INK_FOREGROUNDS)[number]
+
+/**
+ * The surfaces every accent ink is held against: all six a glyph is drawn on.
+ *
+ * Exactly `TEXT_SURFACES`, by reference rather than as a second list, so the two cannot drift: a surface
+ * added to one is a surface the ink is measured on in the other.
+ */
+export const ACCENT_INK_SURFACES: readonly ThemeVariable[] = TEXT_SURFACES
+
+/** Every pair name the pass can report, so `moved` gains the accents without widening the legacy table. */
+export type MovedPair = ReadablePair | AccentInkPair
+
 /** The result of the readability pass: the variables, and the pairs whose value it had to change. */
 export interface ReadableResult {
   vars: ThemeVars
-  moved: ReadablePair[]
+  moved: MovedPair[]
 }
 
 /** Parsed HSL, with alpha only where the source carried it. */

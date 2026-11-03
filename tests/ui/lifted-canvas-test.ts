@@ -34,6 +34,9 @@
  */
 import { strict as assert } from 'node:assert'
 import {
+  BRIGHTNESS_DEFAULT,
+  BRIGHTNESS_MAX,
+  BRIGHTNESS_MIN,
   MIN_CONTRAST,
   TEXT_SURFACES,
   contrastRatio,
@@ -302,6 +305,31 @@ function everyDarkBrandTextReads(): void {
 }
 
 /**
+ * The same claim on the map the document is given, at every brightness the control offers.
+ *
+ * The registry measurement above says the palette authored a readable `--brand-text` at the default
+ * brightness. This one says the ink that reaches a screen clears the floor at -20, 0 and +20, in both
+ * modes and all five palettes — which is the claim that makes the readability pass a rescue rather than a
+ * launch-time-only guard, and the one a brightened dark page is measured by.
+ */
+function everyBrandTextReadsOnTheResolvedMap(): void {
+  for (const theme of THEMES) {
+    for (const mode of THEME_MODES satisfies readonly ThemeMode[]) {
+      for (const brightness of [BRIGHTNESS_MIN, BRIGHTNESS_DEFAULT, BRIGHTNESS_MAX] as const) {
+        const { vars } = ensureReadable(resolveThemeVars(theme.id, mode, brightness))
+        for (const surface of TEXT_SURFACES) {
+          const ratio = contrastRatio(vars['brand-text'], vars[surface])
+          assert.ok(
+            ratio >= MIN_CONTRAST,
+            `${theme.id} ${mode} brightness ${brightness}: --brand-text (${vars['brand-text']}) on --${surface} (${vars[surface]}) measured ${ratio.toFixed(2)}, under the ${MIN_CONTRAST} floor`
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
  * The readability pass has nothing to rescue on the new ladder.
  *
  * If a pair needed moving at the theme's own brightness, the floor would still be met — by the pass rather
@@ -327,6 +355,10 @@ function main(): void {
   claim('every dark foreground clears the floor on the canvas, the plate and the popover', everyDarkForegroundPairReads)
   claim('the light family is where it was', lightModeIsUntouched)
   claim('every dark --brand-text clears the floor on every surface it is drawn on', everyDarkBrandTextReads)
+  claim(
+    '--brand-text clears the floor on the resolved map at -20, 0 and +20, in both modes',
+    everyBrandTextReadsOnTheResolvedMap
+  )
   claim('the default brightness needs no rescue from the readability pass', thePassMovesNothingAtTheDefaultBrightness)
 
   if (failures.length) {

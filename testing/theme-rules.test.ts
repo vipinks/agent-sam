@@ -16,6 +16,8 @@ import {
   BRIGHTNESS_MIN,
   MIN_CONTRAST,
   PAIR_SURFACES,
+  ACCENT_INK_FOREGROUNDS,
+  ACCENT_INK_SURFACES,
   adjustLightness,
   clampBrightness,
   contrastRatio,
@@ -25,7 +27,7 @@ import {
   parseHsl,
   relativeLuminance,
   resolveThemeVars,
-  type ReadablePair,
+  type MovedPair,
   type ThemeVars,
 } from '@/app/components/workbench/theme-engine'
 import { parseHslString, rgbOf, strictRgbOf, stylesheetTokens, themeLayer } from './theme-css'
@@ -52,8 +54,8 @@ const BRIGHTNESS_STEPS = [BRIGHTNESS_MIN, BRIGHTNESS_DEFAULT, BRIGHTNESS_MAX] as
 
 /** One text pair, the two variables it is made of, and the surfaces it is drawn on. */
 interface Pair {
-  /** The pair's own name, as `ensureReadable` reports it. */
-  key: ReadablePair
+  /** The pair's own name, as `ensureReadable` reports it — a legacy pair or an accent ink. */
+  key: MovedPair
   fg: ThemeVariable
   bg: ThemeVariable
   /** Every surface the foreground is held against — the engine's own list, not a second copy of it. */
@@ -73,6 +75,21 @@ function pairs(): Pair[] {
     { key: 'muted-foreground', fg: 'muted-foreground', bg: 'background', surfaces: PAIR_SURFACES['muted-foreground'] },
     { key: 'primary', fg: 'primary-foreground', bg: 'primary', surfaces: PAIR_SURFACES.primary },
   ]
+}
+
+/**
+ * The accent inks in the same shape, so the mirror below answers for both families.
+ *
+ * The page named as `bg` is the one pair the mirror never measures — it walks the surfaces the ink is
+ * held on — and is carried only so this is the same shape as `pairs()` rather than a second one.
+ */
+function accentPairs(): Pair[] {
+  return ACCENT_INK_FOREGROUNDS.map((ink) => ({
+    key: ink,
+    fg: ink,
+    bg: 'background',
+    surfaces: ACCENT_INK_SURFACES,
+  }))
 }
 
 /** Every pair's measured ratio, with the values it was measured from. */
@@ -146,6 +163,35 @@ describe('the contrast floor', () => {
   }
 })
 
+/**
+ * The accent floor: the same claim for the two inks the readability pass also holds, on the applied map.
+ *
+ * The block above measures the three legacy pairs at the three brightness steps. This is its twin for the
+ * ink a brightness step can strand: five palettes, both modes, both ends and the middle of the range, and
+ * each accent ink. The map is the one the document is given — after the pass — so what is asserted is the
+ * value that reaches a screen rather than the value a theme authored.
+ */
+describe('the accent-ink floor', () => {
+  for (const theme of THEMES) {
+    for (const mode of THEME_MODES) {
+      for (const brightness of BRIGHTNESS_STEPS) {
+        for (const ink of ACCENT_INK_FOREGROUNDS) {
+          it(`holds for ${theme.id} in ${mode} at brightness ${brightness} for --${ink}`, () => {
+            const { vars } = ensureReadable(resolveThemeVars(theme.id, mode, brightness))
+            for (const surface of ACCENT_INK_SURFACES) {
+              const ratio = contrastRatio(vars[ink], vars[surface])
+              expect(
+                ratio,
+                `${theme.id} ${mode} brightness ${brightness}: --${ink} (${vars[ink]}) on --${surface} (${vars[surface]}) measured ${ratio}`
+              ).toBeGreaterThanOrEqual(MIN_CONTRAST)
+            }
+          })
+        }
+      }
+    }
+  }
+})
+
 describe('the readability pass', () => {
   it('moves nothing for the default theme at brightness 0, so the default experience is the stylesheet’s', () => {
     for (const mode of THEME_MODES) {
@@ -180,11 +226,35 @@ describe('the readability pass', () => {
             }
           }
 
-          // Three variables may differ, and no fourth: the pass is not allowed to be a repaint.
+          // The mirror again for the two accent inks the pass also rescues: the same ladder walk decides
+          // whether either should have moved, so "it moved" and "it could move" stay one claim per pair.
+          for (const pair of accentPairs()) {
+            const fixable = inkCanReachFloor(theme, mode, pair, before)
+            expect(moved.includes(pair.key), `${where}: --${pair.fg} moved=${moved.join(', ')}`).toBe(fixable)
+
+            if (fixable) {
+              for (const surface of pair.surfaces) {
+                const ratio = contrastRatio(vars[pair.fg], vars[surface])
+                expect(
+                  ratio,
+                  `${where}: --${pair.fg} after the pass (${vars[pair.fg]} on ${vars[surface]}) measured ${ratio}`
+                ).toBeGreaterThanOrEqual(MIN_CONTRAST)
+              }
+            }
+          }
+
+          // Five variables may differ, and no sixth: the pass is a rescue, not a repaint.
           const changed = THEME_VARIABLES.filter((name) => vars[name] !== before[name])
           expect(changed.sort(), where).toEqual(
             changed
-              .filter((name) => name === 'foreground' || name === 'muted-foreground' || name === 'primary-foreground')
+              .filter(
+                (name) =>
+                  name === 'foreground' ||
+                  name === 'muted-foreground' ||
+                  name === 'primary-foreground' ||
+                  name === 'brand-text' ||
+                  name === 'syntax-keyword'
+              )
               .sort()
           )
         }

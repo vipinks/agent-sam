@@ -23,6 +23,10 @@
  */
 import { strict as assert } from 'node:assert'
 import {
+  ACCENT_INK_FOREGROUNDS,
+  ACCENT_INK_SURFACES,
+  BRIGHTNESS_MAX,
+  BRIGHTNESS_MIN,
   MIN_CONTRAST,
   PAIR_SURFACES,
   SURFACE_VARIABLES,
@@ -51,6 +55,9 @@ const RANGE_TOP = 100
 
 /** The contrast values the floor is stated at: both ends of the range and the middle between them. */
 const CONTRAST_STEPS = [RANGE_BOTTOM, 25, 50, 75, RANGE_TOP] as const
+
+/** The brightness values the accent floors are stated at: both ends of the range and the default. */
+const BRIGHTNESS_STEPS = [BRIGHTNESS_MIN, 0, BRIGHTNESS_MAX] as const
 
 /** The variable carrying each pair's ink, by the name the readability pass reports the pair under. */
 const PAIR_INK: Record<keyof typeof PAIR_SURFACES, ThemeVariable> = {
@@ -201,6 +208,15 @@ function theDocumentIsGivenTheContrastInPropertiesItAlreadyHas(): void {
   }
 }
 
+/**
+ * The floor at every step of the range, split by what the step is allowed to force.
+ *
+ * The three legacy pairs are what the contrast control must not break: the multiplier moves the surfaces
+ * away from the page, and the page is where their ink sits, so a step may never make the pass move one of
+ * them. The accent inks are the other half of the claim: a step that pulls a chip surface off the page can
+ * strand an accent that read at the bottom of the range, so the pass may move them — but what reaches the
+ * document still has to clear the floor on every surface a glyph is drawn on.
+ */
 function theFloorHoldsAtEveryStepOfTheRange(): void {
   for (const theme of THEMES) {
     for (const mode of THEME_MODES satisfies readonly ThemeMode[]) {
@@ -208,17 +224,26 @@ function theFloorHoldsAtEveryStepOfTheRange(): void {
         const where = `${theme.id} ${mode} contrast ${contrast}`
         const { vars, moved } = ensureReadable(resolveThemeVars(theme.id, mode, 0, contrast))
 
-        // Nothing needed moving at any step: the multiplier moves the surfaces away from the page, and
-        // the page is where the ink sits. A step that forced the pass to rescue a pair would mean the
-        // slider could paint a palette the theme did not author.
-        assert.deepEqual(moved, [], `${where}: the readability pass had nothing to move`)
-
         for (const pair of Object.keys(PAIR_SURFACES) as (keyof typeof PAIR_SURFACES)[]) {
+          assert.ok(
+            !moved.includes(pair),
+            `${where}: ${pair} was moved by the readability pass, which the contrast control must not force`
+          )
           for (const surface of PAIR_SURFACES[pair]) {
             const ratio = contrastRatio(vars[PAIR_INK[pair]], vars[surface])
             assert.ok(
               ratio >= MIN_CONTRAST,
               `${where}: ${pair} on ${surface} measured ${ratio}, under the ${MIN_CONTRAST} floor`
+            )
+          }
+        }
+
+        for (const ink of ACCENT_INK_FOREGROUNDS) {
+          for (const surface of ACCENT_INK_SURFACES) {
+            const ratio = contrastRatio(vars[ink], vars[surface])
+            assert.ok(
+              ratio >= MIN_CONTRAST,
+              `${where}: --${ink} on ${surface} measured ${ratio}, under the ${MIN_CONTRAST} floor after the pass`
             )
           }
         }
@@ -238,6 +263,10 @@ function theFloorHoldsAtEveryStepOfTheRange(): void {
  *
  * Both modes are measured, and dark mode is the one the pass was opened for: a theme whose accent
  * already reads as text keeps `--brand-text` at its own `--brand`, so the token is not a repaint.
+ *
+ * And the same claim on the map the document is given, at both ends of the brightness range and the
+ * default between them: the registry's value is what a theme authored, the applied one is what a screen
+ * paints, and the rescue is only worth having if the second clears the floor at every step.
  */
 function everyThemeCarriesALegibleBrandText(): void {
   for (const theme of THEMES) {
@@ -252,6 +281,17 @@ function everyThemeCarriesALegibleBrandText(): void {
           ratio >= MIN_CONTRAST,
           `${theme.id} ${mode}: --brand-text (${brandText}) on --${surface} (${theme.tokens[mode][surface]}) measured ${ratio}, under the ${MIN_CONTRAST} floor`
         )
+      }
+
+      for (const brightness of BRIGHTNESS_STEPS) {
+        const applied = documentVars(theme.id, mode, brightness, RANGE_BOTTOM)
+        for (const surface of TEXT_SURFACES) {
+          const ratio = contrastRatio(applied['brand-text'], applied[surface])
+          assert.ok(
+            ratio >= MIN_CONTRAST,
+            `${theme.id} ${mode} brightness ${brightness}: applied --brand-text (${applied['brand-text']}) on --${surface} (${applied[surface]}) measured ${ratio}, under the ${MIN_CONTRAST} floor`
+          )
+        }
       }
     }
   }
@@ -284,16 +324,22 @@ function everyDarkForegroundTokenReads(): void {
 }
 
 /**
- * The syntax keyword on the two light palettes this pass retunes.
+ * The syntax keyword: the two light palettes the retune pins, and the applied map at every step.
  *
  * `syntax-keyword` is a semantic token, not a surface, so brightness leaves it where the palette authored
- * it while the page under it moves. The floor is therefore pinned only at brightness 0 and +20: at -20
- * the light page darkens under an unchanged dark keyword, and every light palette fails 4.5 there — not
- * just forest and amber, but crimson, ocean and violet too. That systemic light-mode gap is parked, not
- * fixed by this pass, and the absence of -20 here is deliberate rather than an oversight.
+ * it while the page under it moves. The registry values below pin the two light palettes this pass
+ * retuned, at brightness 0 and +20. That the -20 case is absent from *them* is measured rather than
+ * asserted: at light -20 the keyword on the page measures crimson 4.70, ocean 4.51 and violet 6.45 —
+ * which pass unassisted — while forest (3.02) and amber (2.98) do not. Those two are the failure the
+ * retune addressed, and brightness 0 and +20 is where the retuned values are pinned.
  *
- * Each case is registered as its own claim so a red run reports how many of the twelve assertions fail,
- * not only the first one in the block.
+ * The applied-map twin is the claim that covers the whole range: all five palettes, both modes, and
+ * -20/0/+20, on the map the document is given. That is where a step which stranded the keyword is
+ * measured after the readability pass that rescues it, so the light-mode -20 gap is not absent from this
+ * file — it is stated on the values a screen actually paints.
+ *
+ * Each case is registered as its own claim so a red run reports how many of the assertions fail, not only
+ * the first one in the block.
  */
 const LIGHT_SYNTAX_KEYWORD_PIN_THEMES = ['forest', 'amber'] as const
 const LIGHT_SYNTAX_KEYWORD_PIN_SURFACES = ['background', 'muted', 'card'] as const
@@ -316,13 +362,52 @@ function pinLightSyntaxKeyword(
   )
 }
 
-function registerLightSyntaxKeywordPins(): void {
+/** The surfaces the applied twin measures: the same three the registry pins name. */
+const APPLIED_SYNTAX_KEYWORD_SURFACES = ['background', 'muted', 'card'] as const
+
+type AppliedSyntaxKeywordSurface = (typeof APPLIED_SYNTAX_KEYWORD_SURFACES)[number]
+
+/**
+ * The keyword on the map the document is given, at one brightness step.
+ *
+ * `documentVars` is `ensureReadable(resolveThemeVars(…))` — the composition `theme-apply.ts` hands to the
+ * document — so a step that stranded the keyword is measured on the value the rescue produced.
+ */
+function pinAppliedSyntaxKeyword(
+  themeId: string,
+  mode: ThemeMode,
+  surface: AppliedSyntaxKeywordSurface,
+  brightness: number
+): void {
+  const where = `${themeId} ${mode} brightness ${brightness}`
+  const vars = documentVars(themeId, mode, brightness, RANGE_BOTTOM)
+  const ratio = contrastRatio(vars['syntax-keyword'], vars[surface])
+  assert.ok(
+    ratio >= MIN_CONTRAST,
+    `${where}: applied --syntax-keyword (${vars['syntax-keyword']}) on --${surface} (${vars[surface]}) measured ${ratio}, under the ${MIN_CONTRAST} floor`
+  )
+}
+
+function registerSyntaxKeywordPins(): void {
   for (const themeId of LIGHT_SYNTAX_KEYWORD_PIN_THEMES) {
     for (const surface of LIGHT_SYNTAX_KEYWORD_PIN_SURFACES) {
       for (const brightness of LIGHT_SYNTAX_KEYWORD_PIN_BRIGHTNESSES) {
         claim(`${themeId} light: --syntax-keyword clears the floor on --${surface} at brightness ${brightness}`, () =>
           pinLightSyntaxKeyword(themeId, surface, brightness)
         )
+      }
+    }
+  }
+
+  for (const theme of THEMES) {
+    for (const mode of THEME_MODES satisfies readonly ThemeMode[]) {
+      for (const surface of APPLIED_SYNTAX_KEYWORD_SURFACES) {
+        for (const brightness of BRIGHTNESS_STEPS) {
+          claim(
+            `${theme.id} ${mode}: applied --syntax-keyword clears the floor on --${surface} at brightness ${brightness}`,
+            () => pinAppliedSyntaxKeyword(theme.id, mode, surface, brightness)
+          )
+        }
       }
     }
   }
@@ -338,6 +423,26 @@ function theTerminalFollowsByTheSameRoute(): void {
       )
     }
   }
+}
+
+/**
+ * The rescue's two lists, pinned to exactly what was ruled.
+ *
+ * `ACCENT_INK_SURFACES` is the guard the parked tint gap relies on: `--brand-soft` is not one of the
+ * surfaces, and can only become one by editing this assertion deliberately. The foregrounds are the two
+ * accent text inks and no signal colour.
+ */
+function theAccentRescueListsAreExactlyAsRuled(): void {
+  assert.deepEqual(
+    [...ACCENT_INK_FOREGROUNDS],
+    ['brand-text', 'syntax-keyword'],
+    'the rescue holds exactly the two accent text inks'
+  )
+  assert.deepEqual([...ACCENT_INK_SURFACES], [...TEXT_SURFACES], 'and holds them against exactly the text surfaces')
+  assert.ok(
+    !ACCENT_INK_SURFACES.includes('brand-soft'),
+    'the parked --brand-soft tint composite is not a rescue surface'
+  )
 }
 
 // ---------------------------------------------------------------- main
@@ -357,16 +462,21 @@ async function main(): Promise<void> {
   claim('the contrast is a multiplier on each surface’s distance from the page, in the map the document is given', () =>
     theDocumentIsGivenTheContrastInPropertiesItAlreadyHas()
   )
-  claim('every pair clears the floor at every step of the range, and the pass moves nothing', () =>
-    theFloorHoldsAtEveryStepOfTheRange()
+  claim(
+    'the three legacy pairs never move at any contrast step, and the accent inks clear the floor after the pass',
+    () => theFloorHoldsAtEveryStepOfTheRange()
   )
-  claim('every theme carries a --brand-text that clears the floor as text, in dark mode above all', () =>
-    everyThemeCarriesALegibleBrandText()
+  claim(
+    'every theme carries a --brand-text that clears the floor as text, at every brightness step on the applied map',
+    () => everyThemeCarriesALegibleBrandText()
   )
   claim('every dark foreground token clears the floor on the canvas, the plate and the popover', () =>
     everyDarkForegroundTokenReads()
   )
-  registerLightSyntaxKeywordPins()
+  claim('the accent rescue holds exactly the two text accents against exactly the six text surfaces', () =>
+    theAccentRescueListsAreExactlyAsRuled()
+  )
+  registerSyntaxKeywordPins()
   claim('the terminal follows the contrast by the route it follows the brightness', () =>
     theTerminalFollowsByTheSameRoute()
   )
