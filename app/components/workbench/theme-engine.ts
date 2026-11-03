@@ -434,17 +434,30 @@ const PAIR_FOREGROUNDS: { key: ReadablePair; variable: ThemeVariable }[] = [
 /**
  * The readability pass: every pair that has to be legible is measured, and any that is not is moved.
  *
+ * The three legacy pairs come first and keep their names and order. The two accent inks follow, held
+ * against every surface a glyph is drawn on, and they are measured on *every* resolve rather than only
+ * when a control is off its default: a brightness step moves the surfaces out from under an accent that
+ * is not one, and a contrast step can pull a chip surface away from the page with the ink left where the
+ * palette authored it. At the launch state the worst of those twelve pairs measures 4.61, so the loop
+ * moves nothing where the theme is still the stylesheet's own values.
+ *
  * Pure with respect to its argument — the returned map is a new object — so a caller can compare what
  * it sent with what came back, and the suite can assert on both the result and the report.
  */
 export function ensureReadable(vars: ThemeVars): ReadableResult {
   const next: ThemeVars = { ...vars }
-  const moved: ReadablePair[] = []
+  const moved: MovedPair[] = []
 
   for (const { key, variable } of PAIR_FOREGROUNDS) {
     const shifted = shiftToReadable(next, variable, PAIR_SURFACES[key])
     next[variable] = shifted.value
     if (shifted.moved) moved.push(key)
+  }
+
+  for (const ink of ACCENT_INK_FOREGROUNDS) {
+    const shifted = shiftToReadable(next, ink, ACCENT_INK_SURFACES)
+    next[ink] = shifted.value
+    if (shifted.moved) moved.push(ink)
   }
 
   return { vars: next, moved }
