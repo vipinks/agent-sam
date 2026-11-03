@@ -207,6 +207,7 @@ describe('the Updates settings section', () => {
     const entries = within(sectionRow()).getAllByRole('tab')
     expect(entries.map((entry) => entry.textContent)).toEqual([
       'Providers',
+      'Combos',
       'MCP Servers',
       'Skills',
       'Terminal',

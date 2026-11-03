@@ -241,6 +241,19 @@ const SUITES = [
     src: 'sessions/session-row-test.ts',
   },
   {
+    name: 'combo protocol (schema, slug, disposition, eligibility, walk, v3 read)',
+    src: 'combos/combos-protocol-test.ts',
+  },
+  { name: 'combo store (CRUD, rehydrate)', src: 'combos/combos-store-test.ts' },
+  {
+    name: 'combo module (boot load, file, CRUD, corrupt, limit)',
+    src: 'combos/combos-module-test.ts',
+  },
+  {
+    name: 'combo failover (429 then answer, all fail, skipped head)',
+    src: 'combos/combo-failover-test.ts',
+  },
+  {
     name: 'memory v1 (index, sanitizer, fan-out, supersede/restore, mtime skip, zero-LLM)',
     src: 'memory/memory-test.ts',
   },

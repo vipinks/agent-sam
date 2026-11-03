@@ -4,6 +4,7 @@ import type { ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import type { McpConsent } from '@/conveyor/protocol/mcp-tools'
 import { normalizePlan, reconcilePlanOnTurnEnd, type PlanStep } from '@/conveyor/protocol/plan'
 import { summarizedIds } from '@/conveyor/protocol/truncate'
+import type { ComboAttemptRecord, ComboReport, ComboSkipReason } from '@/conveyor/protocol/combos'
 import { liveMessageVersion, saysTheSameVersion } from '@/conveyor/protocol/message-versions'
 import {
   AUTO_CONTINUE_MAX,
@@ -317,6 +318,14 @@ export interface TurnEndNotice {
    * and separate from the cause copy because `model_stop` is ordinarily the ending that says nothing.
    */
   midWork?: boolean
+  /**
+   * What this turn's combo walk did, when it ran through one.
+   *
+   * Present when a member was skipped or failed, or when every member did. The card draws the serving
+   * member for a failover that succeeded, and the per-member reasons for a `combo_failed`. Absent for
+   * a combo that answered on its first eligible member with nothing skipped, and for every plain send.
+   */
+  combo?: ComboReport
 }
 
 /**
@@ -851,12 +860,14 @@ export function applyAgentChunk(
       const unfinishedSteps =
         typeof c.unfinishedSteps === 'number' && c.unfinishedSteps > 0 ? c.unfinishedSteps : undefined
       const midWork = c.midWork === true
+      const combo = readComboReport(c.combo)
       const notice: TurnEndNotice = {
         cause,
         resumable,
         ...(failure === null ? {} : { failure }),
         ...(unfinishedSteps ? { unfinishedSteps } : {}),
         ...(midWork ? { midWork: true } : {}),
+        ...(combo === null ? {} : { combo }),
       }
       return {
         turns: replaceTurn(turns, turnId, (turn) => ({
@@ -1301,6 +1312,65 @@ function readTurnEndFailure(value: unknown): TurnEndFailure | null {
   const tail = typeof failure.tail === 'string' ? failure.tail : ''
   if (exitCode === null && code === undefined) return null
   return { exitCode, ...(code === undefined ? {} : { code }), tail }
+}
+
+/** The skip reasons this build can word. An unknown one loses the reason, not the member. */
+const COMBO_SKIP_REASONS: readonly ComboSkipReason[] = [
+  'no-provider',
+  'model-not-enabled',
+  'no-key',
+  'window-too-small',
+  'no-vision',
+]
+
+/**
+ * Read a combo report out of a notice chunk.
+ *
+ * A chunk crosses IPC, so the same defensive read the failure gets: a malformed member is dropped
+ * rather than rendered, and a record with no id or name is no report at all. The list is what the card
+ * draws, so a member missing its provider or model is a line that cannot be named — dropping it is
+ * the honest rendering of a value this build cannot use.
+ */
+function readComboReport(value: unknown): ComboReport | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const id = typeof record.id === 'string' ? record.id : ''
+  const name = typeof record.name === 'string' ? record.name : ''
+  if (id === '' || name === '') return null
+
+  const requests = Array.isArray(record.requests)
+    ? record.requests.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') return []
+        const member = entry as Record<string, unknown>
+        if (typeof member.providerId !== 'string' || typeof member.modelId !== 'string') return []
+        return [{ providerId: member.providerId, modelId: member.modelId }]
+      })
+    : []
+
+  const attempts: ComboAttemptRecord[] = Array.isArray(record.attempts)
+    ? record.attempts.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') return []
+        const attempt = entry as Record<string, unknown>
+        if (attempt.kind !== 'skipped' && attempt.kind !== 'failed') return []
+        if (typeof attempt.providerId !== 'string' || typeof attempt.modelId !== 'string') return []
+        const reason =
+          typeof attempt.reason === 'string' && COMBO_SKIP_REASONS.includes(attempt.reason as ComboSkipReason)
+            ? (attempt.reason as ComboSkipReason)
+            : undefined
+        const code = typeof attempt.code === 'string' && attempt.code !== '' ? attempt.code : undefined
+        return [
+          {
+            kind: attempt.kind,
+            providerId: attempt.providerId,
+            modelId: attempt.modelId,
+            ...(reason === undefined ? {} : { reason }),
+            ...(code === undefined ? {} : { code }),
+          },
+        ]
+      })
+    : []
+
+  return { id, name, requests, attempts }
 }
 
 /** The short identity a failure is named by: the exit code, or the code word a refusal carried. */

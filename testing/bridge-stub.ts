@@ -20,6 +20,8 @@ import { enginePreferencesStore } from '@/conveyor/stores/engine-preferences'
 // here because the control reads it on mount, and an unseeded store makes the mirror cache `undefined`.
 import { engineModelsStore } from '@/conveyor/stores/engine-models'
 import { memoryStore } from '@/conveyor/stores/memory'
+import { combosStore } from '@/conveyor/stores/combos'
+import type { Combo } from '@/conveyor/protocol/combos'
 
 /**
  * A stubbed `window.conveyor` bridge for wiring tests.
@@ -270,6 +272,20 @@ const MANIFEST: Record<string, Record<string, string>> = {
     restorePage: 'command',
     importHandoff: 'command',
   },
+  // The combos surface: the picker's read and the Settings section's writes. Listed by kind for the
+  // reason every entry here is — the client refuses a member missing from this map before any handler
+  // is reached, so a pane whose read was absent could not dispatch at all.
+  combos: {
+    list: 'query',
+    knownTargets: 'query',
+    create: 'command',
+    rename: 'command',
+    reorder: 'command',
+    addMember: 'command',
+    removeMember: 'command',
+    setEnabled: 'command',
+    delete: 'command',
+  },
 }
 
 /**
@@ -407,6 +423,10 @@ const initialStates = new Map<string, unknown>([
   // The memory panel's durable view — the four page summaries main mirrors. Without a genuine initial
   // state here the mirror would cache `undefined` and the panel would throw on `pages` before it asks.
   ['conveyor:store:memory', structuredClone(memoryStore.initialState)],
+  // The combos the user built. Every pane that mounts the model Select reads this on mount, and the
+  // Settings section reads it as its list: without a genuine initial state the mirror would cache
+  // `undefined` and the Select's `.map` would throw before a single row could be drawn.
+  ['conveyor:store:combos', structuredClone(combosStore.initialState)],
 ])
 
 /**
@@ -439,6 +459,10 @@ export function createBridgeStub(overrides: Record<string, (input: unknown) => u
       if (channel === STREAM_CANCEL) return undefined
       const handler = handlers.get(method)
       if (handler) return handler(args[0], channel)
+      // A chat pane reads the combos on mount, and most suites are not about combos. Answering that one
+      // read with an empty list keeps every existing picker suite independent of the seed a combo suite
+      // installs, without a per-suite stub that a new suite could forget to add.
+      if (channel === 'conveyor:combos' && method === 'list') return []
       // A store read is answered from the shared seed, so it works on any stub — including one
       // installed after the fetch began, and including the very first fetch that happens before any
       // test has seeded anything.
@@ -542,6 +566,31 @@ export function stubStore(stub: BridgeStub, storeId: string, state: unknown): vo
 
 /** The chat session store's id, as `defineStore('chat-sessions', ...)` declares it. */
 export const CHAT_SESSIONS_STORE_ID = 'chat-sessions'
+
+/**
+ * A combo every suite that needs one can start from.
+ *
+ * The model picker mounts on every chat pane, and it reads the combos list to draw its group. The
+ * genuine initial state above already keeps that from being `undefined`, but a seed is what lets a
+ * wiring suite assert the group, the glyph and the selection without inventing a combo in the test —
+ * and it is deliberately a plain value with a plain provider/model pair, so it resolves against the
+ * catalogue every picker suite already stubs.
+ */
+export const COMBO_SEED: { combos: Combo[] } = {
+  combos: [
+    {
+      id: 'fast',
+      name: 'Fast answers',
+      members: [{ providerId: 'deepseek', modelId: 'deepseek-chat' }],
+      enabled: true,
+    },
+  ],
+}
+
+/** Seed the combos store, as main would — the store mirror's own two routes, via `stubStore`. */
+export function stubCombos(stub: BridgeStub, combos: Combo[] = COMBO_SEED.combos): void {
+  stubStore(stub, 'combos', { combos })
+}
 
 /**
  * The single bridge object the app's client is given, installed once.

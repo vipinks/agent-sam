@@ -74,6 +74,15 @@ import { readDisabledSkills, resolveActiveSkills, skillTierPathsFor } from './sk
 import { assembleSkillsSection, MAX_ACTIVE_SKILLS, planSkillsInjection, planTurnSkillIds } from '../protocol/skills'
 import { MAX_BUDDY_MCP_IDS, MAX_BUDDY_ROLE_PROMPT_CHARS } from '../protocol/buddies'
 import { MAX_MCP_SERVER_ID_CHARS } from '../protocol/mcp-ids'
+import {
+  comboFailureDisposition,
+  comboRegistryEntry,
+  planComboWalk,
+  type Combo,
+  type ComboMember,
+  type ComboReport,
+} from '../protocol/combos'
+import { comboForRun, currentComboRegistry } from './combos'
 
 /**
  * The agent loop: the model's reasoning and the app's hands, connected.
@@ -618,6 +627,15 @@ export type AgentChunk =
       resumable: boolean
       unfinishedSteps?: number
       midWork?: boolean
+      /**
+       * What a combo walk did, when this turn ran through one.
+       *
+       * Present only when there is something to say: a member was skipped or failed, or every member
+       * did. A combo that answered on its first member with nothing skipped carries no block — the
+       * ordinary ending is still the ordinary ending, and a card under every combo answer would make
+       * the one that matters invisible.
+       */
+      combo?: ComboReport
     }
   /**
    * A turn that picked itself up again, and how much of its budget it has now spent.
@@ -890,7 +908,16 @@ async function* finishTurn(
    * their exact handling. C2 is a `model_stop`-only notice; the omission is the caller saying which
    * stop this is, rather than teaching this function to guess from a count.
    */
-  midWork?: { steps: number; sawSetPlan: boolean }
+  midWork?: { steps: number; sawSetPlan: boolean },
+  /**
+   * What a combo walk did, when this turn ran through one.
+   *
+   * Passed by the loop rather than read here: the walk is the loop's, and this function's job is to
+   * put the ending and the report in one chunk. A report with nothing moved on from is dropped — the
+   * ordinary ending stays silent — while a `combo_failed` always carries it, because the list of
+   * members and reasons is the whole of what that ending has to say.
+   */
+  combo?: ComboReport
 ): AsyncGenerator<AgentChunk, TurnEnding, undefined> {
   const reconciled = reconcilePlanOnTurnEnd(plan)
 
@@ -908,21 +935,45 @@ async function* finishTurn(
   // arriving, and the work that is not done. A turn can be both, and a user reading one of them still
   // needs the other, so they travel in the same chunk rather than as two rows.
   const unfinished = planUnfinishedNotice(reconciled, cause)
+  const comboBlock = combo && (combo.attempts.length > 0 || cause === 'combo_failed') ? combo : undefined
   if (unfinished) {
     yield {
       type: 'turn_end_notice',
       cause,
       resumable: unfinished.resumable,
       unfinishedSteps: unfinished.unfinishedSteps,
+      ...(comboBlock ? { combo: comboBlock } : {}),
     }
   } else if (cause !== 'model_stop') {
     // The reply's own ending, when there is no plan to speak for. An ordinary ending with a finished
     // plan is still the one ending that says nothing: the card exists for the turns that need
     // explaining, and a row under every answer is how it stops being read.
-    yield { type: 'turn_end_notice', cause, resumable: isResumable(cause) }
+    yield {
+      type: 'turn_end_notice',
+      cause,
+      resumable: isResumable(cause),
+      ...(comboBlock ? { combo: comboBlock } : {}),
+    }
   } else if (midWork) {
     const notice = midWorkNotice({ cause, ...midWork, plan: reconciled })
-    if (notice) yield { type: 'turn_end_notice', cause: 'model_stop', resumable: true, midWork: true }
+    if (notice) {
+      yield {
+        type: 'turn_end_notice',
+        cause: 'model_stop',
+        resumable: true,
+        midWork: true,
+        ...(comboBlock ? { combo: comboBlock } : {}),
+      }
+    } else if (comboBlock) {
+      // The mid-work rule did not fire, but the combo has news of its own. The ordinary ending is
+      // silent only when neither has anything to say, so the report is not lost because the caller
+      // happened to pass the tool counts the mid-work rule considers.
+      yield { type: 'turn_end_notice', cause: 'model_stop', resumable: false, combo: comboBlock }
+    }
+  } else if (comboBlock) {
+    // A combo that failed over and then answered: the reply arrived complete, so the cause says
+    // nothing, and the block is the news the user is owed — who served it, and who was passed over.
+    yield { type: 'turn_end_notice', cause: 'model_stop', resumable: false, combo: comboBlock }
   }
 
   if (reason !== null) yield { type: 'done', reason, steps }
@@ -1047,6 +1098,15 @@ interface LoopOptions {
   providerId: string
   apiKey: string
   model: string
+  /**
+   * The combo this run walks, when the user chose one.
+   *
+   * Absent for an ordinary send, which resolves one provider up front and sends to it. Present for a
+   * combo run, where `providerId`/`apiKey` above are only the head pair the renderer carried and every
+   * round-trip resolves its own member: the key, the descriptor and the model are the candidate's,
+   * not the head's, which is what lets a second member answer when the first cannot.
+   */
+  combo?: Combo
   /**
    * The descriptor of a provider the user added, when this run's provider is one.
    *
@@ -1180,6 +1240,17 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
    * out of the transcript would be a second source of truth a reopened conversation could disagree with.
    */
   let continuations = opts.continuations ?? 0
+
+  /**
+   * The combo this run walks, and what its walk has done so far.
+   *
+   * Declared for the turn rather than per round-trip: a turn that made three requests through a combo
+   * has one report to show, and a report rebuilt each round-trip would forget the members the first
+   * request moved on from. `requests` accumulates the serving member of each round-trip; `attempts`
+   * accumulates every skipped or failed member, in the order the walk met them.
+   */
+  const combo = opts.combo
+  const comboReport: ComboReport | null = combo ? { id: combo.id, name: combo.name, requests: [], attempts: [] } : null
 
   /** How many tool calls this turn actually ran, and whether one of them declared a plan. */
   let toolSteps = 0
@@ -1548,7 +1619,16 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       // was ever asked, so the ending a long turn most often has left — a plan still unfinished with the
       // auto-continue budget untouched — put the card up while there was still money in the pocket. What
       // the rule decides is unchanged; this exit lets it decide.
-      const nudge = yield* finishTurn(plan, 'model_stop', steps, 'max_steps', continuations, true)
+      const nudge = yield* finishTurn(
+        plan,
+        'model_stop',
+        steps,
+        'max_steps',
+        continuations,
+        true,
+        undefined,
+        comboReport ?? undefined
+      )
       if (nudge === null) return
 
       // The step budget is a segment's length rather than the turn's, so the counter starts over behind the
@@ -1589,25 +1669,27 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     const requestTools = wireTools(toolsForRoundTrip(mcp), mcpNames)
     const requestHistory = wireHistory(requestMessages, mcpNames)
 
-    // What this request is about to carry, measured as a side effect of building it.
+    // What this request is about to carry, measured when something reads it.
     //
-    // As a side effect, and that is the load-bearing word: the measurement is taken here because this is
-    // the one point where every assembled part is in hand at once — the standing context already in the
-    // history, the app's own tools plus whatever the running servers offer right now, and the
-    // conversation with its references — and because a count taken after the reply would be a count of
-    // the wrong moment. Nothing about the request itself changes: the body is built from the same values
-    // below whether or not anything is listening.
+    // The measurement is taken here because this is the one point where every assembled part is in
+    // hand at once — the standing context already in the history, the app's own tools plus whatever
+    // the running servers offer right now, and the conversation with its references — and because a
+    // count taken after the reply would be a count of the wrong moment. Nothing about the request
+    // itself changes: the body is built from the same values below whether or not anything is
+    // listening.
+    //
+    // Two readers: the Overview sink, and a combo walk's window filter. An ordinary run with nothing
+    // listening measures nothing, so this costs the common path no serialization.
     //
     // Announced to a sink rather than written to a store from in here, for the reason `setSkillPruneSink`
     // is: the store is registered in `router.ts`, which imports this file, so reaching for it from this
     // side would close the cycle. Read through the module-level sink so a run the app is not watching —
     // every suite that drives this loop — measures nothing at all.
     const snapshotSink = contextSnapshotSink
-    if (snapshotSink && opts.sessionId) {
-      const sessionId = opts.sessionId
-      snapshotSink({
-        sessionId,
-        snapshot: snapshotForRequest({
+
+    const needsMeasurement = comboReport !== null || (snapshotSink !== null && opts.sessionId !== undefined)
+    const measured = needsMeasurement
+      ? snapshotForRequest({
           history,
           tools: requestTools,
           standing: {
@@ -1619,60 +1701,173 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
             skills: assembleSkillsSection(activeSkills),
           },
           at: Date.now(),
-        }),
-      })
+        })
+      : null
+    if (snapshotSink && opts.sessionId && measured) {
+      snapshotSink({ sessionId: opts.sessionId, snapshot: measured })
     }
 
-    try {
-      for await (const delta of streamDeltas({
-        providerId: opts.providerId,
-        apiKey: opts.apiKey,
-        model: opts.model,
-        messages: requestHistory,
-        tools: requestTools,
-        signal: opts.signal,
-        fetchImpl: opts.fetchImpl,
-        provider: opts.provider,
-      })) {
-        // An abort is an ending, and the one exit that used to have none: returning here left the turn
-        // with no `turn_end` at all, so a plan mid-way through it was dropped with nothing said — the
-        // silent stop this phase exists to remove. It is ended on the way out instead, under the cause
-        // that names what happened, and it is not continuable: a cancelled run is a decision.
-        if (opts.signal.aborted) {
-          yield* finishTurn(plan, 'interrupted', steps, null, continuations, false)
-          return
-        }
+    // The candidates this request walks, planned once from the registry and this request's own facts.
+    //
+    // A plain send is one candidate that is always eligible: it named its provider and model, and the
+    // refusal for a missing key is `resolveRun`'s, which already ran. A combo is the priority list with
+    // each member's verdict — the window estimate and the image count are facts about this request, so
+    // the plan is rebuilt per round-trip rather than once per turn.
+    const imageRefs = history.reduce((count, message) => count + (message.images?.length ?? 0), 0)
+    const candidates: readonly { member: ComboMember; eligible: boolean; reason?: string }[] = comboReport
+      ? planComboWalk(combo as Combo, currentComboRegistry(), {
+          estimatedTokens: measured?.used ?? 0,
+          images: imageRefs,
+        })
+      : [{ member: { providerId: opts.providerId, modelId: opts.model }, eligible: true }]
 
-        if (delta.finishReason) finishReasons.push(delta.finishReason)
+    // The member that served this round-trip, or null when every member was skipped or failed.
+    let served: ComboMember | null = null
 
-        // Kept rather than yielded here: the accounting frame is the last thing a reply says, and the
-        // pane has already been handed the prose — so it is announced once the round-trip is over, where
-        // it reads as the closer it is.
-        if (delta.usage) reportedUsage = delta.usage
+    for (const candidate of candidates) {
+      if (!candidate.eligible) {
+        comboReport?.attempts.push({
+          kind: 'skipped',
+          providerId: candidate.member.providerId,
+          modelId: candidate.member.modelId,
+          ...(candidate.reason ? { reason: candidate.reason as ComboReport['attempts'][number]['reason'] } : {}),
+        })
+        continue
+      }
 
-        if (delta.text) {
-          text.push(delta.text)
-          yield { type: 'text_delta', text: delta.text }
-        }
-
-        // Every fragment in the frame, not just the first: a provider may batch several calls into one
-        // `tool_calls` array, and a call that never gets accumulated is a call that never gets answered.
-        for (const fragment of delta.toolCalls ?? []) {
-          const existing = partials.get(fragment.index) ?? { index: fragment.index, args: '' }
-          if (fragment.id) existing.id = fragment.id
-          if (fragment.name) existing.name = fragment.name
-          if (fragment.argumentsDelta) existing.args += fragment.argumentsDelta
-          partials.set(fragment.index, existing)
+      // Each candidate resolves its own credential and descriptor. That is the whole point of the
+      // walk being here rather than in the executor: the key is main's, the descriptor is the
+      // provider's own, and neither may be the head's merely because the head was named first.
+      let apiKey = opts.apiKey
+      let provider = opts.provider
+      if (comboReport) {
+        provider = comboRegistryEntry(currentComboRegistry(), candidate.member.providerId)?.descriptor
+        try {
+          const resolved = await resolveRun(candidate.member.providerId, provider)
+          apiKey = resolved.apiKey
+          provider = resolved.provider
+        } catch (err) {
+          if (err instanceof ConveyorError && comboFailureDisposition(err.code) === 'advance') {
+            comboReport.attempts.push({
+              kind: 'failed',
+              providerId: candidate.member.providerId,
+              modelId: candidate.member.modelId,
+              code: err.code,
+            })
+            continue
+          }
+          throw err
         }
       }
-    } catch (err) {
-      // Only a reply that stopped arriving is diagnosed here. A provider that refused the request
-      // outright — no key, a rejected key, a rate limit, a bad model — threw before any of the answer
-      // existed, and that is a failure to report rather than a turn to continue: it propagates
-      // unchanged, so the wording the renderer already has for it stays what the user sees. Branched
-      // on the code, never on the message.
-      if (!(err instanceof ConveyorError) || err.code !== 'STREAM_ERROR') throw err
-      streamErrorCode = err.code
+
+      let received = false
+      let replied = false
+      try {
+        for await (const delta of streamDeltas({
+          providerId: candidate.member.providerId,
+          apiKey,
+          model: candidate.member.modelId,
+          messages: requestHistory,
+          tools: requestTools,
+          signal: opts.signal,
+          fetchImpl: opts.fetchImpl,
+          provider,
+        })) {
+          received = true
+          // An abort is an ending, and the one exit that used to have none: returning here left the turn
+          // with no `turn_end` at all, so a plan mid-way through it was dropped with nothing said — the
+          // silent stop this phase exists to remove. It is ended on the way out instead, under the cause
+          // that names what happened, and it is not continuable: a cancelled run is a decision.
+          if (opts.signal.aborted) {
+            yield* finishTurn(
+              plan,
+              'interrupted',
+              steps,
+              null,
+              continuations,
+              false,
+              undefined,
+              comboReport ?? undefined
+            )
+            return
+          }
+
+          if (delta.finishReason) finishReasons.push(delta.finishReason)
+
+          // Kept rather than yielded here: the accounting frame is the last thing a reply says, and the
+          // pane has already been handed the prose — so it is announced once the round-trip is over, where
+          // it reads as the closer it is.
+          if (delta.usage) reportedUsage = delta.usage
+
+          if (delta.text) {
+            text.push(delta.text)
+            yield { type: 'text_delta', text: delta.text }
+          }
+
+          // Every fragment in the frame, not just the first: a provider may batch several calls into one
+          // `tool_calls` array, and a call that never gets accumulated is a call that never gets answered.
+          for (const fragment of delta.toolCalls ?? []) {
+            const existing = partials.get(fragment.index) ?? { index: fragment.index, args: '' }
+            if (fragment.id) existing.id = fragment.id
+            if (fragment.name) existing.name = fragment.name
+            if (fragment.argumentsDelta) existing.args += fragment.argumentsDelta
+            partials.set(fragment.index, existing)
+          }
+        }
+        replied = true
+      } catch (err) {
+        if (opts.signal.aborted) {
+          yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, undefined, comboReport ?? undefined)
+          return
+        }
+        if (!(err instanceof ConveyorError)) throw err
+
+        // A member that failed before it said anything is exactly what a combo exists for. The
+        // disposition decides whether another member may be asked — a refused key, a rate limit, a
+        // dropped connection, a server error — or whether the failure is about this prompt and a
+        // second member would only be told the same thing.
+        if (comboReport && !received && comboFailureDisposition(err.code) === 'advance') {
+          comboReport.attempts.push({
+            kind: 'failed',
+            providerId: candidate.member.providerId,
+            modelId: candidate.member.modelId,
+            code: err.code,
+          })
+          // Nothing from this attempt belongs to the next one: a fresh candidate writes a fresh reply.
+          text.length = 0
+          partials.clear()
+          finishReasons.length = 0
+          streamErrorCode = undefined
+          reportedUsage = undefined
+          continue
+        }
+
+        // Only a reply that stopped arriving is diagnosed here. A provider that refused the request
+        // outright — no key, a rejected key, a rate limit, a bad model — threw before any of the answer
+        // existed, and that is a failure to report rather than a turn to continue: it propagates
+        // unchanged, so the wording the renderer already has for it stays what the user sees. Branched
+        // on the code, never on the message.
+        if (err.code !== 'STREAM_ERROR') throw err
+        streamErrorCode = err.code
+        replied = true
+      }
+
+      if (replied) {
+        served = candidate.member
+        comboReport?.requests.push({
+          providerId: candidate.member.providerId,
+          modelId: candidate.member.modelId,
+        })
+        break
+      }
+    }
+
+    // Every member was skipped or failed: the turn ends on the combo's own account, with the list of
+    // what each one said, rather than throwing a single provider's failure as if it were the whole
+    // story. `shouldAutoContinue` refuses this cause, so no nudge follows it.
+    if (comboReport && served === null) {
+      yield* finishTurn(plan, 'combo_failed', steps, null, continuations, false, undefined, comboReport)
+      return
     }
 
     // A round-trip that measured itself says so, once, before anything is done with the reply: the
@@ -1768,7 +1963,16 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // frame said. An empty stop does not arrive here at all: it is not a reply that was cut short, so it
     // owns its calls, and the reply's own ending below is what judges it.
     if (isReplyCutShort(cause)) {
-      const nudge = yield* finishTurn(plan, cause, steps, null, continuations, calls.length === 0)
+      const nudge = yield* finishTurn(
+        plan,
+        cause,
+        steps,
+        null,
+        continuations,
+        calls.length === 0,
+        undefined,
+        comboReport ?? undefined
+      )
       if (nudge === null) return
 
       // A nudge opens a segment, and a segment's length is the step budget: reset here for the same reason
@@ -1788,10 +1992,19 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // nowhere else: no chunk carries it, so the pane never renders it as something the user typed, and
     // the transcript of this conversation gains no turn from it.
     if (calls.length === 0) {
-      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations, true, {
-        steps: toolSteps,
-        sawSetPlan,
-      })
+      const nudge = yield* finishTurn(
+        plan,
+        cause,
+        steps,
+        'complete',
+        continuations,
+        true,
+        {
+          steps: toolSteps,
+          sawSetPlan,
+        },
+        comboReport ?? undefined
+      )
       if (nudge === null) return
 
       // The step budget starts over with the segment, as it does at the ceiling and at a dead reply: the
@@ -1815,7 +2028,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // reaching it, which is what keeps a decision card from being carded as an ending.
     const walked = yield* walkFrame(calls, 0)
     if (walked === 'aborted') {
-      yield* finishTurn(plan, 'interrupted', steps, null, continuations, false)
+      yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, undefined, comboReport ?? undefined)
       return
     }
     if (walked !== 'settled') return
@@ -1932,14 +2145,29 @@ export const agentModule = defineModule({
        * same question, and the two would eventually disagree.
        */
       provider: z.unknown().optional(),
+      /**
+       * The combo this send runs through, when the user chose one.
+       *
+       * `providerId` and `model` above still travel and still name the combo's head: the pair is what
+       * the renderer's session record keeps, what the stale guard checks, and what every existing suite
+       * asserts. Main reads the combo's own members from the store; this id is only the choice. Absent
+       * for an ordinary send, which is the request it always was.
+       */
+      comboId: z.string().min(1).optional(),
     }),
     async function* ({ input, signal }) {
-      const { apiKey, provider } = await resolveRun(input.providerId, input.provider)
+      // A combo run resolves each candidate in the loop, so the up-front resolve is skipped: doing it
+      // here would refuse a keyless head before the walk ever reached the member that has a key.
+      const combo = input.comboId === undefined ? undefined : comboForRun(input.comboId)
+      const { apiKey, provider } = combo
+        ? { apiKey: '', provider: undefined }
+        : await resolveRun(input.providerId, input.provider)
       yield* runAgentLoop({
         providerId: input.providerId,
         apiKey,
         model: input.model,
         provider,
+        ...(combo ? { combo } : {}),
         workspaceRoot: input.workspaceRoot,
         messages: input.messages as HistoryMessage[],
         autoApprove: input.autoApprove ?? false,
@@ -2011,14 +2239,20 @@ export const agentModule = defineModule({
       decision: z.enum(['approved', 'denied']),
       /** The same descriptor the run started with: a resumed turn is the same turn. */
       provider: z.unknown().optional(),
+      /** The same combo the run started through: a resumed turn is the same turn. */
+      comboId: z.string().min(1).optional(),
     }),
     async function* ({ input, signal }) {
-      const { apiKey, provider } = await resolveRun(input.providerId, input.provider)
+      const combo = input.comboId === undefined ? undefined : comboForRun(input.comboId)
+      const { apiKey, provider } = combo
+        ? { apiKey: '', provider: undefined }
+        : await resolveRun(input.providerId, input.provider)
       yield* runAgentLoop({
         providerId: input.providerId,
         apiKey,
         model: input.model,
         provider,
+        ...(combo ? { combo } : {}),
         workspaceRoot: input.workspaceRoot,
         messages: input.messages as HistoryMessage[],
         autoApprove: input.autoApprove ?? false,

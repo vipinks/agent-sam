@@ -306,6 +306,7 @@ describe('the Appearance section', () => {
         .map((tab) => tab.textContent)
     ).toEqual([
       'Providers',
+      'Combos',
       'MCP Servers',
       'Skills',
       'Terminal',

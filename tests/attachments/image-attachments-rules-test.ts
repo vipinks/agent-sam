@@ -237,8 +237,9 @@ async function testTurnRecord(): Promise<void> {
 
   await step('the version is not bumped for an additive optional key', () => {
     // The rule the shape has followed since plans landed: nothing a reader has to be told about is a
-    // version bump, and a key a reader can strip is not something it has to be told about.
-    assert.equal(TRANSCRIPT_VERSION, 3)
+    // version bump, and a key a reader can strip is not something it has to be told about. The version
+    // is 4 for the combo block (D10); this image-reference key still moved nothing of its own.
+    assert.equal(TRANSCRIPT_VERSION, 4)
     assert.equal(
       transcriptSnapshotSchema.safeParse({ version: 1, interrupted: false, turns: [{ ...base, imageRefs: [ref] }] })
         .success,

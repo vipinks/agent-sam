@@ -64,6 +64,56 @@ const WORDING: Record<TurnEndCause, string | null> = {
   // mid-answer — and that user comes back to a card that would otherwise be about a plan with no reason
   // above it.
   interrupted: 'Ended early: the run was stopped before it finished',
+  // The combo's own ending. The names and reasons below are the detail; this line is the fact, so the
+  // card exists even if the report somehow arrived without attempts.
+  combo_failed: 'Ended: no member of this combo could answer',
+}
+
+/** The skip reasons, in the user's terms. Branched on the code, never on a sentence main wrote. */
+const SKIP_WORDING: Record<string, string> = {
+  'no-provider': 'provider is not configured',
+  'model-not-enabled': 'model is switched off',
+  'no-key': 'no API key saved',
+  'window-too-small': 'request does not fit its window',
+  'no-vision': 'provider cannot see the attached image',
+}
+
+/** A skip or failure reason as one short clause, with the code itself when it came from a failure. */
+function attemptReason(attempt: { reason?: string; code?: string }): string {
+  if (attempt.reason !== undefined) return SKIP_WORDING[attempt.reason] ?? attempt.reason
+  if (attempt.code !== undefined) return attempt.code
+  return 'unavailable'
+}
+
+/**
+ * What a combo walk owes the card.
+ *
+ * Two shapes, one function, because they are the same report read at two endings. A turn that failed
+ * over and then answered gets one quiet line: who served it, and how many were passed over. A turn
+ * that exhausted the combo gets the list — each member and the coded reason it could not answer —
+ * because that list is the whole of what the user can act on.
+ */
+function comboLines(notice: TurnEndNoticeData): string[] {
+  const combo = notice.combo
+  if (combo === undefined) return []
+
+  if (notice.cause === 'combo_failed') {
+    return [
+      `Combo ${combo.name} — every member was skipped or failed`,
+      ...combo.attempts.map((attempt) => `${attempt.providerId} · ${attempt.modelId}: ${attemptReason(attempt)}`),
+    ]
+  }
+
+  if (combo.attempts.length === 0) return []
+  const served = combo.requests[combo.requests.length - 1]
+  const passed = combo.attempts.length
+  const line =
+    served === undefined
+      ? `Combo ${combo.name}: ${passed} member${passed === 1 ? '' : 's'} were passed over`
+      : `Combo ${combo.name}: ${served.providerId} · ${served.modelId} answered after ${passed} member${
+          passed === 1 ? '' : 's'
+        } were passed over`
+  return [line]
 }
 
 /** A planless stop after real tool work, which the plan count cannot describe. */
@@ -100,6 +150,7 @@ export function TurnEndNotice({
     notice.midWork === true ? MID_WORK : null,
     notice.unfinishedSteps === undefined ? null : unfinishedCopy(notice.unfinishedSteps),
     notice.lostPending === true ? LOST_PENDING : null,
+    ...comboLines(notice),
   ].filter((line): line is string => line !== null)
   // Nothing to read for this ending — the ordinary one — so nothing on screen. The card exists for the
   // endings that need explaining, and a row under every answer is how it stops being read.

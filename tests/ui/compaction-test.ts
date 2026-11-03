@@ -203,8 +203,10 @@ function theSummaryTurnRoundTrips(): void {
   const turns = compacted()
   const snapshot = serializeTranscript({ turns, interrupted: false })
 
-  assert.equal(TRANSCRIPT_VERSION, 3)
-  assert.equal(snapshot.version, 3)
+  // Four: the combo block is the newest claim a transcript reader has to understand. A summary turn
+  // still adds only its range, and that is why this suite exists.
+  assert.equal(TRANSCRIPT_VERSION, 4)
+  assert.equal(snapshot.version, 4)
   assert.deepEqual(snapshot.turns[0].summarizesTurns, ['user-1', 'assistant-2', 'user-3', 'assistant-4'])
   // Every summarized turn is still in the file: compaction adds, it never rewrites history away.
   assert.equal(snapshot.turns.length, turns.length)

@@ -17,6 +17,7 @@ import { AppearanceSection } from './appearance-settings'
 import { BuddiesSection } from './buddies-settings'
 import { UpdatesSection } from './updates-settings'
 import { EnginesSection } from './engines-settings'
+import { CombosSection } from './combos-settings'
 import { keySaveErrorMessage } from './provider-notices'
 import { useWorkbenchStore, type SettingsSection } from './store'
 
@@ -150,6 +151,11 @@ export function SettingsView() {
             <TabsTrigger value="providers" className={RAIL_ENTRY}>
               Providers
             </TabsTrigger>
+            {/* Immediately after Providers, because it is the same subject one level up: the picker's
+                rows are models, and a combo is a named ordering of them. */}
+            <TabsTrigger value="combos" className={RAIL_ENTRY}>
+              Combos
+            </TabsTrigger>
             <TabsTrigger value="mcp-servers" className={RAIL_ENTRY}>
               MCP Servers
             </TabsTrigger>
@@ -242,10 +248,13 @@ export function SettingsView() {
             </div>
           </TabsContent>
 
+          <TabsContent value="combos" data-slot="settings-section-combos" className="mx-auto max-w-2xl px-8 py-7">
+            <CombosSection />
+          </TabsContent>
+
           <TabsContent value="mcp-servers" data-slot="settings-section-mcp" className="mx-auto max-w-2xl px-8 py-7">
             <McpServersSection />
           </TabsContent>
-
           <TabsContent value="skills" data-slot="settings-section-skills" className="mx-auto max-w-2xl px-8 py-7">
             <SkillsSection />
           </TabsContent>

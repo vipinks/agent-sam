@@ -3,6 +3,7 @@ import { planStepSchema } from './plan'
 import { TURN_END_CAUSES } from './turn-end'
 import { imageAttachmentRefSchema } from './image-attachments'
 import { ENGINE_MODEL_MAX_LENGTH } from './engine'
+import { comboMemberSchema } from './combos'
 
 /**
  * The shape of a saved transcript, and its version.
@@ -34,8 +35,14 @@ import { ENGINE_MODEL_MAX_LENGTH } from './engine'
  * stripped rather than defaulted. Old files are valid reads, and a new file read by an older build
  * loses only the two fields it never knew about. Nothing a reader has to be told about is a version
  * bump; only a change it would otherwise get wrong is.
+ *
+ * Version 4 adds an optional combo block to a turn's ending notice — who served, and which members
+ * were moved on from. It is a bump because the block is a new claim about *how* a turn ran, which a
+ * reader must be able to recognize; it is additive and optional, so a version 3 file still loads:
+ * `version` is a bare integer rather than a literal, and the absent block is simply absent. The
+ * loader deliberately accepts both 3 and 4 — no migration, no rewrite of any file on disk.
  */
-export const TRANSCRIPT_VERSION = 3
+export const TRANSCRIPT_VERSION = 4
 
 /**
  * A tool step. `status` is the widened set, not just the settled ones: a turn interrupted by a
@@ -227,6 +234,32 @@ const turnBaseSchema = z.object({
           exitCode: z.number().int().nullable(),
           code: z.string().optional(),
           tail: z.string().max(500),
+        })
+        .optional(),
+      /**
+       * The combo this turn ran through, when it ran through one.
+       *
+       * Optional and additive. `requests` is the member that served each round-trip — normally one —
+       * and `attempts` is every member the walk moved on from, with the code or skip reason that
+       * moved it. The card draws both: a successful failover says who answered and how many were
+       * passed over, and a combo that exhausted every member lists each one and its reason.
+       */
+      combo: z
+        .object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          requests: z.array(comboMemberSchema),
+          attempts: z.array(
+            z.object({
+              kind: z.enum(['skipped', 'failed']),
+              providerId: z.string().min(1),
+              modelId: z.string().min(1),
+              reason: z
+                .enum(['no-provider', 'model-not-enabled', 'no-key', 'window-too-small', 'no-vision'])
+                .optional(),
+              code: z.string().optional(),
+            })
+          ),
         })
         .optional(),
     })

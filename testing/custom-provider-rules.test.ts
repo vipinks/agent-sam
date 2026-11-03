@@ -114,8 +114,8 @@ describe('the descriptor', () => {
   })
 
   it('moves the transcript version only when a stored shape widens: a step status did, a setting did not', () => {
-    // Raised to 3 by the `interrupted` step status, the same rule that raised it to 2 for `queued`.
-    // The settings slice this file is about still changes nothing a transcript reader must know.
-    expect(TRANSCRIPT_VERSION).toBe(3)
+    // Raised to 3 by the `interrupted` step status, and to 4 by the combo block on a turn's ending
+    // notice. The settings slice this file is about still changes nothing a transcript reader must know.
+    expect(TRANSCRIPT_VERSION).toBe(4)
   })
 })

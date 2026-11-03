@@ -1,5 +1,6 @@
 import { app, safeStorage } from 'electron'
 import { mkdir, readFile, writeFile } from 'fs/promises'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'path'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
@@ -108,6 +109,28 @@ export async function readApiKey(providerId: string): Promise<string | null> {
     // Ciphertext from a different machine or user account cannot be read back. Treat it as absent
     // so the user is asked to re-enter rather than shown a decryption failure they cannot act on.
     return null
+  }
+}
+
+/**
+ * Which providers hold a key, synchronously.
+ *
+ * The combos resolver needs this before a request, from a place that cannot await: the eligibility
+ * walk plans a request's candidates in one synchronous pass, and the one filter that asks "would
+ * `resolveRun` refuse this provider" cannot be the only asynchronous one. `listConfigured` above is
+ * the same fact for Settings, where a round trip is fine.
+ *
+ * A missing, unreadable or malformed file is "no keys", which is the honest reading for the walk: a
+ * built-in provider with no readable key would be refused anyway, so it is skipped rather than
+ * attempted. The ciphertext's value is never read here — only its key's presence.
+ */
+export function configuredProviderIdsSync(): readonly string[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(keyFilePath(), 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+    return Object.keys(parsed as Record<string, unknown>)
+  } catch {
+    return []
   }
 }
 

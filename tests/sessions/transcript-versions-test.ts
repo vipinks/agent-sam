@@ -110,8 +110,9 @@ function theOldArraysAreDropped() {
     undefined,
     'and neither is the reply archive'
   )
-  // Nothing about the stored shape moved: the keys above were stripped, not migrated into a new one.
-  assert.equal(TRANSCRIPT_VERSION, 3, 'the version does not move for a key this build dropped')
+  // These two dropped keys moved nothing; the bump to 4 is the combo block's (D10), and a version 3
+  // file still loads with that block absent.
+  assert.equal(TRANSCRIPT_VERSION, 4, 'the version moved for the combo block, not for a dropped key')
 
   results.push('an older file reads as its most recent version, with the parked ones lost')
 }

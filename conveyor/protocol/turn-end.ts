@@ -35,7 +35,14 @@ import type { PlanStep } from './plan'
  * screen still showed it. It is last because it is not evidence about the reply: `turnEndCause` never
  * returns it, and only the exits that know the run was cancelled can.
  */
-export const TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted'] as const
+export const TURN_END_CAUSES = [
+  'model_stop',
+  'empty_stop',
+  'truncated',
+  'stream_error',
+  'interrupted',
+  'combo_failed',
+] as const
 export type TurnEndCause = (typeof TURN_END_CAUSES)[number]
 
 /**
@@ -348,6 +355,10 @@ export const AUTO_CONTINUE_MAX = 8
  */
 export function shouldAutoContinue(cause: TurnEndCause, plan: readonly PlanStep[], usedBudget: number): boolean {
   if (cause === 'stream_error') return false
+  // A combo that exhausted every member is not a turn a nudge can help: the next request would walk
+  // the same list and fail at the same members for the same reasons. The user is owed the list, and
+  // the choice of what to change, rather than one more round-trip paid to reproduce the failure.
+  if (cause === 'combo_failed') return false
   // An abort is a decision, and the one that most obviously is: the person pressed Stop, or closed the
   // window, and a loop that answered that by asking the model to carry on would be doing the opposite
   // of what it was told. It is the second cause with a line of its own — not because it is technically

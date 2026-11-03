@@ -4,8 +4,9 @@
  *
  * Three records are involved and each is asserted where it lives. The stored snapshot
  * (`conveyor/protocol/transcript.ts`) is the file on disk, and the whole point of the key is that it did
- * *not* move `TRANSCRIPT_VERSION`: a file with no key and a file with one are both version 3, because a
- * reader that does not know the key loses it rather than getting the rest of the file wrong. The
+ * *not* move `TRANSCRIPT_VERSION` for its own sake: a file with no key and a file with one are both the
+ * current version, and a reader that does not know the key loses it rather than getting the rest of the
+ * file wrong. The version's move to 4 is the combo block's, not this key's. The
  * renderer's own state (`session-transcript.ts`) is the second, and it is asserted as a round trip —
  * write, read back — because a key written and not read is a key that does nothing.
  *
@@ -69,7 +70,9 @@ function theKeyIsAdditiveOptionalOnTheStoredRecord() {
     'a blank engine id is refused'
   )
 
-  assert.equal(TRANSCRIPT_VERSION, 3, 'the version does not move for an additive-optional key')
+  // The version moved for the combo block (D10), not for this key: an engine id is still additive and
+  // optional, and a file written before it still loads with no engine.
+  assert.equal(TRANSCRIPT_VERSION, 4, 'the version moved for the combo block, not for engineId')
   const empty = emptySnapshot()
   assert.equal(empty.version, TRANSCRIPT_VERSION, 'an empty snapshot carries the current version')
   assert.equal('engineId' in empty, false, 'and names no engine, which is the Sam default')

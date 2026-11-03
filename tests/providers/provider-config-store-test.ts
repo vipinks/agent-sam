@@ -203,13 +203,13 @@ function theSliceIsNotWhereAKeyIsKept() {
 /**
  * The version moves only for a change in what a reader of a transcript must know.
  *
- * It is 3 now: a tool step gained `interrupted`, the same kind of widening that took it to 2 for
- * `queued`. What this suite is about — a provider setting — still changes nothing a transcript reader
- * has to know, which is the property being held here rather than the number itself.
+ * It is 4 now: the combo block joined the endings a turn can record. What this suite is about — a
+ * provider setting — still changes nothing a transcript reader has to know, which is the property being
+ * held here rather than the number itself.
  */
 function theTranscriptVersionDidNotMove() {
-  assert.equal(TRANSCRIPT_VERSION, 3, 'storing custom providers is not a transcript change')
-  results.push('the transcript version is still 3')
+  assert.equal(TRANSCRIPT_VERSION, 4, 'the version moved for the combo block, not for a provider preference')
+  results.push('the transcript version is 4 — the combo block, not this preference')
 }
 
 // ---------------------------------------------------------------- image support
@@ -275,8 +275,8 @@ function anOlderFileCarriesNoOpinionAboutImages() {
  * has to know, which is the property being held here rather than the number itself.
  */
 function theTranscriptVersionDidNotMoveOfImages() {
-  assert.equal(TRANSCRIPT_VERSION, 3, 'a provider preference is not a transcript change')
-  results.push('the transcript version is still 3 after the image-support key')
+  assert.equal(TRANSCRIPT_VERSION, 4, 'the version moved for the combo block, not for the image-support key')
+  results.push('the transcript version is 4 — the combo block, not this key either')
 }
 
 // ---------------------------------------------------------------- declared prices, by model

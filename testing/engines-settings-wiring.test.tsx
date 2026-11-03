@@ -71,6 +71,7 @@ const INITIAL_STATE = structuredClone(
 /** Every section the rail lists, in order, with the one this phase added last. */
 const RAIL_ENTRIES = [
   'Providers',
+  'Combos',
   'MCP Servers',
   'Skills',
   'Terminal',
@@ -292,7 +293,7 @@ describe('the Engines settings section', () => {
     // the middle would be a different navigation from the one the design names.
     const entries = within(sectionRow()).getAllByRole('tab')
     expect(entries.map((entry) => entry.textContent)).toEqual(RAIL_ENTRIES)
-    expect(entries).toHaveLength(9)
+    expect(entries).toHaveLength(10)
     expect(entries[entries.length - 1].textContent).toBe('Engines')
 
     // A launch opens Providers, and the section a deep link lands on is the one it names.

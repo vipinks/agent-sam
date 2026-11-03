@@ -5,7 +5,21 @@ import { windowModule, setupWindowEvents } from './modules/window'
 import { systemModule } from './modules/system'
 import { webModule } from './modules/web'
 import { workspaceModule } from './modules/workspace'
-import { settingsModule, setCustomProviderIds } from './modules/settings'
+import {
+  settingsModule,
+  setCustomProviderIds,
+  PROVIDERS,
+  DEFAULT_MODELS,
+  configuredProviderIdsSync,
+} from './modules/settings'
+import {
+  combosModule,
+  setCombosSink,
+  setComboRegistrySource,
+  buildComboRegistrySnapshot,
+  loadCombosSync,
+} from './modules/combos'
+import { combosStore } from './stores/combos'
 import { providerModule } from './modules/provider'
 import { llmModule } from './modules/llm'
 import { terminalModule } from './modules/terminal'
@@ -80,6 +94,7 @@ export const router = createRouter(
     updates: updatesModule,
     engine: engineModule,
     memory: memoryModule,
+    combos: combosModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
@@ -98,12 +113,39 @@ export const router = createRouter(
       engineStatusStore,
       engineModelsStore,
       memoryStore,
+      combosStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
 )
 
 export type AppRouter = typeof router
+
+/**
+ * Give the combos resolvers one frozen registry, and load the combos file before any window exists.
+ *
+ * The sink first: the member guard and the eligibility walk both read it, and the module that owns
+ * the file is imported *by* this file, so it cannot reach the stores itself. Read through a function
+ * rather than handed a snapshot, because the models a user switches on are not the models this file
+ * saw at startup — every request re-reads it.
+ *
+ * The load is synchronous and sits here, after `createRouter` and before any window: the store holds
+ * what the file says from the first moment a renderer can ask, and a save triggered by the first
+ * query cannot write an empty list over a file that has combos in it. That ordering is the whole
+ * point of the call, so it is not awaited or deferred.
+ */
+setCombosSink((combos) => router.stores['combos'].dispatch('replace', { combos }))
+setComboRegistrySource(() => {
+  const providerConfig = router.stores['provider-config'].getState()
+  return buildComboRegistrySnapshot({
+    providers: PROVIDERS.map((provider) => ({ id: provider.id, name: provider.name })),
+    custom: providerConfig.customProviders,
+    defaults: DEFAULT_MODELS,
+    configs: providerConfig.providers,
+    configured: configuredProviderIdsSync(),
+  })
+})
+loadCombosSync()
 
 /**
  * Take the retired provider-level rate keys off the loaded records.

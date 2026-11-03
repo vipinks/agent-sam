@@ -164,10 +164,17 @@ function errorMapping() {
   assert.equal(mapHttpError(403, '').code, 'AUTH_FAILED')
   assert.equal(mapHttpError(429, '').code, 'RATE_LIMITED')
   assert.equal(mapHttpError(402, '').code, 'RATE_LIMITED')
+  // A 5xx is the provider failing at something that is not the request, and keeps PROVIDER_ERROR.
   assert.equal(mapHttpError(503, '').code, 'PROVIDER_ERROR')
-  assert.equal(mapHttpError(400, 'bad model').code, 'PROVIDER_ERROR')
+  assert.equal(mapHttpError(500, '').code, 'PROVIDER_ERROR')
+  // Every other 4xx is the provider refusing this request, and has its own code so a failover walk
+  // does not ask another member to answer a prompt this one judged unacceptable. Extended, not
+  // deleted: the old 400 assertion now states the new code, and the wording still rides along.
+  assert.equal(mapHttpError(400, 'bad model').code, 'PROVIDER_REQUEST_INVALID')
+  assert.equal(mapHttpError(404, '').code, 'PROVIDER_REQUEST_INVALID')
+  assert.equal(mapHttpError(422, 'content policy').code, 'PROVIDER_REQUEST_INVALID')
   assert.match(mapHttpError(400, 'bad model').message, /bad model/)
-  results.push('http error mapping')
+  results.push('http error mapping (5xx keeps PROVIDER_ERROR, other 4xx is REQUEST_INVALID)')
 }
 
 // ----------------------------------------------------------------- mocked streams

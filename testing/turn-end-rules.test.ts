@@ -184,8 +184,10 @@ describe('isResumable', () => {
   })
 
   it('answers for every cause in the vocabulary, so a new one cannot be forgotten', () => {
+    // One answer per cause, in the vocabulary's order. `combo_failed` is resumable like every ending
+    // that is not the model finishing: the conversation is intact and the next send chooses again.
     const answers = TURN_END_CAUSES.map((cause: TurnEndCause) => isResumable(cause))
-    expect(answers).toEqual([false, true, true, true, true])
+    expect(answers).toEqual([false, true, true, true, true, true])
   })
 
   it('offers a way on for a run that was stopped, because nothing about the conversation moved', () => {
@@ -374,9 +376,19 @@ describe('shouldAutoContinue', () => {
     // with the segment the nudge opens, which is a fact about the caller's counter rather than about this
     // rule. Pinned here so a later reader tempted to widen the vocabulary for the ceiling — a
     // `step_ceiling` cause, or a fourth argument — has a test to argue with first.
-    expect(TURN_END_CAUSES).toEqual(['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted'])
+    expect(TURN_END_CAUSES).toEqual([
+      'model_stop',
+      'empty_stop',
+      'truncated',
+      'stream_error',
+      'interrupted',
+      'combo_failed',
+    ])
     expect(shouldAutoContinue('model_stop', unfinished, 0)).toBe(true)
     expect(shouldAutoContinue('model_stop', unfinished, AUTO_CONTINUE_MAX)).toBe(false)
+    // A combo that exhausted every member is not nudged: the next request would walk the same list and
+    // fail at the same members, and the user is owed the list rather than another round-trip.
+    expect(shouldAutoContinue('combo_failed', unfinished, 0)).toBe(false)
   })
 })
 

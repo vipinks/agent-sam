@@ -133,6 +133,19 @@ function freezeTurn(turn: AgentTurn): TranscriptTurn {
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
             ...(turn.endNotice.midWork ? { midWork: true } : {}),
             ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),
+            // The combo report, copied rather than referenced for the same reason the plan is: what
+            // was written must not change because the live turn's array did. Absent for every turn
+            // that did not run through a combo, and for a combo that answered on its first member.
+            ...(turn.endNotice.combo === undefined
+              ? {}
+              : {
+                  combo: {
+                    id: turn.endNotice.combo.id,
+                    name: turn.endNotice.combo.name,
+                    requests: turn.endNotice.combo.requests.map((member) => ({ ...member })),
+                    attempts: turn.endNotice.combo.attempts.map((attempt) => ({ ...attempt })),
+                  },
+                }),
           },
         }
       : {}),
@@ -236,6 +249,19 @@ function thawTurn(turn: TranscriptTurn): AgentTurn {
             ...(turn.endNotice.lostPending ? { lostPending: true } : {}),
             ...(turn.endNotice.midWork ? { midWork: true } : {}),
             ...(turn.endNotice.unfinishedSteps ? { unfinishedSteps: turn.endNotice.unfinishedSteps } : {}),
+            // Carried back so a reopened conversation still says which members served it and which
+            // were passed over. Absent for every turn without a combo report, exactly as it was
+            // written.
+            ...(turn.endNotice.combo === undefined
+              ? {}
+              : {
+                  combo: {
+                    id: turn.endNotice.combo.id,
+                    name: turn.endNotice.combo.name,
+                    requests: turn.endNotice.combo.requests.map((member) => ({ ...member })),
+                    attempts: turn.endNotice.combo.attempts.map((attempt) => ({ ...attempt })),
+                  },
+                }),
           },
         }
       : {}),

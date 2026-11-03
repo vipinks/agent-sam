@@ -138,6 +138,8 @@ function entry(name: string): HTMLElement {
  */
 const SECTIONS = [
   { label: 'Providers', value: 'providers' },
+  // Immediately after Providers: the same subject one level up.
+  { label: 'Combos', value: 'combos' },
   { label: 'MCP Servers', value: 'mcp-servers' },
   { label: 'Skills', value: 'skills' },
   { label: 'Terminal', value: 'terminal' },

@@ -523,6 +523,17 @@ function readDataLines(frame: string): string | null {
 /**
  * Translate an HTTP failure into a typed error. Status is the only reliable signal across
  * providers, so the mapping is on status and the body is used for wording, not for branching.
+ *
+ * The 4xx line is split deliberately. A 5xx is the provider failing at something that is not the
+ * request, so it keeps `PROVIDER_ERROR` and a failover walk may try another member. Every other 4xx
+ * is the provider refusing *this* request — a malformed body, an unknown model, a content policy —
+ * and it gets `PROVIDER_REQUEST_INVALID` so a second member is not asked to answer a prompt the first
+ * one judged unacceptable. The two 4xx kinds are indistinguishable at the status level (ruling 6b):
+ * OpenAI-compatible servers answer both with 400 and a prose detail, so they are one code by design
+ * rather than by omission.
+ *
+ * Timeout has no code here (ruling 6a): there is no chat request timer, and adding one would cut long
+ * generations. It is a parked gap, not a mapping this function is missing.
  */
 export function mapHttpError(status: number, detail: string): ConveyorError {
   const trimmed = detail.trim().slice(0, 400)
@@ -540,8 +551,9 @@ export function mapHttpError(status: number, detail: string): ConveyorError {
   if (status >= 500) {
     return new ConveyorError('PROVIDER_ERROR', `The provider had a server error (${status}).${suffix}`)
   }
-  // Everything else — a bad model id, a malformed body — is the provider refusing the request.
-  return new ConveyorError('PROVIDER_ERROR', `The provider refused the request (${status}).${suffix}`)
+  // Everything else — a bad model id, a malformed body, a content refusal — is the provider refusing
+  // the request itself, which is a fact about this prompt rather than about who was asked.
+  return new ConveyorError('PROVIDER_REQUEST_INVALID', `The provider refused the request (${status}).${suffix}`)
 }
 
 /** A `fetch`-shaped function, so the stream can be driven from a test without a network. */

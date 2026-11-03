@@ -573,4 +573,54 @@ describe('the turn-end notice', () => {
       view.unmount()
     }
   })
+
+  it('draws the serving member and the count moved on from when a combo failed over', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'turn_end_notice',
+      cause: 'model_stop',
+      resumable: false,
+      combo: {
+        id: 'fast',
+        name: 'Fast answers',
+        requests: [{ providerId: 'backup', modelId: 'backup-model' }],
+        attempts: [{ kind: 'skipped', providerId: 'head', modelId: 'head-model', reason: 'no-key' }],
+      },
+    })
+    stub.emit(channel, { type: 'end' })
+
+    // One quiet line: who served it, and how many were passed over. The skipped member's own reason is
+    // not repeated here — the answer arrived, and the card is reporting the failover, not the refusal.
+    expect(
+      await screen.findByText('Combo Fast answers: backup · backup-model answered after 1 member were passed over')
+    ).toBeTruthy()
+  })
+
+  it('names the combo and lists every member with its coded reason when no member could answer', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'turn_end_notice',
+      cause: 'combo_failed',
+      resumable: true,
+      combo: {
+        id: 'fast',
+        name: 'Fast answers',
+        requests: [],
+        attempts: [
+          { kind: 'failed', providerId: 'head', modelId: 'head-model', code: 'RATE_LIMITED' },
+          { kind: 'skipped', providerId: 'backup', modelId: 'backup-model', reason: 'no-key' },
+        ],
+      },
+    })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText('Ended: no member of this combo could answer')).toBeTruthy()
+    expect(await screen.findByText('Combo Fast answers — every member was skipped or failed')).toBeTruthy()
+    expect(await screen.findByText('head · head-model: RATE_LIMITED')).toBeTruthy()
+    expect(await screen.findByText('backup · backup-model: no API key saved')).toBeTruthy()
+  })
 })

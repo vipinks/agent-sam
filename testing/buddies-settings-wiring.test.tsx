@@ -268,6 +268,7 @@ describe('the Buddies section', () => {
         .map((tab) => tab.textContent)
     ).toEqual([
       'Providers',
+      'Combos',
       'MCP Servers',
       'Skills',
       'Terminal',

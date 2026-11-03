@@ -125,6 +125,7 @@ function sectionPane(): HTMLElement | null {
  */
 const SECTIONS = [
   'Providers',
+  'Combos',
   'MCP Servers',
   'Skills',
   'Terminal',
@@ -353,6 +354,7 @@ describe('the settings shell', () => {
     // pane — not in the rail, and never instead of the rail.
     const walk = [
       { label: 'Providers', value: 'providers', slot: 'settings-section-providers', heading: 'Model providers' },
+      { label: 'Combos', value: 'combos', slot: 'settings-section-combos', heading: 'Combos' },
       { label: 'MCP Servers', value: 'mcp-servers', slot: 'settings-section-mcp', heading: 'MCP servers' },
       { label: 'Skills', value: 'skills', slot: 'settings-section-skills', heading: 'Skills' },
       { label: 'Terminal', value: 'terminal', slot: 'settings-section-terminal', heading: 'Terminal' },

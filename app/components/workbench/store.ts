@@ -14,6 +14,7 @@ import type { RightPanelId } from './right-rail'
 import { BRIGHTNESS_DEFAULT, CONTRAST_DEFAULT, clampBrightness, clampContrast } from './theme-engine'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
 import { bootTargetSeed as readBootTargetSeed, setBootTargetSeed } from './boot-target-seed'
+import type { Combo } from '@/conveyor/protocol/combos'
 
 /**
  * The sections of the settings screen, in the order the section row offers them.
@@ -24,7 +25,16 @@ import { bootTargetSeed as readBootTargetSeed, setBootTargetSeed } from './boot-
  * control is found, and the value itself is persisted by the store that owns it rather than by this one.
  */
 export type SettingsSection =
-  'providers' | 'mcp-servers' | 'skills' | 'terminal' | 'context' | 'appearance' | 'buddies' | 'updates' | 'engines'
+  | 'providers'
+  | 'combos'
+  | 'mcp-servers'
+  | 'skills'
+  | 'terminal'
+  | 'context'
+  | 'appearance'
+  | 'buddies'
+  | 'updates'
+  | 'engines'
 
 /**
  * Workbench state. Mostly renderer-local by design — which view is open, which file is shown —
@@ -79,8 +89,34 @@ interface WorkbenchState {
   activeProviderId: string
   /** Model the composer sends to, or null while no model is switched on. */
   activeModel: string | null
+  /**
+   * The combo the composer sends through, or null for a plain pair.
+   *
+   * Window state, not a property of the conversation: a combo is a way of choosing where the next
+   * request goes, exactly like the provider and model beside it. The pair above is still the combo's
+   * head — the two travel together, which is what keeps every existing guard, the session record and
+   * the payload shape holding a real `providerId`/`model` even while a combo is active.
+   */
+  activeComboId: string | null
   /** Switch provider and model together — a provider's default model is not the previous one's. */
   setTarget: (target: { providerId: string; model: string }) => void
+  /**
+   * Switch to a combo: its head pair and its id, written in one step.
+   *
+   * One action rather than `setTarget` plus a second write, because a moment with the pair updated and
+   * the combo not would be a send that named the wrong thing. The combo's head is provided by the
+   * caller from the mirror, so the store never derives it from a list it does not own.
+   */
+  setComboTarget: (target: { comboId: string; providerId: string; model: string }) => void
+  /**
+   * Drop a combo the mirror no longer lists or no longer enables, keeping its pair.
+   *
+   * The same shape as `reconcileTarget` and for the same reason: the choice is persisted, while the
+   * combos it names are read from main a bridge call after the launch. A combo deleted or switched
+   * off since the last send must not stay selected, and the pair it left behind is still a valid
+   * target — so the fallback is the pair rather than an empty target.
+   */
+  reconcileComboTarget: (combos: readonly Combo[]) => void
   /**
    * Re-apply the boot seed once the provider-config mirror answers. The renderer cannot hand the
    * persisted config to module evaluation — the store is built before the bridge resolves — so the
@@ -273,6 +309,29 @@ interface WorkbenchState {
 
 const TARGET_KEY = 'sam-ai-chat-target'
 
+/**
+ * Persist the chat target, tolerating a storage that refuses to write.
+ *
+ * One writer for both kinds of target, because the record is one: `{ providerId, model }` for a plain
+ * pair and `{ comboId, providerId, model }` for a combo — the pair still present and still the combo's
+ * head, so a reader that does not know the combo key reads a perfectly valid target. The combo key is
+ * written only when there is one; absence is "a plain pair", which is what every older record is.
+ */
+function saveTarget(target: { providerId: string; model: string; comboId?: string | null }): void {
+  try {
+    localStorage.setItem(
+      TARGET_KEY,
+      JSON.stringify({
+        ...(target.comboId ? { comboId: target.comboId } : {}),
+        providerId: target.providerId,
+        model: target.model,
+      })
+    )
+  } catch {
+    // A full or blocked localStorage must not break switching models or combos.
+  }
+}
+
 /** The models each provider has switched on, by provider id. */
 export type EnabledModels = Record<string, readonly string[]>
 
@@ -293,6 +352,11 @@ export interface TargetSeed {
 interface ChatTarget {
   activeProviderId: string
   activeModel: string | null
+}
+
+/** What a launch starts on: the pair, and the combo that currently owns it when one does. */
+interface InitialTarget extends ChatTarget {
+  activeComboId: string | null
 }
 
 /**
@@ -335,26 +399,35 @@ export function deriveTarget(
  * the pair against the models actually switched on, which is a rule a module-evaluation read cannot
  * apply by itself.
  */
-function initialTarget(seed: TargetSeed): ChatTarget {
+function initialTarget(seed: TargetSeed): InitialTarget {
   try {
     const saved = localStorage.getItem(TARGET_KEY)
     if (saved) {
-      const parsed = JSON.parse(saved) as { providerId?: unknown; model?: unknown }
+      const parsed = JSON.parse(saved) as { providerId?: unknown; model?: unknown; comboId?: unknown }
       if (typeof parsed.providerId === 'string' && typeof parsed.model === 'string') {
+        // The combo is read on the same terms as the pair: a stored id is the choice, and whether it
+        // still exists is `reconcileComboTarget`'s question — a module-evaluation read cannot ask the
+        // mirror anything, so it must not throw a valid choice away.
+        const comboId = typeof parsed.comboId === 'string' && parsed.comboId !== '' ? parsed.comboId : null
         const stored = { activeProviderId: parsed.providerId, activeModel: parsed.model }
-        if (seed.enabledModels === undefined) return stored
+        if (seed.enabledModels === undefined) return { ...stored, activeComboId: comboId }
         const enabled = seed.enabledModels[stored.activeProviderId]
         // The same "not known" reading `reconcileTarget` uses: an absent or empty record is not a
         // statement that the remembered model was switched off.
-        if (stored.activeModel !== null && (enabled === undefined || enabled.length === 0)) return stored
-        return deriveTarget(stored, seed.enabledModels, seed.providerOrder)
+        if (stored.activeModel !== null && (enabled === undefined || enabled.length === 0)) {
+          return { ...stored, activeComboId: comboId }
+        }
+        return { ...deriveTarget(stored, seed.enabledModels, seed.providerOrder), activeComboId: comboId }
       }
     }
   } catch {
     // Unreadable preference — fall through to the derivation rather than failing to start.
   }
   const empty = { activeProviderId: '', activeModel: null }
-  return seed.enabledModels === undefined ? empty : deriveTarget(empty, seed.enabledModels, seed.providerOrder)
+  return {
+    ...(seed.enabledModels === undefined ? empty : deriveTarget(empty, seed.enabledModels, seed.providerOrder)),
+    activeComboId: null,
+  }
 }
 
 import { bootTargetSeed } from './boot-target-seed'
@@ -586,13 +659,23 @@ const workbenchState =
     setSelectedFile: (selectedFile) => set({ selectedFile }),
     ...initialTarget(seed),
     setTarget: ({ providerId, model }) => {
-      try {
-        localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId, model }))
-      } catch {
-        // A full or blocked localStorage must not break switching models.
-      }
-      set({ activeProviderId: providerId, activeModel: model })
+      saveTarget({ providerId, model })
+      // A plain pick clears the combo in the same write: the pair and the combo are one choice, and a
+      // moment with the pair switched and the combo still set would send through the combo's members.
+      set({ activeProviderId: providerId, activeModel: model, activeComboId: null })
     },
+    setComboTarget: ({ comboId, providerId, model }) => {
+      saveTarget({ comboId, providerId, model })
+      set({ activeProviderId: providerId, activeModel: model, activeComboId: comboId })
+    },
+    reconcileComboTarget: (combos) =>
+      set((state) => {
+        if (state.activeComboId === null) return {}
+        const combo = combos.find((entry) => entry.id === state.activeComboId)
+        // The pair stays exactly as it is — it was the combo's head and is still a valid target — so
+        // the fallback is a send that goes where the head goes rather than one that names nothing.
+        return combo && combo.enabled ? {} : { activeComboId: null }
+      }),
     seedTarget: () => set(initialTarget(bootTargetSeed())),
     reconcileTarget: (enabledModels, providerOrder) => {
       // This is the first moment the persisted provider-config snapshot reaches the renderer. Keep

@@ -7,6 +7,7 @@ import {
   Folder,
   ImagePlus,
   Lock,
+  Layers,
   Paperclip,
   Plus,
   SendHorizontal,
@@ -30,6 +31,7 @@ import {
   AGENT_SAM_BUDDY_NAME,
 } from '@/conveyor/protocol/buddies'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
+import { combosStore } from '@/conveyor/stores/combos'
 import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { appearancePreferencesStore } from '@/conveyor/stores/appearance-preferences'
@@ -225,6 +227,10 @@ function streamErrorMessage(error: unknown, providerName: string): string {
         return `Could not reach ${providerName}. Check your connection.`
       case 'PROVIDER_ERROR':
         return `${providerName} refused the request.`
+      // A 4xx that is not a rate limit: the provider judged this prompt rather than failing at it.
+      // Malformed and content-policy refusals are one code because the status cannot tell them apart.
+      case 'PROVIDER_REQUEST_INVALID':
+        return `${providerName} rejected the request. Try a different model or a shorter prompt.`
       case 'NO_WORKSPACE':
         return 'Open a folder first — the agent works inside your workspace.'
       // A skill the turn was told to use and could not: named, because the user turned it on and the
@@ -445,6 +451,11 @@ export function ChatPanel() {
   // the send guard below refuses, rather than sending a model nobody enabled.
   const activeModel = useWorkbenchStore((s) => s.activeModel) ?? ''
   const setTarget = useWorkbenchStore((s) => s.setTarget)
+  // The combo the picker is on, if any, and the two actions that change it. The pair above is still
+  // the combo's head: `activeComboId` only says which list the next request walks.
+  const activeComboId = useWorkbenchStore((s) => s.activeComboId)
+  const setComboTarget = useWorkbenchStore((s) => s.setComboTarget)
+  const reconcileComboTarget = useWorkbenchStore((s) => s.reconcileComboTarget)
   // The model each engine runs under, as the header's own control holds it. Read here as well as there because a
   // send has to carry it, and read as the whole map rather than one engine's value because the conversation a
   // send belongs to is read from a ref at send time rather than from this render.
@@ -852,11 +863,42 @@ export function ChatPanel() {
   // writes, so the picker and the screen that fills it can never disagree about what exists.
   const customProviders = useConveyorStore(providerConfigStore, (s) => s.customProviders)
 
+  /**
+   * The combos the user built, from the store main mirrors.
+   *
+   * The same list Settings writes, so the picker cannot offer a combo the screen does not know about —
+   * and one the user can resolve from here rather than have main tell it which member is its head.
+   */
+  const combos = useConveyorStore(combosStore, (s) => s.combos)
+
+  /**
+   * The combos as main reads them, once, for the reconcile below.
+   *
+   * The store's first render is its initial state — an empty list — which is indistinguishable from
+   * "the user has no combos". Reading the query gives the one signal that matters: `undefined` while
+   * the mirror is still answering, an array once it has. Reconciling on the initial empty list would
+   * throw away a persisted combo on every launch, which is the failure `reconcileTarget` avoids for
+   * the pair by treating an empty enabled list as "not known yet".
+   */
+  const combosQuery = conveyor.combos.list.useQuery()
+  useEffect(() => {
+    if (combosQuery.data === undefined) return
+    reconcileComboTarget(combosQuery.data)
+  }, [combosQuery.data, reconcileComboTarget])
+
   // Whether the selected provider has a key. Undefined while the query is in flight, which must
   // not read as "missing" — a warning that flashes on load is worse than none.
   const configured = conveyor.settings.listConfigured.useQuery()
 
   const providerName = providers.data?.find((p) => p.id === activeProviderId)?.name ?? activeProviderId
+
+  /** The combo the header is on, resolved from the mirror; null for a plain pair. */
+  const activeCombo = activeComboId === null ? null : (combos.find((combo) => combo.id === activeComboId) ?? null)
+  // Disabled combos are omitted from the picker. A combo with no currently eligible member is still
+  // offered: eligibility is a fact about the next request's estimate and images, which the composer
+  // does not know yet, and the refusal belongs at send time rather than in a menu that would hide a
+  // choice the user just made in Settings.
+  const enabledCombos = combos.filter((combo) => combo.enabled)
   const modelsFor = (providerId: string): string[] => {
     const enabled = configs[providerId]?.enabledModels
     if (enabled && enabled.length > 0) return enabled
@@ -932,8 +974,35 @@ export function ChatPanel() {
     return enabled.includes(activeModel)
   }, [activeModel, activeProviderId, configs, customProviders, providers.data])
 
-  /** Stop a send whose saved model no longer exists, and say how to recover. */
+  /** Stop a send whose saved model or combo no longer exists, and say how to recover. */
   const stopForStaleModel = useCallback((): boolean => {
+    // A combo is checked before the pair: its head pair may still be valid while the combo itself was
+    // deleted or switched off, and sending the head as if the user had chosen it would be a different
+    // request from the one the header is showing. Refused here rather than after a round-trip, which
+    // is the same rule the stale model follows.
+    if (activeComboId !== null) {
+      // An empty list is "the mirror has not answered yet", not "the combo is gone": the same reading
+      // the pair's guard uses for an empty enabled list. Main still refuses an id it does not have, and
+      // a refusal at launch would be a send stopped for a fact this window had not been told yet.
+      if (combos.length === 0) return false
+      const combo = combos.find((entry) => entry.id === activeComboId)
+      if (!combo) {
+        toast.error('That combo is no longer available', {
+          description: 'Choose another target in the header, then send again.',
+        })
+        return true
+      }
+      if (!combo.enabled) {
+        toast.error('That combo is switched off', {
+          description: 'Switch it on in Settings, or choose another target in the header.',
+        })
+        return true
+      }
+      // A valid combo needs no model check here: its members are resolved and filtered in main, and a
+      // member that cannot answer is the walk's business rather than the composer's.
+      return false
+    }
+
     if (activeModel === '') {
       toast.error('Choose a model to send', {
         description: 'Switch a model on in Settings, then send again.',
@@ -945,7 +1014,7 @@ export function ChatPanel() {
       description: `Choose another model in the header, then send again. (${activeModel})`,
     })
     return true
-  }, [activeModel, selectedModelOffered])
+  }, [activeComboId, activeModel, combos, selectedModelOffered])
 
   //
   // Mentions: the `@` picker's source, and the chip row it fills.
@@ -1666,10 +1735,34 @@ export function ChatPanel() {
             // checklist still on screen and no card under it. `undefined` rather than an empty list,
             // because a conversation that never planned anything sends the request it always sent.
             plan: currentPlan(turns) ?? undefined,
+            // The combo the user chose, when one is active. The pair above is still its head, so a
+            // reader that does not know combos sees a perfectly ordinary request; main is the side
+            // that owns the member list and walks it.
+            comboId: activeComboId ?? undefined,
           }),
         turnId,
         sessionId
       )
+
+      // The pair this turn actually ran under, stamped onto the conversation.
+      //
+      // A combo may have served a member other than its head, and a plain mid-conversation switch may
+      // have moved the pair at all; either way the row should name the model that wrote the answer,
+      // because the Overview prices at the row's pair and the compaction window resolves from it. The
+      // served member is read from the ending notice the loop just wrote; with no report (a head that
+      // answered, or a plain send) the head, then the window's pair, is the honest fallback.
+      if (engineId === null) {
+        const served = currentEndNotice(messagesRef.current)?.combo?.requests.at(-1)
+        const head = activeCombo?.members[0]
+        const pair = served
+          ? { providerId: served.providerId, model: served.modelId }
+          : head
+            ? { providerId: head.providerId, model: head.modelId }
+            : activeModel !== ''
+              ? { providerId: activeProviderId, model: activeModel }
+              : null
+        if (pair) sessionsRef.current.stampTarget(sessionId, pair)
+      }
 
       // A turn boundary: what was sent and the reply to it are now a complete unit, so this is when the
       // transcript is worth writing. Never per token — the run above may have produced hundreds of
@@ -1683,6 +1776,8 @@ export function ChatPanel() {
       if (rewrittenTurnId === undefined) sessionsRef.current.compactAutomatically()
     },
     [
+      activeCombo,
+      activeComboId,
       activeModel,
       activeProviderId,
       autoApprove,
@@ -2060,6 +2155,9 @@ export function ChatPanel() {
           // And the auto-continuations it had already spent, for the same reason: the budget is the
           // turn's, so a permission granted midway through it must not hand the loop a fresh one.
           continuations: current.continuations,
+          // The combo this turn started through. A resumed turn is the same turn, so its requests
+          // still walk the same priority list even though the head pair is what the payload names.
+          comboId: activeComboId ?? undefined,
           decision: 'approved',
         }),
         current.turnId,
@@ -2070,6 +2168,7 @@ export function ChatPanel() {
       sessionsRef.current.scheduleSave()
     },
     [
+      activeComboId,
       activeModel,
       activeProviderId,
       autoApprove,
@@ -2309,16 +2408,29 @@ export function ChatPanel() {
           Settings — a provider with none gets a disabled hint instead of a dead end.
         */}
         <Select
-          value={`${activeProviderId}::${activeModel}`}
+          value={activeCombo ? `combo::${activeCombo.id}` : `${activeProviderId}::${activeModel}`}
           // Refused while an engine owns this conversation, for the reason the caption below states: the engine
           // runs its own model and provider, so a choice here would be one nothing honours.
           disabled={engineId !== null}
           onValueChange={(picked) => {
+            // A combo is a target of its own, and it carries its head pair: the two are written in one
+            // step so the payload never names a pair from one choice and a combo from another.
+            if (picked.startsWith('combo::')) {
+              const comboId = picked.slice('combo::'.length)
+              const combo = combos.find((entry) => entry.id === comboId)
+              const head = combo?.members[0]
+              if (combo && head) {
+                setComboTarget({ comboId, providerId: head.providerId, model: head.modelId })
+              }
+              return
+            }
+
             const [providerId, ...rest] = picked.split('::')
             const model = rest.join('::')
 
             // An explicit model wins — including one belonging to a different provider, which is
             // how a user compares two providers' models without a detour through the first entry.
+            // `setTarget` clears any combo in the same write, so a plain pick is a plain request.
             if (model) {
               setTarget({ providerId, model })
               return
@@ -2334,9 +2446,17 @@ export function ChatPanel() {
             aria-label="Provider and model"
             // The engine's name in place of the pair while an engine owns the conversation: a disabled control
             // is not a pointer target, so the reason travels in the native title rather than in a tooltip.
-            title={engineId === null ? `${providerName} · ${activeModel}` : ENGINE_MODEL_LOCK_CAPTION(engineName)}
+            title={
+              engineId === null
+                ? activeCombo
+                  ? `${activeCombo.name} · ${activeCombo.members.length} model${activeCombo.members.length === 1 ? '' : 's'}`
+                  : `${providerName} · ${activeModel}`
+                : ENGINE_MODEL_LOCK_CAPTION(engineName)
+            }
           >
-            <SelectValue placeholder="Choose a model" />
+            {/* The trigger names the combo rather than its head: the list is the choice, and showing
+                one member's id would make two combos with overlapping heads indistinguishable. */}
+            <SelectValue placeholder="Choose a model">{activeCombo ? activeCombo.name : undefined}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {providers.data?.map((provider) => {
@@ -2387,6 +2507,29 @@ export function ChatPanel() {
                 </SelectGroup>
               )
             })}
+
+            {/*
+              The combos, after every plain group and in one group of their own.
+              One group rather than one per combo: a combo is a target, not a provider, and a row
+              carries the count it stands for. Disabled combos are omitted — the picker offers what
+              a send could run — while a combo with no currently eligible member stays: eligibility
+              is a fact about the next request's estimate and images, and the refusal belongs at send
+              time rather than in a menu that hides the user's own choice.
+            */}
+            {enabledCombos.length > 0 && (
+              <SelectGroup>
+                <SelectLabel>Combos</SelectLabel>
+                {enabledCombos.map((combo) => (
+                  <SelectItem key={combo.id} value={`combo::${combo.id}`}>
+                    <Layers aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span>{combo.name}</span>
+                    <span className="text-muted-foreground">
+                      · {combo.members.length} model{combo.members.length === 1 ? '' : 's'}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
           </SelectContent>
         </Select>
 

@@ -360,6 +360,22 @@ export interface ChatSessions {
    */
   stampEngineModel: (id: string, model: string) => void
   /**
+   * Record the provider/model pair a turn of this conversation actually ran under.
+   *
+   * The Overview prices a conversation at the model its row names, and a combo turn's row would
+   * otherwise keep the *creation* pair after the walk served a different member — the reply would be
+   * billed at a model that did not write it, and the compaction window would follow the wrong model.
+   * Stamped at the turn boundary with the member that resolved, so the row follows the conversation's
+   * last real request. This also changes a plain mid-conversation model switch, deliberately: the row
+   * then states the model the conversation is running rather than the one it was created with.
+   *
+   * Two named limitations. The session keeps one summed token total, so a conversation that ran two
+   * models prices *all* of its tokens at the last one — per-model bucketing is out of scope this slice.
+   * And the stamp is what makes the row label and the compaction window follow the conversation's real
+   * model now, which is a behaviour change for every plain switch rather than a combo-only fix.
+   */
+  stampTarget: (id: string, target: { providerId: string; model: string }) => void
+  /**
    * Why the last selection did not happen, worded from its code, or null.
    *
    * Kept here rather than in the row that was clicked, and cleared by the next attempt: what a click
@@ -930,6 +946,18 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     [setTranscript, touchSession]
   )
 
+  const stampTarget = useCallback(
+    (id: string, target: { providerId: string; model: string }) => {
+      if (target.providerId === '' || target.model.trim() === '') return
+      const session = sessionsRef.current.find((s) => s.id === id)
+      // A stamp that would say what the row already says writes nothing — the habit `stampRoot` and
+      // `stampEngineModel` follow, and what keeps a turn boundary from being a save boundary.
+      if (session?.providerId === target.providerId && session.model === target.model) return
+      touchSession({ id, providerId: target.providerId, model: target.model })
+    },
+    [touchSession]
+  )
+
   const createSession = useCallback(
     (buddyId: string | null = null) => {
       // `crypto.randomUUID` in the renderer is fine for an id: it only has to be unique and safe as a
@@ -1433,6 +1461,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     setStreaming,
     stampRoot,
     stampEngineModel,
+    stampTarget,
     notice,
     error,
     openId,

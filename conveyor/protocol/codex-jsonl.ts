@@ -76,7 +76,14 @@ const TOOL_ITEM_TYPES: readonly string[] = [
  * what this side saw was a turn that stopped arriving. Both are here because a cause this set is missing
  * would be a cause a stored codex transcript could not read back, and the set's job is to be the app's.
  */
-export const CODEX_TURN_END_CAUSES = ['model_stop', 'empty_stop', 'truncated', 'stream_error', 'interrupted'] as const
+export const CODEX_TURN_END_CAUSES = [
+  'model_stop',
+  'empty_stop',
+  'truncated',
+  'stream_error',
+  'interrupted',
+  'combo_failed',
+] as const
 export type CodexTurnEndCause = (typeof CODEX_TURN_END_CAUSES)[number]
 
 /**
