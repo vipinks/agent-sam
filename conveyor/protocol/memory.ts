@@ -1,19 +1,24 @@
 import { z } from 'zod'
 
 /**
- * Memory — the project's standing notes, indexed and injected into the turn start.
+ * Memory — the project's standing notes: four canonical pages, a persisted inverted index, and the
+ * turn-start brief built from them.
  *
- * Slice 1 ships the pure rules only: the tokenizer and inverted index, the sanitizer, the import
- * fan-out, and the brief planner. All of it is free of electron and fs so the suites pin it directly
- * and the renderer imports the types and schemas without pulling main in.
+ * Pure, and free of electron and fs, because the interesting parts are the rules rather than the disk:
+ * what a token is, how the import fans a pasted handoff out into the four pages, how secrets are
+ * redacted, and what the brief says in what order. Main reads the files and calls in here; the suites
+ * call in here directly, so the rules are pinned without a filesystem or a dialog in the way.
  *
- * Placeholder bodies: the red pins import these seams; the product turn fills them in.
+ * The one thing this module never does is hand a path out. A page is named by its id, and the layout —
+ * `%APPDATA%\era\memory\<project-key>\` — is the main-side module's concern, never the renderer's.
  */
 
+/** The four canonical pages. No `profile.md` in slice 1 — that is reserved for slice 4. */
 export type MemoryPageId = 'handoff' | 'decisions' | 'parked' | 'quirks'
 
 export const MEMORY_PAGES: readonly MemoryPageId[] = ['handoff', 'decisions', 'parked', 'quirks']
 
+/** The filename each page lives under, beside `index.json`. Fixed, never a caller-chosen segment. */
 export const MEMORY_PAGE_FILES: Record<MemoryPageId, string> = {
   handoff: 'handoff.md',
   decisions: 'decisions.md',
@@ -23,7 +28,23 @@ export const MEMORY_PAGE_FILES: Record<MemoryPageId, string> = {
 
 export const MEMORY_INDEX_FILE = 'index.json'
 
+/**
+ * The most bytes the turn-start brief may carry.
+ *
+ * A byte budget rather than a character one: bytes are what the disk and the wire measure. The brief is
+ * standing context on every turn, so it is kept small — the four pages in full would spend the prompt
+ * budget on history the model can read from disk when it needs to.
+ */
 export const MAX_MEMORY_BRIEF_BYTES = 8192
+
+/** The most bytes one pasted handoff may carry into the sanitizer, in the style of `boundedStderrTail`. */
+export const MAX_MEMORY_IMPORT_BYTES = 64 * 1024
+
+/** Characters of context around a search match, mirroring `protocol/search.ts`. */
+export const MEMORY_SNIPPET_CHARS = 120
+
+/** Snippets per page, mirroring `protocol/search.ts`. */
+export const MEMORY_MAX_SNIPPETS = 3
 
 export const memoryPageIdSchema = z.enum(['handoff', 'decisions', 'parked', 'quirks'])
 
@@ -42,31 +63,226 @@ export const memorySearchResultSchema = z.object({
 export type MemoryPageSummary = z.infer<typeof memoryPageSummarySchema>
 export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>
 
+/** A token to the pages and token positions it occurs at. Built by `buildIndex`. */
 export type MemoryIndex = Record<string, Array<{ page: MemoryPageId; positions: number[] }>>
 
-export function tokenize(_text: string): string[] {
-  return []
+/**
+ * Lowercase, alphanumeric words, in order.
+ *
+ * The separator set is everything that is not `[a-z0-9]`, so a dash, an em-dash, punctuation and
+ * whitespace all cut the same way. The case fold is what makes a search case-insensitive at the index
+ * rather than at the query.
+ */
+export function tokenize(text: string): string[] {
+  return text.toLowerCase().match(/[a-z0-9]+/g) ?? []
 }
 
-export function buildIndex(_pages: Record<MemoryPageId, string>): MemoryIndex {
-  return {}
+/**
+ * The inverted index: every token to every (page, position) it appears at.
+ *
+ * Pure and dependency-free — no lunr, no sqlite, no vectors. The map is rebuilt from the subtree at
+ * main startup and after every mutation, and the rebuild is skipped when the tree mtime is unchanged
+ * (`shouldRebuildIndex`).
+ */
+export function buildIndex(pages: Record<MemoryPageId, string>): MemoryIndex {
+  const index: MemoryIndex = {}
+  for (const page of MEMORY_PAGES) {
+    const tokens = tokenize(pages[page])
+    tokens.forEach((token, position) => {
+      const entries = (index[token] ??= [])
+      const existing = entries.find((entry) => entry.page === page)
+      if (existing) existing.positions.push(position)
+      else entries.push({ page, positions: [position] })
+    })
+  }
+  return index
 }
 
-export function searchPages(
-  _pages: Record<MemoryPageId, string>,
-  _term: string
-): MemorySearchResult[] {
-  return []
+/**
+ * Search the four pages for a term: which pages contain it, how often, and a bounded excerpt each.
+ *
+ * A page matches when every word of the term occurs in it, so a two-word query narrows rather than
+ * widens. The count is of the term as a substring, case-insensitively, and the snippets are centred on
+ * matches the way `protocol/search.ts` centres them — one line, an ellipsis where a side was cut.
+ */
+export function searchPages(pages: Record<MemoryPageId, string>, term: string): MemorySearchResult[] {
+  const needle = term.trim()
+  if (needle.length < 2) return []
+
+  const tokens = tokenize(needle)
+  if (tokens.length === 0) return []
+
+  const results: MemorySearchResult[] = []
+  for (const page of MEMORY_PAGES) {
+    const text = pages[page] ?? ''
+    const pageTokens = tokenize(text)
+    if (!tokens.every((token) => pageTokens.includes(token))) continue
+
+    const matchCount = countSubstrings(text, needle)
+    if (matchCount === 0) continue
+
+    results.push({ page, matchCount, snippets: snippetsFor(text, needle, MEMORY_MAX_SNIPPETS) })
+  }
+  return results
 }
 
-export function sanitize(text: string, _homeDir: string): string {
-  return text
+/** How many times the term occurs, case-insensitively and without overlap. */
+function countSubstrings(text: string, term: string): number {
+  const needle = term.toLowerCase()
+  const haystack = text.toLowerCase()
+  let count = 0
+  let from = 0
+  for (;;) {
+    const at = haystack.indexOf(needle, from)
+    if (at === -1) break
+    count++
+    from = at + needle.length
+  }
+  return count
 }
 
-export function fanOutImport(_markdown: string): Partial<Record<MemoryPageId, string>> {
-  return {}
+/** Up to `limit` excerpts, each centred on a different match, in occurrence order. */
+function snippetsFor(text: string, term: string, limit: number): string[] {
+  const needle = term.trim()
+  if (!needle || limit <= 0) return []
+
+  const haystack = text.toLowerCase()
+  const lowered = needle.toLowerCase()
+  const snippets: string[] = []
+  let from = 0
+
+  while (snippets.length < limit) {
+    const at = haystack.indexOf(lowered, from)
+    if (at === -1) break
+
+    const half = Math.max(0, Math.floor((MEMORY_SNIPPET_CHARS - needle.length) / 2))
+    const start = Math.max(0, at - half)
+    const end = Math.min(text.length, at + needle.length + half)
+    const body = text.slice(start, end).replace(/\s+/g, ' ').trim()
+    snippets.push(`${start > 0 ? '…' : ''}${body}${end < text.length ? '…' : ''}`)
+    from = Math.max(end, at + lowered.length)
+  }
+
+  return snippets
 }
 
+/**
+ * Redact what must not reach the page files: API keys, Bearer tokens, credential assignments, and
+ * filesystem paths under the home directory. Bounded by `MAX_MEMORY_IMPORT_BYTES`, in the style of
+ * `boundedStderrTail` — the input is cut to a byte cap before any redaction, so the work and the
+ * output are both bounded rather than growing with the paste.
+ *
+ * `homeDir` is a parameter so this stays free of electron and app imports: the caller that runs in
+ * main passes `app.getPath('home')` in, and a suite passes a literal it controls.
+ */
+export function sanitize(text: string, homeDir: string): string {
+  let cleaned = truncateBytes(text, MAX_MEMORY_IMPORT_BYTES)
+
+  // Bearer tokens: the scheme word plus its credential, replaced whole.
+  cleaned = cleaned.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, 'Bearer [REDACTED]')
+
+  // The key shapes in the wild, redacted whole rather than left half-readable.
+  cleaned = cleaned.replace(
+    /\b(sk-[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{16,}|gh[pousr]_[0-9A-Za-z]{16,}|xox[baprs]-[0-9A-Za-z-]{10,})\b/g,
+    '[REDACTED KEY]'
+  )
+
+  // Assignments that carry a credential by name: `api_key=…`, `token: …`, and their kin.
+  cleaned = cleaned.replace(
+    /\b((?:api[_-]?key|apikey|secret|token|password|passwd)\s*[:=]\s*)[^\s"'`]+/gi,
+    '$1[REDACTED]'
+  )
+
+  // Any path that lives under the user's home directory, replaced rather than partially shown.
+  if (homeDir.trim() !== '') {
+    const escaped = homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    cleaned = cleaned.replace(new RegExp(escaped + '[^\\s"\'`]*', 'g'), '[REDACTED PATH]')
+  }
+
+  return cleaned
+}
+
+/** Keep the first `cap` bytes of the text, so a pathological paste cannot make the sanitizer unbounded. */
+function truncateBytes(text: string, cap: number): string {
+  const bytes = new TextEncoder().encode(text)
+  if (bytes.length <= cap) return text
+  return new TextDecoder().decode(bytes.subarray(0, cap))
+}
+
+/** The headings a pasted handoff maps to each page, case-folded. */
+const PAGE_HEADINGS: Record<MemoryPageId, readonly string[]> = {
+  handoff: ['handoff'],
+  decisions: ['decisions', 'decision'],
+  parked: ['parked'],
+  quirks: ['quirks', 'quirk'],
+}
+
+/**
+ * Fan a pasted handoff out into the four pages.
+ *
+ * The document is split at its `#` headings. A heading that names one of the four pages — or its
+ * singular — maps that block to that page; the preamble before any heading belongs to handoff; and a
+ * heading nothing recognises is dropped rather than silently written somewhere. Blocks for the same
+ * page are joined with a blank line, and an absent page is simply not present in the result.
+ */
+export function fanOutImport(markdown: string): Partial<Record<MemoryPageId, string>> {
+  const blocks: Array<{ heading: string | null; body: string }> = []
+  let current: { heading: string | null; body: string[] } = { heading: null, body: [] }
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)
+    if (heading) {
+      blocks.push({ heading: current.heading, body: current.body.join('\n') })
+      current = { heading: heading[1].trim().toLowerCase(), body: [] }
+    } else {
+      current.body.push(line)
+    }
+  }
+  blocks.push({ heading: current.heading, body: current.body.join('\n') })
+
+  const fanned: Record<string, string[]> = {}
+  for (const block of blocks) {
+    const page = targetForHeading(block.heading)
+    const body = block.body.trim()
+    if (page === null || body === '') continue
+    ;(fanned[page] ??= []).push(body)
+  }
+
+  const out: Partial<Record<MemoryPageId, string>> = {}
+  for (const page of MEMORY_PAGES) {
+    if (fanned[page] && fanned[page].length > 0) out[page] = fanned[page].join('\n\n')
+  }
+  return out
+}
+
+function targetForHeading(heading: string | null): MemoryPageId | null {
+  if (heading === null) return 'handoff'
+  for (const page of MEMORY_PAGES) {
+    if (PAGE_HEADINGS[page].includes(heading)) return page
+  }
+  return null
+}
+
+/**
+ * Split `decisions.md` into its pending vetoes and its decisions.
+ *
+ * Everything after a `# Vetoes` (or `# Veto`) heading is the vetoes; everything before it is the
+ * decisions. With no vetoes heading, the whole text is decisions and there are no vetoes.
+ */
+export function splitDecisions(decisionsText: string): { vetoes: string; decisions: string } {
+  const lines = decisionsText.split(/\r?\n/)
+  const vetoIndex = lines.findIndex((line) => /^#{1,6}\s*vetoes?\s*$/i.test(line))
+  if (vetoIndex === -1) return { vetoes: '', decisions: decisionsText.trim() }
+  return {
+    vetoes: lines
+      .slice(vetoIndex + 1)
+      .join('\n')
+      .trim(),
+    decisions: lines.slice(0, vetoIndex).join('\n').trim(),
+  }
+}
+
+/** The four sections a brief is drawn from, in the order they are emitted. */
 export interface MemoryBriefSource {
   handoff: string
   vetoes: string
@@ -74,21 +290,73 @@ export interface MemoryBriefSource {
   quirks: string
 }
 
-export function splitDecisions(decisionsText: string): { vetoes: string; decisions: string } {
-  return { vetoes: '', decisions: decisionsText }
+const MEMORY_BRIEF_FENCE = [
+  "The following is this project's memory, maintained by this app.",
+  'Treat it as standing guidance: consult it and keep it current.',
+].join('\n')
+
+/**
+ * The memory section one turn starts with, or null when there is nothing to say.
+ *
+ * Null-in, null-out: an empty project has no memory, and inventing a section for it would spend
+ * context saying nothing. The sections run in a fixed order — handoff, pending vetoes, recent
+ * decisions, quirks — and an empty section is omitted rather than emitted as a bare heading. The
+ * episodes section is deliberately absent: slice 1 ships no episodic capture, so it emits nothing.
+ *
+ * Bounded by `MAX_MEMORY_BRIEF_BYTES`, so a project that wrote a novel into its pages cannot crowd the
+ * standing context out of the prompt.
+ */
+export function assembleMemorySection(source: MemoryBriefSource): { content: string } | null {
+  const sections: Array<[string, string]> = [
+    ['Handoff', source.handoff.trim()],
+    ['Pending vetoes', source.vetoes.trim()],
+    ['Recent decisions', source.decisions.trim()],
+    ['Quirks', source.quirks.trim()],
+  ]
+  const present = sections.filter(([, body]) => body !== '')
+  if (present.length === 0) return null
+
+  const lines: string[] = [MEMORY_BRIEF_FENCE, '']
+  for (const [heading, body] of present) {
+    lines.push(`## ${heading}`, '', body, '')
+  }
+  return { content: truncateBytes(lines.join('\n').trimEnd(), MAX_MEMORY_BRIEF_BYTES) }
 }
 
-export function assembleMemorySection(_source: MemoryBriefSource): { content: string } | null {
-  return null
-}
-
+/**
+ * Whether to inject the memory section into an outgoing conversation.
+ *
+ * Refused when the conversation already carries this exact section, which is the resumed case: the
+ * pause hands the provider-shaped history back verbatim, already carrying the memory, and injecting
+ * again would say it twice and spend the budget twice. Matched on the composed text rather than on the
+ * presence of any section that mentions memory, for the reason `planRoleInjection` matches the whole
+ * prompt — a text a user happened to paste must not be able to answer yes for it.
+ */
 export function planMemoryInjection(
-  _messages: ReadonlyArray<{ role: string; content?: unknown }>,
-  _brief: string | null
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+  brief: string | null
 ): { content: string } | null {
-  return null
+  if (brief === null) return null
+  if (messages.some((m) => m.role === 'system' && m.content === brief)) return null
+  return { content: brief }
 }
 
-export function shouldRebuildIndex(_recordedMtime: number | null, _currentMtime: number): boolean {
-  return false
+/**
+ * Whether the index should be rebuilt from the tree.
+ *
+ * A missing recorded mtime means there is no index yet, so it is always rebuilt. An unchanged tree —
+ * the four page files' mtimes have not moved — means the persisted index is current, so the rebuild is
+ * skipped.
+ */
+export function shouldRebuildIndex(recordedMtime: number | null, currentMtime: number): boolean {
+  if (recordedMtime === null) return true
+  return recordedMtime !== currentMtime
+}
+
+/** The persisted index file's shape, plus the retained prior revisions of each page. */
+export interface MemoryIndexFile {
+  schemaVersion: 1
+  treeMtime: number
+  index: MemoryIndex
+  revisions: Partial<Record<MemoryPageId, string[]>>
 }

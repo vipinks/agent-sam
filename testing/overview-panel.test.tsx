@@ -328,7 +328,7 @@ describe('the Overview resident and its tiles', () => {
     // Its place in the registry, read from the rail rather than from the array: the resident sits after
     // the two views of the file and before the tools.
     const labels = [...rightRail().querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    expect(labels).toEqual(['Code', 'Preview', 'Overview', 'Tools'])
+    expect(labels).toEqual(['Code', 'Preview', 'Overview', 'Tools', 'Memory'])
 
     await waitFor(() => expect(tile(container, 'tokens').textContent).toBe('1M'))
     // 47 000 tokens at $1, 893 000 cache hits at $0.50 and 60 000 out at $2, which is the declaration

@@ -419,7 +419,7 @@ describe('the panel’s own place in the layout', () => {
     expect(container.querySelector('[data-group]#workbench-chat > [data-panel]#terminal')).not.toBeNull()
   })
 
-  it('offers the rail its four residents and no Terminal anywhere', async () => {
+  it('offers the rail its five residents and no Terminal anywhere', async () => {
     const stub = stubWorkbench()
     const root = freshRoot()
     stub.on('create', () => ({ rootPath: root, pid: 4242, cwd: root, lines: [] }))
@@ -432,6 +432,7 @@ describe('the panel’s own place in the layout', () => {
       'Preview',
       'Overview',
       'Tools',
+      'Memory',
     ])
     expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull()
 

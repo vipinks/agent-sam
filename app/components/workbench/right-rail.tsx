@@ -1,4 +1,5 @@
 import {
+  Brain,
   ChartColumn,
   Eye,
   FileCode,
@@ -39,7 +40,7 @@ import { useWorkbenchStore } from './store'
  */
 
 /** The ids of the panels the right rail can dock. */
-export type RightPanelId = 'code' | 'preview' | 'overview' | 'tools'
+export type RightPanelId = 'code' | 'preview' | 'overview' | 'tools' | 'memory'
 
 /** One resident of the rail: what it is called, and the glyph it is drawn as. */
 export interface RightResident {
@@ -63,6 +64,7 @@ export const RIGHT_RESIDENTS: RightResident[] = [
   { id: 'preview', label: 'Preview', icon: Eye },
   { id: 'overview', label: 'Overview', icon: ChartColumn },
   { id: 'tools', label: 'Tools', icon: Wrench },
+  { id: 'memory', label: 'Memory', icon: Brain },
 ]
 
 /**

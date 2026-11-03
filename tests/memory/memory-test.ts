@@ -55,9 +55,7 @@ function theIndexMapsTokensToPagesAndPositions() {
   const beta = index['beta']
   assert.ok(beta, 'the shared token is present')
   assert.deepEqual(
-    beta
-      .map((entry) => [entry.page, entry.positions] as const)
-      .sort((a, b) => a[0].localeCompare(b[0])),
+    beta.map((entry) => [entry.page, entry.positions] as const).sort((a, b) => a[0].localeCompare(b[0])),
     [
       ['decisions', [0]],
       ['handoff', [1]],
@@ -82,7 +80,10 @@ function theSearchReturnsPageIdsAndSnippets() {
   )
   const handoff = found.find((r) => r.page === 'handoff')
   assert.equal(handoff?.matchCount, 1, 'the count covers the occurrence in that page')
-  assert.ok(handoff?.snippets.every((s) => s.toLowerCase().includes('parser')), 'every snippet contains the term')
+  assert.ok(
+    handoff?.snippets.every((s) => s.toLowerCase().includes('parser')),
+    'every snippet contains the term'
+  )
   assert.ok((handoff?.snippets.length ?? 0) <= 3, 'snippets are bounded')
   results.push('search returns page ids with bounded snippets containing the term')
 }
@@ -289,10 +290,7 @@ function theMemoryModulesImportNoAgentEngineOrLlm() {
       (m) => m[1]
     )
     for (const spec of specifiers) {
-      assert.ok(
-        !/(agent|engine|llm)/.test(spec),
-        `${name} imports '${spec}', which crosses the zero-LLM boundary`
-      )
+      assert.ok(!/(agent|engine|llm)/.test(spec), `${name} imports '${spec}', which crosses the zero-LLM boundary`)
     }
   }
   results.push('neither memory module imports an agent, engine or llm module')

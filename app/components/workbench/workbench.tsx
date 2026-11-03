@@ -17,6 +17,7 @@ import { PreviewPanel } from './preview-panel'
 import { OverviewPanel } from './overview-panel'
 import { RightRail } from './right-rail'
 import { ToolsPanel } from './tools-panel'
+import { MemoryPanel } from './memory-panel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable'
 import { useWorkspaceChangeInvalidation } from './use-workspace-changes'
 import { ChatSessionsProvider, useChatSessionsContext } from './chat-sessions-context'
@@ -411,6 +412,8 @@ function WorkbenchLayout() {
                         <PreviewPanel />
                       ) : rightPanel === 'overview' ? (
                         <OverviewPanel />
+                      ) : rightPanel === 'memory' ? (
+                        <MemoryPanel />
                       ) : (
                         <ToolsPanel />
                       )}

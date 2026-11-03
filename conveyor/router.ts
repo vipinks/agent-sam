@@ -17,6 +17,7 @@ import {
   setTerminalScrollbackSource,
 } from './modules/terminal-pty'
 import { agentModule, setContextSnapshotSink } from './modules/agent'
+import { memoryModule, setMemoryPagesSink, refreshMemoryPagesForRoot } from './modules/memory'
 import { sessionsModule, setSessionMoveSink, sweepOrphanedTranscripts } from './modules/sessions'
 import { imageAttachmentsModule, sweepAttachmentFolders } from './modules/image-attachments'
 import { mentionsModule } from './modules/mentions'
@@ -46,6 +47,7 @@ import { engineConsentStore } from './stores/engine-consent'
 import { enginePreferencesStore } from './stores/engine-preferences'
 import { engineStatusStore } from './stores/engine-status'
 import { engineModelsStore } from './stores/engine-models'
+import { memoryStore } from './stores/memory'
 import { setWorkspaceChangeSink } from './events'
 
 /**
@@ -77,6 +79,7 @@ export const router = createRouter(
     git: gitModule,
     updates: updatesModule,
     engine: engineModule,
+    memory: memoryModule,
   },
   {
     createContext: () => ({ appStartedAt: APP_STARTED_AT, windows, openWindow: openAppWindow }),
@@ -94,6 +97,7 @@ export const router = createRouter(
       enginePreferencesStore,
       engineStatusStore,
       engineModelsStore,
+      memoryStore,
     ], // main holds the state; every window mirrors it live
     use: [devLogger], // per-call timing in dev, a no-op in packaged builds
   }
@@ -250,6 +254,25 @@ setSessionMoveSink(({ id, destination }) =>
 setContextSnapshotSink(({ sessionId, snapshot }) =>
   router.stores['chat-sessions'].dispatch('recordContextSnapshot', { id: sessionId, snapshot })
 )
+
+/**
+ * Give the memory module the memory store, so a mutation mirrors the four page summaries to every window.
+ *
+ * Installed here for the reason the sinks above are: the store does not exist until `createRouter` has
+ * returned, and the module is imported *by* this file. Dispatched rather than written, because the page
+ * summaries are memory state and the store is the only thing that owns one — and because a write has to
+ * reach every window, which only a store change is broadcast to.
+ */
+setMemoryPagesSink((pages) => router.stores['memory'].dispatch('setPages', { pages }))
+
+/**
+ * Seed the memory store for the folder open at launch, so the panel's tab row has a durable view before
+ * it is first docked. Not awaited, like the sweeps: startup must not wait on housekeeping, and a failure
+ * here is housekeeping failing rather than the app failing to start.
+ */
+void refreshMemoryPagesForRoot(router.stores['workspace'].getState().rootPath).catch((error: unknown) => {
+  console.warn('[memory] launch seed failed', error)
+})
 
 /**
  * End the shell of a folder the user has stopped being offered.

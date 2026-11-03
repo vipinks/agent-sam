@@ -34,6 +34,7 @@ import { resolveCwd, runCommand } from './terminal'
 import { resolveWorkspacePath } from './workspace-paths'
 import { MAX_FILE_BYTES, writeWorkspaceFile } from './workspace'
 import { readProjectInstructions } from './project-context'
+import { resolveMemoryBrief } from './memory'
 import {
   instructionsFileName,
   agentSystemPrompt,
@@ -42,6 +43,7 @@ import {
   planRoleInjection,
   planSystemInjection,
 } from '../protocol/context'
+import { planMemoryInjection } from '../protocol/memory'
 import { snapshotRequest, type ContextSnapshot } from '../protocol/context-window'
 import { EMPTY_ASSISTANT_MARKER, sanitizeOutboundHistory } from '../protocol/history'
 import {
@@ -1313,6 +1315,18 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     ),
   })
   const skillsInjection = planSkillsInjection(history, assembleSkillsSection(activeSkills))
+
+  // The project's memory, read fresh at the turn start like the skills: the disk is the only copy worth
+  // sending. Planned from the same untouched history as the rest, then unshifted *first* so it lands at
+  // the very end of the standing-context block — after the project instructions and the skills — because
+  // it is the most specific of the standing messages and belongs closest to the conversation it governs.
+  // Null when the project has no memory subtree, so a project that never wrote one sends exactly what it
+  // sent before memory existed.
+  const memoryInjection = planMemoryInjection(
+    history,
+    (await resolveMemoryBrief(opts.workspaceRoot, app.getPath('appData')))?.content ?? null
+  )
+  if (memoryInjection) history.unshift({ role: 'system', content: memoryInjection.content })
 
   // Appended at the end of the standing-context block: closest to the conversation it governs, and
   // after the project's own instructions, which are the folder's word rather than a skill's.
