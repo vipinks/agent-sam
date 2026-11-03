@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-11-03: v1.15.2 — Accent-ink readability rescue
+
+- test(theme): pin the accent-ink floor and the moved-pair contract
+- fix(theme): rescue the accent inks at every brightness and contrast step — closes the brightness and contrast extremes for brand-text and syntax-keyword across all five palettes and both modes; the dark +20 pastel is accepted and the brand-text-on-brand-soft tint gap is parked
+
+<br>
+
 ## 2026-11-03: v1.15.1 — Explorer Material file-type icons
 
 - test(explorer): pin file-type icon rules and row glyphs
