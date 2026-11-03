@@ -1357,7 +1357,7 @@ async function theMemorySectionIsAppendedAtTheEndOfStandingContext() {
     const instructions = '# House rules\nAlways run the tests.'
     writeFileSync(join(root, 'AGENTS.md'), instructions, 'utf8')
 
-    const memRoot = memoryRoot(app.getPath('appData'), root)
+    const memRoot = memoryRoot(app.getPath('userData'), root)
     mkdirSync(memRoot, { recursive: true })
     writeFileSync(join(memRoot, 'handoff.md'), 'Ship the small release.', 'utf8')
 

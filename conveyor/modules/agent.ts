@@ -1324,7 +1324,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   // sent before memory existed.
   const memoryInjection = planMemoryInjection(
     history,
-    (await resolveMemoryBrief(opts.workspaceRoot, app.getPath('appData')))?.content ?? null
+    (await resolveMemoryBrief(opts.workspaceRoot, app.getPath('userData')))?.content ?? null
   )
   if (memoryInjection) history.unshift({ role: 'system', content: memoryInjection.content })
 

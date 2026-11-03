@@ -273,11 +273,11 @@ function theProjectKeyIsAHashedNormalizedRoot() {
   assert.match(key, /^[0-9a-f]{64}$/, 'the key is a sha256 hex digest, never a raw path segment')
   assert.equal(key, projectKeyFor('C:\\w'), 'the same root hashes to the same key')
   assert.equal(
-    memoryRoot('C:\\appdata', 'C:\\w'),
-    join('C:\\appdata', 'era', 'memory', key),
-    'the layout is %APPDATA%\\era\\memory\\<key>'
+    memoryRoot('C:\\userdata', 'C:\\w'),
+    join('C:\\userdata', 'memory', key),
+    'the layout is <userData>\\memory\\<key>'
   )
-  results.push('the project key is a hashed normalized root and the layout is app-data-scoped')
+  results.push('the project key is a hashed normalized root and the layout is userData-scoped')
 }
 
 function theMemoryModulesImportNoAgentEngineOrLlm() {

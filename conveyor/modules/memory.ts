@@ -28,13 +28,14 @@ import {
  * Memory — main-only filesystem access, the persisted inverted index, and the turn-start brief.
  *
  * The renderer never sees `fs` or a path: it names a page by id and a folder by its workspace root,
- * and main turns that into `%APPDATA%\era\memory\<project-key>\` — where the project key is a sha256
- * hash of the resolved root, never a raw path segment. Every page write is a temp-then-rename so a
+ * and main turns that into `<userData>\memory\<project-key>\` — where the project key is a sha256 hash
+ * of the resolved root, never a raw path segment. `userData` already equals `%APPDATA%\era`
+ * (`app.setPath('userData', <appData>/era)` in `lib/main/identity.ts`), so the on-disk layout stays the
+ * same `%APPDATA%\era\memory\<project-key>\` it always was; the module joins `memory/<key>` onto
+ * `userData` instead of `era/memory/<key>` onto `appData`. Every page write is a temp-then-rename so a
  * reader sees the old bytes or the new ones, never a half-written page, mirroring `saveTranscriptFile`.
  */
 
-/** The `%APPDATA%` folder this app owns, the same one the user's skills and MCP settings live under. */
-const MEMORY_ROOT_FOLDER = 'era'
 const MEMORY_FOLDER = 'memory'
 
 /** A project key is a sha256 hex digest: 64 lowercase hex chars, never a path segment a caller shaped. */
@@ -45,15 +46,15 @@ export function projectKeyFor(rootPath: string): string {
   return createHash('sha256').update(resolve(rootPath)).digest('hex')
 }
 
-/** The memory subtree for one workspace: `%APPDATA%\era\memory\<project-key>`. */
-export function memoryRoot(appDataPath: string, rootPath: string): string {
+/** The memory subtree for one workspace: `<userData>\memory\<project-key>`. */
+export function memoryRoot(userDataPath: string, rootPath: string): string {
   const key = projectKeyFor(rootPath)
   // Shape-checked before it is joined, the way a session id is before it becomes a filename: the key is
   // the one segment that names a directory, and a segment that is not sha256 hex must never be joined.
   if (!PROJECT_KEY_PATTERN.test(key)) {
     throw new ConveyorError('MEMORY_IO_ERROR', 'The project key did not form a safe path segment.')
   }
-  return join(appDataPath, MEMORY_ROOT_FOLDER, MEMORY_FOLDER, key)
+  return join(userDataPath, MEMORY_FOLDER, key)
 }
 
 /** The file one page lives under. The page id is validated before this is called; the name is fixed. */
@@ -175,8 +176,8 @@ async function writeIndexFile(root: string, file: MemoryIndexFile): Promise<void
 }
 
 /** The four page summaries, for the panel's tab row. */
-export async function listMemoryPages(appDataPath: string, rootPath: string): Promise<MemoryPageSummary[]> {
-  const root = memoryRoot(appDataPath, rootPath)
+export async function listMemoryPages(userDataPath: string, rootPath: string): Promise<MemoryPageSummary[]> {
+  const root = memoryRoot(userDataPath, rootPath)
   const indexFile = await readIndexFile(root)
 
   const summaries: MemoryPageSummary[] = []
@@ -195,11 +196,11 @@ export async function listMemoryPages(appDataPath: string, rootPath: string): Pr
 
 /** Read one page's current text and its retained revision count, or null when it has never been written. */
 export async function readMemoryPage(
-  appDataPath: string,
+  userDataPath: string,
   rootPath: string,
   page: MemoryPageId
 ): Promise<{ content: string; revisions: number } | null> {
-  const root = memoryRoot(appDataPath, rootPath)
+  const root = memoryRoot(userDataPath, rootPath)
   const content = await readPageRaw(root, page)
   if (content === null) return null
   const indexFile = await readIndexFile(root)
@@ -215,12 +216,12 @@ export async function readMemoryPage(
  * the tree has moved.
  */
 export async function writeMemoryPage(
-  appDataPath: string,
+  userDataPath: string,
   rootPath: string,
   page: MemoryPageId,
   content: string
 ): Promise<MemoryPageSummary> {
-  const root = memoryRoot(appDataPath, rootPath)
+  const root = memoryRoot(userDataPath, rootPath)
   const prior = await readPageSafe(root, page)
   const indexFile = (await readIndexFile(root)) ?? { schemaVersion: 1, treeMtime: 0, index: {}, revisions: {} }
 
@@ -249,11 +250,11 @@ export async function writeMemoryPage(
  * write failure.
  */
 export async function restoreMemoryPage(
-  appDataPath: string,
+  userDataPath: string,
   rootPath: string,
   page: MemoryPageId
 ): Promise<{ content: string; revisions: number }> {
-  const root = memoryRoot(appDataPath, rootPath)
+  const root = memoryRoot(userDataPath, rootPath)
   const indexFile = await readIndexFile(root)
   const history = indexFile?.revisions?.[page] ?? []
   if (history.length === 0) {
@@ -274,11 +275,11 @@ export async function restoreMemoryPage(
 
 /** Search the four pages, returning page ids with bounded snippets. */
 export async function searchMemoryPages(
-  appDataPath: string,
+  userDataPath: string,
   rootPath: string,
   term: string
 ): Promise<MemorySearchResult[]> {
-  const root = memoryRoot(appDataPath, rootPath)
+  const root = memoryRoot(userDataPath, rootPath)
   return searchPages(await readAllPages(root), term)
 }
 
@@ -292,13 +293,13 @@ export async function searchMemoryPages(
  * under `MEMORY_IMPORT_FAILED`.
  */
 export async function importMemoryHandoff(
-  appDataPath: string,
+  userDataPath: string,
   rootPath: string,
   markdown: string,
   homeDir: string,
   force = false
 ): Promise<MemoryPageSummary[]> {
-  const root = memoryRoot(appDataPath, rootPath)
+  const root = memoryRoot(userDataPath, rootPath)
   const fanned = fanOutImport(sanitize(markdown, homeDir))
   const targets = MEMORY_PAGES.filter((page) => typeof fanned[page] === 'string' && (fanned[page] ?? '').trim() !== '')
 
@@ -320,9 +321,9 @@ export async function importMemoryHandoff(
   }
 
   for (const page of targets) {
-    await writeMemoryPage(appDataPath, rootPath, page, fanned[page] ?? '')
+    await writeMemoryPage(userDataPath, rootPath, page, fanned[page] ?? '')
   }
-  return listMemoryPages(appDataPath, rootPath)
+  return listMemoryPages(userDataPath, rootPath)
 }
 
 /**
@@ -332,8 +333,8 @@ export async function importMemoryHandoff(
  * The skip is the whole point of persisting the index: a launch over an untouched tree reads the index
  * off disk instead of re-tokenising every page.
  */
-export async function ensureMemoryIndex(appDataPath: string, rootPath: string): Promise<{ rebuilt: boolean }> {
-  const root = memoryRoot(appDataPath, rootPath)
+export async function ensureMemoryIndex(userDataPath: string, rootPath: string): Promise<{ rebuilt: boolean }> {
+  const root = memoryRoot(userDataPath, rootPath)
   const currentMtime = await readTreeMtime(root)
   const existing = await readIndexFile(root)
 
@@ -365,11 +366,11 @@ export async function ensureMemoryIndex(appDataPath: string, rootPath: string): 
  */
 export async function resolveMemoryBrief(
   workspaceRoot: string | null,
-  appDataPath: string
+  userDataPath: string
 ): Promise<{ content: string } | null> {
   if (!workspaceRoot) return null
 
-  const root = memoryRoot(appDataPath, workspaceRoot)
+  const root = memoryRoot(userDataPath, workspaceRoot)
   const handoff = (await readPageSafe(root, 'handoff')) ?? ''
   const decisions = (await readPageSafe(root, 'decisions')) ?? ''
   const quirks = (await readPageSafe(root, 'quirks')) ?? ''
@@ -389,34 +390,34 @@ export function setMemoryPagesSink(next: ((pages: MemoryPageSummary[]) => void) 
 /** Seed the store for the folder open at launch, so the panel has a durable view before it is opened. */
 export async function refreshMemoryPagesForRoot(rootPath: string | null): Promise<void> {
   if (!rootPath) return
-  await ensureMemoryIndex(app.getPath('appData'), rootPath)
-  memoryPagesSink?.(await listMemoryPages(app.getPath('appData'), rootPath))
+  await ensureMemoryIndex(app.getPath('userData'), rootPath)
+  memoryPagesSink?.(await listMemoryPages(app.getPath('userData'), rootPath))
 }
 
 export const memoryModule = defineModule({
   /** The four page summaries, for the panel's tab row. The store mirror is refreshed as a side effect. */
   listPages: query(z.object({ rootPath: z.string().min(1) }), async ({ input }) => {
-    const pages = await listMemoryPages(app.getPath('appData'), input.rootPath)
+    const pages = await listMemoryPages(app.getPath('userData'), input.rootPath)
     memoryPagesSink?.(pages)
     return pages
   }),
 
   /** One page's current text, or null while it has never been written. */
   readPage: query(z.object({ rootPath: z.string().min(1), page: memoryPageIdSchema }), async ({ input }) =>
-    readMemoryPage(app.getPath('appData'), input.rootPath, input.page)
+    readMemoryPage(app.getPath('userData'), input.rootPath, input.page)
   ),
 
   /** Search the pages for a term. A query, because the panel wants it keyed per term while the user types. */
   search: query(z.object({ rootPath: z.string().min(1), term: z.string().min(2) }), async ({ input }) =>
-    searchMemoryPages(app.getPath('appData'), input.rootPath, input.term)
+    searchMemoryPages(app.getPath('userData'), input.rootPath, input.term)
   ),
 
   /** Write a page: create it, or supersede it and retain the prior revision. */
   writePage: command(
     z.object({ rootPath: z.string().min(1), page: memoryPageIdSchema, content: z.string() }),
     async ({ input }) => {
-      const summary = await writeMemoryPage(app.getPath('appData'), input.rootPath, input.page, input.content)
-      memoryPagesSink?.(await listMemoryPages(app.getPath('appData'), input.rootPath))
+      const summary = await writeMemoryPage(app.getPath('userData'), input.rootPath, input.page, input.content)
+      memoryPagesSink?.(await listMemoryPages(app.getPath('userData'), input.rootPath))
       return summary
     }
   ),
@@ -425,20 +426,20 @@ export const memoryModule = defineModule({
   supersedePage: command(
     z.object({ rootPath: z.string().min(1), page: memoryPageIdSchema, content: z.string() }),
     async ({ input }) => {
-      const prior = await readMemoryPage(app.getPath('appData'), input.rootPath, input.page)
+      const prior = await readMemoryPage(app.getPath('userData'), input.rootPath, input.page)
       if (prior === null) {
         throw new ConveyorError('MEMORY_NOT_FOUND', 'There is no page to supersede yet.')
       }
-      const summary = await writeMemoryPage(app.getPath('appData'), input.rootPath, input.page, input.content)
-      memoryPagesSink?.(await listMemoryPages(app.getPath('appData'), input.rootPath))
+      const summary = await writeMemoryPage(app.getPath('userData'), input.rootPath, input.page, input.content)
+      memoryPagesSink?.(await listMemoryPages(app.getPath('userData'), input.rootPath))
       return summary
     }
   ),
 
   /** Revert a page to its prior revision. `MEMORY_NOT_FOUND` when there is none. */
   restorePage: command(z.object({ rootPath: z.string().min(1), page: memoryPageIdSchema }), async ({ input }) => {
-    const result = await restoreMemoryPage(app.getPath('appData'), input.rootPath, input.page)
-    memoryPagesSink?.(await listMemoryPages(app.getPath('appData'), input.rootPath))
+    const result = await restoreMemoryPage(app.getPath('userData'), input.rootPath, input.page)
+    memoryPagesSink?.(await listMemoryPages(app.getPath('userData'), input.rootPath))
     return result
   }),
 
@@ -447,7 +448,7 @@ export const memoryModule = defineModule({
     z.object({ rootPath: z.string().min(1), markdown: z.string(), force: z.boolean().optional() }),
     async ({ input }) => {
       const pages = await importMemoryHandoff(
-        app.getPath('appData'),
+        app.getPath('userData'),
         input.rootPath,
         input.markdown,
         app.getPath('home'),
