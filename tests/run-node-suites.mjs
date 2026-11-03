@@ -78,6 +78,7 @@ const SUITES = [
   { name: 'terminal wire (chunk framing)', src: 'terminal/terminal-wire-test.ts' },
   { name: 'workspace change invalidation', src: 'ui/workspace-changes-test.ts' },
   { name: 'dock rules (explorer double-click)', src: 'ui/dock-rules-test.ts' },
+  { name: 'file icons (name precedence, folder map, shipped fills)', src: 'ui/file-icons-rules-test.ts' },
   { name: 'chat sessions', src: 'sessions/chat-sessions-test.ts' },
   { name: 'session resume', src: 'sessions/session-resume-test.ts' },
   { name: 'session click + title flow', src: 'sessions/session-flow-test.ts' },
