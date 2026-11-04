@@ -6,6 +6,17 @@ coding assistant.
 
 <br>
 
+## 2026-11-03: v1.15.3 — Memory v1 slice 1 and model combos
+
+- test(memory): pin memory v1 slice 1
+- feat(memory): memory v1 slice 1 — per-project markdown pages, right-rail Memory panel, handoff import, search, turn-start brief injection
+- fix(memory): read userData not appData for the memory subtree
+- feat(combos): priority-and-availability model combos
+- test(combos): pin the searchable model picker
+- feat(combos): searchable model picker in Combos settings
+
+<br>
+
 ## 2026-11-03: v1.15.2 — Accent-ink readability rescue
 
 - test(theme): pin the accent-ink floor and the moved-pair contract
