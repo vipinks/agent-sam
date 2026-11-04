@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AlertDialog, AlertDialogContent, AlertDialogTitle } from '@/app/components/ui/alert-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/app/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/app/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/app/components/ui/tooltip'
 import { AgentActionCard } from '@/app/components/workbench/agent-action-card'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { IconRail } from '@/app/components/workbench/icon-rail'
@@ -340,6 +342,56 @@ describe('the overlay surfaces’ arrival', () => {
         'data-[state=open]:animate-in',
         'data-[side=bottom]:slide-in-from-top-2',
         'data-[side=top]:slide-in-from-bottom-2',
+        'motion-reduce:animate-none',
+      ])
+    )
+  })
+
+  it('gives the select its exit duration and the reduced-motion guard', () => {
+    render(
+      <Select open value="alpha">
+        <SelectTrigger aria-label="Select probe">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="alpha">Alpha</SelectItem>
+        </SelectContent>
+      </Select>
+    )
+
+    const content = document.querySelector('[data-slot="select-content"]')
+    expect(tokens(content)).toEqual(
+      expect.arrayContaining([
+        'duration-150',
+        'ease-out',
+        'data-[state=closed]:animate-out',
+        'data-[state=closed]:fade-out-0',
+        'data-[state=closed]:zoom-out-95',
+        'motion-reduce:animate-none',
+      ])
+    )
+  })
+
+  it('gives the tooltip its closed-state exit and the same reduced-motion guard', () => {
+    render(
+      <TooltipProvider>
+        <Tooltip open>
+          <TooltipTrigger asChild>
+            <button type="button">Tooltip probe</button>
+          </TooltipTrigger>
+          <TooltipContent>Hint</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    )
+
+    const content = document.querySelector('[data-slot="tooltip-content"]')
+    expect(tokens(content)).toEqual(
+      expect.arrayContaining([
+        'duration-150',
+        'ease-out',
+        'data-[state=closed]:animate-out',
+        'data-[state=closed]:fade-out-0',
+        'data-[state=closed]:zoom-out-95',
         'motion-reduce:animate-none',
       ])
     )
