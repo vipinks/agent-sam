@@ -31,6 +31,17 @@ const PAGES = [
   { page: 'quirks', exists: false, revisions: 0 },
 ]
 
+/** One captured turn, so the panel's store mirror is the slice-2 shape rather than the slice-1 one. */
+const EPISODES = [
+  {
+    sessionId: 'aaaaaaaa-1111-4111-8111-111111111111',
+    turnId: 'assistant-2',
+    capturedAt: 1_000,
+    ordinal: 2,
+    ask: 'fix the parser',
+  },
+]
+
 function sessionStore() {
   return {
     sessions: [
@@ -69,7 +80,7 @@ function stubWorkbench(): BridgeStub {
     search: () => [],
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
-  stubStore(stub, 'memory', { pages: PAGES })
+  stubStore(stub, 'memory', { pages: PAGES, episodes: EPISODES, episodesEnabled: true })
   stubStore(stub, CHAT_SESSIONS_STORE_ID, sessionStore())
   setActiveStub(stub)
   return stub
@@ -124,6 +135,8 @@ describe('the memory panel', () => {
     expect(screen.getByText('Decisions')).toBeTruthy()
     expect(screen.getByText('Parked')).toBeTruthy()
     expect(screen.getByText('Quirks')).toBeTruthy()
+    // Still exactly four: the episode rows are a section beside the tabs, never a fifth tab.
+    expect(screen.getAllByRole('tab')).toHaveLength(4)
   })
 })
 

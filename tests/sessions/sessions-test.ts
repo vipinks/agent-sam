@@ -6,9 +6,10 @@
  * denied approval, survive a save/load round trip with their steps intact.
  */
 import { strict as assert } from 'node:assert'
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadTranscriptFile, saveTranscriptFile, sessionsModule } from '../../conveyor/modules/sessions'
+import { memoryRoot, setEpisodesEnabledSource, setSessionRootSource } from '../../conveyor/modules/memory'
 import {
   transcriptSnapshotSchema,
   TRANSCRIPT_VERSION,
@@ -87,6 +88,57 @@ async function roundTrip() {
   assert.deepEqual(loaded?.turns[1].steps[0].args, snapshot.turns[1].steps[0].args, 'tool args survive')
 
   results.push('a transcript with tool cards and a denial round-trips exactly')
+}
+
+/**
+ * The turn-end capture, at the one place it is attached: the save command.
+ *
+ * The write lands first and the capture is fire-and-forget behind it, so what this pins is the pair —
+ * the episode appears for the completed turn, and the transcript still comes back byte-identical.
+ * Consent is a source installed here rather than a store, which is exactly how main reads it.
+ */
+async function aSaveCapturesTheTurnWithoutTouchingTheTranscript() {
+  const userData = process.env.SAM_TEST_USER_DATA
+  if (!userData) throw new Error('SAM_TEST_USER_DATA must be set for this test')
+  const root = join(userData, 'workspace')
+  mkdirSync(root, { recursive: true })
+
+  setEpisodesEnabledSource(() => true)
+  setSessionRootSource((id) => (id === UUID ? root : null))
+
+  try {
+    const snapshot = realisticSnapshot()
+    const record = sessionsModule.record.saveTranscript as unknown as {
+      resolver: (opts: { input: unknown }) => Promise<void>
+    }
+    await record.resolver({ input: { id: UUID, snapshot } })
+
+    const page = join(memoryRoot(userData, root), 'episodes', `${UUID}.md`)
+    for (let attempt = 0; attempt < 200 && !existsSync(page); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.ok(existsSync(page), 'the save handler captured the completed turn')
+    assert.match(readFileSync(page, 'utf8'), /<!-- episode turn=assistant-4 /, 'the last answer is the episode')
+
+    const stored = await loadTranscriptFile(UUID)
+    assert.deepEqual(stored, snapshot, 'capture never rewrites the transcript')
+
+    // Consent off is the other half: the save still lands and no page is authored.
+    const other = '22222222-3333-4444-8555-666666666666'
+    setEpisodesEnabledSource(() => false)
+    setSessionRootSource((id) => (id === other ? root : null))
+    await record.resolver({ input: { id: other, snapshot } })
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.ok(
+      !existsSync(join(memoryRoot(userData, root), 'episodes', `${other}.md`)),
+      'with capture switched off the save authors no episode'
+    )
+
+    results.push('the save command captures one episode and leaves the transcript exactly as it wrote it')
+  } finally {
+    setEpisodesEnabledSource(null)
+    setSessionRootSource(null)
+  }
 }
 
 async function absentIsNull() {
@@ -295,6 +347,7 @@ async function main() {
     await step('valid uuid', aValidUuidIsAccepted)
     await step('schema agreement', theSchemaAcceptsWhatWeWrite)
     await step('round trip', roundTrip)
+    await step('turn-boundary capture', aSaveCapturesTheTurnWithoutTouchingTheTranscript)
     await step('absent file', absentIsNull)
     await step('no temp files', noTempFilesAreLeftBehind)
     await step('overwrite', overwriteReplacesInPlace)

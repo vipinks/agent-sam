@@ -5,6 +5,8 @@ import { app } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, command, query } from '../init'
+import type { Episode, MemoryEpisodeRow } from '../protocol/episodes'
+import type { TranscriptSnapshot } from '../protocol/transcript'
 import { MAX_FILE_BYTES } from './workspace'
 import {
   assembleMemorySection,
@@ -459,3 +461,61 @@ export const memoryModule = defineModule({
     }
   ),
 })
+
+/**
+ * Episodes — declaration-only seams for the red pins.
+ *
+ * The capture path needs two things main alone can answer: whether the user left episodic capture on,
+ * and which project a conversation belongs to. Both arrive through sources installed by the router,
+ * the pattern `setAutoDownloadSource` and `setEnginePreferenceSource` already follow, so this module
+ * never reaches for a store it is imported beside.
+ *
+ * Every body here answers the empty value until the green commit implements it. Nothing imports from
+ * this section yet, which is what keeps the red at the assertion level rather than the bundler's.
+ */
+export function setMemoryEpisodesSink(next: ((episodes: MemoryEpisodeRow[]) => void) | null): void {
+  void next
+}
+
+export function setEpisodesEnabledSource(next: (() => boolean) | null): void {
+  void next
+}
+
+export function setSessionRootSource(next: ((sessionId: string) => string | null) | null): void {
+  void next
+}
+
+export async function captureEpisode(sessionId: string, snapshot: TranscriptSnapshot): Promise<void> {
+  void sessionId
+  void snapshot
+}
+
+export async function appendEpisodePage(
+  userDataPath: string,
+  rootPath: string,
+  episode: Episode,
+  homeDir: string
+): Promise<void> {
+  void userDataPath
+  void rootPath
+  void episode
+  void homeDir
+}
+
+export async function listMemoryEpisodes(userDataPath: string, rootPath: string): Promise<MemoryEpisodeRow[]> {
+  void userDataPath
+  void rootPath
+  return []
+}
+
+export async function deleteEpisodePagesForSession(userDataPath: string, sessionId: string): Promise<number> {
+  void userDataPath
+  void sessionId
+  return 0
+}
+
+export async function sweepOrphanedEpisodePages(userDataPath: string, liveSessionIds: string[]): Promise<number> {
+  void userDataPath
+  void liveSessionIds
+  return 0
+}

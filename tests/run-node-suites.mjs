@@ -257,6 +257,10 @@ const SUITES = [
     name: 'memory v1 (index, sanitizer, fan-out, supersede/restore, mtime skip, zero-LLM)',
     src: 'memory/memory-test.ts',
   },
+  {
+    name: 'memory episodes (extraction, sanitizer, page writer, rotation, brief, quiet failure)',
+    src: 'memory/episodes-test.ts',
+  },
 ]
 
 mkdirSync(outDir, { recursive: true })

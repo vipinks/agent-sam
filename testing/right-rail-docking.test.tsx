@@ -85,6 +85,14 @@ const SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
 const OTHER_ID = 'bbbbbbbb-2222-4222-8222-222222222222'
 const OTHER_TITLE = 'unrelated subject entirely'
 
+/** The four canonical memory pages, as the Memory panel's own read answers them. */
+const MEMORY_PAGES = [
+  { page: 'handoff', exists: false, revisions: 0 },
+  { page: 'decisions', exists: false, revisions: 0 },
+  { page: 'parked', exists: false, revisions: 0 },
+  { page: 'quirks', exists: false, revisions: 0 },
+]
+
 /** Two conversations in the open folder, so a switch is a switch between two real rows. */
 function sessionStore() {
   const row = (id: string, title: string, updatedAt: number) => ({
@@ -134,6 +142,11 @@ function stubWorkbench(): BridgeStub {
     // A session switch asks main to open the folder the conversation was used in. Answered with the
     // folder already open, which is the case that changes nothing around the dock.
     openRoot: () => ROOT,
+    // The Memory resident's own reads, answered emptily: this file's subject is the header row and the
+    // dock, and an unstubbed query would be noise rather than a claim.
+    listPages: () => MEMORY_PAGES,
+    readPage: () => ({ content: '', revisions: 0 }),
+    search: () => [],
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
   stubStore(stub, CHAT_SESSIONS_STORE_ID, sessionStore())
@@ -297,6 +310,23 @@ describe('docking a resident', () => {
     expect(header?.getAttribute('aria-expanded')).toBe('true')
 
     await userEvent.click(header as HTMLElement)
+    expect(docked(container)).toBeNull()
+    expect(useWorkbenchStore.getState().rightPanel).toBeNull()
+  })
+
+  it('keeps the Memory header’s collapse glyph beside the episode capture switch', async () => {
+    stubWorkbench()
+    const { container } = renderWorkbench()
+
+    await userEvent.click(resident('Memory'))
+    await waitFor(() => expect(container.querySelector('[data-slot="memory-panel"]')).not.toBeNull())
+
+    const panel = docked(container) as HTMLElement
+    // The switch shares the header's trailing row with the two dock glyphs and does not take either
+    // of them away: the collapse control still returns the panel to the rail.
+    expect(within(panel).getByRole('switch', { name: 'Capture episodes' })).toBeTruthy()
+    await userEvent.click(within(panel).getByRole('button', { name: 'Collapse panel' }))
+
     expect(docked(container)).toBeNull()
     expect(useWorkbenchStore.getState().rightPanel).toBeNull()
   })

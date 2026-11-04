@@ -8,7 +8,7 @@
  * sessions suites, and the reason every helper here takes `appDataPath` rather than reading one.
  */
 import { strict as assert } from 'node:assert'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -146,7 +146,31 @@ function theBriefAssemblesInTheDocumentedOrder() {
     null,
     'all blank means no section'
   )
-  results.push('the brief assembles handoff, pending vetoes, recent decisions and quirks in order')
+
+  // Slice 2 appends the captured turns as the last section, after every canonical page.
+  const withEpisodes = assembleMemorySection({
+    handoff: 'H',
+    vetoes: 'V',
+    decisions: 'D',
+    quirks: 'Q',
+    episodes: [
+      {
+        sessionId: '11111111-2222-4333-8444-555555555555',
+        turnId: 'assistant-2',
+        capturedAt: 1_000,
+        ordinal: 2,
+        text: '<!-- episode turn=assistant-2 at=1970-01-01T00:00:01.000Z -->\n## Episode 2\n- ask: the captured ask',
+      },
+    ],
+  })
+  assert.ok(withEpisodes, 'episodes alone are memory too')
+  assert.ok(
+    withEpisodes.content.indexOf('Quirks') < withEpisodes.content.indexOf('## Episodes'),
+    'the episodes section is last'
+  )
+  assert.ok(withEpisodes.content.includes('the captured ask'), 'and carries the captured block')
+
+  results.push('the brief assembles the canonical pages in order and appends episodes last')
 }
 
 function theInjectionPlansNullInNullOut() {
@@ -185,7 +209,17 @@ async function theIndexRebuildsOnlyWhenTheTreeMoved() {
     const third = await ensureMemoryIndex(appData, root)
     assert.equal(third.rebuilt, true, 'a new page changes the tree and rebuilds')
 
-    results.push('the index rebuilds once and skips while the tree mtime is unchanged')
+    // Slice 2: the tree includes the episode pages, so a captured turn makes the next ensure rebuild
+    // once and then settle — the deferred invalidation the capture path relies on.
+    const episodes = join(mem, 'episodes')
+    mkdirSync(episodes, { recursive: true })
+    writeFileSync(join(episodes, '33333333-4444-4555-8666-777777777777.md'), '# Episodes\n', 'utf8')
+    const fourth = await ensureMemoryIndex(appData, root)
+    assert.equal(fourth.rebuilt, true, 'an episode page changes the tree and rebuilds')
+    const fifth = await ensureMemoryIndex(appData, root)
+    assert.equal(fifth.rebuilt, false, 'and the skip returns once the episode mtime is recorded')
+
+    results.push('the index rebuilds once and skips while the tree mtime — pages and episodes — is unchanged')
   } finally {
     cleanup()
   }
@@ -216,14 +250,20 @@ async function restoreRevertsToThePriorRevision() {
     await writeMemoryPage(appData, root, 'handoff', 'v1')
     await writeMemoryPage(appData, root, 'handoff', 'v2')
 
+    // A captured episode lives beside the pages and is not a page: restore must not touch it.
+    const episodeFile = join(memoryRoot(appData, root), 'episodes', '33333333-4444-4555-8666-777777777777.md')
+    mkdirSync(join(memoryRoot(appData, root), 'episodes'), { recursive: true })
+    writeFileSync(episodeFile, '# Episodes\n', 'utf8')
+
     const restored = await restoreMemoryPage(appData, root, 'handoff')
     assert.equal(restored.content, 'v1', 'restore reverts to the prior revision')
     assert.equal(restored.revisions, 0, 'and consumes it')
 
     const read = await readMemoryPage(appData, root, 'handoff')
     assert.equal(read?.content, 'v1', 'the reverted content is on disk')
+    assert.ok(existsSync(episodeFile), 'restore leaves the episode pages beside the four pages alone')
 
-    results.push('restore reverts to the prior revision and consumes it')
+    results.push('restore reverts to the prior revision, consumes it, and leaves episodes alone')
   } finally {
     cleanup()
   }
@@ -284,6 +324,7 @@ function theMemoryModulesImportNoAgentEngineOrLlm() {
   const sources = [
     ['conveyor/modules/memory.ts', readFileSync(join(process.cwd(), 'conveyor', 'modules', 'memory.ts'), 'utf8')],
     ['conveyor/protocol/memory.ts', readFileSync(join(process.cwd(), 'conveyor', 'protocol', 'memory.ts'), 'utf8')],
+    ['conveyor/protocol/episodes.ts', readFileSync(join(process.cwd(), 'conveyor', 'protocol', 'episodes.ts'), 'utf8')],
   ] as const
   for (const [name, src] of sources) {
     const specifiers = [...src.matchAll(/(?:from\s+|import\s*\(|require\s*\(|import\s+)['"]([^'"]+)['"]/g)].map(

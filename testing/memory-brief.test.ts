@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   assembleMemorySection,
+  EPISODES_IN_BRIEF,
+  MAX_EPISODES_BRIEF_BYTES,
   MAX_MEMORY_BRIEF_BYTES,
   planMemoryInjection,
   splitDecisions,
@@ -36,6 +38,29 @@ describe('the memory brief, assembled', () => {
 
   it('is bounded by the 8 KB brief budget', () => {
     expect(MAX_MEMORY_BRIEF_BYTES).toBe(8192)
+  })
+
+  it('appends episodes last, newest first, inside their own 2 KB sub-budget', () => {
+    const block = (turnId: string, capturedAt: number, ask: string) => ({
+      sessionId: '11111111-2222-4333-8444-555555555555',
+      turnId,
+      capturedAt,
+      ordinal: 1,
+      text: `<!-- episode turn=${turnId} at=${new Date(capturedAt).toISOString()} -->\n## Episode 1\n- ask: ${ask}`,
+    })
+    const section = assembleMemorySection({
+      handoff: 'H',
+      vetoes: 'V',
+      decisions: 'D',
+      quirks: 'Q',
+      episodes: [block('older', 1_000, 'the older ask'), block('newer', 2_000, 'the newer ask')],
+    })
+    expect(section).not.toBeNull()
+    const text = section!.content
+    expect(text.indexOf('Quirks')).toBeLessThan(text.indexOf('## Episodes'))
+    expect(text.indexOf('the newer ask')).toBeLessThan(text.indexOf('the older ask'))
+    expect(EPISODES_IN_BRIEF).toBe(5)
+    expect(MAX_EPISODES_BRIEF_BYTES).toBe(2048)
   })
 })
 

@@ -420,8 +420,9 @@ const initialStates = new Map<string, unknown>([
   // mount to draw the list it searches. Without a genuine initial state here the mirror would cache `undefined`
   // for this store, and the control would throw on the selector that reads an engine's ids out of it.
   ['conveyor:store:engine-models', structuredClone(engineModelsStore.initialState)],
-  // The memory panel's durable view — the four page summaries main mirrors. Without a genuine initial
-  // state here the mirror would cache `undefined` and the panel would throw on `pages` before it asks.
+  // The memory panel's durable view — the four page summaries main mirrors, the episode rows the
+  // brief previews, and the capture switch's stored setting. Without a genuine initial state here the
+  // mirror would cache `undefined` and the panel would throw on `pages` before it asks.
   ['conveyor:store:memory', structuredClone(memoryStore.initialState)],
   // The combos the user built. Every pane that mounts the model Select reads this on mount, and the
   // Settings section reads it as its list: without a genuine initial state the mirror would cache

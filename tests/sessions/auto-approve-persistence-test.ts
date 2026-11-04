@@ -20,10 +20,11 @@
  * No Electron runtime: `app.getPath` comes from the shared stub (see `tests/stubs/`).
  */
 import { strict as assert } from 'node:assert'
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadTranscriptFile, saveTranscriptFile } from '../../conveyor/modules/sessions'
-import { transcriptSnapshotSchema } from '../../conveyor/protocol/transcript'
+import { loadTranscriptFile, saveTranscriptFile, sessionsModule } from '../../conveyor/modules/sessions'
+import { memoryRoot, setEpisodesEnabledSource, setSessionRootSource } from '../../conveyor/modules/memory'
+import { TRANSCRIPT_VERSION, transcriptSnapshotSchema } from '../../conveyor/protocol/transcript'
 import {
   rehydrateTranscript,
   serializeTranscript,
@@ -107,6 +108,52 @@ async function turningItBackOffStoresNothing() {
   results.push('a session turned back off leaves no key, so absence keeps meaning "never stored"')
 }
 
+/**
+ * The turn-boundary capture riding on the same save must not disturb the flag.
+ *
+ * The save command is the exact call the pane makes, with the capture switched on through the sources
+ * main installs. What is asserted is the pairing: an episode lands for the completed turn, the stored
+ * bytes still carry the consent key, and a later save with no turns writes no further block — an
+ * empty conversation is not an episode, which is the same gate that keeps the flag-only save silent.
+ */
+async function aCaptureAlongsideTheSaveLeavesTheFlagAlone() {
+  const userData = process.env.SAM_TEST_USER_DATA
+  if (!userData) throw new Error('SAM_TEST_USER_DATA must be set for this test')
+  const root = join(userData, 'workspace')
+  mkdirSync(root, { recursive: true })
+
+  setEpisodesEnabledSource(() => true)
+  setSessionRootSource((id) => (id === UUID ? root : null))
+  try {
+    const record = sessionsModule.record.saveTranscript as unknown as {
+      resolver: (opts: { input: unknown }) => Promise<void>
+    }
+    await record.resolver({ input: { id: UUID, snapshot: serializeTranscript(afterATurn(true)) } })
+
+    const page = join(memoryRoot(userData, root), 'episodes', `${UUID}.md`)
+    for (let attempt = 0; attempt < 200 && !existsSync(page); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.ok(existsSync(page), 'the completed turn was captured beside the save')
+    assert.match(storedFile(), /"autoApprove":true/, 'the flag is still in the bytes the save wrote')
+    assert.equal((await loadTranscriptFile(UUID))?.autoApprove, true, 'and reads back on')
+
+    const emptySave = { version: TRANSCRIPT_VERSION, interrupted: false, turns: [], autoApprove: true }
+    await record.resolver({ input: { id: UUID, snapshot: emptySave } })
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(
+      (readFileSync(page, 'utf8').match(/<!-- episode turn=/g) ?? []).length,
+      1,
+      'a flag-only save with no completed turn writes no second block'
+    )
+
+    results.push('capturing beside a turn-boundary save leaves the stored consent flag untouched')
+  } finally {
+    setEpisodesEnabledSource(null)
+    setSessionRootSource(null)
+  }
+}
+
 // ---------------------------------------------------------------- agreement with the schema
 
 function whatWeWriteIsWhatTheReaderAccepts() {
@@ -137,6 +184,7 @@ async function main() {
     await step('on survives', anOnFlagSurvivesATurnBoundarySave)
     await step('never toggled', aConversationNeverToggledStoresNothing)
     await step('turned back off', turningItBackOffStoresNothing)
+    await step('capture beside the save', aCaptureAlongsideTheSaveLeavesTheFlagAlone)
 
     console.log(`auto-approve persistence: ${results.length} passed`)
     for (const r of results) console.log(`  pass: ${r}`)

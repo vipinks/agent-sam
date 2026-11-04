@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { EpisodeBlock } from './episodes'
 
 /**
  * Memory — the project's standing notes: four canonical pages, a persisted inverted index, and the
@@ -36,6 +37,18 @@ export const MEMORY_INDEX_FILE = 'index.json'
  * budget on history the model can read from disk when it needs to.
  */
 export const MAX_MEMORY_BRIEF_BYTES = 8192
+
+/**
+ * The episodes section's own budget, and the most blocks it carries.
+ *
+ * A sub-budget rather than a share of the whole: when episodes exist the canonical body is cut to
+ * `MAX_MEMORY_BRIEF_BYTES - MAX_EPISODES_BRIEF_BYTES` first, so a project that wrote a novel into
+ * its handoff cannot evict the newest captured work from the brief entirely.
+ */
+export const MAX_EPISODES_BRIEF_BYTES = 2048
+
+/** The newest captured blocks one brief carries, across every session in the project. */
+export const EPISODES_IN_BRIEF = 5
 
 /** The most bytes one pasted handoff may carry into the sanitizer, in the style of `boundedStderrTail`. */
 export const MAX_MEMORY_IMPORT_BYTES = 64 * 1024
@@ -288,6 +301,11 @@ export interface MemoryBriefSource {
   vetoes: string
   decisions: string
   quirks: string
+  /**
+   * Captured episodes, newest first by the rule in `assembleMemorySection`. Declaration-only for the
+   * red pins: the section is appended in the green commit.
+   */
+  episodes?: readonly EpisodeBlock[]
 }
 
 const MEMORY_BRIEF_FENCE = [
