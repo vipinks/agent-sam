@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '../ui/alert-dialog'
+import { CombosModelPicker } from './combos-model-picker'
 
 /**
  * The Combos section: the list the chat picker offers, and everything about one.
@@ -373,12 +374,15 @@ function ComboCard({ combo, targets }: { combo: Combo; targets: ComboTarget[] })
 }
 
 /**
- * The two selects that name a member: first the provider, then that provider's models.
+ * The two controls that name a member: first the provider, then that provider's models.
  *
  * One component for the create form and the add-member row because the rule is one rule: a model list
  * belongs to the provider above it, and changing the provider clears a model that belonged to the old
  * one. A free-text field would let a combo name something the registry has never heard of, and the
  * member guard would refuse it only after the round trip.
+ *
+ * The provider stays a bare Select — its list is short enough to scan. The model side is the searchable
+ * picker in its own file, because a provider can report dozens of ids and scanning them is not a plan.
  */
 function TargetSelects({
   targets,
@@ -417,18 +421,16 @@ function TargetSelects({
 
       <div className="flex min-w-44 flex-col gap-1.5">
         <Label htmlFor={`${idPrefix}-model`}>Model</Label>
-        <Select value={modelId} onValueChange={onModel} disabled={providerId === ''}>
-          <SelectTrigger id={`${idPrefix}-model`} aria-label="Model">
-            <SelectValue placeholder={providerId === '' ? 'Choose a provider first' : 'Choose a model'} />
-          </SelectTrigger>
-          <SelectContent>
-            {models.map((model) => (
-              <SelectItem key={model} value={model}>
-                <span className="font-mono">{model}</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <CombosModelPicker
+          // A new provider owns a new list, so the picker starts over: the term is not carried across,
+          // and no row is still marked with an id that belonged to the provider just left.
+          key={providerId}
+          id={`${idPrefix}-model`}
+          providerSelected={providerId !== ''}
+          models={models}
+          modelId={modelId}
+          onSelect={onModel}
+        />
       </div>
     </>
   )
