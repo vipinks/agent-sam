@@ -567,7 +567,13 @@ function latestTurnIsTheAssistantOne() {
 }
 
 async function aFailedCaptureNeverThrows() {
-  const { appData, root, cleanup } = makeRoots()
+  // The capture path resolves its own app-data directory through electron's `app.getPath`, so this
+  // step uses the stub's private directory rather than a second root of its own — otherwise the page
+  // would land somewhere the assertion never looks.
+  const appData = process.env.SAM_TEST_USER_DATA
+  if (!appData) throw new Error('SAM_TEST_USER_DATA must be set for this test')
+  const root = join(appData, 'workspace')
+  mkdirSync(root, { recursive: true })
   const warnings: string[] = []
   const original = console.warn
   console.warn = (...args: unknown[]) => {
@@ -605,7 +611,7 @@ async function aFailedCaptureNeverThrows() {
     console.warn = original
     setEpisodesEnabledSource(null)
     setSessionRootSource(null)
-    cleanup()
+    rmSync(root, { recursive: true, force: true })
   }
 }
 

@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Brain } from 'lucide-react'
-import { ConveyorError, useConveyorStore } from 'electron-conveyor/react'
+import { ConveyorError, useConveyorActions, useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
-import { MEMORY_PAGES, type MemoryPageId } from '@/conveyor/protocol/memory'
+import { compareEpisodes, MEMORY_PAGES, type MemoryPageId } from '@/conveyor/protocol/memory'
 import { memoryStore } from '@/conveyor/stores/memory'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { ScrollArea } from '../ui/scroll-area'
+import { Switch } from '../ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { Textarea } from '../ui/textarea'
 import {
@@ -55,6 +56,14 @@ function failureSentence(error: unknown): string {
 export function MemoryPanel() {
   const rootPath = useConveyorStore(workspaceStore, (s) => s.rootPath) ?? null
   const storedPages = useConveyorStore(memoryStore, (s) => s.pages)
+  // The captured turns the brief previews, and the switch that decides whether anything is captured.
+  // Rows are read-only: an episode is an artifact of a turn, not a page a user edits.
+  const storedEpisodes = useConveyorStore(memoryStore, (s) => s.episodes)
+  const episodesEnabled = useConveyorStore(memoryStore, (s) => s.episodesEnabled)
+  const setEpisodesEnabled = useConveyorActions(memoryStore).setEpisodesEnabled
+  // Drawn in the brief's order rather than whatever order the mirror arrived in, so the preview and
+  // what the next turn actually carries cannot disagree.
+  const episodes = [...storedEpisodes].sort(compareEpisodes)
 
   const [page, setPage] = useState<MemoryPageId>('handoff')
   const [buffer, setBuffer] = useState('')
@@ -141,6 +150,20 @@ export function MemoryPanel() {
   return (
     <div data-slot="memory-panel" className="flex h-full flex-col bg-background">
       <PaneHeader icon={Brain} title="Memory">
+        {/*
+         * Capture on or off, for completed turns. On by default because capture is local, sanitized,
+         * bounded and never edits a canonical page — the tradeoff is that this project's questions
+         * reach the provider inside the brief, which is what the switch is here to make a choice.
+         */}
+        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span>Capture</span>
+          <Switch
+            size="sm"
+            aria-label="Capture episodes"
+            checked={episodesEnabled}
+            onCheckedChange={(checked) => setEpisodesEnabled({ enabled: checked })}
+          />
+        </div>
         <PanelExpandControl />
         <PanelCollapseControl />
       </PaneHeader>
@@ -236,6 +259,34 @@ export function MemoryPanel() {
             </div>
           </ScrollArea>
         </Tabs>
+      )}
+
+      {/*
+       * The captured episodes, read-only and newest first — the same blocks the next turn's brief
+       * carries, so a user can see what standing context a project has accumulated without a second
+       * surface. A row is a preview, not an editor: episodes are artifacts of completed turns.
+       */}
+      {episodes.length > 0 && (
+        <div data-slot="memory-episodes" className="max-h-44 shrink-0 overflow-y-auto border-t border-border px-3 py-2">
+          <p className="mb-1.5 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">Episodes</p>
+          <div className="flex flex-col gap-1.5">
+            {episodes.map((episode) => (
+              <div
+                key={`${episode.sessionId}:${episode.turnId}`}
+                data-slot="memory-episode-row"
+                className="rounded-md border border-border bg-card px-2.5 py-1.5"
+              >
+                <p className="truncate text-[12px] leading-tight" title={episode.ask}>
+                  {episode.ask === '' ? 'No question recorded' : episode.ask}
+                </p>
+                <p className="text-[10.5px] text-muted-foreground">
+                  Episode {episode.ordinal} ·{' '}
+                  {new Date(episode.capturedAt).toISOString().slice(0, 16).replace('T', ' ')}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/*

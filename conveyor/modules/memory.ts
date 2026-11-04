@@ -1,16 +1,30 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { app } from 'electron'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, command, query } from '../init'
-import type { Episode, MemoryEpisodeRow } from '../protocol/episodes'
+import {
+  EPISODE_PAGE_DIR,
+  EPISODE_SESSION_ID_PATTERN,
+  MAX_EPISODE_PAGE_BYTES,
+  MAX_EPISODES_PER_PAGE,
+  episodeRowFromBlock,
+  extractEpisode,
+  latestEpisodeTurnId,
+  parseEpisodeBlocks,
+  renderEpisodeBlock,
+  type Episode,
+  type EpisodeBlock,
+  type MemoryEpisodeRow,
+} from '../protocol/episodes'
 import type { TranscriptSnapshot } from '../protocol/transcript'
 import { MAX_FILE_BYTES } from './workspace'
 import {
   assembleMemorySection,
   buildIndex,
+  compareEpisodes,
   fanOutImport,
   MEMORY_INDEX_FILE,
   MEMORY_PAGE_FILES,
@@ -128,7 +142,14 @@ async function readAllPages(root: string): Promise<Record<MemoryPageId, string>>
   return pages
 }
 
-/** The newest mtime of the four page files, or zero while none exist. */
+/**
+ * The newest mtime of the memory tree: the four page files and every episode page, or zero while none
+ * exist.
+ *
+ * The episode pages are part of the tree because a captured turn is memory. A capture deliberately
+ * does not rebuild the index inline — that would tokenise four pages on every completed turn — so the
+ * moved mtime is what lets the next `ensureMemoryIndex` rebuild once and then settle.
+ */
 async function readTreeMtime(root: string): Promise<number> {
   let max = 0
   for (const page of MEMORY_PAGES) {
@@ -136,6 +157,22 @@ async function readTreeMtime(root: string): Promise<number> {
       max = Math.max(max, (await stat(pageFilePath(root, page))).mtimeMs)
     } catch {
       // Absent page contributes nothing to the tree.
+    }
+  }
+
+  const dir = episodesDir(root)
+  let files: string[]
+  try {
+    files = await readdir(dir)
+  } catch {
+    return max
+  }
+  for (const file of files) {
+    if (!isEpisodePageFile(file)) continue
+    try {
+      max = Math.max(max, (await stat(join(dir, file))).mtimeMs)
+    } catch {
+      // A page that vanished between the readdir and the stat contributes nothing.
     }
   }
   return max
@@ -378,7 +415,13 @@ export async function resolveMemoryBrief(
   const quirks = (await readPageSafe(root, 'quirks')) ?? ''
   const { vetoes, decisions: recent } = splitDecisions(decisions)
 
-  return assembleMemorySection({ handoff, vetoes, decisions: recent, quirks })
+  return assembleMemorySection({
+    handoff,
+    vetoes,
+    decisions: recent,
+    quirks,
+    episodes: await readAllEpisodeBlocks(root),
+  })
 }
 
 /** Installed by the router, after the store exists: mirrors the four page summaries to every window. */
@@ -389,18 +432,40 @@ export function setMemoryPagesSink(next: ((pages: MemoryPageSummary[]) => void) 
   memoryPagesSink = next
 }
 
-/** Seed the store for the folder open at launch, so the panel has a durable view before it is opened. */
+/** Installed by the router beside the pages sink: mirrors the episode rows to every window. */
+let memoryEpisodesSink: ((episodes: MemoryEpisodeRow[]) => void) | null = null
+
+/**
+ * Install the episode sink, or clear it with null. Called once, by the router, after the stores exist.
+ *
+ * A second sink rather than a wider first one, because the two lists have different moments: the page
+ * summaries change on a page write, while the episode rows are only refreshed at launch and when the
+ * panel asks. A capture deliberately pushes nothing — a store broadcast per completed turn is the IPC
+ * chatter the whole transcript design exists to avoid.
+ */
+export function setMemoryEpisodesSink(next: ((episodes: MemoryEpisodeRow[]) => void) | null): void {
+  memoryEpisodesSink = next
+}
+
+/**
+ * Seed the store for the folder open at launch, so the panel has a durable view before it is opened.
+ *
+ * The episode rows are seeded beside the page summaries, in the brief's order, so the panel's preview
+ * is what the next turn would actually carry.
+ */
 export async function refreshMemoryPagesForRoot(rootPath: string | null): Promise<void> {
   if (!rootPath) return
   await ensureMemoryIndex(app.getPath('userData'), rootPath)
   memoryPagesSink?.(await listMemoryPages(app.getPath('userData'), rootPath))
+  memoryEpisodesSink?.(await listMemoryEpisodes(app.getPath('userData'), rootPath))
 }
 
 export const memoryModule = defineModule({
-  /** The four page summaries, for the panel's tab row. The store mirror is refreshed as a side effect. */
+  /** The four page summaries, for the panel's tab row. The store mirrors are refreshed as a side effect. */
   listPages: query(z.object({ rootPath: z.string().min(1) }), async ({ input }) => {
     const pages = await listMemoryPages(app.getPath('userData'), input.rootPath)
     memoryPagesSink?.(pages)
+    memoryEpisodesSink?.(await listMemoryEpisodes(app.getPath('userData'), input.rootPath))
     return pages
   }),
 
@@ -463,59 +528,278 @@ export const memoryModule = defineModule({
 })
 
 /**
- * Episodes — declaration-only seams for the red pins.
+ * Episodes — the captured turns, one page per session, and the fire-and-forget capture behind a
+ * transcript save.
  *
  * The capture path needs two things main alone can answer: whether the user left episodic capture on,
  * and which project a conversation belongs to. Both arrive through sources installed by the router,
  * the pattern `setAutoDownloadSource` and `setEnginePreferenceSource` already follow, so this module
  * never reaches for a store it is imported beside.
  *
- * Every body here answers the empty value until the green commit implements it. Nothing imports from
- * this section yet, which is what keeps the red at the assertion level rather than the bundler's.
+ * Every write here is a read-modify-write of the whole page — there is one block per turn and forty
+ * at most — serialised per page by a promise chain, so two saves of one session that overlap cannot
+ * each read the old bytes and write one block. The write itself is the same temp-then-rename the
+ * canonical pages use.
  */
-export function setMemoryEpisodesSink(next: ((episodes: MemoryEpisodeRow[]) => void) | null): void {
-  void next
+
+/** The directory one project's episode pages live in. */
+function episodesDir(root: string): string {
+  return join(root, EPISODE_PAGE_DIR)
 }
 
-export function setEpisodesEnabledSource(next: (() => boolean) | null): void {
-  void next
+/** Whether a directory entry names one of our episode pages: `<uuid>.md`, and nothing else. */
+function isEpisodePageFile(file: string): boolean {
+  if (!file.endsWith('.md')) return false
+  return EPISODE_SESSION_ID_PATTERN.test(file.slice(0, -'.md'.length))
 }
 
-export function setSessionRootSource(next: ((sessionId: string) => string | null) | null): void {
-  void next
+/**
+ * One session's episode page. The session id is shape-checked before it becomes a filename, by the
+ * same UUID rule the transcript's own input schema enforces — the page lives under the memory root,
+ * and a segment that could escape it must never be joined.
+ */
+function episodePagePath(root: string, sessionId: string): string {
+  if (!EPISODE_SESSION_ID_PATTERN.test(sessionId)) {
+    throw new ConveyorError('MEMORY_IO_ERROR', 'The session id did not form a safe path segment.')
+  }
+  return join(episodesDir(root), `${sessionId}.md`)
 }
 
-export async function captureEpisode(sessionId: string, snapshot: TranscriptSnapshot): Promise<void> {
-  void sessionId
-  void snapshot
+/**
+ * One episode page's text, or null while it has never been written.
+ *
+ * Bounded twice: the file is ours and capped at 128 KB, so anything several times that size is a
+ * hand-edited file rather than a page, and refusing to read it is the conservative answer — the next
+ * capture logs its code and leaves the bytes alone rather than replacing them with one block.
+ */
+async function readEpisodePage(target: string): Promise<string | null> {
+  let size: number
+  try {
+    size = (await stat(target)).size
+  } catch {
+    return null
+  }
+  if (size > MAX_EPISODE_PAGE_BYTES * 4) {
+    throw new ConveyorError('MEMORY_IO_ERROR', 'An episode page is too large to read.')
+  }
+  return readFile(target, 'utf8')
 }
 
+const EPISODE_PAGE_HEADER = '# Episodes'
+
+/** The page's whole text: its heading, then whole blocks newest first. */
+function renderEpisodePage(blocks: readonly string[]): string {
+  return `${EPISODE_PAGE_HEADER}\n\n${blocks.join('\n\n')}\n`
+}
+
+function episodePageBytes(blocks: readonly string[]): number {
+  return new TextEncoder().encode(renderEpisodePage(blocks)).length
+}
+
+/** One page-preserving write: supersede in place, cap by count, then cap by bytes. */
+async function writeEpisodePage(root: string, target: string, episode: Episode, homeDir: string): Promise<void> {
+  const block = renderEpisodeBlock(episode, homeDir)
+  const existing = await readEpisodePage(target)
+  const prior = existing === null ? [] : parseEpisodeBlocks(existing, episode.sessionId)
+
+  const same = prior.findIndex((candidate) => candidate.turnId === episode.turnId)
+  const blocks =
+    same === -1
+      ? [block, ...prior.map((candidate) => candidate.text)]
+      : prior.map((candidate, index) => (index === same ? block : candidate.text))
+
+  const kept = blocks.slice(0, MAX_EPISODES_PER_PAGE)
+  // Over the byte cap the oldest whole blocks go; a page of one block is never reduced further.
+  while (kept.length > 1 && episodePageBytes(kept) > MAX_EPISODE_PAGE_BYTES) kept.pop()
+
+  await writeFileAtomic(episodesDir(root), target, renderEpisodePage(kept))
+}
+
+/** The in-flight read-modify-write per page, so overlapping saves of one session serialise. */
+const episodeWriteChains = new Map<string, Promise<void>>()
+
+/**
+ * Append one episode to its session's page, or replace the block a re-save of the same turn wrote.
+ *
+ * The chain is keyed by the page rather than the session id: a session's page is one file, and that is
+ * the thing two writers must not interleave on. A failed write leaves the chain usable — the next call
+ * catches its predecessor's rejection rather than inheriting it.
+ */
 export async function appendEpisodePage(
   userDataPath: string,
   rootPath: string,
   episode: Episode,
   homeDir: string
 ): Promise<void> {
-  void userDataPath
-  void rootPath
-  void episode
-  void homeDir
+  const root = memoryRoot(userDataPath, rootPath)
+  const target = episodePagePath(root, episode.sessionId)
+
+  const previous = episodeWriteChains.get(target) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(() => writeEpisodePage(root, target, episode, homeDir))
+  episodeWriteChains.set(target, next)
+  try {
+    await next
+  } finally {
+    if (episodeWriteChains.get(target) === next) episodeWriteChains.delete(target)
+  }
 }
 
+/** Every block on every page in one project, as the brief draws them. */
+async function readAllEpisodeBlocks(root: string): Promise<EpisodeBlock[]> {
+  const dir = episodesDir(root)
+  let files: string[]
+  try {
+    files = await readdir(dir)
+  } catch {
+    return []
+  }
+
+  const blocks: EpisodeBlock[] = []
+  for (const file of files) {
+    if (!isEpisodePageFile(file)) continue
+    const sessionId = file.slice(0, -'.md'.length)
+    let content: string | null
+    try {
+      content = await readEpisodePage(join(dir, file))
+    } catch {
+      // One unreadable page must not take the brief down with it.
+      continue
+    }
+    if (content === null) continue
+    blocks.push(...parseEpisodeBlocks(content, sessionId))
+  }
+  return blocks
+}
+
+/**
+ * The episode rows the panel draws, newest first by the brief's own rule.
+ *
+ * Read-only rows rather than pages: an episode is an artifact of a turn, not text a user edits, so
+ * there is no write and no revision behind one. A page that cannot be read is skipped for the reason
+ * one unreadable canonical page is skipped — the panel is a view, and a missing row is a smaller
+ * problem than a panel that fails.
+ */
 export async function listMemoryEpisodes(userDataPath: string, rootPath: string): Promise<MemoryEpisodeRow[]> {
-  void userDataPath
-  void rootPath
-  return []
+  const root = memoryRoot(userDataPath, rootPath)
+  return (await readAllEpisodeBlocks(root)).map(episodeRowFromBlock).sort(compareEpisodes)
 }
 
+/**
+ * Remove one session's episode pages, across every project, and report how many were removed.
+ *
+ * Every project rather than the session's current one: a conversation moved between folders keeps the
+ * page it captured under the folder it worked in, and a delete that only looked at the last folder
+ * would strand the rest for the startup sweep.
+ */
 export async function deleteEpisodePagesForSession(userDataPath: string, sessionId: string): Promise<number> {
-  void userDataPath
-  void sessionId
-  return 0
+  if (!EPISODE_SESSION_ID_PATTERN.test(sessionId)) return 0
+
+  const memoryDir = join(userDataPath, MEMORY_FOLDER)
+  let keys: string[]
+  try {
+    keys = await readdir(memoryDir)
+  } catch {
+    return 0
+  }
+
+  let deleted = 0
+  for (const key of keys) {
+    if (!PROJECT_KEY_PATTERN.test(key)) continue
+    try {
+      await unlink(join(memoryDir, key, EPISODE_PAGE_DIR, `${sessionId}.md`))
+      deleted++
+    } catch {
+      // Absent is the ordinary case: most projects never captured this session.
+    }
+  }
+  return deleted
 }
 
+/**
+ * Clear episode pages whose session metadata is gone, and report how many were removed.
+ *
+ * The startup half of retention, beside the transcript sweep and for the same reason: deleting a
+ * session removes its metadata first, so a failed page delete would strand bytes nothing references
+ * again. Each file is removed independently — one locked page must not stop the rest of the sweep.
+ */
 export async function sweepOrphanedEpisodePages(userDataPath: string, liveSessionIds: string[]): Promise<number> {
-  void userDataPath
-  void liveSessionIds
-  return 0
+  const memoryDir = join(userDataPath, MEMORY_FOLDER)
+  let keys: string[]
+  try {
+    keys = await readdir(memoryDir)
+  } catch {
+    return 0
+  }
+
+  const live = new Set(liveSessionIds)
+  let deleted = 0
+  for (const key of keys) {
+    if (!PROJECT_KEY_PATTERN.test(key)) continue
+    const dir = join(memoryDir, key, EPISODE_PAGE_DIR)
+    let files: string[]
+    try {
+      files = await readdir(dir)
+    } catch {
+      continue
+    }
+    for (const file of files) {
+      if (!isEpisodePageFile(file)) continue
+      const id = file.slice(0, -'.md'.length)
+      if (live.has(id)) continue
+      try {
+        await unlink(join(dir, file))
+        deleted++
+      } catch {
+        // Left for the next startup rather than raised: one undeletable page must not block the rest.
+      }
+    }
+  }
+  return deleted
+}
+
+/** Whether capture is switched on, read through the source the router installs. */
+let episodesEnabledSource: (() => boolean) | null = null
+
+/** Install the consent read, or clear it with null. Called once, by the router. */
+export function setEpisodesEnabledSource(next: (() => boolean) | null): void {
+  episodesEnabledSource = next
+}
+
+/** The folder a conversation belongs to, read through the source the router installs. */
+let sessionRootSource: ((sessionId: string) => string | null) | null = null
+
+/** Install the project read, or clear it with null. Called once, by the router. */
+export function setSessionRootSource(next: ((sessionId: string) => string | null) | null): void {
+  sessionRootSource = next
+}
+
+/**
+ * Capture the completed turn a transcript save just wrote, or do nothing.
+ *
+ * Fire-and-forget, and quiet by construction: every path that cannot capture — consent off, a
+ * conversation with no project, no completed answer — is an ordinary no-op, and a genuine failure is
+ * one bounded warning carrying the error's code. Nothing here throws, so nothing can fail the save or
+ * the turn it rode in on; nothing here is branched on by a caller, so a store read that fails is
+ * reported and otherwise ignored.
+ *
+ * The turn id comes from the snapshot rather than from the save's own payload: the payload is the
+ * transcript's shape and stays exactly as it was, and the last answer on the checked-out trail is the
+ * turn a turn-end save is about.
+ */
+export async function captureEpisode(sessionId: string, snapshot: TranscriptSnapshot): Promise<void> {
+  try {
+    if (episodesEnabledSource?.() !== true) return
+    const rootPath = sessionRootSource?.(sessionId) ?? null
+    if (!rootPath) return
+    const turnId = latestEpisodeTurnId(snapshot)
+    if (turnId === null) return
+
+    const episode = extractEpisode(sessionId, snapshot, turnId, Date.now())
+    if (episode === null) return
+
+    await appendEpisodePage(app.getPath('userData'), rootPath, episode, app.getPath('home'))
+  } catch (error) {
+    const code = error instanceof ConveyorError ? error.code : 'EPISODE_CAPTURE_FAILED'
+    console.warn(`[memory] episode capture skipped (${code})`)
+  }
 }

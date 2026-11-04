@@ -31,7 +31,14 @@ import {
   setTerminalScrollbackSource,
 } from './modules/terminal-pty'
 import { agentModule, setContextSnapshotSink } from './modules/agent'
-import { memoryModule, setMemoryPagesSink, refreshMemoryPagesForRoot } from './modules/memory'
+import {
+  memoryModule,
+  setMemoryPagesSink,
+  setMemoryEpisodesSink,
+  setEpisodesEnabledSource,
+  setSessionRootSource,
+  refreshMemoryPagesForRoot,
+} from './modules/memory'
 import { sessionsModule, setSessionMoveSink, sweepOrphanedTranscripts } from './modules/sessions'
 import { imageAttachmentsModule, sweepAttachmentFolders } from './modules/image-attachments'
 import { mentionsModule } from './modules/mentions'
@@ -306,6 +313,30 @@ setContextSnapshotSink(({ sessionId, snapshot }) =>
  * reach every window, which only a store change is broadcast to.
  */
 setMemoryPagesSink((pages) => router.stores['memory'].dispatch('setPages', { pages }))
+
+/**
+ * Mirror the captured episode rows, on the same terms and for the same reason as the page summaries.
+ *
+ * A push only where the panel's preview is refreshed — launch and its own listPages — never per
+ * capture. An episode is written on disk by the save it rides on, and a store broadcast per completed
+ * turn is exactly the chatter the transcript's out-of-store design exists to avoid.
+ */
+setMemoryEpisodesSink((episodes) => router.stores['memory'].dispatch('setEpisodes', { episodes }))
+
+/**
+ * Give episodic capture its two reads: the consent switch, and the folder a conversation belongs to.
+ *
+ * Both are reads through functions rather than values, because the switch a user flips and the folder
+ * a conversation is used in are not the values this file saw at startup. The folder comes from the
+ * session record's `lastRoot` — the project a conversation's work actually happened in — rather than
+ * from whichever folder a window happens to have open, so a save of a background session lands under
+ * its own project.
+ */
+setEpisodesEnabledSource(() => router.stores['memory'].getState().episodesEnabled)
+setSessionRootSource((sessionId) => {
+  const record = router.stores['chat-sessions'].getState().sessions.find((session) => session.id === sessionId)
+  return record?.lastRoot ?? null
+})
 
 /**
  * Seed the memory store for the folder open at launch, so the panel's tab row has a durable view before

@@ -180,10 +180,16 @@ function snippetsFor(text: string, term: string, limit: number): string[] {
 }
 
 /**
- * Redact what must not reach the page files: API keys, Bearer tokens, credential assignments, and
- * filesystem paths under the home directory. Bounded by `MAX_MEMORY_IMPORT_BYTES`, in the style of
- * `boundedStderrTail` — the input is cut to a byte cap before any redaction, so the work and the
- * output are both bounded rather than growing with the paste.
+ * Redact what must not reach the page files: API keys, Bearer tokens, credential assignments,
+ * credential-shaped environment names, the hyphenated token prefixes, Basic auth and URL userinfo, PEM
+ * blocks, and filesystem paths under the home directory. Bounded by `MAX_MEMORY_IMPORT_BYTES`, in the
+ * style of `boundedStderrTail` — the input is cut to a byte cap before any redaction, so the work and
+ * the output are both bounded rather than growing with the paste.
+ *
+ * Redaction-only, deliberately: every rule replaces a value with a marker and none removes a rule that
+ * was here before, so a page already written can only lose secrets it once carried, never gain one.
+ * Path redaction outside the home directory is a known gap and is not attempted — a path is a weak
+ * secret at best, and guessing which ones matter would be worse than leaving them.
  *
  * `homeDir` is a parameter so this stays free of electron and app imports: the caller that runs in
  * main passes `app.getPath('home')` in, and a suite passes a literal it controls.
@@ -206,6 +212,29 @@ export function sanitize(text: string, homeDir: string): string {
     '$1[REDACTED]'
   )
 
+  // Credential-shaped environment names: `GITHUB_TOKEN=…`, `AWS_SECRET_ACCESS_KEY: …` and their kin.
+  // The assignment rule above cannot catch these — an underscore is a word character, so there is no
+  // boundary before the `TOKEN` in the middle of the name — and redaction is all this may do.
+  cleaned = cleaned.replace(
+    /\b([A-Z][A-Z0-9_]*(?:_TOKEN|_API_KEY|_SECRET_ACCESS_KEY|_PASSWORD|_SECRET|_KEY))\s*[:=]\s*[^\s"'`]+/g,
+    '$1=[REDACTED]'
+  )
+
+  // The hyphenated token prefixes issued today, redacted whole rather than left half-readable. They are
+  // a rule of their own because `sk-proj-…` does not match the `sk-…` shape above: the hyphen after the
+  // scheme word ends that pattern before its length floor is reached.
+  cleaned = cleaned.replace(/\b(?:sk-proj-|sk-ant-|github_pat_|glpat-|xai-)[A-Za-z0-9_-]{8,}/g, '[REDACTED KEY]')
+
+  // Basic auth, and the userinfo a URL carries. The credential is what goes, never the host or scheme.
+  cleaned = cleaned.replace(/\bBasic\s+[A-Za-z0-9+/=]{6,}/gi, 'Basic [REDACTED]')
+  cleaned = cleaned.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@')
+
+  // A PEM block, markers and body together: half a private key is still a private key.
+  cleaned = cleaned.replace(
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+    '[REDACTED PEM]'
+  )
+
   // Any path that lives under the user's home directory, replaced rather than partially shown.
   if (homeDir.trim() !== '') {
     const escaped = homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -216,7 +245,7 @@ export function sanitize(text: string, homeDir: string): string {
 }
 
 /** Keep the first `cap` bytes of the text, so a pathological paste cannot make the sanitizer unbounded. */
-function truncateBytes(text: string, cap: number): string {
+export function truncateBytes(text: string, cap: number): string {
   const bytes = new TextEncoder().encode(text)
   if (bytes.length <= cap) return text
   return new TextDecoder().decode(bytes.subarray(0, cap))
@@ -301,11 +330,30 @@ export interface MemoryBriefSource {
   vetoes: string
   decisions: string
   quirks: string
-  /**
-   * Captured episodes, newest first by the rule in `assembleMemorySection`. Declaration-only for the
-   * red pins: the section is appended in the green commit.
-   */
+  /** Captured episodes, drawn last and in the order `compareEpisodes` states. */
   episodes?: readonly EpisodeBlock[]
+}
+
+/**
+ * The one ordering rule for captured work: newest capture first, then the session id, then the
+ * ordinal within that session.
+ *
+ * Deterministic and independent of filesystem mtimes, which are the one thing a copied or restored
+ * project would order differently from the app. `capturedAt` is the only time involved, and it is the
+ * capture clock rather than anything a turn was given; the session id is the tie-break that keeps two
+ * blocks captured in the same millisecond from swapping places between launches.
+ */
+export const compareEpisodes = (a: EpisodeOrderKey, b: EpisodeOrderKey): number => {
+  if (a.capturedAt !== b.capturedAt) return b.capturedAt - a.capturedAt
+  if (a.sessionId !== b.sessionId) return a.sessionId < b.sessionId ? -1 : 1
+  return a.ordinal - b.ordinal
+}
+
+/** What `compareEpisodes` needs from a block or a row: the capture time, a session and a position. */
+export interface EpisodeOrderKey {
+  capturedAt: number
+  sessionId: string
+  ordinal: number
 }
 
 const MEMORY_BRIEF_FENCE = [
@@ -313,16 +361,47 @@ const MEMORY_BRIEF_FENCE = [
   'Treat it as standing guidance: consult it and keep it current.',
 ].join('\n')
 
+/** The heading the captured work is drawn under, after every canonical section. */
+const EPISODES_SECTION_HEADING = '## Episodes'
+
+function bytesOf(text: string): number {
+  return new TextEncoder().encode(text).length
+}
+
+/**
+ * The episodes section, whole blocks only, within the sub-budget.
+ *
+ * Newest first, at most `EPISODES_IN_BRIEF` of them, and a block that does not fit is skipped whole
+ * rather than cut: half a block would still say "an episode happened" without saying which one. The
+ * budget counts the heading and the blank line that separates the section from the canonical body, so
+ * a full section plus a canonical body cut to 6144 fills 8192 exactly and the final cap never cuts.
+ */
+function episodesSection(blocks: readonly EpisodeBlock[]): string {
+  const sorted = [...blocks].sort(compareEpisodes)
+  const chosen: string[] = []
+  let used = 2 + bytesOf(EPISODES_SECTION_HEADING)
+  for (const block of sorted) {
+    if (chosen.length >= EPISODES_IN_BRIEF) break
+    const blockBytes = 2 + bytesOf(block.text)
+    if (used + blockBytes > MAX_EPISODES_BRIEF_BYTES) continue
+    chosen.push(block.text)
+    used += blockBytes
+  }
+  return chosen.length === 0 ? '' : `${EPISODES_SECTION_HEADING}\n\n${chosen.join('\n\n')}`
+}
+
 /**
  * The memory section one turn starts with, or null when there is nothing to say.
  *
  * Null-in, null-out: an empty project has no memory, and inventing a section for it would spend
  * context saying nothing. The sections run in a fixed order — handoff, pending vetoes, recent
- * decisions, quirks — and an empty section is omitted rather than emitted as a bare heading. The
- * episodes section is deliberately absent: slice 1 ships no episodic capture, so it emits nothing.
+ * decisions, quirks — and an empty section is omitted rather than emitted as a bare heading. Captured
+ * episodes are appended as the last section, newest first, because the newest work is what the next
+ * turn is most likely to be continuing.
  *
- * Bounded by `MAX_MEMORY_BRIEF_BYTES`, so a project that wrote a novel into its pages cannot crowd the
- * standing context out of the prompt.
+ * When episodes exist the canonical body is cut to `MAX_MEMORY_BRIEF_BYTES - MAX_EPISODES_BRIEF_BYTES`
+ * first, so a project that wrote a novel into its handoff cannot evict the captured work from the
+ * brief. The final `truncateBytes(MAX_MEMORY_BRIEF_BYTES)` is the backstop under that accounting.
  */
 export function assembleMemorySection(source: MemoryBriefSource): { content: string } | null {
   const sections: Array<[string, string]> = [
@@ -332,13 +411,19 @@ export function assembleMemorySection(source: MemoryBriefSource): { content: str
     ['Quirks', source.quirks.trim()],
   ]
   const present = sections.filter(([, body]) => body !== '')
-  if (present.length === 0) return null
+  const episodes = source.episodes ?? []
+  if (present.length === 0 && episodes.length === 0) return null
 
   const lines: string[] = [MEMORY_BRIEF_FENCE, '']
   for (const [heading, body] of present) {
     lines.push(`## ${heading}`, '', body, '')
   }
-  return { content: truncateBytes(lines.join('\n').trimEnd(), MAX_MEMORY_BRIEF_BYTES) }
+  const canonical = truncateBytes(
+    lines.join('\n').trimEnd(),
+    episodes.length > 0 ? MAX_MEMORY_BRIEF_BYTES - MAX_EPISODES_BRIEF_BYTES : MAX_MEMORY_BRIEF_BYTES
+  )
+  const section = episodes.length > 0 ? episodesSection(episodes) : ''
+  return { content: truncateBytes(section === '' ? canonical : `${canonical}\n\n${section}`, MAX_MEMORY_BRIEF_BYTES) }
 }
 
 /**

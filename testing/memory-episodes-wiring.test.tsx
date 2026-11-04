@@ -5,6 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { MemoryPanel } from '@/app/components/workbench/memory-panel'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { queryClient } from '@/conveyor/client'
+import { memoryStore, type MemoryState } from '@/conveyor/stores/memory'
 import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -23,30 +24,60 @@ const OLDEST = '11111111-2222-4333-8444-555555555555'
 const NEWEST = '22222222-3333-4444-8555-666666666666'
 const MIDDLE = '33333333-4444-4555-8666-777777777777'
 
-const PAGES = [
+const PAGES: MemoryState['pages'] = [
   { page: 'handoff', exists: true, revisions: 0 },
   { page: 'decisions', exists: false, revisions: 0 },
   { page: 'parked', exists: false, revisions: 0 },
   { page: 'quirks', exists: false, revisions: 0 },
 ]
 
-const EPISODES = [
+const EPISODES: MemoryState['episodes'] = [
   { sessionId: OLDEST, turnId: 'assistant-old', capturedAt: 1_000, ordinal: 1, ask: 'the oldest captured ask' },
   { sessionId: NEWEST, turnId: 'assistant-new', capturedAt: 3_000, ordinal: 2, ask: 'the newest captured ask' },
   { sessionId: MIDDLE, turnId: 'assistant-mid', capturedAt: 2_000, ordinal: 1, ask: 'the middle captured ask' },
 ]
 
+/**
+ * The memory store as main would serve it: the seeded state, and the definition's own reducer behind
+ * the channel. The transport answers a store action itself, so without this loop a dispatched
+ * preference would leave no trace for the assertion and the mirror would never move.
+ */
+function fakeMemoryMain(stub: BridgeStub, initial: MemoryState): { state: () => MemoryState } {
+  let state = structuredClone(initial)
+  stubStore(stub, 'memory', state)
+  const invoke = stub.bridge.invoke
+
+  stub.bridge.invoke = async (channel, method, ...args) => {
+    if (channel === 'conveyor:store:memory' && method in memoryStore.actions) {
+      stub.calls.push({ channel, method, args })
+      const payload = (args[0] as { payload?: unknown } | undefined)?.payload
+      const next = structuredClone(state)
+      const reduce = memoryStore.actions[method as keyof typeof memoryStore.actions] as unknown as (
+        draft: MemoryState,
+        input: unknown
+      ) => void
+      reduce(next, payload)
+      state = next
+      queueMicrotask(() => stub.pushToChannel('conveyor:store:memory:changed', structuredClone(state)))
+      return state
+    }
+    return invoke(channel, method, ...args)
+  }
+
+  return { state: () => state }
+}
+
 /** The panel's own reads, and the memory store it mirrors. Nothing else is on screen here. */
-function stubPanel(episodesEnabled = true): BridgeStub {
+function stubPanel(episodesEnabled = true): { stub: BridgeStub; state: () => MemoryState } {
   const stub = createBridgeStub({
     listPages: () => PAGES,
     readPage: () => ({ content: 'ship the small release', revisions: 0 }),
     search: () => [],
   })
   stubStore(stub, 'workspace', { rootPath: ROOT, recentRoots: [] })
-  stubStore(stub, 'memory', { pages: PAGES, episodes: EPISODES, episodesEnabled })
+  const main = fakeMemoryMain(stub, { pages: PAGES, episodes: EPISODES, episodesEnabled })
   setActiveStub(stub)
-  return stub
+  return { stub, state: main.state }
 }
 
 function renderPanel() {
@@ -75,23 +106,26 @@ beforeEach(() => {
 
 describe('the episode capture switch', () => {
   it('reflects the stored setting and dispatches the ruled action on click', async () => {
-    const stub = stubPanel(false)
+    const { stub, state } = stubPanel(false)
     renderPanel()
 
     const toggle = await screen.findByRole('switch', { name: 'Capture episodes' })
     expect(toggle.getAttribute('aria-checked')).toBe('false')
 
     await userEvent.click(toggle)
-    await waitFor(() => {
-      expect(
-        stub.calls.some(
-          (call) =>
-            call.channel === 'conveyor:store:memory' &&
-            call.method === 'setEpisodesEnabled' &&
-            (call.args[0] as { enabled: boolean }).enabled === true
-        )
-      ).toBe(true)
-    })
+
+    await waitFor(() => expect(state().episodesEnabled).toBe(true))
+    expect(
+      stub.calls.some(
+        (call) =>
+          call.channel === 'conveyor:store:memory' &&
+          call.method === 'setEpisodesEnabled' &&
+          // The store client wraps an action's payload: `invoke(channel, name, { payload })`.
+          (call.args[0] as { payload?: { enabled?: boolean } }).payload?.enabled === true
+      )
+    ).toBe(true)
+    // And the mirror main pushes back puts the switch where the user put it.
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'))
   })
 
   it('is checked when the stored setting is on, and states its name to a reader', async () => {

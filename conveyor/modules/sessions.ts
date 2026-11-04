@@ -23,6 +23,7 @@ import { exportTitle } from '../protocol/session-title'
 import { IMAGE_ATTACH_NOT_FOUND } from '../protocol/image-attachments'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 import { deleteSessionAttachments } from './image-attachments'
+import { captureEpisode, deleteEpisodePagesForSession, sweepOrphanedEpisodePages } from './memory'
 
 /**
  * Transcript storage — one JSON file per session, under `userData/sessions`.
@@ -150,6 +151,11 @@ export function orphanedTranscriptFiles(files: string[], liveSessionIds: string[
  * Each file is removed independently and failures are not fatal: a sweep that cannot delete one file
  * must not stop the app from starting, or leave the remaining orphans behind. The count returned is
  * therefore of files actually deleted, not of orphans found.
+ *
+ * The same pass extends to the episode pages: a captured turn is memory, and a session deleted without
+ * its page would strand that page forever. The episode sweep is called beside the transcripts rather
+ * than folded into the same loop, because the two live in different directories and fail
+ * independently; a housekeeping failure on one must not stop the other.
  */
 export async function sweepOrphanedTranscripts(liveSessionIds: string[]): Promise<number> {
   const dir = sessionsDir()
@@ -160,7 +166,7 @@ export async function sweepOrphanedTranscripts(liveSessionIds: string[]): Promis
   } catch {
     // No directory yet, or it cannot be read. Either way there is nothing this can safely do, and
     // startup must not fail over housekeeping.
-    return 0
+    files = []
   }
 
   const orphans = orphanedTranscriptFiles(files, liveSessionIds)
@@ -173,6 +179,12 @@ export async function sweepOrphanedTranscripts(liveSessionIds: string[]): Promis
     } catch {
       // Left for the next startup rather than raised: one undeletable file must not block the rest.
     }
+  }
+
+  try {
+    deleted += await sweepOrphanedEpisodePages(app.getPath('userData'), liveSessionIds)
+  } catch {
+    // A sweep that cannot run is housekeeping failing, not startup failing.
   }
 
   return deleted
@@ -307,9 +319,18 @@ export function setSessionMoveSink(next: ((payload: { id: string; destination: s
 }
 
 export const sessionsModule = defineModule({
-  /** Persist one transcript. Called at turn boundaries, not per token. */
+  /**
+   * Persist one transcript. Called at turn boundaries, not per token.
+   *
+   * The save is the transcript and nothing else; the episode capture is a note taken beside it, after
+   * the atomic write has landed and fire-and-forget. That ordering is what makes capture unable to fail
+   * a save: the call resolves quietly on every failure, and the renderer never learns it happened.
+   * Idempotence is the turn id's — a debounced re-save and a regenerated reply both rewrite the one
+   * block — never a count of writes, which this side could not measure.
+   */
   saveTranscript: command(z.object({ id: idSchema, snapshot: transcriptSnapshotSchema }), async ({ input }) => {
     await saveTranscriptFile(input.id, input.snapshot)
+    void captureEpisode(input.id, input.snapshot)
   }),
 
   /**
@@ -321,8 +342,8 @@ export const sessionsModule = defineModule({
   }),
 
   /**
-   * Remove one transcript, and the images its turns referenced. A session with no file is already in the
-   * desired state.
+   * Remove one transcript, the images its turns referenced, and the episodes it was captured into. A
+   * session with no file is already in the desired state.
    *
    * The attachments go with the conversation, and that is the whole retention rule: a reference in a turn
    * points at a folder named after the session, so the folder is meaningless the moment the session is.
@@ -330,6 +351,10 @@ export const sessionsModule = defineModule({
    * swallowed here by *code* — nothing was stored, which is the ordinary case — while any other failure
    * is reported like the transcript's own, since the startup sweep exists precisely because a delete
    * that failed halfway leaves bytes nothing will reference again.
+   *
+   * The episode pages are removed best-effort and deliberately after the transcript: the startup sweep
+   * collects a page a failed unlink leaves behind, and a conversation whose metadata is already gone
+   * must not fail because a capture page could not go with it.
    */
   deleteTranscript: command(z.object({ id: idSchema }), async ({ input }) => {
     try {
@@ -337,6 +362,12 @@ export const sessionsModule = defineModule({
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       throw new ConveyorError('SESSION_DELETE_FAILED', `Could not delete this conversation. ${reason}`)
+    }
+
+    try {
+      await deleteEpisodePagesForSession(app.getPath('userData'), input.id)
+    } catch {
+      // Left to the startup sweep, which exists for exactly this.
     }
 
     try {
