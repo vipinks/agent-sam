@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { advanceSectionCollapse, openingSectionCollapse, type SectionCollapse } from '@/conveyor/protocol/collapse'
+import { MOTION_QUICK_MS, useClosingState } from './motion'
 
 /**
  * One step of a transcript, as a section with a header that folds it.
@@ -103,6 +104,9 @@ export function CollapsibleSection({
   children: ReactNode
 }) {
   const { expanded, toggle } = useSectionCollapse(inFlight, defaultOpen)
+  // The body is never unmounted; the fold's exit is a class swap and a deferred `hidden`, so the
+  // section can fade where it stands without taking its record out of the document.
+  const { closing } = useClosingState(expanded, MOTION_QUICK_MS)
 
   return (
     <section data-slot={slot} className={cn('overflow-hidden', className)}>
@@ -132,14 +136,18 @@ export function CollapsibleSection({
         {trailing}
       </button>
 
-      {/* Mounted either way; `hidden` is what folds it. Not `hidden` as a utility class and not a
-          conditional render — an attribute a test can read, and a body that is still there. */}
+      {/* Mounted either way; `hidden` is what folds it, written after the exit window rather than on
+          the frame the rule folds it. Not `hidden` as a utility class and not a conditional render —
+          an attribute a test can read, and a body that is still there. */}
       <div
         data-slot={`${slot}-body`}
         data-expanded={expanded}
-        hidden={!expanded}
+        data-closing={closing ? 'true' : undefined}
+        hidden={!expanded && !closing}
+        inert={closing}
         className={cn(
-          'data-[expanded=true]:animate-in data-[expanded=true]:fade-in-0 data-[expanded=true]:slide-in-from-top-1 data-[expanded=true]:duration-150 data-[expanded=true]:ease-out motion-reduce:animate-none',
+          'data-[expanded=true]:animate-in data-[expanded=true]:fade-in-0 data-[expanded=true]:slide-in-from-top-1 data-[expanded=true]:duration-150 data-[expanded=true]:ease-out motion-reduce:animate-none motion-reduce:data-[expanded=true]:animate-none',
+          'data-[closing=true]:animate-out data-[closing=true]:fade-out-0 data-[closing=true]:slide-out-to-top-1 data-[closing=true]:duration-150 data-[closing=true]:ease-out motion-reduce:animate-none motion-reduce:data-[closing=true]:animate-none',
           bodyClassName
         )}
       >

@@ -23,6 +23,8 @@ export function MentionPicker({
   atCap,
   onSelect,
   onInteractOutside,
+  closing = false,
+  forceMount = false,
 }: {
   /** The filtered rows, in display order. */
   paths: readonly string[]
@@ -33,6 +35,10 @@ export function MentionPicker({
   atCap: boolean
   onSelect: (path: string) => void
   onInteractOutside?: ComponentProps<typeof PopoverContent>['onInteractOutside']
+  /** Drawn for the popover's exit window: visible, but not a place the pointer can land. */
+  closing?: boolean
+  /** Kept mounted while the popover is closed so the content's own `data-[state=closed]` exit plays. */
+  forceMount?: boolean
 }) {
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -54,7 +60,8 @@ export function MentionPicker({
       onOpenAutoFocus={(event) => event.preventDefault()}
       onCloseAutoFocus={(event) => event.preventDefault()}
       onInteractOutside={onInteractOutside}
-      className="max-h-64 w-80 overflow-y-auto p-1"
+      forceMount={forceMount ? true : undefined}
+      className={cn('max-h-64 w-80 overflow-y-auto p-1', closing && 'pointer-events-none')}
     >
       {paths.length === 0 ? (
         <p className="px-2 py-1.5 text-[12px] text-muted-foreground">{emptyMessage}</p>

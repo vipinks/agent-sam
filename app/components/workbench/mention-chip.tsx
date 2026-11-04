@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { mentionTail } from './mentions'
+import { MOTION_QUICK_MS, useLeavingItems } from './motion'
 
 /**
  * One attached file, as a chip.
@@ -18,23 +19,29 @@ export function MentionChip({
   path,
   onRemove,
   animateOnMount = false,
+  leaving = false,
 }: {
   path: string
   onRemove?: (path: string) => void
   /** Composer chips arrive; chips in a virtualized transcript reappear on scroll and must stay still. */
   animateOnMount?: boolean
+  /** Drawn for one exit window after the composer dropped it; no remove control while it goes. */
+  leaving?: boolean
 }) {
   return (
     <span
       title={path}
+      data-leaving={leaving ? 'true' : undefined}
       className={cn(
         'inline-flex max-w-56 min-w-0 items-center gap-1 rounded-md bg-background py-0.5 pr-0.5 pl-1.5 font-mono text-[11px] text-foreground shadow-sm',
-        animateOnMount &&
-          'animate-in fade-in zoom-in-95 slide-in-from-left-1 duration-150 ease-out motion-reduce:animate-none'
+        leaving
+          ? 'pointer-events-none animate-out fade-out zoom-out-95 slide-out-to-left-1 duration-150 ease-out motion-reduce:animate-none'
+          : animateOnMount &&
+              'animate-in fade-in zoom-in-95 slide-in-from-left-1 duration-150 ease-out motion-reduce:animate-none'
       )}
     >
       <span className="truncate">{mentionTail(path)}</span>
-      {onRemove && (
+      {onRemove && !leaving && (
         <button
           type="button"
           // The path, not the tail: a screen reader is told which file, and two chips for `index.ts`
@@ -62,10 +69,21 @@ export function MentionChipRow({
   animateOnMount?: boolean
   className?: string
 }) {
+  const rendered = useLeavingItems(paths, (path) => path, MOTION_QUICK_MS)
+  // Nothing to draw, and nothing leaving: the row keeps itself mounted through the leaving union and
+  // only disappears once that union is empty, so the caller must not conditionally render it.
+  if (rendered.length === 0) return null
+
   return (
     <div className={cn('flex flex-wrap gap-1', className)}>
-      {paths.map((path) => (
-        <MentionChip key={path} path={path} onRemove={onRemove} animateOnMount={animateOnMount} />
+      {rendered.map(({ item, key, leaving }) => (
+        <MentionChip
+          key={key}
+          path={item}
+          onRemove={leaving ? undefined : onRemove}
+          animateOnMount={animateOnMount}
+          leaving={leaving}
+        />
       ))}
     </div>
   )

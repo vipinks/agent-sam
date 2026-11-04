@@ -24,12 +24,18 @@ export function CommandPicker({
   activeIndex,
   onSelect,
   onInteractOutside,
+  closing = false,
+  forceMount = false,
 }: {
   /** The rows to offer, in display order, already filtered and already hidden where hidden applies. */
   commands: readonly ComposerCommand[]
   activeIndex: number
   onSelect: (id: ComposerCommand['id']) => void
   onInteractOutside?: ComponentProps<typeof PopoverContent>['onInteractOutside']
+  /** Drawn for the popover's exit window: visible, but not a place the pointer can land. */
+  closing?: boolean
+  /** Kept mounted while the popover is closed so the content's own `data-[state=closed]` exit plays. */
+  forceMount?: boolean
 }) {
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -47,7 +53,8 @@ export function CommandPicker({
       onOpenAutoFocus={(event) => event.preventDefault()}
       onCloseAutoFocus={(event) => event.preventDefault()}
       onInteractOutside={onInteractOutside}
-      className="max-h-64 w-80 overflow-y-auto p-1"
+      forceMount={forceMount ? true : undefined}
+      className={cn('max-h-64 w-80 overflow-y-auto p-1', closing && 'pointer-events-none')}
     >
       <div data-slot="command-picker">
         {commands.length === 0 ? (

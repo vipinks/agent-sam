@@ -41,6 +41,7 @@ import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { MOTION_QUICK_MS, useLeavingItems } from './motion'
 
 /** One skill the composer knows the name of, for the chip row. */
 export interface SkillChip {
@@ -67,23 +68,39 @@ export function SkillChipRow({
   /** Placement only — the composer decides where the row sits, this decides how it looks. */
   className?: string
 }) {
-  if (skills.length === 0) return null
+  const rendered = useLeavingItems(skills, (skill) => skill.id, MOTION_QUICK_MS)
+  if (rendered.length === 0) return null
 
   return (
     <div className={cn('flex flex-wrap gap-1', className)} aria-label="Active skills">
-      {skills.map((skill) => (
-        <Badge key={skill.id} variant="secondary" className="max-w-56 min-w-0 gap-1 pr-0.5 pl-1.5" title={skill.id}>
+      {rendered.map(({ item: skill, key, leaving }) => (
+        <Badge
+          key={key}
+          variant="secondary"
+          data-leaving={leaving ? 'true' : undefined}
+          className={cn(
+            'max-w-56 min-w-0 gap-1 pr-0.5 pl-1.5',
+            leaving
+              ? 'pointer-events-none animate-out fade-out zoom-out-95 slide-out-to-left-1 duration-150 ease-out motion-reduce:animate-none'
+              : // The arrival is new beside the exit: a chip that fades out of a row that snapped in
+                // would be motion in one direction only, which is what this pass exists to remove.
+                'animate-in fade-in zoom-in-95 slide-in-from-left-1 duration-150 ease-out motion-reduce:animate-none'
+          )}
+          title={skill.id}
+        >
           <BookOpen className="size-3 shrink-0" aria-hidden="true" />
           <span className="truncate font-normal">{skill.title}</span>
-          <button
-            type="button"
-            aria-label={`Remove skill ${skill.id}`}
-            disabled={disabled}
-            onClick={() => onRemove(skill.id)}
-            className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-          >
-            <X className="size-3" aria-hidden="true" />
-          </button>
+          {!leaving && (
+            <button
+              type="button"
+              aria-label={`Remove skill ${skill.id}`}
+              disabled={disabled}
+              onClick={() => onRemove(skill.id)}
+              className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <X className="size-3" aria-hidden="true" />
+            </button>
+          )}
         </Badge>
       ))}
     </div>

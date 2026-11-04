@@ -16,6 +16,7 @@ import {
 import { MentionChipRow } from './mention-chip'
 import { AttachmentRefChipRow } from './attachment-chip'
 import { contextNoticeText } from './mentions'
+import { useLeavingItems } from './motion'
 import { branchCount, branchPosition, type AgentTurn } from './agent-session'
 
 /**
@@ -546,6 +547,8 @@ function CopyMessageButton({ value, label }: { value: string; label: string }) {
     timer.current = setTimeout(() => setCopied(false), COPIED_MS)
   }
 
+  const glyphs = useLeavingItems([copied ? 'check' : 'copy'] as const, (glyph) => glyph)
+
   return (
     <button
       type="button"
@@ -553,17 +556,25 @@ function CopyMessageButton({ value, label }: { value: string; label: string }) {
       onClick={() => void copy()}
       className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
     >
-      {copied ? (
-        <Check
-          key="check"
-          className="size-3.5 animate-in text-success fade-in zoom-in-50 duration-150 ease-out motion-reduce:animate-none"
-        />
-      ) : (
-        <Copy
-          key="copy"
-          className="size-3.5 animate-in fade-in zoom-in-50 duration-150 ease-out motion-reduce:animate-none"
-        />
-      )}
+      {/* One grid cell for both glyphs: while one leaves and the other arrives they occupy the same
+          `size-3.5` square, so the button cannot grow or shift as the swap happens. */}
+      <span data-slot="copy-glyph-stack" className="grid size-3.5 place-items-center">
+        {glyphs.map(({ item, key, leaving }) => {
+          const Glyph = item === 'check' ? Check : Copy
+          return (
+            <Glyph
+              key={key}
+              className={cn(
+                'col-start-1 row-start-1 size-3.5',
+                item === 'check' && 'text-success',
+                leaving
+                  ? 'animate-out fade-out zoom-out-50 duration-150 ease-out motion-reduce:animate-none'
+                  : 'animate-in fade-in zoom-in-50 duration-150 ease-out motion-reduce:animate-none'
+              )}
+            />
+          )
+        })}
+      </span>
     </button>
   )
 }

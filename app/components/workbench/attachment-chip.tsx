@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { conveyor } from '@/conveyor/client'
 import { attachmentReadNotice, type ImageAttachmentRef } from '@/conveyor/protocol/image-attachments'
 import { attachmentSizeLabel, type DraftAttachment } from './attachments'
+import { MOTION_QUICK_MS, useLeavingItems } from './motion'
 
 /**
  * One image the composer is about to send, and one image a sent message carried.
@@ -69,15 +70,40 @@ function useThumbnailUrl(image: DraftAttachment): string | null {
   return url
 }
 
+/**
+ * The composer's chip motion: the arrival the chip already had, and the exit that mirrors it.
+ *
+ * The exit is the same 150 ms ease-out in the opposite direction. `pointer-events-none` is part of it
+ * rather than a styling nicety: a leaving chip is a picture on its way out, not a control, and the
+ * pointer must not be able to land on a remove button that no longer exists.
+ */
+const CHIP_ARRIVAL =
+  'animate-in fade-in zoom-in-95 slide-in-from-left-1 duration-150 ease-out motion-reduce:animate-none'
+const CHIP_EXIT =
+  'pointer-events-none animate-out fade-out zoom-out-95 slide-out-to-left-1 duration-150 ease-out motion-reduce:animate-none'
+
 /** One image in the composer's draft: its picture, its name, its size, and the way to take it off. */
-function AttachmentChip({ image, onRemove }: { image: DraftAttachment; onRemove?: (id: string) => void }) {
+function AttachmentChip({
+  image,
+  onRemove,
+  leaving = false,
+}: {
+  image: DraftAttachment
+  onRemove?: (id: string) => void
+  /** Drawn for one exit window after the draft dropped it; no remove control while it goes. */
+  leaving?: boolean
+}) {
   const thumbnail = useThumbnailUrl(image)
 
   return (
     <span
       data-slot="attachment-chip"
+      data-leaving={leaving ? 'true' : undefined}
       title={image.name}
-      className="inline-flex max-w-56 min-w-0 animate-in items-center gap-1.5 rounded-md bg-background py-0.5 pr-0.5 pl-1 text-[11px] text-foreground shadow-sm fade-in zoom-in-95 slide-in-from-left-1 duration-150 ease-out motion-reduce:animate-none"
+      className={cn(
+        'inline-flex max-w-56 min-w-0 items-center gap-1.5 rounded-md bg-background py-0.5 pr-0.5 pl-1 text-[11px] text-foreground shadow-sm',
+        leaving ? CHIP_EXIT : CHIP_ARRIVAL
+      )}
     >
       {thumbnail ? (
         // Decorative: the file's name is the text beside it, so a screen reader has nothing to gain from
@@ -91,7 +117,7 @@ function AttachmentChip({ image, onRemove }: { image: DraftAttachment; onRemove?
       )}
       <span className="truncate">{image.name}</span>
       <span className="shrink-0 text-muted-foreground">{attachmentSizeLabel(image.size)}</span>
-      {onRemove && (
+      {onRemove && !leaving && (
         <button
           type="button"
           // The name, not the size: two screenshots can arrive under the same name, and only the id
@@ -117,10 +143,17 @@ export function AttachmentChipRow({
   onRemove?: (id: string) => void
   className?: string
 }) {
+  const rendered = useLeavingItems(images, (image) => image.id, MOTION_QUICK_MS)
+  // The row unmounts itself only after the leaving union is empty; a caller that hid it on
+  // `images.length` would take the last chip's exit — and its object URL — with it.
+  if (rendered.length === 0) return null
+
   return (
     <div data-slot="attachment-chip-row" className={cn('flex flex-wrap gap-1', className)}>
-      {images.map((image) => (
-        <AttachmentChip key={image.id} image={image} onRemove={onRemove} />
+      {/* The union of what is attached and what is leaving. A removed image is still drawn for one
+          window, which is also what keeps its object URL alive until its own unmount revokes it. */}
+      {rendered.map(({ item, key, leaving }) => (
+        <AttachmentChip key={key} image={item} onRemove={leaving ? undefined : onRemove} leaving={leaving} />
       ))}
     </div>
   )

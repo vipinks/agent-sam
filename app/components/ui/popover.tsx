@@ -33,10 +33,11 @@ function PopoverContent({
   className,
   align = 'start',
   sideOffset = 6,
+  forceMount,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal forceMount={forceMount}>
       {/* A popover is a card on the page and is portalled out of the tree that opened it, so its own family
           is declared here: a field inside one recesses rather than taking the plate of the surface it lies on. */}
       <SurfaceProvider kind="card">
@@ -44,8 +45,12 @@ function PopoverContent({
           data-slot="popover-content"
           align={align}
           sideOffset={sideOffset}
+          // The portal is a `Presence` of its own: without the same `forceMount` it unmounts the whole
+          // subtree before the content's own exit can play, which is why a closed picker vanished on the
+          // frame it closed rather than fading.
+          forceMount={forceMount}
           className={cn(
-            'z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md outline-none duration-150 ease-out zoom-in-95 zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 motion-reduce:animate-none',
+            'z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md outline-none duration-150 ease-out zoom-in-95 zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 motion-reduce:animate-none motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none',
             className
           )}
           {...props}

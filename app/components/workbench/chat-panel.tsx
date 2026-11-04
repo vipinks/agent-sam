@@ -59,6 +59,7 @@ import { MentionPicker } from './mention-picker'
 import { CommandNotice, CommandPicker, type CommandNoticeText } from './command-picker'
 import { MentionChipRow } from './mention-chip'
 import { AttachmentChipRow } from './attachment-chip'
+import { MOTION_QUICK_MS, useClosingState } from './motion'
 import {
   ATTACHMENT_ACCEPT_ATTRIBUTE,
   addDraftAttachment,
@@ -92,6 +93,7 @@ import {
   composerCommandAt,
   filterComposerCommands,
   parseComposerCommand,
+  type ComposerCommand,
   type ComposerCommandId,
   type ComposerCommandToken,
 } from '@/conveyor/protocol/composer-commands'
@@ -1042,6 +1044,36 @@ export function ChatPanel() {
   // Clamped rather than reset by an effect: narrowing the query can leave the index past the end, and
   // deriving the active row keeps the render and the selection in step without a second render.
   const activePickerIndex = mentionMatches.length === 0 ? 0 : Math.min(pickerIndex, mentionMatches.length - 1)
+
+  // The popover's exit is the primitive's, and it has never played: both pickers were mounted only
+  // while their state was open, so the content was gone on the same frame Radix set `data-state=closed`.
+  // The fix is a mount that outlives the state by one window. The last picker's view is snapshotted
+  // while it is open, so the exit draws the list the user was looking at rather than the empty list
+  // that selecting or dismissing leaves behind.
+  type PickerSnapshot =
+    | { kind: 'mention'; paths: readonly string[]; total: number; activeIndex: number; atCap: boolean }
+    | { kind: 'command'; commands: readonly ComposerCommand[]; activeIndex: number }
+
+  const pickerPopoverOpen = pickerOpen || commandOpen
+  const { closing: pickerClosing } = useClosingState(pickerPopoverOpen, MOTION_QUICK_MS)
+  const lastPicker = useRef<PickerSnapshot | null>(null)
+  const mentionView: Extract<PickerSnapshot, { kind: 'mention' }> | null = pickerOpen
+    ? {
+        kind: 'mention',
+        paths: mentionMatches,
+        total: allMentionFiles.length,
+        activeIndex: activePickerIndex,
+        atCap: mentionPaths.length >= MAX_MENTION_PATHS,
+      }
+    : null
+  const commandView: Extract<PickerSnapshot, { kind: 'command' }> | null = commandOpen
+    ? { kind: 'command', commands: commandRows, activeIndex: activeCommandIndex }
+    : null
+  if (mentionView) lastPicker.current = mentionView
+  else if (commandView) lastPicker.current = commandView
+  const closingView = pickerClosing ? lastPicker.current : null
+  const renderedMention = mentionView ?? (closingView?.kind === 'mention' ? closingView : null)
+  const renderedCommand = commandView ?? (closingView?.kind === 'command' ? closingView : null)
 
   // The skills the composer can offer, from the registered query: main scans the four folders a skill
   // may live in and hands back what it found, tier by tier. A session stores ids, so the titles behind
@@ -2746,7 +2778,7 @@ export function ChatPanel() {
               onPointerDown={startComposerDrag}
             />
             <Popover
-              open={pickerOpen || commandOpen}
+              open={pickerPopoverOpen}
               onOpenChange={(next) => {
                 // The picker can also be dismissed by the layer itself — Escape, or a click outside the
                 // composer. Both arrive here, and both mean the same thing: this token is no longer asking.
@@ -2767,25 +2799,24 @@ export function ChatPanel() {
                 What this conversation is working from, above the sentence being written about it. Chips
                 rather than a line of prose because the point is that they can be taken off again, and
                 beside the mention chips because both are "what goes with this message".
+
+                The three rows are drawn unconditionally, and each hides itself only when its current
+                list *and* its leaving union are empty. A `length > 0 &&` here would be the one thing
+                that defeated the exit: removing the last chip would unmount the row on the same frame,
+                taking the leaving chip (and an attachment's object URL) with it.
               */}
-                  {skillChips.length > 0 && (
-                    <SkillChipRow
-                      skills={skillChips}
-                      disabled={isStreaming || pending !== null}
-                      onRemove={sessions.toggleSkill}
-                      className="mb-2"
-                    />
-                  )}
-                  {mentionPaths.length > 0 && (
-                    <MentionChipRow paths={mentionPaths} onRemove={removeMention} animateOnMount className="mb-2" />
-                  )}
+                  <SkillChipRow
+                    skills={skillChips}
+                    disabled={isStreaming || pending !== null}
+                    onRemove={sessions.toggleSkill}
+                    className="mb-2"
+                  />
+                  <MentionChipRow paths={mentionPaths} onRemove={removeMention} animateOnMount className="mb-2" />
                   {/*
                 The images the next send will carry, beside the files for the same reason the files are
                 there: both are "what goes with this message", and both can be taken off again.
               */}
-                  {draftImages.length > 0 && (
-                    <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
-                  )}
+                  <AttachmentChipRow images={draftImages} onRemove={removeImage} className="mb-2" />
                   <Textarea
                     ref={textareaRef}
                     value={draft}
@@ -2899,25 +2930,29 @@ export function ChatPanel() {
                 </div>
               </PopoverAnchor>
 
-              {pickerOpen && (
+              {renderedMention && (
                 <MentionPicker
-                  paths={mentionMatches}
+                  paths={renderedMention.paths}
                   // The unfiltered count, so an empty list can say whether nothing matched or there is
                   // nothing to match at all.
-                  total={allMentionFiles.length}
-                  activeIndex={activePickerIndex}
-                  atCap={mentionPaths.length >= MAX_MENTION_PATHS}
+                  total={renderedMention.total}
+                  activeIndex={renderedMention.activeIndex}
+                  atCap={renderedMention.atCap}
                   onSelect={chooseMention}
                   onInteractOutside={keepComposerClicks}
+                  closing={closingView?.kind === 'mention'}
+                  forceMount={closingView?.kind === 'mention'}
                 />
               )}
 
-              {commandOpen && (
+              {renderedCommand && (
                 <CommandPicker
-                  commands={commandRows}
-                  activeIndex={activeCommandIndex}
+                  commands={renderedCommand.commands}
+                  activeIndex={renderedCommand.activeIndex}
                   onSelect={runCommand}
                   onInteractOutside={keepComposerClicks}
+                  closing={closingView?.kind === 'command'}
+                  forceMount={closingView?.kind === 'command'}
                 />
               )}
             </Popover>
