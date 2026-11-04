@@ -6,6 +6,16 @@ coding assistant.
 
 <br>
 
+## 2026-11-05: v1.15.4 — Memory episodic capture and object-removal exits
+
+- test(memory): pin memory slice 2 episodes
+- feat(memory): memory slice 2 episodic capture — per-session episode pages, capture switch in the Memory panel, turn-start brief episodes section
+- a11y(select): guard the select's motion under reduced motion
+- test(motion): red pins for the object-removal exits
+- feat(motion): six object-removal exits — collapsible fold, composer attachment/mention/skill chips, copy glyph, mention/command picker dismissal, all 150 ms ease-out mirroring their arrivals
+
+<br>
+
 ## 2026-11-03: v1.15.3 — Memory v1 slice 1 and model combos
 
 - test(memory): pin memory v1 slice 1
