@@ -227,14 +227,17 @@ describe('the slash picker', () => {
     const area = await composer()
     await userEvent.type(area, 'see src/utils')
 
-    expect(screen.queryByRole('listbox', { name: 'Run a command' })).toBeNull()
+    // No picker ever opened for a slash that is not the first character, so this is the null state
+    // rather than a closing window.
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Run a command' })).toBeNull())
 
     // And once the draft moves past the word there is nothing to offer either: a command takes no
-    // arguments, so `/new please` is a sentence from the first space onwards.
+    // arguments, so `/new please` is a sentence from the first space onwards. The picker had opened for
+    // `/new`, so its listbox is leaving for the quick window rather than gone on the keystroke.
     await userEvent.clear(area)
     await userEvent.type(area, '/new please')
 
-    expect(screen.queryByRole('listbox', { name: 'Run a command' })).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Run a command' })).toBeNull())
     expect(area.value).toBe('/new please')
   })
 
@@ -252,7 +255,8 @@ describe('the slash picker', () => {
     await userEvent.keyboard('{Enter}')
 
     await waitFor(() => expect(useWorkbenchStore.getState().bottomPanelOpen).toBe(true))
-    expect(screen.queryByRole('listbox', { name: 'Run a command' })).toBeNull()
+    // The panel opened at once; the listbox is unmounted at the end of its own exit window.
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Run a command' })).toBeNull())
   })
 
   it('runs the row that was clicked, without sending anything', async () => {

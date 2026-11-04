@@ -188,7 +188,8 @@ describe('the @ picker', () => {
 
     // The chip is the second file, because that is the one the arrow key chose.
     expect(await screen.findByTitle('src/lib/utils.ts')).toBeTruthy()
-    expect(screen.queryByRole('listbox')).toBeNull()
+    // The listbox is unmounted at the end of its exit window rather than on the selection frame.
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
     // And the `@src` it was chosen from is consumed: the token became the chip.
     expect(area.value).toBe('')
   })
@@ -268,12 +269,33 @@ describe('the chips', () => {
     await userEvent.type(area, '{Enter}')
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove src/app.tsx' }))
-    expect(screen.queryByTitle('src/app.tsx')).toBeNull()
+    // The chip leaves on the exit timer; the send that follows reads the list, not the drawing.
+    await waitFor(() => expect(screen.queryByTitle('src/app.tsx')).toBeNull())
 
     await userEvent.type(area, 'explain it{Enter}')
 
     expect(await screen.findByText('explain it')).toBeTruthy()
     expect((sent[0] as { mentionPaths?: string[] }).mentionPaths).toEqual(['src/lib/utils.ts'])
+  })
+
+  it('keeps the row mounted through the last chip’s exit, not just the chip', async () => {
+    stubWorkspace()
+    renderChat()
+
+    const area = await composer()
+    await userEvent.type(area, '@app')
+    await screen.findByRole('option', { name: 'src/app.tsx' })
+    await userEvent.type(area, '{Enter}')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove src/app.tsx' }))
+
+    // The composer used to hide the whole row on `paths.length > 0`, which unmounted the leaving chip
+    // on the same frame the removal happened. The row has to survive its own last item's window.
+    expect(screen.getByTitle('src/app.tsx')).toBeTruthy()
+    expect(screen.getByTitle('src/app.tsx').getAttribute('data-leaving')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Remove src/app.tsx' })).toBeNull()
+
+    await waitFor(() => expect(screen.queryByTitle('src/app.tsx')).toBeNull())
   })
 
   // Twenty sequential selections cross the real query and key handling; the default timeout is a
@@ -344,9 +366,10 @@ describe('sending with mentions', () => {
     // The payload main validates and reads the files from. Paths, and only paths.
     expect((sent[0] as { mentionPaths?: string[] }).mentionPaths).toEqual(['src/app.tsx'])
 
-    // The composer is empty of the chip; the message keeps it as a record in its bubble.
+    // The composer is empty of the chip after its exit window; the message keeps it as a record in
+    // its bubble, which is the one that remains once the composer's copy has gone.
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove src/app.tsx' })).toBeNull())
-    expect(screen.getByTitle('src/app.tsx')).toBeTruthy()
+    await waitFor(() => expect(screen.getAllByTitle('src/app.tsx')).toHaveLength(1))
   })
 
   it('omits mentionPaths when nothing was attached', async () => {

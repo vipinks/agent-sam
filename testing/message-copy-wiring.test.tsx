@@ -110,6 +110,46 @@ describe('copy on a message bubble', () => {
     )
   })
 
+  it('keeps the outgoing glyph in the same cell for the exit window, then drops it', async () => {
+    const { writeText } = withClipboard()
+    // Faked after the clipboard is set up, for the reason stated below the imports: setup() arms its
+    // own wait on the real clock, and this test fires one synchronous click rather than using it.
+    vi.useFakeTimers()
+    render(<MessageBubble message={userTurn()} />)
+
+    const button = screen.getByRole('button', { name: 'Copy message' })
+    fireEvent.click(button)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(writeText).toHaveBeenCalledTimes(1)
+
+    const copy = button.querySelector('svg.lucide-copy')
+    const check = button.querySelector('svg.lucide-check')
+    expect(check).toBeTruthy()
+    // Both glyphs are drawn for the window, stacked in one grid cell so the button cannot grow or shift
+    // as the old glyph leaves.
+    expect(copy).toBeTruthy()
+    const leaving = copy?.getAttribute('class')?.split(/\s+/).filter(Boolean) ?? []
+    expect(leaving).toEqual(
+      expect.arrayContaining([
+        'col-start-1',
+        'row-start-1',
+        'animate-out',
+        'fade-out',
+        'zoom-out-50',
+        'duration-150',
+        'ease-out',
+        'motion-reduce:animate-none',
+      ])
+    )
+
+    act(() => void vi.advanceTimersByTime(150))
+    expect(button.querySelector('svg.lucide-copy')).toBeNull()
+    expect(button.querySelector('svg.lucide-check')).toBeTruthy()
+  })
+
   it('reaches the copy button by keyboard', async () => {
     const { user } = withClipboard()
     render(<MessageBubble message={userTurn()} />)
@@ -198,6 +238,12 @@ describe('copy on a message bubble', () => {
     expect(button.querySelector('svg.lucide-check')).toBeTruthy()
 
     act(() => void vi.advanceTimersByTime(600))
+    // The confirmation state is gone, but the check glyph is still leaving for the quick window while
+    // the copy glyph has already arrived: the swap is a window, not a flip.
+    expect(button.querySelector('svg.lucide-check')).toBeTruthy()
+    expect(button.querySelector('svg.lucide-copy')).toBeTruthy()
+
+    act(() => void vi.advanceTimersByTime(150))
     expect(button.querySelector('svg.lucide-check')).toBeNull()
     expect(button.querySelector('svg.lucide-copy')).toBeTruthy()
   })

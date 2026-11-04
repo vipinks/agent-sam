@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CollapsibleSection } from '@/app/components/workbench/collapsible-section'
 
@@ -77,7 +77,9 @@ describe('the section that folds a transcript', () => {
     view.rerender(section(false))
 
     expect(isOpen()).toBe(false)
-    expect(body().hasAttribute('hidden')).toBe(true)
+    // The body is hidden on the exit timer rather than on the frame the rule folds it, so the wait is
+    // the window as the component measures it, not a retry for a slow render.
+    await waitFor(() => expect(body().hasAttribute('hidden')).toBe(true))
     expect(body().textContent).toContain('the call')
     expect(chevronClass()).not.toContain('rotate-90')
   })
