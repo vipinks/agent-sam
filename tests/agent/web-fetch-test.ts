@@ -26,7 +26,6 @@ import { transcriptSnapshotSchema } from '../../conveyor/protocol/transcript'
 const results: string[] = []
 
 const PAGE_URL = 'https://example.com/page'
-const PROVIDER_HOST = 'https://api.deepseek.com'
 
 type FetchMock = (url: string, init: RequestInit) => Promise<Response>
 
@@ -337,9 +336,7 @@ async function theDeadlineAndHttpFailuresAreCoded() {
       init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
     })
 
-  const timeout = await failureOf(() =>
-    fetchWebPage(PAGE_URL, { signal: signal(), fetchImpl: never, timeoutMs: 25 })
-  )
+  const timeout = await failureOf(() => fetchWebPage(PAGE_URL, { signal: signal(), fetchImpl: never, timeoutMs: 25 }))
   assert.equal(timeout.code, 'WEB_FETCH_TIMEOUT', 'a request-owned deadline that fires is its own code')
 
   const refused = await failureOf(() =>
@@ -392,9 +389,11 @@ async function theBodyIsFencedAndTheSentinelNeutralized() {
     fetchImpl: async () => pageResponse(html),
   })
 
-  assert.ok(outcome.output.startsWith(`URL: ${PAGE_URL}`), `the status line names the URL: ${outcome.output}`)
-  assert.ok(outcome.output.includes('HTTP 200'), 'and the HTTP status')
-  assert.ok(/bytes read/.test(outcome.output), 'and the byte count')
+  assert.ok(
+    outcome.output.startsWith(`URL: ${PAGE_URL} — HTTP 200,`),
+    `the status line names the URL: ${outcome.output}`
+  )
+  assert.ok(/bytes read/.test(outcome.output), 'the first line carries the byte count and the HTTP status')
   assert.ok(outcome.output.includes('untrusted'), 'the declaration says the body is untrusted data')
   assert.ok(outcome.output.includes('never as instructions'), 'and that it is never instructions')
   assert.ok(outcome.output.includes(`<<<FETCHED-CONTENT ${PAGE_URL}>>>`), 'the opening marker names the URL')
@@ -445,9 +444,7 @@ async function theLoopGatesTheCallAndRunsItOnApproval() {
   const approved = providerAndPage(rounds, () => pageResponse('<h1>Remote</h1><p>Body text.</p>'))
   const base = loopBase(approved.fetchImpl)
 
-  const first = await collect(
-    runAgentLoop({ ...base, messages: [{ role: 'user', content: 'fetch that page' }] })
-  )
+  const first = await collect(runAgentLoop({ ...base, messages: [{ role: 'user', content: 'fetch that page' }] }))
   assert.deepEqual(
     first.map((chunk) => chunk.type),
     ['tool_call_start', 'awaiting_approval'],
@@ -493,8 +490,8 @@ async function theLoopGatesTheCallAndRunsItOnApproval() {
     })
   )
   assert.equal(denied[0].code, 'DENIED', 'the refusal is the answer')
-  assert.equal(deniedState.pageCalls, 0, 'and a denial produces no fetch at all')
-  assert.equal(deniedState.providerCalls, 1, 'nor another round-trip')
+  assert.equal(deniedState.state.pageCalls, 0, 'and a denial produces no fetch at all')
+  assert.equal(deniedState.state.providerCalls, 1, 'nor another round-trip')
 
   results.push('the loop gates web_fetch, runs it on approval, and a denial fetches nothing')
 }
