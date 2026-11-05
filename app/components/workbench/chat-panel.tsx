@@ -7,7 +7,6 @@ import {
   Folder,
   ImagePlus,
   Lock,
-  Layers,
   Paperclip,
   Plus,
   SendHorizontal,
@@ -39,7 +38,7 @@ import { cn } from '@/lib/utils'
 import samMark from '@/resources/build/icon.png'
 import { Button } from '../ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '../ui/select'
 import { SURFACE_FILL, SurfaceProvider, useSurfaceKind } from '../ui/surface'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
@@ -50,6 +49,7 @@ import { HOME_STARTERS } from './home'
 import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
 import { AgentActionCard } from './agent-action-card'
+import { CombosModelPicker } from './combos-model-picker'
 import { EnginePicker } from './engine-picker'
 import { EngineModelPicker } from './engine-model-picker'
 import type { ToolStep } from './agent-session'
@@ -892,10 +892,21 @@ export function ChatPanel() {
   // not read as "missing" — a warning that flashes on load is worse than none.
   const configured = conveyor.settings.listConfigured.useQuery()
 
-  const providerName = providers.data?.find((p) => p.id === activeProviderId)?.name ?? activeProviderId
+  const providerName =
+    providers.data?.find((p) => p.id === activeProviderId)?.name ??
+    customProviders.find((p) => p.id === activeProviderId)?.name ??
+    activeProviderId
 
   /** The combo the header is on, resolved from the mirror; null for a plain pair. */
   const activeCombo = activeComboId === null ? null : (combos.find((combo) => combo.id === activeComboId) ?? null)
+  /**
+   * What the picker's trigger names: the combo when one is on, otherwise the pair, otherwise nothing.
+   *
+   * One expression for the visible label and the accessible name, so a screen reader hears the same
+   * choice the eye reads rather than only the field's name.
+   */
+  const activeTargetLabel =
+    activeCombo !== null ? activeCombo.name : activeModel === '' ? null : `${providerName} · ${activeModel}`
   // Disabled combos are omitted from the picker. A combo with no currently eligible member is still
   // offered: eligibility is a fact about the next request's estimate and images, which the composer
   // does not know yet, and the refusal belongs at send time rather than in a menu that would hide a
@@ -921,6 +932,27 @@ export function ChatPanel() {
     if (enabled && enabled.length > 0) return enabled
     return provider.models
   }
+
+  /**
+   * The sections the header's picker draws: the shipped providers in registry order, then the ones the
+   * user added, each with the same model list the old grouped Select offered.
+   *
+   * A provider with nothing to offer contributes no section rather than a heading and a dead line. An
+   * absent or empty enabled list is "not known yet", which the send guard already reads as permission
+   * for a remembered model — not as a fact the picker should draw a disabled row for.
+   */
+  const pickerGroups = [
+    ...(providers.data ?? []).map((provider) => ({
+      id: provider.id,
+      label: provider.name,
+      models: modelsFor(provider.id),
+    })),
+    ...customProviders.map((provider) => ({
+      id: provider.id,
+      label: provider.name,
+      models: customModelsFor(provider),
+    })),
+  ].filter((group) => group.models.length > 0)
 
   // The catalogue lands after the store is built: this is the first moment a remembered target can
   // be judged, and where a fresh install adopts its first enabled model.
@@ -2435,135 +2467,47 @@ export function ChatPanel() {
         <EngineModelPicker engineId={atHome ? sessions.pendingEngineId : sessions.engineId} />
 
         {/*
-          One control, two axes: the value is `provider::model`, so picking either changes both.
-          Options are grouped by provider, and a provider only offers the models switched on in
-          Settings — a provider with none gets a disabled hint instead of a dead end.
+          One control, two kinds of target: a plain `provider · model` pair or a combo. The rows are
+          grouped by provider and searched by id; combos follow in a section of their own. The old
+          grouped Select could not host a filter box, which is why this is the shared combobox the
+          Combos settings field already uses.
         */}
-        <Select
-          value={activeCombo ? `combo::${activeCombo.id}` : `${activeProviderId}::${activeModel}`}
-          // Refused while an engine owns this conversation, for the reason the caption below states: the engine
-          // runs its own model and provider, so a choice here would be one nothing honours.
-          disabled={engineId !== null}
-          onValueChange={(picked) => {
-            // A combo is a target of its own, and it carries its head pair: the two are written in one
-            // step so the payload never names a pair from one choice and a combo from another.
-            if (picked.startsWith('combo::')) {
-              const comboId = picked.slice('combo::'.length)
+        <CombosModelPicker
+          grouped={{
+            groups: pickerGroups,
+            combos: enabledCombos.map((combo) => ({
+              id: combo.id,
+              name: combo.name,
+              memberCount: combo.members.length,
+            })),
+            selectedValue: activeTargetLabel,
+            placeholder: 'Choose a model',
+            selectedModel:
+              activeCombo === null && activeModel !== '' ? { providerId: activeProviderId, model: activeModel } : null,
+            selectedComboId: activeCombo?.id ?? null,
+            onSelectModel: (providerId, model) => setTarget({ providerId, model }),
+            onSelectCombo: (comboId) => {
               const combo = combos.find((entry) => entry.id === comboId)
               const head = combo?.members[0]
               if (combo && head) {
                 setComboTarget({ comboId, providerId: head.providerId, model: head.modelId })
               }
-              return
-            }
-
-            const [providerId, ...rest] = picked.split('::')
-            const model = rest.join('::')
-
-            // An explicit model wins — including one belonging to a different provider, which is
-            // how a user compares two providers' models without a detour through the first entry.
-            // `setTarget` clears any combo in the same write, so a plain pick is a plain request.
-            if (model) {
-              setTarget({ providerId, model })
-              return
-            }
-
-            // Only a bare provider pick auto-selects, and then it takes that provider's first
-            // enabled model, since the previous provider's model means nothing to it.
-            const first = modelsFor(providerId)[0]
-            if (first) setTarget({ providerId, model: first })
+            },
           }}
-        >
-          <SelectTrigger
-            aria-label="Provider and model"
-            // The engine's name in place of the pair while an engine owns the conversation: a disabled control
-            // is not a pointer target, so the reason travels in the native title rather than in a tooltip.
-            title={
-              engineId === null
-                ? activeCombo
-                  ? `${activeCombo.name} · ${activeCombo.members.length} model${activeCombo.members.length === 1 ? '' : 's'}`
-                  : `${providerName} · ${activeModel}`
-                : ENGINE_MODEL_LOCK_CAPTION(engineName)
-            }
-          >
-            {/* The trigger names the combo rather than its head: the list is the choice, and showing
-                one member's id would make two combos with overlapping heads indistinguishable. */}
-            <SelectValue placeholder="Choose a model">{activeCombo ? activeCombo.name : undefined}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {providers.data?.map((provider) => {
-              const models = modelsFor(provider.id)
-              return (
-                <SelectGroup key={provider.id}>
-                  <SelectLabel>{provider.name}</SelectLabel>
-                  {models.length === 0 ? (
-                    <SelectItem value={`${provider.id}::`} disabled>
-                      <span className="text-muted-foreground">Enable models in Settings</span>
-                    </SelectItem>
-                  ) : (
-                    models.map((model) => (
-                      <SelectItem key={model} value={`${provider.id}::${model}`}>
-                        <span className="font-mono">{model}</span>
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectGroup>
-              )
-            })}
-
-            {/*
-              The providers the user added, after every one that ships. Grouped the same way, and each
-              line carries its provider's name: two providers can offer the same model id, and the id on
-              its own would not say which server a line would run against.
-            */}
-            {customProviders.map((provider) => {
-              const models = customModelsFor(provider)
-              return (
-                <SelectGroup key={provider.id}>
-                  <SelectLabel>{provider.name}</SelectLabel>
-                  {models.length === 0 ? (
-                    // Named rather than dropped: a provider missing from this list would be one the user
-                    // added and cannot find, so it stays and says what it is waiting for.
-                    <SelectItem value={`${provider.id}::`} disabled>
-                      <span className="text-muted-foreground">{provider.name} · No models yet</span>
-                    </SelectItem>
-                  ) : (
-                    models.map((model) => (
-                      <SelectItem key={model} value={`${provider.id}::${model}`}>
-                        <span className="font-mono">
-                          {provider.name} · {model}
-                        </span>
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectGroup>
-              )
-            })}
-
-            {/*
-              The combos, after every plain group and in one group of their own.
-              One group rather than one per combo: a combo is a target, not a provider, and a row
-              carries the count it stands for. Disabled combos are omitted — the picker offers what
-              a send could run — while a combo with no currently eligible member stays: eligibility
-              is a fact about the next request's estimate and images, and the refusal belongs at send
-              time rather than in a menu that hides the user's own choice.
-            */}
-            {enabledCombos.length > 0 && (
-              <SelectGroup>
-                <SelectLabel>Combos</SelectLabel>
-                {enabledCombos.map((combo) => (
-                  <SelectItem key={combo.id} value={`combo::${combo.id}`}>
-                    <Layers aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                    <span>{combo.name}</span>
-                    <span className="text-muted-foreground">
-                      · {combo.members.length} model{combo.members.length === 1 ? '' : 's'}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            )}
-          </SelectContent>
-        </Select>
+          // Refused while an engine owns this conversation, for the reason the caption below states: the engine
+          // runs its own model and provider, so a choice here would be one nothing honours.
+          disabled={engineId !== null}
+          // The engine's name in place of the pair while an engine owns the conversation: a disabled control
+          // is not a pointer target, so the reason travels in the native title rather than in a tooltip.
+          title={
+            engineId === null
+              ? activeCombo
+                ? `${activeCombo.name} · ${activeCombo.members.length} model${activeCombo.members.length === 1 ? '' : 's'}`
+                : `${providerName} · ${activeModel}`
+              : ENGINE_MODEL_LOCK_CAPTION(engineName)
+          }
+          triggerClassName="max-w-64"
+        />
 
         {isKeyMissing && (
           <TooltipProvider>

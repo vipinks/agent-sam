@@ -196,7 +196,7 @@ describe('the model picker', () => {
 
     // It contributes nothing to the search either: the term is judged against rows that exist.
     await userEvent.type(await screen.findByLabelText('Filter models'), 'work-gateway')
-    await waitFor(() => expect(options()).toHaveLength(0))
+    await waitFor(() => expect(screen.queryAllByRole('option')).toHaveLength(0))
     expect(screen.getByText("No models match 'work-gateway'")).toBeTruthy()
   })
 
