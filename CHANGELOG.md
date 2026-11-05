@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-11-05: v1.15.6 — Built-in web_fetch tool
+
+- feat(agent): declare web_fetch and pin its red suite
+- feat(agent): implement web_fetch — the agent can read a URL as bounded, sanitized text, gated by per-call approval
+
+<br>
+
 ## 2026-11-05: v1.15.5 — Searchable chat model picker and header fixes
 
 - test(picker): pin the chat picker search and both accessible names
