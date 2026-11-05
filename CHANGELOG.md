@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-11-05: v1.15.8 — From-here message delete
+
+- test(chat): pin the from-here message delete
+- feat(chat): the from-here message delete — a single delete verb on messages removes the named turn and everything after it, with a confirmation dialog naming the turn count and parked-trail count, an immediate awaited save that prunes episode blocks, and refusal under a live run or held pause
+
+<br>
+
 ## 2026-11-05: v1.15.7 — Working row, themed folder chip, and context menus
 
 - test(chat): pin the working row, the themed folder chip and the two native menus
