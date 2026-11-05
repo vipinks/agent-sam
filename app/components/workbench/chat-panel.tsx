@@ -292,6 +292,14 @@ export function autoApproveHelperText(on: boolean): string {
  * combobox, and a combobox that claims the row's width as its flex basis, or refuses to shrink at all,
  * would otherwise leave the folder's name with zero pixels before it ever truncated. A name the reader
  * cannot read is the one thing this chip exists to prevent.
+ *
+ * The colour is the accent's ink and the accent's rule, over the surface the chip already sat on.
+ * `--brand-text` is the token the theme engine holds to the 4.5:1 floor on every surface a glyph is
+ * drawn on, at every theme, every mode and every brightness step, so a themed chip cannot cost the
+ * folder's name its legibility; `--brand` at 40 percent draws the outline, and the folder glyph
+ * inherits the ink rather than carrying a colour of its own. The chip is tinted, never filled: no ink
+ * is asserted against a solid accent plate, and the parked `--brand-soft` tint is an excluded
+ * composite, so neither is a background this chip may take.
  */
 function RootChip({ root }: { root: string | null }) {
   const name = rootFolderName(root)
@@ -303,7 +311,7 @@ function RootChip({ root }: { root: string | null }) {
       data-slot="chat-root-chip"
       title={root}
       className={cn(
-        'flex max-w-40 min-w-20 shrink-6 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] text-muted-foreground',
+        'flex max-w-40 min-w-20 shrink-6 items-center gap-1 rounded-md border border-brand/40 px-1.5 py-1 text-[11px] text-brand-text',
         // The chip is a control, so it reads against the row it sits in rather than only being outlined:
         // the header is the chat pane, which is the page.
         fill
@@ -2343,12 +2351,20 @@ export function ChatPanel() {
    * the pointer, and with nothing selected there is nothing for a Copy to take. The composer half is
    * not gated, because the field it sits on is the thing the menu acts on.
    */
-  const openChatContextMenu = () => {
-    // PLACEHOLDER (phase 18, commit 1): the guarded dispatch lands with the command it calls.
+  const openChatContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    // A right-click on prose is a question about the words under the pointer, and with nothing selected
+    // there is nothing for the menu's one item to take. The selection is read at the gesture rather than
+    // remembered: the pane re-renders on every token, and a stored copy of it would be stale the moment
+    // the user dragged across a different sentence.
+    if ((window.getSelection()?.toString() ?? '') === '') return
+    void conveyor.web.contextMenu({ region: 'chat', x: event.clientX, y: event.clientY })
   }
 
-  const openComposerContextMenu = () => {
-    // PLACEHOLDER (phase 18, commit 1): the dispatch lands with the command it calls.
+  const openComposerContextMenu = (event: React.MouseEvent<HTMLTextAreaElement>) => {
+    // The field is the subject of this menu, wherever inside it the click landed, so it is not gated on
+    // a selection: undo, paste and select-all are offered on an empty composer too. The two numbers are
+    // the event's own, which is what makes main place the menu at the pointer.
+    void conveyor.web.contextMenu({ region: 'composer', x: event.clientX, y: event.clientY })
   }
 
   return (

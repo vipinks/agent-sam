@@ -80,8 +80,17 @@ export type ContextMenuItem = { role: ContextMenuRole } | { type: 'separator' }
  * default would answer for the new region with the old one's menu.
  */
 const TEMPLATES: Readonly<Record<ContextMenuRegion, readonly ContextMenuItem[]>> = {
-  chat: [],
-  composer: [],
+  chat: [{ role: 'copy' }],
+  composer: [
+    { role: 'undo' },
+    { role: 'redo' },
+    { type: 'separator' },
+    { role: 'cut' },
+    { role: 'copy' },
+    { role: 'paste' },
+    { type: 'separator' },
+    { role: 'selectAll' },
+  ],
 }
 
 /**

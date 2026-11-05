@@ -35,11 +35,9 @@ import { branchCount, branchPosition, type AgentTurn } from './agent-session'
  * A working row beside either would claim work that is over.
  */
 export function isWorking(turn: AgentTurn, live: boolean): boolean {
-  // PLACEHOLDER (phase 18, commit 1): the rule is declared so the pins can call it, and it answers
-  // `false` until the row it gates is drawn — which is the commit that turns the pin green.
-  void turn
-  void live
-  return false
+  return (
+    live && turn.content === '' && turn.steps.length === 0 && turn.error === undefined && turn.endNotice === undefined
+  )
 }
 
 /**
@@ -123,12 +121,39 @@ function turnBlocks(
   if (rest) {
     blocks.push(<MarkdownContent key={`prose-${chars}`} content={rest} />)
   } else if (isWorking(turn, live)) {
-    // PLACEHOLDER (phase 18, commit 1): the working row is drawn here by the commit that turns the pin
-    // green. An empty turn that is not working draws nothing either way, which is the behaviour change
-    // this seam already carries.
+    blocks.push(<WorkingRow key={`working-${chars}`} />)
   }
 
   return blocks
+}
+
+/**
+ * The row a running turn shows before it has said anything.
+ *
+ * Three dots and a word, drawn from the turn's own emptiness rather than from a timer: the first
+ * `text_delta` writes the content and the first tool frame appends a step, and either one unmounts
+ * this on the same render. There is no stored state here for the same reason, so nothing about it can
+ * outlive the run or survive it in the wrong bubble.
+ *
+ * `role="status"` rather than a live region of its own: the row appearing is the whole announcement —
+ * the run has started — and the dots are decorative, so they are hidden from a screen reader instead
+ * of being read out as three bullets beside the word that says the same thing.
+ *
+ * The dots pulse, and the guard is the base one (`motion-reduce:animate-none`) rather than the stacked
+ * `motion-reduce:data-[…]:animate-none` form: this row is conditionally *rendered*, so no data
+ * attribute gates the animation whose specificity the guard would have to match.
+ */
+function WorkingRow() {
+  return (
+    <div data-slot="message-working" role="status" className="flex items-center gap-1.5 text-muted-foreground">
+      <span aria-hidden="true" className="flex items-center gap-1">
+        <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
+        <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
+        <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
+      </span>
+      <span>Thinking…</span>
+    </div>
+  )
 }
 
 /**
