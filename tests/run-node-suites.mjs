@@ -144,6 +144,7 @@ const SUITES = [
     src: 'agent/context-snapshot-request-test.ts',
   },
   { name: 'composer commands (slash rules)', src: 'ui/composer-commands-test.ts' },
+  { name: 'context menu (composer and chat templates, payload schema)', src: 'ui/context-menu-test.ts' },
   { name: 'preview kind (dispatch rule, pdf bytes, document cap)', src: 'ui/preview-kind-test.ts' },
   { name: 'docx convert (mammoth over a real container)', src: 'ui/docx-convert-test.ts' },
   { name: 'document read (base64 round trip, refusals)', src: 'workspace/document-read-test.ts' },

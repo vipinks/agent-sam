@@ -19,6 +19,13 @@
  * trailing row's whole width (`w-full`). A combobox that claims the row leaves the folder's name with
  * zero pixels to be read in.
  *
+ * And the ink is pinned here for the same reason — as tokens, never as pixels: the chip's word and its
+ * rule are the brand's (`text-brand-text`, `border-brand/40`), the surface under them stays one of the
+ * two the pane reads against, and the glyph inherits the ink instead of carrying one. That is what tells
+ * a themed chip apart from the neutral one it replaces without mounting a stylesheet: jsdom resolves no
+ * colour, but it does say which token a class names, and the token's contrast is the theme engine's own
+ * claim rather than this file's.
+ *
  * jsdom proves wiring and words, not pixels. Nothing here says the chip looks right in either theme, or
  * that the header still fits its own height with one more control in it; that is Boss's eyes on the
  * running app with a long folder name at a narrow drawer width.
@@ -152,6 +159,25 @@ describe('the chat header’s root chip', () => {
 
       // The label holds a floor of its own, so the control beside it cannot take the last of its width.
       expect(found.className).toContain('min-w-20')
+
+      // The chip's ink and its rule are the brand's, so the folder reads as the accent the rest of the
+      // app marks a live thing with — and the surface underneath it stays the header's own: a tinted
+      // outline and text, never a solid accent plate, which would trade a legible label for a loud one.
+      // The ink is `--brand-text`, the token the theme engine holds to 4.5:1 on every surface it is
+      // drawn on at every theme, mode and brightness step (`theme-rules.test.ts`, the accent-ink floor).
+      expect(found.className).toContain('text-brand-text')
+      expect(found.className).toContain('border-brand/40')
+      expect(found.className.split(' ')).not.toContain('text-muted-foreground')
+      expect(found.className.split(' ')).not.toContain('border-border')
+      // Tinted, not filled: the chip keeps one of the two surface tints it reads against, and takes
+      // neither the accent plate nor the parked brand-soft wash as its background.
+      expect(['bg-card', 'bg-background'].some((token) => found.className.split(' ').includes(token))).toBe(true)
+      for (const token of ['bg-brand', 'bg-brand-soft', 'bg-primary']) {
+        expect(found.className.split(' ')).not.toContain(token)
+      }
+      // The glyph inherits that ink rather than carrying a colour of its own, which is what makes the
+      // pair read as one control instead of a coloured icon beside a coloured word.
+      expect(glyph?.getAttribute('class') ?? '').not.toMatch(/\btext-/)
 
       // And it is drawn before the model trigger, which sizes to its value rather than claiming the
       // trailing row. `w-full` on that trigger is the defect this pair of assertions exists to keep out:

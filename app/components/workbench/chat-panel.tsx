@@ -2328,6 +2328,29 @@ export function ChatPanel() {
     }
   }
 
+  /*
+   * The two regions of the pane that answer a right-click, declared here rather than left to main's
+   * `context-menu` event.
+   *
+   * The pane names the region, because it is the only side that can. Electron's event offers
+   * `params.isEditable` and `params.selectionText`, and neither can tell the composer from the
+   * editor's guarded textarea (both editable) or from selected text anywhere else in the window
+   * (any selection) — so a policy built on them would hand the editor a menu it must not have. The
+   * region is a fact about which element the handler sits on, and the handler is the only thing that
+   * knows it.
+   *
+   * The chat half is gated on a selection: a right-click on prose is a question about the words under
+   * the pointer, and with nothing selected there is nothing for a Copy to take. The composer half is
+   * not gated, because the field it sits on is the thing the menu acts on.
+   */
+  const openChatContextMenu = () => {
+    // PLACEHOLDER (phase 18, commit 1): the guarded dispatch lands with the command it calls.
+  }
+
+  const openComposerContextMenu = () => {
+    // PLACEHOLDER (phase 18, commit 1): the dispatch lands with the command it calls.
+  }
+
   return (
     <div ref={paneRef} className="flex h-full flex-col bg-background">
       {/*
@@ -2565,6 +2588,7 @@ export function ChatPanel() {
               ref={scrollRef}
               data-slot="chat-transcript"
               onScroll={syncEdges}
+              onContextMenu={openChatContextMenu}
               // The pane's own `flex-1` and `min-h-0` are on the box above, so the scroll region keeps the
               // height it had as the pane's flex child — it is now the full height of that box instead.
               className="h-full animate-in overflow-x-hidden overflow-y-auto fade-in-0 duration-200 ease-out motion-reduce:animate-none"
@@ -2602,6 +2626,10 @@ export function ChatPanel() {
                       ) : (
                         <MessageBubble
                           message={messages[item.index]}
+                          // The run's own turn: while a stream is in flight it is the last turn on
+                          // screen, because a send appends it and a regenerate truncates the trail to
+                          // the reply it rewrites. Only this one bubble may draw the working row.
+                          live={isStreaming && item.index === messages.length - 1}
                           canEdit={editAllowed}
                           onCheckoutBranch={checkoutReplyBranch}
                           // The conversation these turns belong to, which is where a turn's images are stored:
@@ -2791,6 +2819,7 @@ export function ChatPanel() {
                       syncMention(area.value, area.selectionStart ?? area.value.length)
                     }}
                     onKeyDown={onKeyDown}
+                    onContextMenu={openComposerContextMenu}
                     onPaste={onComposerPaste}
                     placeholder={
                       pending ? 'Waiting for your approval…' : 'Ask about this project… (@ to attach a file)'

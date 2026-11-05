@@ -179,6 +179,12 @@ const MANIFEST: Record<string, Record<string, string>> = {
     zoomOut: 'command',
     actualSize: 'command',
     toggleFullscreen: 'command',
+    // The native menu a right-click raises. A command, like the six above it, and listed for the reason
+    // every entry here is — a member missing from this map is refused by the client's manifest check
+    // before any handler is reached, so a suite about the gesture could not observe the dispatch at all.
+    // What main does with it is unobservable here: the electron stub has no `Menu`, and the menu itself
+    // is a native window, so the DOM suites assert the call and its payload and nothing further.
+    contextMenu: 'command',
   },
   // The running app's own version, which `/version` reports. A query, like `sessions.transcriptVersion`
   // above it, and listed for the same reason: the client refuses an unlisted member rather than

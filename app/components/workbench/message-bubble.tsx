@@ -20,6 +20,29 @@ import { useLeavingItems } from './motion'
 import { branchCount, branchPosition, type AgentTurn } from './agent-session'
 
 /**
+ * Whether this turn is a run with nothing on screen yet.
+ *
+ * The one state the working row speaks for, and it is derived rather than stored: a run that has
+ * written nothing has an empty `content` and no `steps`, and the first `text_delta` or the first tool
+ * frame changes one of those on the same render the row is drawn from — so the row disappears without
+ * a timer, a second flag, or a state write of its own. `live` is the pane's fact (this is the turn the
+ * running stream is filling, and it is last), so a turn that merely happens to be empty on screen —
+ * a settled turn that ended without saying anything, a branch parked empty — is not one that anything
+ * is thinking about.
+ *
+ * `error` and `endNotice` are checked as well as the two empty fields, because both are endings: a
+ * turn that failed has its cause drawn under these blocks, and a turn that ended has its notice there.
+ * A working row beside either would claim work that is over.
+ */
+export function isWorking(turn: AgentTurn, live: boolean): boolean {
+  // PLACEHOLDER (phase 18, commit 1): the rule is declared so the pins can call it, and it answers
+  // `false` until the row it gates is drawn — which is the commit that turns the pin green.
+  void turn
+  void live
+  return false
+}
+
+/**
  * The turn's blocks in the order they happened: its cards, its prose, and the seams between them.
  *
  * A model that stopped with work left on its plan is nudged rather than ended, so one turn can contain
@@ -49,6 +72,7 @@ import { branchCount, branchPosition, type AgentTurn } from './agent-session'
  */
 function turnBlocks(
   turn: AgentTurn,
+  live: boolean,
   onApprove?: (callId: string) => void,
   onDeny?: (callId: string) => void
 ): ReactNode[] {
@@ -82,19 +106,26 @@ function turnBlocks(
 
   cardsUpTo(turn.steps.length)
   const rest = turn.content.slice(chars)
-  // The last slice is the one the empty state reads: a turn with no cards and nothing written yet is
-  // still thinking, and the bubble says so. An empty slice *between* two seams is not that — the answer
-  // simply paused there, and a "Thinking…" there would be a claim about work that is already done.
+  // The last slice is the one the empty state reads. A turn with nothing written yet and no cards is a
+  // run that has not spoken — but only while it is the run being filled. Which turn that is belongs to
+  // the pane (`live`), and the row is drawn from the derivation rather than from a stored flag or a
+  // timer: the first `text_delta` writes the content and the first tool frame appends a step, and
+  // either one flips the derivation false on the same render.
   //
-  // A turn that failed is the other case that is not that: its work is over, and its cause is drawn under
-  // these blocks as the turn's own error line. An empty placeholder kept beside it would leave the bubble
-  // claiming to think about a turn nothing is thinking about.
+  // Nothing is drawn otherwise. An empty *settled* turn — one that ended without saying anything — used
+  // to draw a static "Thinking…", which was a claim about work that was over. That sentence now belongs
+  // to the working row, and an empty turn with nothing running draws nothing at all. An empty slice
+  // *between* two seams is the same case for the same reason: the answer paused there.
   //
   // Keyed by where it starts rather than by being the last one: the seam that arrives next cuts this
   // stretch in two, and the same offset on both sides of that cut keeps it the same block — rather than
   // a new one drawn in its place, which would remount the markdown inside it.
-  if (rest || (turn.steps.length === 0 && turn.error === undefined)) {
+  if (rest) {
     blocks.push(<MarkdownContent key={`prose-${chars}`} content={rest} />)
+  } else if (isWorking(turn, live)) {
+    // PLACEHOLDER (phase 18, commit 1): the working row is drawn here by the commit that turns the pin
+    // green. An empty turn that is not working draws nothing either way, which is the behaviour change
+    // this seam already carries.
   }
 
   return blocks
@@ -109,6 +140,7 @@ function turnBlocks(
  */
 export const MessageBubble = memo(function MessageBubble({
   message,
+  live = false,
   onApprove,
   onDeny,
   canEdit,
@@ -120,6 +152,16 @@ export const MessageBubble = memo(function MessageBubble({
   fontPreset = DEFAULT_FONT_PRESET,
 }: {
   message: AgentTurn
+  /**
+   * Whether this is the turn the running stream is filling right now.
+   *
+   * A fact about the conversation rather than about the message, so the pane decides it: a send appends
+   * the assistant turn last and a regenerate truncates the trail to the reply it rewrites, so while a
+   * run is in flight the turn it is writing is the last one on screen. Defaulted off, because a bubble
+   * rendered on its own — as the copy and markdown suites do — is not being written by anything, and a
+   * bubble that claimed to be would draw a working row for a run that does not exist.
+   */
+  live?: boolean
   onApprove?: (callId: string) => void
   onDeny?: (callId: string) => void
   /**
@@ -185,7 +227,7 @@ export const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === 'user'
   // The turn's blocks, built once per render: their order is the order the run happened in, and two
   // passes over the same data would be a second place for it to be got wrong.
-  const blocks = turnBlocks(message, onApprove, onDeny)
+  const blocks = turnBlocks(message, live, onApprove, onDeny)
 
   /*
    * The editor, held here rather than in the pane.
