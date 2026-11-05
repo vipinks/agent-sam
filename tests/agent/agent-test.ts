@@ -216,7 +216,7 @@ async function reactLoop() {
 
     // Both requests advertised the tools; the second carried the tool result back.
     const second = log[1] as { body: { messages: Array<Record<string, unknown>>; tools?: unknown[] } }
-    assert.ok(Array.isArray(second.body.tools) && second.body.tools.length === 4, 'tools were advertised')
+    assert.ok(Array.isArray(second.body.tools) && second.body.tools.length === 5, 'tools were advertised')
     const assistantTurn = second.body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert.ok(assistantTurn, 'the assistant tool-call turn was replayed back to the provider')
     const toolTurn = second.body.messages.find((m) => m.role === 'tool')
@@ -312,8 +312,12 @@ function approvalRules() {
   assert.equal(needsApproval('read_file'), false, 'reading is safe and must not need approval')
   assert.equal(needsApproval('write_file'), true, 'writing changes the user’s files')
   assert.equal(needsApproval('run_command'), true, 'commands can do anything')
+  // A network call is an external effect too: the page is someone else's, and the request says where
+  // this machine is looking. It is gated by the same rule as a write or a command, and runs without
+  // asking only when the conversation's Auto-approve is on.
+  assert.equal(needsApproval('web_fetch'), true, 'fetching a page reaches outside this process')
   assert.equal(needsApproval('something_new'), true, 'an unknown tool must ask rather than assume')
-  results.push('only read_file is pre-approved; an unknown tool asks')
+  results.push('only read_file and set_plan are pre-approved; an unknown tool asks')
 }
 
 async function pausesForApproval() {
@@ -935,17 +939,17 @@ async function badArgumentsAreReported() {
 
 function toolDefinitionsAreWellFormed() {
   const names = TOOL_DEFINITIONS.map((t) => t.function.name)
-  // Four, in the order the model reads them. `set_plan` is last because it is not an action: it is
-  // listed here so the assertion keeps proving that every tool the loop recognises is advertised to
-  // the model, and every tool advertised is one the loop recognises.
-  assert.deepEqual(names, ['read_file', 'write_file', 'run_command', 'set_plan'])
+  // Five, in the order the model reads them. `set_plan` is the one declaration, and `web_fetch` the
+  // one network tool, both listed here so the assertion keeps proving that every tool the loop
+  // recognises is advertised to the model, and every tool advertised is one the loop recognises.
+  assert.deepEqual(names, ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'])
   for (const tool of TOOL_DEFINITIONS) {
     assert.equal(tool.type, 'function')
     assert.ok(tool.function.description.length > 10, `${tool.function.name} needs a real description`)
     assert.equal((tool.function.parameters as { type?: string }).type, 'object')
     assert.ok((tool.function.parameters as { properties?: unknown }).properties, 'parameters must be described')
   }
-  results.push('the four tool schemas are OpenAI-shaped and fully described')
+  results.push('the five tool schemas are OpenAI-shaped and fully described')
 }
 
 // ---------------------------------------------------------------- project instructions

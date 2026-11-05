@@ -35,6 +35,7 @@ const SUITES = [
   { name: 'tool protocol', src: 'agent/agent-protocol-test.ts' },
   { name: 'tool protocol (batch)', src: 'agent/agent-protocol2-test.ts' },
   { name: 'agent plan', src: 'agent/plan-test.ts' },
+  { name: 'web fetch (extractor, bounds, codes, loop, record)', src: 'agent/web-fetch-test.ts' },
   { name: 'turn end diagnosis', src: 'agent/turn-end-test.ts' },
   { name: 'plan-unfinished notice', src: 'agent/plan-unfinished-test.ts' },
   { name: 'plan inheritance and aborted endings', src: 'agent/plan-inherit-test.ts' },

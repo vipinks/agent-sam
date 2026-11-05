@@ -292,6 +292,10 @@ function describe(step: ToolStep): string {
       return path ? `Writing ${path}` : 'Writing a file'
     case 'run_command':
       return command ? `Running ${command}` : 'Running a command'
+    case 'web_fetch': {
+      const url = typeof step.args.url === 'string' ? step.args.url : ''
+      return url ? `Fetching ${url}` : 'Fetching a page'
+    }
     default:
       return step.tool
   }
