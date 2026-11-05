@@ -15,7 +15,7 @@
  * Select in either theme; that is Boss's eyes on the running app.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ENGINE_LOCK_CAPTION, ChatPanel } from '@/app/components/workbench/chat-panel'
@@ -171,7 +171,7 @@ beforeEach(() => {
 })
 
 describe('the engine picker in the chat header', () => {
-  it('is drawn in the header, beside the Buddy picker', async () => {
+  it('leads the header’s two pickers, with the Buddy Select beside it as the second', async () => {
     stubScreen()
     renderScreen()
 
@@ -181,9 +181,34 @@ describe('the engine picker in the chat header', () => {
 
     expect(header).not.toBeNull()
     expect(header?.contains(engine)).toBe(true)
-    // After the Buddy picker in document order: the two sit in one cluster, and the engine is the
-    // second of them rather than a control that arrived somewhere else in the row.
-    expect(buddy.compareDocumentPosition(engine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The engine leads the pair in document order: it was the second of the two and is now the first, and
+    // the Buddy Select follows it in the same cluster rather than arriving somewhere else in the row.
+    expect(engine.compareDocumentPosition(buddy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('draws the header’s leftmost Select pair as Engine then Buddy, and the rest of the row after them', async () => {
+    // Home, so the pane is the one the next case starts from too: the order pin states a fact about the
+    // row, and it needs no conversation to state it.
+    stubScreen()
+    renderScreen()
+
+    const buddy = await buddyTrigger()
+    const header = buddy.closest('header') as HTMLElement
+    const controls = within(header).getAllByRole('combobox')
+
+    // The pair the swap is about, in the only order a reader meets them: the engine Select first, the
+    // Buddy Select second. The model combobox is the third control, and it stays in the trailing row.
+    expect(controls.slice(0, 2).map((control) => control.getAttribute('aria-label'))).toEqual(['Engine', 'Buddy'])
+    expect(controls[2]?.getAttribute('aria-label')).toMatch(/^Provider and model/)
+
+    // Everything after the pair keeps the order it had: the folder chip, then the model combobox. The
+    // swap moves two controls and nothing else.
+    const chip = header.querySelector('[data-slot="chat-root-chip"]') as HTMLElement | null
+    expect(chip).not.toBeNull()
+    expect(Boolean(buddy.compareDocumentPosition(chip as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+    expect(Boolean((chip as HTMLElement).compareDocumentPosition(controls[2]) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(
+      true
+    )
   })
 
   it('offers Agent Sam first, and says an engine is not installed rather than offering it', async () => {

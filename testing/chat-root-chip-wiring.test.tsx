@@ -13,6 +13,12 @@
  * chip. The rule itself is `tests/sessions/root-name-test.ts`'s subject, which is why the trailing
  * separator is pinned there rather than twice.
  *
+ * The width contract is pinned here too, because it is the one thing about this chip that a jsdom suite
+ * can hold: the chip keeps a floor (`min-w-20`) and the model combobox beside it sizes to its value
+ * (`w-fit`, capped by `max-w-64`) and yields space at the narrow end (`shrink`) rather than claiming the
+ * trailing row's whole width (`w-full`). A combobox that claims the row leaves the folder's name with
+ * zero pixels to be read in.
+ *
  * jsdom proves wiring and words, not pixels. Nothing here says the chip looks right in either theme, or
  * that the header still fits its own height with one more control in it; that is Boss's eyes on the
  * running app with a long folder name at a narrow drawer width.
@@ -43,8 +49,11 @@ const SESSION_STATE = {
   activeSessionId: SESSION_ID,
 }
 
-/** The pane, over a window whose open project is — or is not — a folder. */
-function renderChat(rootPath: string | null) {
+/** The chat column's declared floor, from `workbench.tsx`: the narrowest a chat header can be. */
+const NARROW_HEADER_PX = 320
+
+/** The pane, over a window whose open project is — or is not — a folder, at an optional column width. */
+function renderChat(rootPath: string | null, width?: number) {
   const stub = createBridgeStub({
     listProviders: () => [],
     defaultModels: () => ({}),
@@ -55,15 +64,24 @@ function renderChat(rootPath: string | null) {
   stubStore(stub, CHAT_SESSIONS_STORE_ID, SESSION_STATE)
   setActiveStub(stub)
 
-  render(
+  // The width is the column's, not the header's: the pane fills whatever column it is given, and the
+  // header degrades inside it. jsdom has no layout engine, so this states the width the contract is
+  // about; the pixels themselves are the screenshot's to prove.
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <ChatSessionsProvider>
-        <ChatPanel />
+        {width === undefined ? (
+          <ChatPanel />
+        ) : (
+          <div style={{ width }}>
+            <ChatPanel />
+          </div>
+        )}
       </ChatSessionsProvider>
     </QueryClientProvider>
   )
 
-  return { stub }
+  return { stub, unmount: view.unmount }
 }
 
 /** The chip as the document has it right now, or null while the header draws none. */
@@ -105,7 +123,7 @@ describe('the chat header’s root chip', () => {
 
     const found = await rootChip()
 
-    // The pickers are the cluster after the title — the Buddy Select and the engine picker — and the
+    // The pickers are the cluster after the title — the engine picker and the Buddy Select — and the
     // Auto-approve control is the shield in the trailing row. The chip belongs between them: it is a fact
     // about the session like the auto-approve state, and it is not one of the things a session is picked by.
     const buddy = screen.getByRole('combobox', { name: 'Buddy' })
@@ -113,6 +131,48 @@ describe('the chat header’s root chip', () => {
 
     expect(Boolean(buddy.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
     expect(Boolean(found.compareDocumentPosition(shield) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  })
+
+  it('keeps the name beside its glyph and ahead of the model trigger at a narrow and a wide header', async () => {
+    // The two widths the contract is about: the chat column's own floor, and a comfortable workbench.
+    // The chip must read at both; a label that only survives a wide pane is a label that is missing
+    // exactly where the folder matters most.
+    for (const width of [NARROW_HEADER_PX, 1200]) {
+      const view = renderChat(ROOT, width)
+      const found = await rootChip()
+
+      // The glyph and then the name, as the element has always drawn them.
+      const glyph = found.firstElementChild
+      const name = found.lastElementChild as HTMLElement
+      expect(glyph?.tagName.toLowerCase()).toBe('svg')
+      expect(name.textContent).toBe('sam-ai')
+      expect(name.className).toContain('truncate')
+      // The same title it always carried: the whole path, for the reader with two folders of one name.
+      expect(found.getAttribute('title')).toBe(ROOT)
+
+      // The label holds a floor of its own, so the control beside it cannot take the last of its width.
+      expect(found.className).toContain('min-w-20')
+
+      // And it is drawn before the model trigger, which sizes to its value rather than claiming the
+      // trailing row. `w-full` on that trigger is the defect this pair of assertions exists to keep out:
+      // a 100-percent flex basis starves the label to zero pixels without deleting anything. `shrink`
+      // overrides the Button primitive's `shrink-0`, so the trigger yields at the narrow end too.
+      const model = screen.getByRole('combobox', { name: /^Provider and model/ })
+      expect(Boolean(found.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+      expect(model.className).toContain('w-fit')
+      expect(model.className).not.toContain('w-full')
+      expect(model.className.split(' ')).toContain('shrink')
+      // The truncation bound, not the layout width: a long model or combo still ellipsizes here.
+      expect(model.className).toContain('max-w-64')
+
+      // And the control between them has not moved: Auto-approve still sits after the chip and before
+      // the model combobox, which is the row order the folder chip was introduced into.
+      const shield = screen.getByRole('switch', { name: 'Auto-approve tool actions' })
+      expect(Boolean(found.compareDocumentPosition(shield) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+      expect(Boolean(shield.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+
+      view.unmount()
+    }
   })
 
   it('draws nothing at all when the project is closed under it', async () => {

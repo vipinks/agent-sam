@@ -286,9 +286,12 @@ export function autoApproveHelperText(on: boolean): string {
  * A session with no project draws nothing at all. That is the rule's own absent answer being taken
  * literally: an empty chip would claim a folder, and the honest rendering of "there is none" is no chip.
  *
- * The width discipline is the row's, not this chip's: `max-w-40` with `min-w-0` and a heavier shrink factor,
- * so a deep path costs the chip characters — with the name still cut cleanly by `truncate` — rather than
- * pushing the pickers or the shield off the row.
+ * The width discipline is the row's, not this chip's: `max-w-40` with a heavier shrink factor costs the
+ * chip characters first — the name still cut cleanly by `truncate` — while `min-w-20` is the floor that
+ * stops the row costing it all of them. That floor is load-bearing: the chip sits beside the model
+ * combobox, and a combobox that claims the row's width as its flex basis, or refuses to shrink at all,
+ * would otherwise leave the folder's name with zero pixels before it ever truncated. A name the reader
+ * cannot read is the one thing this chip exists to prevent.
  */
 function RootChip({ root }: { root: string | null }) {
   const name = rootFolderName(root)
@@ -300,7 +303,7 @@ function RootChip({ root }: { root: string | null }) {
       data-slot="chat-root-chip"
       title={root}
       className={cn(
-        'flex max-w-40 min-w-0 shrink-6 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] text-muted-foreground',
+        'flex max-w-40 min-w-20 shrink-6 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] text-muted-foreground',
         // The chip is a control, so it reads against the row it sits in rather than only being outlined:
         // the header is the chat pane, which is the page.
         fill
@@ -2328,10 +2331,14 @@ export function ChatPanel() {
   return (
     <div ref={paneRef} className="flex h-full flex-col bg-background">
       {/*
-        The Buddy the conversation runs as, immediately after the title it belongs to: the same primitive
-        as the model picker at the other end of this row, the same keyboard and pointer behavior, and the
-        same discipline — a value that truncates rather than pushing the row wider, and a width bound so a
-        long name cannot displace the model list.
+        The two controls the conversation is picked by, in the order the row now states them: the engine
+        that answers, and then the Buddy it runs as. The engine leads because it decides which identity a
+        conversation can even have — the Buddy is refused while another engine owns the choice — and the
+        Buddy Select follows it in the same cluster, after the title the pair belongs to.
+
+        The Buddy is the same primitive as the model picker at the other end of this row, the same
+        keyboard and pointer behavior, and the same discipline — a value that truncates rather than
+        pushing the row wider, and a width bound so a long name cannot displace the model list.
 
         Enabled only while the pane is on the home screen. A conversation's Buddy is fixed the moment it
         starts, because the role and the server subset were snapshotted onto its record then, so a switch
@@ -2349,6 +2356,13 @@ export function ChatPanel() {
         title="Chat"
         afterTitle={
           <>
+            <EnginePicker
+              atHome={atHome}
+              engineId={sessions.engineId}
+              pendingEngineId={sessions.pendingEngineId}
+              lockCaption={ENGINE_LOCK_CAPTION}
+              onPick={sessions.setPendingEngineId}
+            />
             <Select
               value={shownBuddyId ?? SAMAI_BUDDY_ID}
               // Agent Sam is stored as the absent id rather than as itself: the default is what a conversation
@@ -2406,13 +2420,6 @@ export function ChatPanel() {
                 ))}
               </SelectContent>
             </Select>
-            <EnginePicker
-              atHome={atHome}
-              engineId={sessions.engineId}
-              pendingEngineId={sessions.pendingEngineId}
-              lockCaption={ENGINE_LOCK_CAPTION}
-              onPick={sessions.setPendingEngineId}
-            />
           </>
         }
       >
@@ -2506,7 +2513,13 @@ export function ChatPanel() {
                 : `${providerName} · ${activeModel}`
               : ENGINE_MODEL_LOCK_CAPTION(engineName)
           }
-          triggerClassName="max-w-64"
+          // Sized to the value it names rather than to the row: a `w-full` trigger claims the trailing
+          // row's whole width as its flex basis and starves the folder chip beside it to zero pixels
+          // before either label truncates. `shrink` overrides the Button primitive's `shrink-0`, so at
+          // the row's narrow end this control gives up characters instead of taking the chip's.
+          // `max-w-64` is the truncation bound — the inner span still ellipsizes a long model or combo
+          // name — not the width the control occupies.
+          triggerClassName="w-fit shrink max-w-64"
         />
 
         {isKeyMissing && (
