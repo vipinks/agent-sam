@@ -6,6 +6,13 @@ coding assistant.
 
 <br>
 
+## 2026-11-05: v1.15.7 — Working row, themed folder chip, and context menus
+
+- test(chat): pin the working row, the themed folder chip and the two native menus
+- feat(chat): the working row, the themed folder chip and the two native menus — live assistant turns show an animated working row before the first output, the working-folder chip carries theme ink and border, and right-click offers Copy on selected chat text and the standard six in the composer
+
+<br>
+
 ## 2026-11-05: v1.15.6 — Built-in web_fetch tool
 
 - feat(agent): declare web_fetch and pin its red suite
