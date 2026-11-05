@@ -1103,13 +1103,57 @@ export function checkoutBranch(turns: AgentTurn[], turnId: string, position: num
 }
 
 /**
- * Remove the named turn and everything after it, and hand back the surviving prefix.
+ * Delete the named turn and every turn after it, and hand back the surviving prefix.
  *
- * Declared here for the red pins (Phase 21, D2). The cut itself lands in the commit that turns them
- * green, so the suite imports the name it will keep rather than a name that does not exist yet.
+ * A true removal, not a branch: edit and regenerate park the tail they replace so it can be checked
+ * out again, while this is the one verb whose result is that the conversation got shorter.
+ *
+ * The removed records go wholesale — prose, cards, ending, plan, continuations, chips, images, the
+ * tails parked at them — because a field that survived its turn would be a turn nobody can name and
+ * nothing can address. First-match id, and an unknown one is the same array: a stale row costs
+ * nothing. Survivors are the same objects they were, which is `replaceTurn`'s rule and what keeps the
+ * memoised bubbles asleep.
+ *
+ * The one derived reference is a summary's range. A summary whose `summarizesTurns` names a removed
+ * turn would claim the conversation still holds it, and one whose whole range went would render as if
+ * the user had said the summary's words themselves — so removed ids are stripped, and a summary left
+ * naming nothing is dropped.
+ *
+ * No id is reused and no placeholder is minted: ids come from a forward-only counter, so the next
+ * turn is numbered past every turn this conversation ever had.
  */
-export function deleteFromTurn(turns: AgentTurn[], _turnId: string): AgentTurn[] {
-  return turns
+export function deleteFromTurn(turns: AgentTurn[], turnId: string): AgentTurn[] {
+  const index = turns.findIndex((turn) => turn.id === turnId)
+  if (index === -1) return turns
+
+  const kept = turns.slice(0, index)
+  const removed = new Set(turns.slice(index).map((turn) => turn.id))
+  return pruneSummaryRanges(kept, removed)
+}
+
+/**
+ * The surviving turns, with removed ids dropped from every summary's range.
+ *
+ * A summary that still names something is the same object when its range is whole, and a new record
+ * only when an id was stripped; one that names nothing is not a summary any more — `isSummaryTurn`
+ * reads an empty range as an ordinary turn, which would put the model's words in the user's mouth.
+ */
+function pruneSummaryRanges(kept: AgentTurn[], removed: ReadonlySet<string>): AgentTurn[] {
+  const pruned: AgentTurn[] = []
+  for (const turn of kept) {
+    const range = turn.summarizesTurns
+    if (range === undefined || range.length === 0) {
+      pruned.push(turn)
+      continue
+    }
+
+    const surviving = range.filter((id) => !removed.has(id))
+    // An emptied range stops being a summary, and a turn that is no summary must not be left holding
+    // the words of one: it would draw as if the user had typed them.
+    if (surviving.length === 0) continue
+    pruned.push(surviving.length === range.length ? turn : { ...turn, summarizesTurns: surviving })
+  }
+  return pruned
 }
 
 /** How many trails this turn's position has held, the checked-out one included. */

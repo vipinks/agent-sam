@@ -61,7 +61,10 @@ function transcriptTurns(): TranscriptTurn[] {
 }
 
 function snapshot(turns: TranscriptTurn[]): TranscriptSnapshot {
-  return { version: TRANSCRIPT_VERSION, interrupted: false, turns }
+  // Key order matches `serializeTranscript`'s, which is what `isDirty` compares: the hook holds the
+  // loaded snapshot as "what is on disk", and a fixture written in another order would read as dirty
+  // and make an unrelated best-effort save appear in the middle of a delete assertion.
+  return { version: TRANSCRIPT_VERSION, turns, interrupted: false }
 }
 
 const SESSION_STATE = {

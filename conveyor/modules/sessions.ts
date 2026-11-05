@@ -23,7 +23,12 @@ import { exportTitle } from '../protocol/session-title'
 import { IMAGE_ATTACH_NOT_FOUND } from '../protocol/image-attachments'
 import { WORKSPACE_MISSING } from '../protocol/recent-roots'
 import { deleteSessionAttachments } from './image-attachments'
-import { captureEpisode, deleteEpisodePagesForSession, sweepOrphanedEpisodePages } from './memory'
+import {
+  captureEpisode,
+  deleteEpisodePagesForSession,
+  pruneEpisodeBlocksForTurns,
+  sweepOrphanedEpisodePages,
+} from './memory'
 
 /**
  * Transcript storage — one JSON file per session, under `userData/sessions`.
@@ -327,11 +332,35 @@ export const sessionsModule = defineModule({
    * a save: the call resolves quietly on every failure, and the renderer never learns it happened.
    * Idempotence is the turn id's — a debounced re-save and a regenerated reply both rewrite the one
    * block — never a count of writes, which this side could not measure.
+   *
+   * A save carrying `deletedTurnIds` is the from-here delete's, and it is deliberately not a turn end:
+   * those turns' episode blocks are pruned instead of capturing a completed one. Capture is defined as
+   * the note a turn end leaves, and a delete would otherwise make the previous answer the newest turn
+   * and mint an episode for an exchange that was already over. The prune is fire-and-forget behind the
+   * write, the same ordering that makes capture unable to fail a save.
    */
-  saveTranscript: command(z.object({ id: idSchema, snapshot: transcriptSnapshotSchema }), async ({ input }) => {
-    await saveTranscriptFile(input.id, input.snapshot)
-    void captureEpisode(input.id, input.snapshot)
-  }),
+  saveTranscript: command(
+    z.object({
+      id: idSchema,
+      snapshot: transcriptSnapshotSchema,
+      /**
+       * The turns this save removes, when the write is a from-here delete.
+       *
+       * Optional and additive, and it does not change the transcript's shape — a delete removes
+       * records and adds no key — so `TRANSCRIPT_VERSION` stays where it is. Absent on every other
+       * save, so their payload is the shape it always was.
+       */
+      deletedTurnIds: z.array(z.string().min(1)).optional(),
+    }),
+    async ({ input }) => {
+      await saveTranscriptFile(input.id, input.snapshot)
+      if (input.deletedTurnIds !== undefined && input.deletedTurnIds.length > 0) {
+        void pruneEpisodeBlocksForTurns(input.id, input.deletedTurnIds)
+        return
+      }
+      void captureEpisode(input.id, input.snapshot)
+    }
+  ),
 
   /**
    * Read one transcript. Null means "never saved"; a file that exists but will not parse raises

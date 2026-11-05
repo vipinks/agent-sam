@@ -716,18 +716,51 @@ export async function deleteEpisodePagesForSession(userDataPath: string, session
 }
 
 /**
- * Remove the blocks for the given turns from one session's episode page.
+ * Remove the blocks for the given turns from one session's episode page, and report how many went.
  *
- * Declared for the red pins (Phase 21, D4): the parser-and-rewrite lands in the commit that turns
- * them green.
+ * The page is the session's own, parsed with the same `parseEpisodeBlocks` the writer uses and
+ * rewritten through `writeFileAtomic` — the same temp-then-rename capture uses, so a reader never sees
+ * half a page. Surviving blocks are reprinted from the text they carried, which is what keeps their
+ * captured ordinal (`## Episode N`) even though the position moved; renumbering them would make the
+ * page claim those turns happened somewhere they never did.
+ *
+ * Serialised through the page's write chain, like a capture, so a prune cannot interleave with a save
+ * already writing this page. A page that was never written is nothing to remove.
  */
 export async function deleteEpisodeBlocksForTurns(
-  _userDataPath: string,
-  _rootPath: string,
-  _sessionId: string,
-  _turnIds: readonly string[]
+  userDataPath: string,
+  rootPath: string,
+  sessionId: string,
+  turnIds: readonly string[]
 ): Promise<number> {
-  return 0
+  if (turnIds.length === 0) return 0
+
+  const root = memoryRoot(userDataPath, rootPath)
+  const target = episodePagePath(root, sessionId)
+  const removed = new Set(turnIds)
+
+  const previous = episodeWriteChains.get(target) ?? Promise.resolve()
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const existing = await readEpisodePage(target)
+      if (existing === null) return 0
+
+      const prior = parseEpisodeBlocks(existing, sessionId)
+      const kept = prior.filter((block) => !removed.has(block.turnId))
+      if (kept.length === prior.length) return 0
+
+      await writeFileAtomic(episodesDir(root), target, renderEpisodePage(kept.map((block) => block.text)))
+      return prior.length - kept.length
+    })
+
+  const tail = next.then(() => undefined)
+  episodeWriteChains.set(target, tail)
+  try {
+    return await next
+  } finally {
+    if (episodeWriteChains.get(target) === tail) episodeWriteChains.delete(target)
+  }
 }
 
 /**
@@ -816,5 +849,26 @@ export async function captureEpisode(sessionId: string, snapshot: TranscriptSnap
   } catch (error) {
     const code = error instanceof ConveyorError ? error.code : 'EPISODE_CAPTURE_FAILED'
     console.warn(`[memory] episode capture skipped (${code})`)
+  }
+}
+
+/**
+ * Prune a session's episode page for the turns a delete removed, best-effort.
+ *
+ * Fire-and-forget, and quiet by construction, the way `captureEpisode` is: the save that carried the
+ * delete has already landed, so a page that cannot be pruned must not fail that save or the delete it
+ * belongs to. The folder is read through the same source capture uses, and a conversation with no
+ * project has no page to prune.
+ */
+export async function pruneEpisodeBlocksForTurns(sessionId: string, turnIds: readonly string[]): Promise<void> {
+  try {
+    if (turnIds.length === 0) return
+    const rootPath = sessionRootSource?.(sessionId) ?? null
+    if (!rootPath) return
+
+    await deleteEpisodeBlocksForTurns(app.getPath('userData'), rootPath, sessionId, turnIds)
+  } catch (error) {
+    const code = error instanceof ConveyorError ? error.code : 'EPISODE_PRUNE_FAILED'
+    console.warn(`[memory] episode prune skipped (${code})`)
   }
 }

@@ -1,8 +1,19 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, ChevronLeft, ChevronRight, Copy, Pencil, RefreshCw, TriangleAlert } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Copy, Pencil, RefreshCw, Trash2, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Textarea } from '../ui/textarea'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '../ui/alert-dialog'
 import { AutoContinueMark } from './auto-continue-mark'
 import { AgentActionCard } from './agent-action-card'
 import { MarkdownContent } from './markdown'
@@ -171,6 +182,8 @@ export const MessageBubble = memo(function MessageBubble({
   canEdit,
   onResend,
   onRegenerate,
+  onDeleteFromHere,
+  turnsRemoved = 1,
   onCheckoutBranch,
   sessionId,
   alignment = DEFAULT_BUBBLE_ALIGNMENT,
@@ -216,11 +229,17 @@ export const MessageBubble = memo(function MessageBubble({
   /**
    * Delete this message and everything after it.
    *
-   * Declared for the red pins (Phase 21, D9): the row's fourth control and its confirmation dialog
-   * land in the commit that turns them green.
+   * The one action in the row that removes rather than rewrites, so it asks first — through the
+   * bubble's own dialog, because the copy differs by role and the count belongs beside the thing
+   * being counted. Absent for a bubble rendered on its own, which has no transcript to shorten.
    */
   onDeleteFromHere?: (turnId: string) => void
-  /** How many turns a delete at this message would remove, for the dialog's copy. */
+  /**
+   * How many turns a delete at this message would remove.
+   *
+   * The pane's fact, not the bubble's: only the transcript knows where this message sits. It is read
+   * by the confirmation copy, which states the scope rather than leaving the user to discover it.
+   */
   turnsRemoved?: number
   /**
    * Move the conversation to one of the trails parked at this turn.
@@ -456,12 +475,14 @@ export const MessageBubble = memo(function MessageBubble({
         {/*
           The controls that act on this message, at the bottom of its bubble and in one row.
 
-          The set each kind carries is unchanged; where it is drawn is what moved, and one control is
-          new. Copy sits on both, because both have words; edit sits on the user's own, because only
-          their message is theirs to rewrite; regenerate sits on a reply, and only with a callback
-          behind it — a bubble that cannot reach the pane offers no control whose effect it cannot
-          perform; and the branch switcher sits on the turn that is a branch point, because checking a
-          branch out moves the whole trail from that turn rather than one message's words.
+          The set each kind carries is the one it always had here, plus the from-here delete. Copy sits
+          on both, because both have words; edit sits on the user's own, because only their message is
+          theirs to rewrite; regenerate sits on a reply, and only with a callback behind it — a bubble
+          that cannot reach the pane offers no control whose effect it cannot perform; the delete sits
+          on either kind, because the range it removes is the same conversation either way, and only
+          with a handler behind it for the same reason; and the branch switcher sits on the turn that is
+          a branch point, because checking a branch out moves the whole trail from that turn rather than
+          one message's words.
 
           Hidden at rest and revealed by the bubble's own hover or by the keyboard arriving inside it:
           `opacity-0` rather than `hidden`, so the controls stay in the tab order, and `focus-within`
@@ -480,6 +501,19 @@ export const MessageBubble = memo(function MessageBubble({
           {/* And the reply's half: the copy beside it, then the control that writes the reply again. */}
           {!isUser && copyButton}
           {!isUser && canEdit && onRegenerate && <RegenerateButton onRegenerate={regenerate} />}
+          {/* The delete, on either kind of message and last of the message-level controls. Its copy
+              differs by role because the consequence differs — a question and the answer it got, or
+              the answer and what followed it — and it asks first because it removes the range rather
+              than parking it the way edit and regenerate do. */}
+          {canEdit && onDeleteFromHere && (
+            <DeleteMessageButton
+              role={message.role}
+              turnId={message.id}
+              turnsRemoved={turnsRemoved}
+              parked={branches - 1}
+              onDelete={onDeleteFromHere}
+            />
+          )}
           {/* And the branch switcher, at the turn the rewrite branched at. One control for the pair,
               because checking a branch out moves the whole trail from here rather than a bubble's words;
               drawn only when there is more than one branch, and only while the pane says the conversation
@@ -589,6 +623,64 @@ function RegenerateButton({ onRegenerate }: { onRegenerate: () => void }) {
     >
       <RefreshCw className="size-3.5" />
     </button>
+  )
+}
+
+/**
+ * Opens the confirmation for a from-here delete.
+ *
+ * The row's fourth control, drawn by the row and hidden or revealed by it like the two beside it. The
+ * click asks rather than acts: the copy names the range, and at a branch point the parked trails that
+ * go with it, because a delete is the one message action a branch switch cannot undo.
+ *
+ * The dialog lives here rather than in the pane because the bubble is what knows its role — a
+ * question and the answer it was given end differently — and each copy says which consequence it is.
+ * The action itself is the pane's: this hands over the turn id and nothing else.
+ */
+function DeleteMessageButton({
+  role,
+  turnId,
+  turnsRemoved,
+  parked,
+  onDelete,
+}: {
+  role: 'user' | 'assistant'
+  turnId: string
+  turnsRemoved: number
+  /** How many trails this position holds besides the one on screen. */
+  parked: number
+  onDelete: (turnId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const title =
+    role === 'user' ? 'Delete this message and everything after it?' : 'Delete this reply and everything after it?'
+  const count = `${turnsRemoved} ${turnsRemoved === 1 ? 'turn' : 'turns'}`
+  const trails = parked > 0 ? ` ${parked} parked ${parked === 1 ? 'trail goes' : 'trails go'} with it.` : ''
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger asChild>
+        <button
+          type="button"
+          aria-label="Delete from here"
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes {count} from the conversation.{trails} This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => onDelete(turnId)}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 

@@ -26,7 +26,12 @@ import {
 import { renderExport } from '../../conveyor/protocol/export'
 import { conversationText } from '../../conveyor/protocol/search'
 import { runHistoryFor } from '../../conveyor/protocol/truncate'
-import { deleteFromTurn, reviseUserTurn, restartReplyTurn, type AgentTurn } from '../../app/components/workbench/agent-session'
+import {
+  deleteFromTurn,
+  reviseUserTurn,
+  restartReplyTurn,
+  type AgentTurn,
+} from '../../app/components/workbench/agent-session'
 
 const results: string[] = []
 
@@ -237,7 +242,11 @@ function aShrunkFileStillLoads() {
   const shrunk = deleteFromTurn(conversation(), 'user-3')
   const parsed = transcriptSnapshotSchema.parse(snapshotOf(shrunk))
 
-  assert.deepEqual(parsed.turns.map((turn) => turn.id), ['user-1', 'assistant-2'], 'the file holds the surviving prefix')
+  assert.deepEqual(
+    parsed.turns.map((turn) => turn.id),
+    ['user-1', 'assistant-2'],
+    'the file holds the surviving prefix'
+  )
   assert.equal(parsed.version, TRANSCRIPT_VERSION, 'a smaller transcript is still a version 4 transcript')
   assert.equal(parsed.version, 4)
 

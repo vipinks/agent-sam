@@ -190,6 +190,24 @@ export interface CreatedSession {
   mcpSubset: string[] | null
 }
 
+/**
+ * What a direct save carries beyond the transcript itself.
+ *
+ * One field, because there is one save that is not a turn boundary: the from-here delete. The
+ * transcript's shape does not change for it — a delete only removes turns — so what main has to be
+ * told is which turns are gone, and that travels beside the snapshot rather than inside it.
+ */
+export interface SaveOptions {
+  /**
+   * The turns this save is removing from the conversation.
+   *
+   * Main prunes their episode blocks instead of capturing a completed turn. Capture is defined as the
+   * note a turn end leaves, and a delete would otherwise make the previous answer the newest turn and
+   * mint an episode for an exchange that was already over.
+   */
+  deletedTurnIds?: readonly string[]
+}
+
 export interface ChatSessions {
   /** The live transcript on screen. */
   transcript: TranscriptState
@@ -456,13 +474,22 @@ export interface ChatSessions {
    * turn ran as something else, and an engine whose model control never reached a runner.
    */
   ensureSession: (firstMessage: string, buddyId?: string | null) => CreatedSession
-  /** Save now if there is anything to save. Used at turn boundaries and on blur. */
-  saveNow: () => Promise<void>
+  /**
+   * Save now if there is anything to save. Used at turn boundaries and on blur.
+   *
+   * `deletedTurnIds` is the delete-save's own half: the turns this write is removing, for the episode
+   * page. The failure is returned rather than thrown, so a turn-boundary caller can ignore it and the
+   * delete's caller can say it; see the implementation.
+   */
+  saveNow: (options?: SaveOptions) => Promise<ConveyorError | null>
   /**
    * Delete a turn and every turn after it, and write the result down.
    *
-   * The one verb that removes turns rather than parking them. Declared here for the red pins (Phase
-   * 21, D1-D3): the walk itself lands in the commit that turns them green.
+   * The one verb that removes turns rather than parking them. The transcript shrinks on screen and the
+   * save is awaited directly, so the file is what the pane shows by the time the call resolves; the
+   * returned error is the save's failure, which is the only way the click can be honest that the
+   * removal did not reach the disk. A refused delete — a run in flight, a consent pause, an id that
+   * names no turn — returns null and touches nothing.
    */
   deleteFromHere: (turnId: string) => Promise<ConveyorError | null>
   /** Queue the debounced post-turn save. */
@@ -645,36 +672,82 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
    * Guarded three ways: no session, nothing written yet, or not actually different. That is what
    * keeps a save from being a disk write per keystroke — the cadence decision is the caller's, but
    * this is the backstop.
+   *
+   * The two guards about an empty conversation answer two different questions. A session that has
+   * never had a file is not given one here; a conversation whose turns were just deleted does have a
+   * file, and writing its emptiness is the point — refusing it would leave the removed turns in the
+   * old bytes, and reopening the conversation would resurrect them.
+   *
+   * A failure is returned rather than thrown or swallowed. The turn-boundary callers have nothing to
+   * do about one and must not have the conversation interrupted for it, while the delete's caller has
+   * to be able to say the removal did not land. Returning the coded error keeps both honest without a
+   * second save path.
    */
-  const saveNow = useCallback(async () => {
+  const saveNow = useCallback(async (options?: SaveOptions): Promise<ConveyorError | null> => {
     const id = activeIdRef.current
-    if (!id) return
+    if (!id) return null
     const snapshot = serializeTranscript(transcriptRef.current)
-    // An empty conversation is never written: a session the user created and left is not a session with a
-    // transcript. The exception is the one `isDirty` names — a session whose user turned auto-approve on
-    // has a choice to remember even before it has a message.
-    if (snapshot.turns.length === 0 && snapshot.autoApprove !== true) return
-    if (savedRef.current && !isDirty(transcriptRef.current, savedRef.current)) return
+    // An empty conversation is never written for a session that never had one: a session the user
+    // created and left is not a session with a transcript. The other exception is `isDirty`'s — a
+    // session whose user turned auto-approve on has a choice to remember before it has a message.
+    if (snapshot.turns.length === 0 && snapshot.autoApprove !== true && savedRef.current === null) return null
+    if (savedRef.current && !isDirty(transcriptRef.current, savedRef.current)) return null
 
     try {
-      await conveyor.sessions.saveTranscript({ id, snapshot })
-      if (!mountedRef.current) return
+      await conveyor.sessions.saveTranscript({
+        id,
+        snapshot,
+        // Written only for the delete-save, so every other save's payload keeps the shape it had.
+        ...(options?.deletedTurnIds === undefined ? {} : { deletedTurnIds: [...options.deletedTurnIds] }),
+      })
+      if (!mountedRef.current) return null
       savedRef.current = snapshot
-    } catch {
-      // A failed save must not interrupt the conversation. The next turn boundary tries again, and
-      // the transcript is still on screen.
+      return null
+    } catch (error) {
+      // Branched on by the caller through the code, never the message: the reason the write failed is
+      // main's, and the sentence a person reads is this side's.
+      return error instanceof ConveyorError
+        ? error
+        : new ConveyorError('SESSION_WRITE_FAILED', 'Could not save this conversation.')
     }
   }, [])
 
   /**
-   * Delete a turn and everything after it.
+   * Delete a turn and every turn after it.
    *
-   * Declared for the red pins (Phase 21, D1-D3); the reducer call and its awaited save land in the
-   * commit that turns them green.
+   * The one verb that removes rather than parks. The reducer runs first, then the save is awaited
+   * directly — the path an edit, a regenerate and a branch switch take, not the 1500 ms debounce,
+   * because the click means the file no longer holds these turns.
+   *
+   * Four guards, read through refs so a click cannot race a render: a run in flight is writing the
+   * very turns this would remove; a held pause has not ended its turn; no active session has nothing
+   * to write into; and an id that names no turn is a stale row that must cost nothing. All four leave
+   * the screen and the disk exactly as they were.
+   *
+   * The removed ids travel with the save so main can prune the episode page, and the save's failure
+   * is handed back for the pane to say. Nothing is parked: the tail is gone, which is what separates
+   * this verb from edit and regenerate.
    */
-  const deleteFromHere = useCallback(async (_turnId: string): Promise<ConveyorError | null> => {
-    return null
-  }, [])
+  const deleteFromHere = useCallback(
+    async (turnId: string): Promise<ConveyorError | null> => {
+      const id = activeIdRef.current
+      if (!id) return null
+      if (streamingRef.current) return null
+      if (pausesRef.current[id] !== undefined) return null
+
+      const turns = transcriptRef.current.turns
+      const index = turns.findIndex((turn) => turn.id === turnId)
+      if (index === -1) return null
+
+      const removedTurnIds = turns.slice(index).map((turn) => turn.id)
+      const next = deleteFromTurn(turns, turnId)
+      if (next === turns) return null
+      setTurns(next)
+
+      return saveNow({ deletedTurnIds: removedTurnIds })
+    },
+    [saveNow, setTurns]
+  )
 
   const debounced = useRef(createDebouncedSave(() => void saveNow()))
   useEffect(() => {

@@ -195,13 +195,17 @@ describe('the row a bubble carries at its bottom', () => {
     // The slot is the row's, at the end of the message-level controls, and each kind offers it: the
     // verb removes a message of either role, so hiding it on one would be a silent rule.
     const userRow = actionsOn(USER_TEXT)
-    expect(
-      [...userRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    ).toEqual(['Edit message', 'Copy message', 'Delete from here'])
+    expect([...userRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Edit message',
+      'Copy message',
+      'Delete from here',
+    ])
     const replyRow = actionsOn(AGENT_TEXT)
-    expect(
-      [...replyRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
-    ).toEqual(['Copy reply', 'Regenerate reply', 'Delete from here'])
+    expect([...replyRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Copy reply',
+      'Regenerate reply',
+      'Delete from here',
+    ])
 
     // Copy and regenerate are untouched verbs; the delete is its own control and asks first, because
     // what it does cannot be undone and is not one message's words.

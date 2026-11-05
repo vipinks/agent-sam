@@ -165,7 +165,11 @@ async function aShrunkSnapshotRoundTrips() {
 
   const loaded = await loadTranscriptFile(UUID)
   assert.deepEqual(loaded, shrunk, 'the shrunk transcript is what the atomic write replaced the old one with')
-  assert.deepEqual(loaded?.turns.map((turn) => turn.id), ['user-1', 'assistant-2'], 'the removed range is not on disk')
+  assert.deepEqual(
+    loaded?.turns.map((turn) => turn.id),
+    ['user-1', 'assistant-2'],
+    'the removed range is not on disk'
+  )
   assert.equal(loaded?.version, TRANSCRIPT_VERSION, 'and the version did not move for a smaller file')
   assert.equal(loaded?.turns.length, 2)
 

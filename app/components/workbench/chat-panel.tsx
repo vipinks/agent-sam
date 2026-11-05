@@ -257,6 +257,22 @@ function streamErrorMessage(error: unknown, providerName: string): string {
 }
 
 /**
+ * Why a from-here delete did not reach the disk, in the user's terms.
+ *
+ * Branched on the code, never the sentence: main names the failure, and what to tell the user is this
+ * side's. The sentence has to be honest about the half-state the delete leaves — the turns are off the
+ * screen but still in the file, and reopening the conversation would bring them back.
+ */
+function deleteSaveErrorMessage(error: ConveyorError): string {
+  switch (error.code) {
+    case 'SESSION_WRITE_FAILED':
+      return 'That delete could not be saved. The turns are still on disk and will come back when this conversation is reopened.'
+    default:
+      return `That delete could not be saved (${error.code}).`
+  }
+}
+
+/**
  * What the Auto-approve shield says about itself, wherever it is offered.
  *
  * One wording for both of the controls that carry the setting — the switch in the header and the chip at
@@ -737,6 +753,14 @@ export function ChatPanel() {
    * keystroke rather than part of the conversation, so there is nothing here to save, resume or send.
    */
   const [commandNotice, setCommandNotice] = useState<CommandNoticeText | null>(null)
+  /**
+   * Why the last from-here delete could not be written, or null.
+   *
+   * A failed save must not read as a successful removal. The turns are already off the screen while
+   * the file still holds them, so the sentence says exactly that rather than letting a reopen
+   * contradict a delete that looked finished.
+   */
+  const [deleteNote, setDeleteNote] = useState<string | null>(null)
   const composerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // The pane itself, for the ceiling on a drag: the limit is a share of how tall the chat column
@@ -2103,6 +2127,24 @@ export function ChatPanel() {
   )
 
   /**
+   * Delete a message and every turn after it.
+   *
+   * The one message action that removes rather than rewrites, and therefore the one whose failure has
+   * to be said aloud. The pane shrinks first — the click is about what is on screen — and the awaited
+   * save is what makes that true of the file; a save that fails leaves the removed turns on disk, and
+   * the note under the composer says so rather than letting a reopen quietly undo the delete.
+   *
+   * The guards, the reducer and the save are the session layer's, and the dialog is the bubble's: this
+   * carries the click and words its failure, branched on the code the save returned.
+   */
+  const deleteFromHere = useCallback((turnId: string) => {
+    void (async () => {
+      const failure = await sessionsRef.current.deleteFromHere(turnId)
+      setDeleteNote(failure === null ? null : deleteSaveErrorMessage(failure))
+    })()
+  }, [])
+
+  /**
    * Begin a drag of the composer's top edge.
    *
    * The height the drag starts from is captured here and the pointer's movement is applied to it, rather
@@ -2659,6 +2701,10 @@ export function ChatPanel() {
                           fontPreset={appearanceFontPreset}
                           onResend={reviseUserMessage}
                           onRegenerate={regenerateReply}
+                          onDeleteFromHere={deleteFromHere}
+                          // The range a delete at this message would remove, which is the transcript's
+                          // own fact: this bubble and every turn after it.
+                          turnsRemoved={messages.length - item.index}
                           onApprove={() => void decide(true)}
                           onDeny={() => void decide(false)}
                         />
@@ -2973,6 +3019,15 @@ export function ChatPanel() {
             {attachmentNote && (
               <p role="status" className="mt-2 text-[11.5px] text-muted-foreground">
                 {attachmentNote}
+              </p>
+            )}
+
+            {/* A delete the file did not accept, said where the other refusals are said: it is about
+            the control the user just used, and it has to still be there when the reopen contradicts
+            it. Its own line, because it answers a third gesture. */}
+            {deleteNote && (
+              <p role="status" className="mt-2 text-[11.5px] text-destructive">
+                {deleteNote}
               </p>
             )}
 

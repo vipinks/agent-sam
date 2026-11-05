@@ -534,9 +534,12 @@ async function aDeletedRangePrunesItsBlocksAndKeepsOrdinals() {
 async function aDeleteSaveSuppressesCaptureAndPrunesThePage() {
   const userData = process.env.SAM_TEST_USER_DATA
   if (!userData) throw new Error('SAM_TEST_USER_DATA must be set for this test')
+  // Its own conversation, so its page cannot be mistaken for the one the quiet-failure step later
+  // asserts is absent in the shared test app-data directory.
+  const session = '33333333-4444-4555-8666-777777777777'
   const root = join(userData, 'workspace')
   mkdirSync(root, { recursive: true })
-  const page = pagePath(userData, root, SESSION)
+  const page = pagePath(userData, root, session)
   const record = sessionsModule.record.saveTranscript as unknown as {
     resolver: (opts: { input: unknown }) => Promise<void>
   }
@@ -552,8 +555,8 @@ async function aDeleteSaveSuppressesCaptureAndPrunesThePage() {
       assistantTurn('assistant-4', 'Updated them.'),
     ])
 
-    await record.resolver({ input: { id: SESSION, snapshot: first } })
-    await record.resolver({ input: { id: SESSION, snapshot: full } })
+    await record.resolver({ input: { id: session, snapshot: first } })
+    await record.resolver({ input: { id: session, snapshot: full } })
     for (let attempt = 0; attempt < 200 && markerCount(readPage(page)) < 2; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
@@ -566,7 +569,7 @@ async function aDeleteSaveSuppressesCaptureAndPrunesThePage() {
     // The same conversation after a from-here delete at user-3: the delete writes the surviving prefix
     // and says which turns it removed.
     await record.resolver({
-      input: { id: SESSION, snapshot: first, deletedTurnIds: ['user-3', 'assistant-4'] },
+      input: { id: session, snapshot: first, deletedTurnIds: ['user-3', 'assistant-4'] },
     })
     for (let attempt = 0; attempt < 200 && readPage(page).includes('turn=assistant-4'); attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10))
@@ -582,6 +585,7 @@ async function aDeleteSaveSuppressesCaptureAndPrunesThePage() {
   } finally {
     setEpisodesEnabledSource(null)
     setSessionRootSource(null)
+    rmSync(page, { force: true })
     rmSync(root, { recursive: true, force: true })
   }
 }

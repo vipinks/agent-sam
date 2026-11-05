@@ -504,7 +504,7 @@ function aSurvivingSummaryLosesTheRemovedRange() {
     [{ ...summary, summarizesTurns: ['assistant-4', 'user-5'] }, removedAnswer, removedQuestion],
     'assistant-4'
   )
-  assert.deepEqual(emptied, [], 'a summary whose whole range went is dropped')
+  assert.equal(emptied.length, 0, 'a summary whose whole range went is dropped')
   assert.ok(!emptied.some((turn) => turn.id === 'summary-1'))
 
   results.push('a surviving summary loses the removed ids, and one whose range empties is dropped')
