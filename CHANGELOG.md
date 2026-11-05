@@ -6,6 +6,14 @@ coding assistant.
 
 <br>
 
+## 2026-11-05: v1.15.5 — Searchable chat model picker and header fixes
+
+- test(picker): pin the chat picker search and both accessible names
+- feat(chat): searchable model picker and value-naming triggers — the chat header's model control becomes a grouped, filterable combobox and both pickers announce their chosen value
+- fix(chat): restore the working-folder label's width and lead the header with the engine Select
+
+<br>
+
 ## 2026-11-05: v1.15.4 — Memory episodic capture and object-removal exits
 
 - test(memory): pin memory slice 2 episodes
