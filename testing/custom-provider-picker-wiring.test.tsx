@@ -110,7 +110,7 @@ function renderChat() {
  * one Radix routes without consulting the pointer at all.
  */
 async function openPicker(): Promise<HTMLElement> {
-  const trigger = await screen.findByRole('combobox', { name: 'Provider and model' })
+  const trigger = await screen.findByRole('combobox', { name: /^Provider and model/ })
   trigger.focus()
   await userEvent.keyboard('{Enter}')
   await screen.findByRole('listbox')
@@ -126,6 +126,13 @@ function optionTexts(): string[] {
   return options().map((option) => option.textContent ?? '')
 }
 
+/** The provider headings the grouped list is drawing, in document order. */
+function groupLabels(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-slot="picker-group-label"]')).map(
+    (label) => label.textContent ?? ''
+  )
+}
+
 /**
  * Whether an option is the disabled kind.
  *
@@ -138,8 +145,8 @@ function isDisabled(option: HTMLElement): boolean {
 
 /** Choose one option and let the picker settle. */
 async function pick(text: string): Promise<void> {
-  const option = options().find((candidate) => (candidate.textContent ?? '') === text)
-  if (!option) throw new Error(`no option named ${text} — the picker offered ${optionTexts().join(', ')}`)
+  const option = options().find((candidate) => (candidate.textContent ?? '').includes(text))
+  if (!option) throw new Error(`no option matching ${text} — the picker offered ${optionTexts().join(', ')}`)
   await userEvent.click(option)
 }
 
@@ -150,13 +157,14 @@ beforeEach(() => {
 })
 
 describe('the model picker', () => {
-  it('lists every custom provider’s models after all the predefined ones, named by their provider', async () => {
+  it('lists every custom provider’s models after all the predefined ones, in a section named by its provider', async () => {
     stubChat()
     renderChat()
     await openPicker()
 
+    await waitFor(() => expect(groupLabels()).toContain(LLAMA.name))
     const texts = optionTexts()
-    const firstCustom = texts.findIndex((text) => text.includes(LLAMA.name))
+    const firstCustom = texts.findIndex((text) => LLAMA.models.some((model) => text.includes(model)))
     const lastPredefined = texts.map((text) => /deepseek-chat|gpt-4o-mini/.test(text)).lastIndexOf(true)
 
     // After all of them, not interleaved: a custom provider is an addition to the list, not a peer of
@@ -164,22 +172,52 @@ describe('the model picker', () => {
     expect(firstCustom).toBeGreaterThan(lastPredefined)
     expect(lastPredefined).toBeGreaterThanOrEqual(0)
 
-    // Each model carries its provider's name, because two providers can offer the same model id and
-    // the id alone would not say which one a line belongs to.
+    // The provider order matches the control this replaced, and the section heading is what names the
+    // provider a row belongs to now that the row itself carries only the model id.
+    expect(groupLabels()).toEqual(['DeepSeek', 'OpenAI', LLAMA.name])
     for (const model of LLAMA.models) {
-      expect(texts).toContain(`${LLAMA.name} · ${model}`)
+      expect(texts.some((text) => text.includes(model))).toBe(true)
     }
   })
 
-  it('shows a custom provider with no models as a disabled hint rather than dropping it', async () => {
+  it('gives a provider with no models no rows at all rather than a dead hint', async () => {
     stubChat()
     renderChat()
     await openPicker()
 
-    const hint = options().find((option) => option.textContent?.includes(GATEWAY.name))
-    expect(hint, 'the provider with nothing to offer is still listed').toBeTruthy()
-    expect(hint?.textContent).toContain('No models yet')
-    expect(isDisabled(hint as HTMLElement)).toBe(true)
+    await waitFor(() => expect(groupLabels()).toContain(LLAMA.name))
+    // The not-known-yet provider is absent from the list rather than drawn as an unselectable line. Its
+    // empty catalogue is not a fact the composer has to report; it is a list with nothing in it, and the
+    // picker's job is to offer what can be chosen.
+    expect(groupLabels()).not.toContain(GATEWAY.name)
+    expect(optionTexts().some((text) => text.includes(GATEWAY.name))).toBe(false)
+    expect(optionTexts().some((text) => text.includes('No models yet'))).toBe(false)
+    expect(options().some(isDisabled)).toBe(false)
+
+    // It contributes nothing to the search either: the term is judged against rows that exist.
+    await userEvent.type(await screen.findByLabelText('Filter models'), 'work-gateway')
+    await waitFor(() => expect(options()).toHaveLength(0))
+    expect(screen.getByText("No models match 'work-gateway'")).toBeTruthy()
+  })
+
+  it('narrows the rows across every provider section as the term changes', async () => {
+    stubChat()
+    renderChat()
+    await openPicker()
+    await waitFor(() => expect(groupLabels()).toContain(LLAMA.name))
+
+    const box = await screen.findByLabelText('Filter models')
+    // A term that only one of the predefined providers can answer: the sections that match nothing go,
+    // and the one that matches keeps its own heading.
+    await userEvent.type(box, 'GPT')
+    await waitFor(() => expect(optionTexts()).toEqual(['gpt-4o-mini']))
+    expect(groupLabels()).toEqual(['OpenAI'])
+
+    // And the same box reaches the custom provider's section: one list, one predicate, every group.
+    await userEvent.clear(box)
+    await userEvent.type(box, 'qwen')
+    await waitFor(() => expect(optionTexts()).toEqual(['qwen2.5-coder-7b']))
+    expect(groupLabels()).toEqual([LLAMA.name])
   })
 
   it('carries the selected provider’s descriptor into the loop-start payload', async () => {
@@ -188,7 +226,12 @@ describe('the model picker', () => {
     renderChat()
     await openPicker()
 
-    await pick(`${LLAMA.name} · ${LLAMA.models[0]}`)
+    await pick(LLAMA.models[0])
+
+    // The trigger now names the pair it picked, for assistive tech as well as for the eye.
+    expect(
+      screen.getByRole('combobox', { name: `Provider and model: ${LLAMA.name} · ${LLAMA.models[0]}` })
+    ).toBeTruthy()
 
     await userEvent.type(await screen.findByLabelText('Message'), 'hello{Enter}')
     await waitFor(() => expect(sent.length).toBe(1))
@@ -198,6 +241,19 @@ describe('the model picker', () => {
     expect(payload.model).toBe(LLAMA.models[0])
     // The descriptor as turn A defined it, and with no credential on it: the key is main's to add.
     expect(payload.provider).toEqual({ ...LLAMA, apiKey: '' })
+  })
+
+  it('restores a remembered target into the trigger after a relaunch', async () => {
+    stubChat()
+    localStorage.setItem('sam-ai-chat-target', JSON.stringify({ providerId: 'deepseek', model: 'deepseek-reasoner' }))
+    // The one-shot read a launch performs, from the record the previous session wrote.
+    useWorkbenchStore.getState().seedTarget()
+    renderChat()
+
+    const trigger = await screen.findByRole('combobox', {
+      name: 'Provider and model: DeepSeek · deepseek-reasoner',
+    })
+    expect(trigger.textContent).toContain('DeepSeek · deepseek-reasoner')
   })
 
   it('allows a remembered model when the provider config mirror has no record yet', async () => {

@@ -692,7 +692,7 @@ describe('the Buddy Select in an open conversation', () => {
     // what makes a locked control read as deliberate rather than broken.
     expect(trigger.getAttribute('title')).toBe(BUDDY_LOCK_CAPTION)
 
-    const model = screen.getByRole('combobox', { name: 'Provider and model' })
+    const model = screen.getByRole('combobox', { name: /^Provider and model/ })
     expect(isDisabled(model)).toBe(false)
 
     const shield = screen.getByRole('switch', { name: 'Auto-approve tool actions' })

@@ -349,7 +349,7 @@ describe('the home screen at launch', () => {
     expect(screen.getByRole('separator', { name: 'Resize the composer' })).toBeTruthy()
     expect(screen.getByLabelText('Attach the open file')).toBeTruthy()
     expect(screen.getByLabelText('Send message')).toBeTruthy()
-    expect(screen.getByLabelText('Provider and model')).toBeTruthy()
+    expect(screen.getByLabelText(/^Provider and model/)).toBeTruthy()
 
     // The row beneath the card: a chip per folder the app remembers, named for the folder and saying
     // how many conversations were last used in it.

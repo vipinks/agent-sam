@@ -138,7 +138,7 @@ const renderScreen = () => render(<Screen />)
 /** The two pickers, by the labels a reader is told. */
 const buddyTrigger = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Buddy' })
 const engineTrigger = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Engine' })
-const modelTrigger = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Provider and model' })
+const modelTrigger = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: /^Provider and model/ })
 
 /** Open a Select from the keyboard, the one path Radix routes without consulting the pointer. */
 async function open(trigger: HTMLElement): Promise<void> {

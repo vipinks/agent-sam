@@ -97,8 +97,8 @@ beforeEach(() => {
   useWorkbenchStore.setState({ settingsSection: 'combos', activeActivity: 'settings' })
 })
 
-/** Open one Radix select by its accessible name and pick the option whose text matches. */
-async function choose(triggerName: string, optionText: string, index = 0): Promise<void> {
+/** Open one picker by its accessible name and pick the option whose text matches. */
+async function choose(triggerName: string | RegExp, optionText: string, index = 0): Promise<void> {
   const triggers = screen.getAllByLabelText(triggerName)
   const trigger = triggers[index]
   trigger.focus()
@@ -128,7 +128,7 @@ describe('the Combos settings section', () => {
 
     await userEvent.type(screen.getByLabelText('Name'), 'Work')
     await choose('Provider', 'DeepSeek')
-    await choose('Model', 'deepseek-chat')
+    await choose(/^Model:/, 'deepseek-chat')
     await userEvent.click(screen.getByRole('button', { name: /Add combo/ }))
 
     await waitFor(() =>
@@ -167,7 +167,7 @@ describe('the Combos settings section', () => {
     await waitFor(() => expect(calls).toContainEqual({ member: 'setEnabled', input: { id: 'fast', enabled: false } }))
 
     await choose('Provider', 'DeepSeek', 1)
-    await choose('Model', 'deepseek-reasoner', 1)
+    await choose(/^Model:/, 'deepseek-reasoner', 1)
     await userEvent.click(screen.getByRole('button', { name: 'Add member to Fast answers' }))
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -208,7 +208,7 @@ describe('the Combos settings section', () => {
     await screen.findByRole('heading', { name: 'Combos' })
 
     await choose('Provider', 'DeepSeek', 1)
-    await choose('Model', 'deepseek-reasoner', 1)
+    await choose(/^Model:/, 'deepseek-reasoner', 1)
     await userEvent.click(screen.getByRole('button', { name: 'Add member to Fast answers' }))
 
     const alert = await screen.findByRole('alert')

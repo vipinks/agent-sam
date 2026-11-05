@@ -99,11 +99,12 @@ async function choose(triggerName: string, optionText: string, index = 0): Promi
  * The model trigger, by its accessible name. Two exist — the create form's and the one combo's
  * add-member row — in the order they are drawn.
  *
- * The name is what the field is called, not what it currently holds: a trigger whose name changed
- * with its value would be announced as "deepseek-chat" and never as the field the user is filling.
+ * The name is the field and the current selection together, in the form the feature states:
+ * `Model: <value>` or `Model: none selected`. The visible Label above the field stays the field's
+ * own words; the trigger's name is what tells a screen reader what is in it.
  */
 function modelTrigger(index = 0): HTMLButtonElement {
-  return screen.getAllByLabelText('Model')[index] as HTMLButtonElement
+  return screen.getAllByLabelText(/^Model(?:$|:)/)[index] as HTMLButtonElement
 }
 
 /** The rows the picker is offering, read off the popover's own slot. */
@@ -205,13 +206,16 @@ describe('the combo member model picker', () => {
     expect(rows().map((row) => row.textContent)).toEqual(['gpt-4o', 'gpt-4o-mini'])
   })
 
-  it('keeps an accessible name on the trigger, chosen or not', async () => {
+  it('names the field and the chosen value, chosen or not, while the visible Label stays the field', async () => {
     stubSettings([])
     renderSettings()
     await screen.findByRole('heading', { name: 'Combos' })
 
-    // Named by the field, not by its value — and the name survives the disabled state.
-    expect(screen.getAllByRole('button', { name: 'Model' })).toHaveLength(2)
+    // Named by the field and its value, and the name survives the disabled state: nothing is chosen yet,
+    // so the value half says exactly that rather than borrowing the field label as the whole name.
+    expect(screen.getAllByRole('button', { name: 'Model: none selected' })).toHaveLength(2)
+    // The visible label is still its own element, beside the field rather than inside its name.
+    expect(screen.getAllByText('Model')).toHaveLength(2)
 
     await choose('Provider', 'DeepSeek')
     await userEvent.click(modelTrigger())
@@ -219,7 +223,9 @@ describe('the combo member model picker', () => {
     await waitFor(() => expect(rows()).toHaveLength(1))
     await userEvent.click(rows()[0])
 
-    expect(screen.getAllByRole('button', { name: 'Model' })).toHaveLength(2)
+    // The chosen id is in the name now, and the other picker still says nothing is chosen.
+    expect(screen.getByRole('button', { name: 'Model: deepseek-coder' })).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Model: none selected' })).toHaveLength(1)
     expect(modelTrigger().textContent).toContain('deepseek-coder')
   })
 })

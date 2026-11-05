@@ -106,7 +106,7 @@ function renderChat() {
 }
 
 async function openPicker(): Promise<HTMLElement> {
-  const trigger = await screen.findByRole('combobox', { name: 'Provider and model' })
+  const trigger = await screen.findByRole('combobox', { name: /^Provider and model/ })
   trigger.focus()
   await userEvent.keyboard('{Enter}')
   await screen.findByRole('listbox')
@@ -174,6 +174,8 @@ describe('the model picker with combos', () => {
     expect(useWorkbenchStore.getState().activeModel).toBe('deepseek-chat')
     // The persisted marker is the combo and its head, so the next launch restores the same choice.
     expect(storedMarker()).toEqual({ comboId: 'fast', providerId: 'deepseek', model: 'deepseek-chat' })
+    // The trigger names the combo, not its head pair, for a screen reader as well as for the eye.
+    expect(screen.getByRole('combobox', { name: 'Provider and model: Fast answers' })).toBeTruthy()
 
     await userEvent.type(await screen.findByLabelText('Message'), 'hello{Enter}')
     await waitFor(() => expect(sent.length).toBe(1))
@@ -182,6 +184,21 @@ describe('the model picker with combos', () => {
       providerId: 'deepseek',
       model: 'deepseek-chat',
     })
+  })
+
+  it('finds a combo by name, and the row the filter kept is the one that sets comboId', async () => {
+    stubChat()
+    renderChat()
+    await openPicker()
+
+    const box = await screen.findByLabelText('Filter models')
+    await userEvent.type(box, 'Fast')
+    await waitFor(() => expect(options()).toHaveLength(1))
+    expect(options()[0].textContent).toContain('Fast answers')
+
+    await userEvent.click(options()[0])
+    expect(useWorkbenchStore.getState().activeComboId).toBe('fast')
+    expect(storedMarker()).toEqual({ comboId: 'fast', providerId: 'deepseek', model: 'deepseek-chat' })
   })
 
   it('picking a plain model clears the combo', async () => {
@@ -203,7 +220,7 @@ describe('the model picker with combos', () => {
     await openPicker()
     await pick('Fast answers')
 
-    const trigger = await screen.findByRole('combobox', { name: 'Provider and model' })
+    const trigger = await screen.findByRole('combobox', { name: 'Provider and model: Fast answers' })
     expect(trigger.textContent).toContain('Fast answers')
     expect(trigger.textContent).not.toContain('deepseek-chat')
   })

@@ -344,7 +344,7 @@ describe('a conversation running OpenCode', () => {
     stubScreen({ session: OPENCODE_SESSION })
     renderChat()
 
-    const model = await screen.findByRole('combobox', { name: 'Provider and model' })
+    const model = await screen.findByRole('combobox', { name: /^Provider and model/ })
     expect(isDisabled(model)).toBe(true)
     expect(model.getAttribute('title')).toContain(ENGINE_LABELS[OPENCODE])
 

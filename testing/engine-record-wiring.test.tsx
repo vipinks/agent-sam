@@ -217,7 +217,7 @@ function renderChat(): ReturnType<typeof render> {
 
 /** The control this suite is about, looked for by the name a reader is told. */
 const engineModelControl = (): HTMLElement | null => screen.queryByRole('combobox', { name: ENGINE_MODEL_NAME })
-const samModelPicker = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Provider and model' })
+const samModelPicker = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: /^Provider and model/ })
 const enginePicker = (): Promise<HTMLElement> => screen.findByRole('combobox', { name: 'Engine' })
 
 /** The advertised ids the open list is offering, in the order it offers them. */
