@@ -10,7 +10,13 @@ import {
   serializeTranscript,
   type TranscriptState,
 } from './session-transcript'
-import { resumeTurnNumbering, startSummaryTurn, type AgentTurn, type PendingCall } from './agent-session'
+import {
+  deleteFromTurn,
+  resumeTurnNumbering,
+  startSummaryTurn,
+  type AgentTurn,
+  type PendingCall,
+} from './agent-session'
 import { compactionRange, summarizeRange } from '@/conveyor/protocol/truncate'
 import { pastCompactPoint, resolveWindow } from '@/conveyor/protocol/context-window'
 import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
@@ -452,6 +458,13 @@ export interface ChatSessions {
   ensureSession: (firstMessage: string, buddyId?: string | null) => CreatedSession
   /** Save now if there is anything to save. Used at turn boundaries and on blur. */
   saveNow: () => Promise<void>
+  /**
+   * Delete a turn and every turn after it, and write the result down.
+   *
+   * The one verb that removes turns rather than parking them. Declared here for the red pins (Phase
+   * 21, D1-D3): the walk itself lands in the commit that turns them green.
+   */
+  deleteFromHere: (turnId: string) => Promise<ConveyorError | null>
   /** Queue the debounced post-turn save. */
   scheduleSave: () => void
   /** Rename a session from its first user message, once. */
@@ -651,6 +664,16 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // A failed save must not interrupt the conversation. The next turn boundary tries again, and
       // the transcript is still on screen.
     }
+  }, [])
+
+  /**
+   * Delete a turn and everything after it.
+   *
+   * Declared for the red pins (Phase 21, D1-D3); the reducer call and its awaited save land in the
+   * commit that turns them green.
+   */
+  const deleteFromHere = useCallback(async (_turnId: string): Promise<ConveyorError | null> => {
+    return null
   }, [])
 
   const debounced = useRef(createDebouncedSave(() => void saveNow()))
@@ -1475,6 +1498,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     deleteSession,
     ensureSession,
     saveNow,
+    deleteFromHere,
     scheduleSave,
     maybeTitle,
     renameSession,

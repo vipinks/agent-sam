@@ -215,6 +215,42 @@ describe('a debounced session save that outlives its render', () => {
     expect(saveCalls(stub).slice(callsAtHome)).toEqual([])
   })
 
+  it('T4: writes a from-here delete immediately, and never through the debounce', async () => {
+    const { api, stub } = renderSessions()
+    await hydrated(api)
+
+    // The conversation is non-empty on disk, and the delete removes every turn it has. That transition
+    // — non-empty to empty — is still a write: refusing it would leave the deleted turns on disk and
+    // reopening the conversation would resurrect them.
+    await act(async () => {
+      await api.current?.deleteFromHere('user-1')
+    })
+
+    expect(saveCalls(stub)).toHaveLength(1)
+    expect(saveCalls(stub)[0].id).toBe(FIRST_ID)
+    expect(saveCalls(stub)[0].snapshot.turns).toEqual([])
+
+    // The immediate save is the delete's, not a scheduled one waking later: nothing else may arrive.
+    await afterDebounce()
+    expect(saveCalls(stub)).toHaveLength(1)
+  })
+
+  it('T4: still refuses to author a file for a conversation that never had one', async () => {
+    const { api, stub } = renderSessions()
+    await hydrated(api)
+
+    // A session created and left, with nothing to write: the empty-guard's other half, which the
+    // delete's allowance must not weaken.
+    act(() => {
+      api.current?.createSession()
+    })
+    await act(async () => {
+      await api.current?.saveNow()
+    })
+
+    expect(saveCalls(stub)).toHaveLength(0)
+  })
+
   it('T2: cancels the active-session timer before deleting that session', async () => {
     let finishDelete: (() => void) | undefined
     const deletion = new Promise<void>((resolve) => {

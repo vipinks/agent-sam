@@ -1102,6 +1102,16 @@ export function checkoutBranch(turns: AgentTurn[], turnId: string, position: num
   return [...turns.slice(0, index), nextHead, ...target.slice(1)]
 }
 
+/**
+ * Remove the named turn and everything after it, and hand back the surviving prefix.
+ *
+ * Declared here for the red pins (Phase 21, D2). The cut itself lands in the commit that turns them
+ * green, so the suite imports the name it will keep rather than a name that does not exist yet.
+ */
+export function deleteFromTurn(turns: AgentTurn[], _turnId: string): AgentTurn[] {
+  return turns
+}
+
 /** How many trails this turn's position has held, the checked-out one included. */
 export function branchCount(turn: AgentTurn): number {
   return (turn.branchPoints?.length ?? 0) + 1

@@ -214,6 +214,15 @@ export const MessageBubble = memo(function MessageBubble({
    */
   onRegenerate?: (turnId: string) => void
   /**
+   * Delete this message and everything after it.
+   *
+   * Declared for the red pins (Phase 21, D9): the row's fourth control and its confirmation dialog
+   * land in the commit that turns them green.
+   */
+  onDeleteFromHere?: (turnId: string) => void
+  /** How many turns a delete at this message would remove, for the dialog's copy. */
+  turnsRemoved?: number
+  /**
    * Move the conversation to one of the trails parked at this turn.
    *
    * The position, and the turn whose branch point it is: the whole trail from that turn onward is what

@@ -36,6 +36,7 @@ import {
 import {
   appendEpisodePage,
   captureEpisode,
+  deleteEpisodeBlocksForTurns,
   ensureMemoryIndex,
   listMemoryEpisodes,
   memoryRoot,
@@ -43,6 +44,7 @@ import {
   setSessionRootSource,
   writeMemoryPage,
 } from '../../conveyor/modules/memory'
+import { sessionsModule } from '../../conveyor/modules/sessions'
 import {
   TRANSCRIPT_VERSION,
   type TranscriptSnapshot,
@@ -140,6 +142,20 @@ function pagePath(appData: string, root: string, sessionId: string): string {
 
 function markerCount(page: string): number {
   return (page.match(/<!-- episode turn=/g) ?? []).length
+}
+
+/** The capture clock one block was written with, as the marker states it. */
+function capturedAtOf(page: string, turnId: string): string | null {
+  return new RegExp(`<!-- episode turn=${turnId} at=([^ ]+) -->`).exec(page)?.[1] ?? null
+}
+
+/** A page that may not have been written yet, read as empty rather than raised. */
+function readPage(path: string): string {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
 }
 
 // ---------------------------------------------------------------- extraction
@@ -456,6 +472,120 @@ async function theRowsAndRetentionFollowThePage() {
   }
 }
 
+/**
+ * A from-here delete prunes the blocks its range captured, and renumbers nothing.
+ *
+ * The page is newest first and each block carries the ordinal it was captured with. Removing a block
+ * leaves the others exactly where they were, ordinal included: renumbering them would make the page
+ * claim those turns happened at positions they never held.
+ */
+async function aDeletedRangePrunesItsBlocksAndKeepsOrdinals() {
+  const { appData, root, cleanup } = makeRoots()
+  try {
+    const conversation = snap([
+      userTurn('user-1', 'first question'),
+      assistantTurn('assistant-2', 'first answer'),
+      userTurn('user-3', 'second question'),
+      assistantTurn('assistant-4', 'second answer'),
+      userTurn('user-5', 'third question'),
+      assistantTurn('assistant-6', 'third answer'),
+    ])
+    for (const [index, turnId] of ['assistant-2', 'assistant-4', 'assistant-6'].entries()) {
+      const episode = extractEpisode(SESSION, conversation, turnId, AT + index * 1_000)
+      assert.ok(episode)
+      await appendEpisodePage(appData, root, episode, '')
+    }
+
+    const before = readFileSync(pagePath(appData, root, SESSION), 'utf8')
+    assert.equal(markerCount(before), 3, 'three captured answers are three blocks')
+    assert.ok(before.includes('## Episode 2'), 'the first answer was captured at position two')
+    assert.ok(before.includes('## Episode 4'))
+    assert.ok(before.includes('## Episode 6'))
+
+    // A from-here delete at assistant-4 removes it and every turn after it.
+    const removed = await deleteEpisodeBlocksForTurns(appData, root, SESSION, ['assistant-4', 'assistant-6'])
+    assert.equal(removed, 2, 'both removed turns had a block on the page')
+
+    const after = readFileSync(pagePath(appData, root, SESSION), 'utf8')
+    assert.equal(markerCount(after), 1, 'the removed turns’ blocks are gone')
+    assert.ok(after.includes('turn=assistant-2'), 'the surviving block is kept')
+    assert.ok(after.includes('## Episode 2'), 'with the ordinal it was captured with, not a renumbered one')
+    assert.ok(!after.includes('turn=assistant-4'), 'and the deleted turn is not on the page')
+    assert.ok(!after.includes('turn=assistant-6'))
+
+    // Idempotent: a second prune for the same ids has nothing to remove.
+    assert.equal(await deleteEpisodeBlocksForTurns(appData, root, SESSION, ['assistant-4']), 0)
+    assert.equal(markerCount(readFileSync(pagePath(appData, root, SESSION), 'utf8')), 1)
+
+    results.push('a delete prunes the removed turns’ blocks and leaves the survivors’ ordinals untouched')
+  } finally {
+    cleanup()
+  }
+}
+
+/**
+ * A delete-save is not a turn-end save: it captures nothing, and prunes the blocks it removed.
+ *
+ * Capture is defined as a note about the answer a turn just produced. A delete would make the previous
+ * answer the newest turn, and capturing then would mint an episode for an old exchange — so the save
+ * that carries removed turn ids prunes instead of capturing, and the surviving block keeps the clock
+ * it was already written with.
+ */
+async function aDeleteSaveSuppressesCaptureAndPrunesThePage() {
+  const userData = process.env.SAM_TEST_USER_DATA
+  if (!userData) throw new Error('SAM_TEST_USER_DATA must be set for this test')
+  const root = join(userData, 'workspace')
+  mkdirSync(root, { recursive: true })
+  const page = pagePath(userData, root, SESSION)
+  const record = sessionsModule.record.saveTranscript as unknown as {
+    resolver: (opts: { input: unknown }) => Promise<void>
+  }
+
+  setEpisodesEnabledSource(() => true)
+  setSessionRootSource(() => root)
+  try {
+    const first = snap([userTurn('user-1', 'fix the parser'), assistantTurn('assistant-2', 'Fixed it.')])
+    const full = snap([
+      userTurn('user-1', 'fix the parser'),
+      assistantTurn('assistant-2', 'Fixed it.'),
+      userTurn('user-3', 'and the docs'),
+      assistantTurn('assistant-4', 'Updated them.'),
+    ])
+
+    await record.resolver({ input: { id: SESSION, snapshot: first } })
+    await record.resolver({ input: { id: SESSION, snapshot: full } })
+    for (let attempt = 0; attempt < 200 && markerCount(readPage(page)) < 2; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    const before = readPage(page)
+    assert.equal(markerCount(before), 2, 'the two ordinary saves captured the two answers')
+    const keptAt = capturedAtOf(before, 'assistant-2')
+    assert.ok(keptAt, 'the surviving answer has a capture clock')
+
+    // The same conversation after a from-here delete at user-3: the delete writes the surviving prefix
+    // and says which turns it removed.
+    await record.resolver({
+      input: { id: SESSION, snapshot: first, deletedTurnIds: ['user-3', 'assistant-4'] },
+    })
+    for (let attempt = 0; attempt < 200 && readPage(page).includes('turn=assistant-4'); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    const after = readPage(page)
+    assert.equal(markerCount(after), 1, 'a delete-save captures nothing of its own')
+    assert.ok(after.includes('turn=assistant-2'), 'the surviving block is still there')
+    assert.equal(capturedAtOf(after, 'assistant-2'), keptAt, 'and its capture clock was not rewritten by a capture')
+    assert.ok(!after.includes('turn=assistant-4'), 'the removed turn’s block was pruned after the write')
+
+    results.push('a delete-save prunes the removed range and mints no episode for the previous answer')
+  } finally {
+    setEpisodesEnabledSource(null)
+    setSessionRootSource(null)
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------- the brief
 
 /** One block built by the real extractor and renderer, so the brief is fed the bytes it will store. */
@@ -629,6 +759,8 @@ async function main() {
     ['writer rotation', theWriterRotatesThePageAtFortyBlocks],
     ['mtime invalidation', anEpisodeWriteInvalidatesTheIndexSkip],
     ['rows and retention', theRowsAndRetentionFollowThePage],
+    ['delete pruning', aDeletedRangePrunesItsBlocksAndKeepsOrdinals],
+    ['delete-save capture', aDeleteSaveSuppressesCaptureAndPrunesThePage],
     ['brief order', theBriefAppendsEpisodesLastNewestFirst],
     ['brief five-block budget', theBriefCarriesFiveEpisodesAtMost],
     ['brief whole-block truncation', theBriefDropsWholeBlocksAndCannotBeEvictedByANovel],

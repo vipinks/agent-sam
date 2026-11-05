@@ -15,6 +15,8 @@ import {
   TRANSCRIPT_VERSION,
   type TranscriptSnapshot,
 } from '../../conveyor/protocol/transcript'
+import { deleteFromTurn, type AgentTurn } from '../../app/components/workbench/agent-session'
+import { serializeTranscript } from '../../app/components/workbench/session-transcript'
 
 const results: string[] = []
 
@@ -139,6 +141,35 @@ async function aSaveCapturesTheTurnWithoutTouchingTheTranscript() {
     setEpisodesEnabledSource(null)
     setSessionRootSource(null)
   }
+}
+
+/**
+ * The smallest file a delete writes: the same conversation with its tail cut off.
+ *
+ * The write is still the atomic one, and the shrink is just a smaller snapshot of the same shape. The
+ * assertion that matters is the file's own: reopening it shows the survivors and nothing the delete
+ * removed, and it is still the version this build writes.
+ */
+async function aShrunkSnapshotRoundTrips() {
+  const full = realisticSnapshot()
+  await saveTranscriptFile(UUID, full)
+
+  const turns: AgentTurn[] = [
+    { id: 'user-1', role: 'user', content: 'Create new_fibonacci.py and run it', steps: [] },
+    { id: 'assistant-2', role: 'assistant', content: "I'll write the file first.", steps: [] },
+    { id: 'user-3', role: 'user', content: 'Try again', steps: [] },
+    { id: 'assistant-4', role: 'assistant', content: 'I will not do that.', steps: [] },
+  ]
+  const shrunk = serializeTranscript({ turns: deleteFromTurn(turns, 'user-3'), interrupted: false })
+  await saveTranscriptFile(UUID, shrunk)
+
+  const loaded = await loadTranscriptFile(UUID)
+  assert.deepEqual(loaded, shrunk, 'the shrunk transcript is what the atomic write replaced the old one with')
+  assert.deepEqual(loaded?.turns.map((turn) => turn.id), ['user-1', 'assistant-2'], 'the removed range is not on disk')
+  assert.equal(loaded?.version, TRANSCRIPT_VERSION, 'and the version did not move for a smaller file')
+  assert.equal(loaded?.turns.length, 2)
+
+  results.push('a shrunk snapshot round-trips through the atomic write, and the deleted turns do not come back')
 }
 
 async function absentIsNull() {
@@ -351,6 +382,7 @@ async function main() {
     await step('absent file', absentIsNull)
     await step('no temp files', noTempFilesAreLeftBehind)
     await step('overwrite', overwriteReplacesInPlace)
+    await step('shrunk snapshot', aShrunkSnapshotRoundTrips)
     await step('corrupt json', corruptJsonIsReported)
     await step('wrong shape', validJsonButWrongShapeIsReported)
     await step('delete idempotence', deleteIsIdempotent)

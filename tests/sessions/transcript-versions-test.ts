@@ -26,7 +26,7 @@ import {
 import { renderExport } from '../../conveyor/protocol/export'
 import { conversationText } from '../../conveyor/protocol/search'
 import { runHistoryFor } from '../../conveyor/protocol/truncate'
-import { reviseUserTurn, restartReplyTurn, type AgentTurn } from '../../app/components/workbench/agent-session'
+import { deleteFromTurn, reviseUserTurn, restartReplyTurn, type AgentTurn } from '../../app/components/workbench/agent-session'
 
 const results: string[] = []
 
@@ -224,6 +224,26 @@ function aSendAppendsToTheCheckedOutTrail() {
   results.push('a new send appends to the checked-out trail, not to a parked one')
 }
 
+// ---------------------------------------------------------------- a shrunk conversation
+
+/**
+ * A conversation a from-here delete shrank is still the version it was.
+ *
+ * The delete removes records; it does not add a key, widen a status or change what any surviving turn
+ * means. So the file it writes is a version 4 file with fewer turns, and a reader that accepted the
+ * file before the delete accepts it after — which is why `TRANSCRIPT_VERSION` does not move for it.
+ */
+function aShrunkFileStillLoads() {
+  const shrunk = deleteFromTurn(conversation(), 'user-3')
+  const parsed = transcriptSnapshotSchema.parse(snapshotOf(shrunk))
+
+  assert.deepEqual(parsed.turns.map((turn) => turn.id), ['user-1', 'assistant-2'], 'the file holds the surviving prefix')
+  assert.equal(parsed.version, TRANSCRIPT_VERSION, 'a smaller transcript is still a version 4 transcript')
+  assert.equal(parsed.version, 4)
+
+  results.push('a shrunk transcript still loads, and its version is still 4')
+}
+
 // ---------------------------------------------------------------- what a re-run is handed
 
 function aRerunsHistoryEndsAtTheTarget() {
@@ -262,6 +282,7 @@ function main(): void {
   step('an edit', anEditParksTheOldTail)
   step('a regenerate', aRegenerateParksTheOldTail)
   step('a send', aSendAppendsToTheCheckedOutTrail)
+  step('a shrunk file', aShrunkFileStillLoads)
   step('a re-run history', aRerunsHistoryEndsAtTheTarget)
 
   console.log(`transcript branches: ${results.length} passed`)

@@ -170,6 +170,54 @@ describe('the row a bubble carries at its bottom', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
+  it('adds the from-here delete as the row’s fourth control, on either kind of message', async () => {
+    const user = userEvent.setup()
+    const onDeleteFromHere = vi.fn()
+    render(
+      <>
+        <MessageBubble
+          message={userTurn()}
+          canEdit
+          onResend={vi.fn()}
+          onDeleteFromHere={onDeleteFromHere}
+          turnsRemoved={3}
+        />
+        <MessageBubble
+          message={agentTurn()}
+          canEdit
+          onRegenerate={vi.fn()}
+          onDeleteFromHere={onDeleteFromHere}
+          turnsRemoved={2}
+        />
+      </>
+    )
+
+    // The slot is the row's, at the end of the message-level controls, and each kind offers it: the
+    // verb removes a message of either role, so hiding it on one would be a silent rule.
+    const userRow = actionsOn(USER_TEXT)
+    expect(
+      [...userRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Edit message', 'Copy message', 'Delete from here'])
+    const replyRow = actionsOn(AGENT_TEXT)
+    expect(
+      [...replyRow.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Copy reply', 'Regenerate reply', 'Delete from here'])
+
+    // Copy and regenerate are untouched verbs; the delete is its own control and asks first, because
+    // what it does cannot be undone and is not one message's words.
+    await user.click(within(userRow).getByRole('button', { name: 'Delete from here' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('Delete this message and everything after it?')).toBeTruthy()
+    expect(within(dialog).getByText(/3 turns/)).toBeTruthy()
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    expect(onDeleteFromHere).toHaveBeenCalledWith(TURN_ID)
+  })
+
+  it('draws no delete control where the bubble has no handler to reach', () => {
+    render(<MessageBubble message={agentTurn()} canEdit onRegenerate={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Delete from here' })).toBeNull()
+  })
+
   it('draws the branch switcher only at a turn that is a branch point', async () => {
     const user = userEvent.setup()
     const onCheckoutBranch = vi.fn()

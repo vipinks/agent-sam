@@ -9,10 +9,12 @@
 import { strict as assert } from 'node:assert'
 import {
   applyAgentChunk,
+  deleteFromTurn,
   resolveDecision,
   startAssistantTurn,
   startUserTurn,
   toHistory,
+  type AgentTurn,
 } from '../../app/components/workbench/agent-session'
 
 const results: string[] = []
@@ -418,6 +420,96 @@ function identityIsPreserved() {
   results.push('only the changed turn is replaced, so memo still skips the rest')
 }
 
+/**
+ * Deleting from a turn is a prefix cut: the named turn and every turn after it go, and the survivors
+ * are the same objects they were. The consequence is a true removal — no tail parked, no branch the
+ * pane could switch back to — which is what makes it a different verb from edit and regenerate.
+ */
+function fromHereDelete() {
+  const turns: AgentTurn[] = [
+    { id: 'user-1', role: 'user', content: 'first', steps: [] },
+    { id: 'assistant-2', role: 'assistant', content: 'first answer', steps: [] },
+    {
+      id: 'user-3',
+      role: 'user',
+      content: 'second',
+      steps: [],
+      mentionPaths: ['src/second.ts'],
+      branchPoints: [{ turns: [{ id: 'user-3', role: 'user', content: 'an older second', steps: [] }] }],
+      branch: 1,
+    },
+    {
+      id: 'assistant-4',
+      role: 'assistant',
+      content: 'second answer',
+      steps: [{ callId: 'call-4', tool: 'read_file', args: { path: 'a.ts' }, status: 'ok' }],
+      plan: [{ id: 'plan-4', text: 'the removed plan', status: 'done' }],
+    },
+    { id: 'user-5', role: 'user', content: 'third', steps: [] },
+  ]
+
+  const after = deleteFromTurn(turns, 'user-3')
+  assert.deepEqual(
+    after.map((turn) => turn.id),
+    ['user-1', 'assistant-2'],
+    'the named turn and every turn after it are gone'
+  )
+  assert.equal(after[0], turns[0], 'a survivor keeps its identity, so memo still skips it')
+  assert.equal(after[1], turns[1], 'and so does the other one')
+  assert.equal(turns.length, 5, 'the live array is not mutated')
+  // Removed records go wholesale: the parked branch, the plan, the mention chips and the tool card
+  // all belonged to turns that are no longer part of the conversation.
+  assert.ok(!JSON.stringify(after).includes('older second'), 'the branch parked at the removed turn is gone with it')
+  assert.ok(!JSON.stringify(after).includes('the removed plan'), 'and the plan that turn declared')
+  assert.ok(!JSON.stringify(after).includes('src/second.ts'), 'and the chips its message carried')
+
+  // A stale row costs nothing: an id that names no turn is the same array, untouched.
+  assert.equal(deleteFromTurn(turns, 'missing'), turns, 'an unknown id returns the same array')
+  // From-here at the first turn removes the conversation, which is a transition the save has to allow.
+  assert.deepEqual(deleteFromTurn(turns, 'user-1'), [], 'a delete at the first turn leaves nothing on the trail')
+
+  results.push('a from-here delete cuts the prefix, removes records wholesale and leaves survivors identical')
+}
+
+/**
+ * The one derived reference a delete has to repair: a surviving summary naming the removed turns.
+ *
+ * A summary is not a message — it is a range that says "these words stand for those turns". Left
+ * naming a turn that is gone it would claim a range the conversation no longer holds, and one whose
+ * whole range went would render as if the user had said the summary's words themselves.
+ */
+function aSurvivingSummaryLosesTheRemovedRange() {
+  const summary: AgentTurn = {
+    id: 'summary-1',
+    role: 'user',
+    content: 'the compacted conversation',
+    steps: [],
+    summarizesTurns: ['user-3', 'assistant-4'],
+  }
+  const keptQuestion: AgentTurn = { id: 'user-3', role: 'user', content: 'kept question', steps: [] }
+  const removedAnswer: AgentTurn = { id: 'assistant-4', role: 'assistant', content: 'removed answer', steps: [] }
+  const removedQuestion: AgentTurn = { id: 'user-5', role: 'user', content: 'removed question', steps: [] }
+
+  const trimmed = deleteFromTurn([summary, keptQuestion, removedAnswer, removedQuestion], 'assistant-4')
+  assert.deepEqual(
+    trimmed.map((turn) => turn.id),
+    ['summary-1', 'user-3'],
+    'the summary survives while its range has a turn left'
+  )
+  assert.deepEqual(trimmed[0].summarizesTurns, ['user-3'], 'the removed id is stripped from the range')
+  assert.notEqual(trimmed[0], summary, 'a summary whose range changed is a new record')
+
+  // A range with nothing left names nothing, and an empty range stops being a summary at all.
+  const emptied = deleteFromTurn(
+    [{ ...summary, summarizesTurns: ['assistant-4', 'user-5'] }, removedAnswer, removedQuestion],
+    'assistant-4'
+  )
+  assert.deepEqual(emptied, [], 'a summary whose whole range went is dropped')
+  assert.ok(!emptied.some((turn) => turn.id === 'summary-1'))
+
+  results.push('a surviving summary loses the removed ids, and one whose range empties is dropped')
+}
+
 function doneIsReported() {
   const { effects } = run([
     { type: 'text_delta', text: 'hi' },
@@ -450,6 +542,8 @@ function main() {
   step('context notice', aContextNoticeIsReportedWithoutTouchingTheTurn)
   step('junk chunks', junkChunks)
   step('identity', identityIsPreserved)
+  step('from-here delete', fromHereDelete)
+  step('summary pruning', aSurvivingSummaryLosesTheRemovedRange)
   step('done', doneIsReported)
 
   console.log(`agent session: ${results.length} passed`)

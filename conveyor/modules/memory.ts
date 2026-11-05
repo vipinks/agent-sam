@@ -716,6 +716,21 @@ export async function deleteEpisodePagesForSession(userDataPath: string, session
 }
 
 /**
+ * Remove the blocks for the given turns from one session's episode page.
+ *
+ * Declared for the red pins (Phase 21, D4): the parser-and-rewrite lands in the commit that turns
+ * them green.
+ */
+export async function deleteEpisodeBlocksForTurns(
+  _userDataPath: string,
+  _rootPath: string,
+  _sessionId: string,
+  _turnIds: readonly string[]
+): Promise<number> {
+  return 0
+}
+
+/**
  * Clear episode pages whose session metadata is gone, and report how many were removed.
  *
  * The startup half of retention, beside the transcript sweep and for the same reason: deleting a

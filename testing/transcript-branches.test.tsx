@@ -114,9 +114,9 @@ function transcriptFiles(initial: TranscriptSnapshot) {
 }
 
 /** The panel over a stored conversation, with every run recorded. */
-function renderChat() {
+function renderChat(options: { turns?: TranscriptTurn[] } = {}) {
   const sent: unknown[] = []
-  const transcripts = transcriptFiles(snapshot(transcriptTurns()))
+  const transcripts = transcriptFiles(snapshot(options.turns ?? transcriptTurns()))
   const stub = createBridgeStub({
     listProviders: () => [],
     defaultModels: () => ({}),
@@ -232,6 +232,35 @@ describe('an edit as a branch point', () => {
     // And what the other branch wrote is gone from the pane, not merely dimmed.
     expect(screen.queryByText(EDITED_TEXT)).toBeNull()
     expect(screen.queryByText(REWRITTEN)).toBeNull()
+  })
+})
+
+describe('the counted consequence of a from-here delete', () => {
+  /**
+   * A branch point is a position that holds trails. Deleting from it removes the checked-out trail and
+   * the parked ones with it — a delete keeps no branch — so the confirmation has to name the number of
+   * parked trails that go, rather than let the user discover it after the fact.
+   */
+  it('names the parked trails in the confirmation dialog', async () => {
+    const branchy = transcriptTurns()
+    const head = branchy[2]
+    branchy[2] = {
+      ...head,
+      // The second question was itself rewritten once: one parked trail lives at this position.
+      branchPoints: [{ turns: [{ ...head, id: 'user-3-parked', content: 'an older second question' }] }],
+      branch: 1,
+    }
+    renderChat({ turns: branchy })
+    await loaded()
+
+    await userEvent.click(within(bubbleOf(EDITED_TARGET)).getByRole('button', { name: 'Delete from here' }))
+    const dialog = await screen.findByRole('alertdialog')
+
+    expect(within(dialog).getByText('Delete this message and everything after it?')).toBeTruthy()
+    // The range is this question, the reply after it and the message after that: three turns.
+    expect(within(dialog).getByText(/3 turns/)).toBeTruthy()
+    // And the parked trail at this position goes with them, which the copy says outright.
+    expect(within(dialog).getByText(/1 parked trail/)).toBeTruthy()
   })
 })
 
