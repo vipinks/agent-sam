@@ -222,6 +222,8 @@ export function ProviderBox({
 
   const commitName = () => {
     if (!onSaveName) return
+    // TEMPORARY (Turn 7 probe): the draft this editor is about to commit. Removed in Turn 8.
+    console.warn('[PROBE] commit', { editor: 'name', draft: nameDraft })
     const rejection = onSaveName(nameDraft)
     if (rejection) {
       // Still editing: the field the user has to fix is the field they are already in.
@@ -230,6 +232,8 @@ export function ProviderBox({
     }
     setNameError(null)
     setEditingName(false)
+    // TEMPORARY (Turn 7 probe): the box closes whether or not the store wrote. Removed in Turn 8.
+    console.warn('[PROBE] close', { editor: 'name', closed: true })
   }
 
   const startBaseUrlEdit = () => {
@@ -245,6 +249,8 @@ export function ProviderBox({
 
   const commitBaseUrl = () => {
     if (!onSaveBaseUrl) return
+    // TEMPORARY (Turn 7 probe): the draft this editor is about to commit. Removed in Turn 8.
+    console.warn('[PROBE] commit', { editor: 'baseUrl', draft: baseUrlDraft })
     const rejection = onSaveBaseUrl(baseUrlDraft)
     if (rejection) {
       setBaseUrlError(draftError(rejection).message)
@@ -252,6 +258,8 @@ export function ProviderBox({
     }
     setBaseUrlError(null)
     setEditingBaseUrl(false)
+    // TEMPORARY (Turn 7 probe): the box closes whether or not the store wrote. Removed in Turn 8.
+    console.warn('[PROBE] close', { editor: 'baseUrl', closed: true })
   }
 
   return (

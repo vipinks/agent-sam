@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Eye, EyeOff, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
@@ -66,6 +66,73 @@ export function CustomProviders({
   onProvidersChanged: () => void
 }) {
   const providers = useConveyorStore(providerConfigStore, (s) => s.customProviders)
+
+  /*
+   * TEMPORARY (Turn 7 probe): where the store dispatch goes after `onSaveName`/`onSaveBaseUrl` hand it
+   * over, and what becomes of it. Removed in Turn 8.
+   *
+   * A store action is dispatched by conveyor's bound action, which is `void
+   * window.conveyor.invoke(storeChannel, name, { payload })` — the promise is dropped, so a rejection
+   * (main refusing the payload) and a resolution (main returning state) are equally invisible to the
+   * renderer. Wrapping `invoke` is the one place both are visible. The bridge is exposed through
+   * `contextBridge`, though, and Electron freezes that object when the `ContextBridgeMutability`
+   * feature is off (it is off in this build), so the assignment below is refused at runtime and only
+   * succeeds against the plain stub object the DOM suites install. When it is refused, the effect falls
+   * back to `unhandledrejection`, which is where the dropped promise's rejection surfaces; the mount
+   * line says which path was taken, so a silent L3 is never read as "invoke never happened".
+   *
+   * Only `updateCustomProvider` is logged: every other call on this bridge (store reads included) would
+   * bury the one dispatch this probe is about.
+   */
+  useEffect(() => {
+    const bridge = window.conveyor
+    const original = bridge.invoke
+    let installed = false
+
+    const wrapped = (channel: string, method: string, ...args: unknown[]): Promise<unknown> => {
+      if (method !== 'updateCustomProvider') return original(channel, method, ...args)
+      const payload = (args[0] as { payload?: unknown } | undefined)?.payload
+      const result = original(channel, method, ...args)
+      result.then(
+        (value) => console.warn('[PROBE] invoke resolved', { channel, method, payload, value }),
+        (reason: unknown) =>
+          console.warn('[PROBE] invoke rejected', {
+            channel,
+            method,
+            payload,
+            reason: String(reason),
+            code: (reason as { code?: string } | null)?.code ?? null,
+          })
+      )
+      return result
+    }
+
+    try {
+      bridge.invoke = wrapped
+      installed = bridge.invoke === wrapped
+    } catch {
+      installed = false
+    }
+
+    if (installed) {
+      return () => {
+        bridge.invoke = original
+      }
+    }
+
+    console.warn('[PROBE] invoke wrapper unavailable', {
+      reason: 'window.conveyor is frozen by contextBridge; watching unhandledrejection instead',
+    })
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const reason = event.reason as { code?: string; message?: string } | null
+      console.warn('[PROBE] invoke rejected (unhandled)', {
+        reason: String(reason?.message ?? reason),
+        code: reason?.code ?? null,
+      })
+    }
+    window.addEventListener('unhandledrejection', onUnhandled)
+    return () => window.removeEventListener('unhandledrejection', onUnhandled)
+  }, [])
 
   return (
     <>
@@ -318,6 +385,12 @@ function CustomProviderCard({
 
   const onSaveName = (next: string): ProviderEditRejection | null => {
     const check = resolveProviderEdit(providers, provider.id, { name: next })
+    // TEMPORARY (Turn 7 probe): the local check's verdict and the payload the dispatch carries.
+    console.warn('[PROBE] dispatch', {
+      ok: check.ok,
+      code: check.ok ? null : check.code,
+      payload: { id: provider.id, name: next },
+    })
     if (check.ok) updateCustomProvider({ id: provider.id, name: next })
     return refusal(check)
   }
@@ -362,6 +435,12 @@ function CustomProviderCard({
     if (!check.ok) return refusal(check)
 
     const baseUrl = check.edit.baseUrl ?? next
+    // TEMPORARY (Turn 7 probe): the local check's verdict and the payload the dispatch carries.
+    console.warn('[PROBE] dispatch', {
+      ok: check.ok,
+      code: null,
+      payload: { id: provider.id, baseUrl },
+    })
     updateCustomProvider({ id: provider.id, baseUrl })
     void refetchCatalogue(baseUrl)
     return null
