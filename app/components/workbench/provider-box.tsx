@@ -7,7 +7,7 @@ import { Label } from '../ui/label'
 import { CardSurface } from '../ui/surface'
 import { Switch } from '../ui/switch'
 import { ModelList, type ModelEntry } from './model-list'
-import type { ProviderDraftRejection } from '@/conveyor/protocol/custom-provider'
+import type { ProviderEditRejection } from '@/conveyor/protocol/custom-provider'
 import type { ModelRates } from '@/conveyor/protocol/session-usage'
 import type { ModelWindows } from '@/conveyor/protocol/context-window'
 
@@ -62,8 +62,15 @@ export const CUSTOM_PROVIDER_ONLY_CONTROLS = [
  * Here rather than in the settings section because the field a refusal belongs to is drawn here now: the
  * add form and the two in-place editors ask the same rules, so they say the same sentence on the same
  * field, and a second copy of this map would be a second answer to the same refusal.
+ *
+ * It answers for every code an edit can be refused with, not only the three a draft can. `NOT_FOUND` and
+ * `NO_FIELDS` are the rules' statements about an edit rather than about a draft, so no typed field caused
+ * them — and that is why they were the two the box swallowed: an edit refused for either closed as though
+ * it had been saved. Neither has a field of its own to name, so both name the header row, where the
+ * provider's identity is and where the two editors commit from; what an editor renders is the sentence,
+ * and the sentence is what tells these two apart from a save.
  */
-export function draftError(code: ProviderDraftRejection): { field: 'name' | 'baseUrl'; message: string } {
+export function draftError(code: ProviderEditRejection): { field: 'name' | 'baseUrl'; message: string } {
   switch (code) {
     case 'NAME_REQUIRED':
       return { field: 'name', message: 'A name is required.' }
@@ -71,6 +78,10 @@ export function draftError(code: ProviderDraftRejection): { field: 'name' | 'bas
       return { field: 'name', message: 'A provider with this name already exists.' }
     case 'BASE_URL_INVALID':
       return { field: 'baseUrl', message: 'Enter an http(s) URL, like http://localhost:1234/v1.' }
+    case 'NOT_FOUND':
+      return { field: 'name', message: 'This provider is no longer in the list, so nothing was saved.' }
+    case 'NO_FIELDS':
+      return { field: 'name', message: 'Nothing was saved: there was no edit to apply.' }
   }
 }
 
@@ -180,14 +191,14 @@ export function ProviderBox({
    * edit was refused, or null when it was written, so the sentence lands on the field that caused it.
    */
   baseUrl?: string
-  onSaveBaseUrl?: (baseUrl: string) => ProviderDraftRejection | null
+  onSaveBaseUrl?: (baseUrl: string) => ProviderEditRejection | null
   /**
    * Rename this provider in place, answering with why the name was refused or null when it was written.
    *
    * Custom-only for the reason the URL is: the id a custom provider was created under does not move when
    * the name does, so a rename is a label rather than an identity.
    */
-  onSaveName?: (name: string) => ProviderDraftRejection | null
+  onSaveName?: (name: string) => ProviderEditRejection | null
 }) {
   // The two in-place editors: which one is open, the draft it is holding, and the sentence a refusal left.
   // Local rather than in the store, because a half-typed name is nobody's state but this box's.

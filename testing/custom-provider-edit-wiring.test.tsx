@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -6,6 +6,7 @@ import { ConveyorError } from 'electron-conveyor/react'
 import { SettingsView } from '@/app/components/workbench/settings-view'
 import { providerConfigStore, type ProviderConfigState } from '@/conveyor/stores/provider-config'
 import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
+import type { ProviderEditRejection } from '@/conveyor/protocol/custom-provider'
 
 /**
  * Settings, as wiring: editing a custom provider in place — its name, and its base URL.
@@ -26,6 +27,28 @@ import { createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './b
  * An edit must make no settings call at all: the key is kept per id, the id does not move, and the
  * ciphertext stays valid without this path ever touching it.
  */
+
+/**
+ * The two refusals the screen cannot type its way into, made able to happen here.
+ *
+ * `resolveProviderEdit` answers `NOT_FOUND` only for an id the list does not hold, and `NO_FIELDS` only
+ * for an edit that named no field — while a box is drawn from a provider the list holds, through
+ * dispatch sites that each name one field. So the two codes are unreachable from the box as it stands,
+ * and the wiring that decides what a box does when it is handed one is exactly what this suite cannot
+ * otherwise see: whether the field says why, or closes as though the edit had been saved. The forced
+ * code answers only while a case sets it, and every other call goes to the real check, which is what
+ * keeps the rest of this file a test of the rules rather than of a stub.
+ */
+const forced = vi.hoisted(() => ({ rejection: null as ProviderEditRejection | null }))
+
+vi.mock('@/conveyor/protocol/custom-provider', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/conveyor/protocol/custom-provider')>()
+  return {
+    ...actual,
+    resolveProviderEdit: (...args: Parameters<typeof actual.resolveProviderEdit>) =>
+      forced.rejection ? { ok: false as const, code: forced.rejection } : actual.resolveProviderEdit(...args),
+  }
+})
 
 const PROVIDERS = [
   { id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' },
@@ -158,6 +181,8 @@ async function editBaseUrl(box: HTMLElement, next: string): Promise<void> {
 
 beforeEach(() => {
   localStorage.clear()
+  // A forced code belongs to the case that set it, or the next case would commit against it too.
+  forced.rejection = null
 })
 
 describe('the base URL row', () => {
@@ -319,6 +344,46 @@ describe('editing the name in place', () => {
     // Still editing, so the field the user must fix is still the field they are in.
     expect(within(custom).getByLabelText('Provider name')).toBeTruthy()
     expect(storeMethods(stub)).not.toContain('updateCustomProvider')
+  })
+})
+
+describe('a refusal the screen cannot type its way into', () => {
+  it('names a NOT_FOUND refusal on the name field, rather than closing as though it saved', async () => {
+    const { stub } = stubSettings(undefined, SEEDED)
+    forced.rejection = 'NOT_FOUND'
+    const { container } = renderSettings()
+
+    const custom = await waitFor(() => boxFor(container, 'custom', 'Local Llama'))
+    await userEvent.click(within(custom).getByRole('button', { name: 'Local Llama' }))
+
+    const field = within(custom).getByLabelText('Provider name')
+    await userEvent.clear(field)
+    await userEvent.type(field, 'Local Mistral')
+    await userEvent.keyboard('{Enter}')
+
+    // The map's own sentence for that code, on the field it was committed from — and the editor still
+    // open, because a draft that was not written is a draft the user is still fixing.
+    const error = await within(custom).findByText('This provider is no longer in the list, so nothing was saved.')
+    expect(error.dataset.slot).toBe('provider-name-error')
+    expect(within(custom).getByLabelText('Provider name')).toBeTruthy()
+    expect(storeMethods(stub)).not.toContain('updateCustomProvider')
+  })
+
+  it('names a NO_FIELDS refusal on the URL row, rather than closing as though it saved', async () => {
+    const { stub } = stubSettings(undefined, SEEDED)
+    forced.rejection = 'NO_FIELDS'
+    const { container } = renderSettings()
+
+    const custom = await waitFor(() => boxFor(container, 'custom', 'Local Llama'))
+    await editBaseUrl(custom, 'http://localhost:4321/v1')
+
+    const error = await within(custom).findByText('Nothing was saved: there was no edit to apply.')
+    expect(error.dataset.slot).toBe('provider-url-error')
+    expect(within(custom).getByLabelText('API URL')).toBeTruthy()
+    // Refused before the write, so neither the store nor the server was asked anything: the URL row must
+    // not show a moved endpoint it never saved.
+    expect(storeMethods(stub)).not.toContain('updateCustomProvider')
+    expect(stub.methodsOn('provider')).not.toContain('listModels')
   })
 })
 

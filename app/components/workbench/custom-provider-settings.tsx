@@ -8,8 +8,8 @@ import {
   resolveProviderEdit,
   validateProviderDraft,
   type CustomProvider,
-  type ProviderDraftRejection,
   type ProviderEditCheck,
+  type ProviderEditRejection,
 } from '@/conveyor/protocol/custom-provider'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import {
@@ -302,20 +302,21 @@ function CustomProviderCard({
   const catalogue = useMemo(() => provider.models.map((id) => ({ id })), [provider.models])
 
   /**
-   * Why an edit was refused, in the words the form's own rules use.
+   * Why an edit was refused, in the words the form's own rules use — every code the rules can answer
+   * with, not only the three a draft can produce.
    *
    * The check the store applies is run here too, so a refusal lands on the field that caused it: an
    * action cannot answer with an error, and a name another provider holds would otherwise look like a
-   * save that did nothing. `NOT_FOUND` cannot happen for a box that is on screen and `NO_FIELDS` cannot
-   * happen for a box that sends a field, so neither is rendered as a sentence.
+   * save that did nothing. `NOT_FOUND` and `NO_FIELDS` are statements about the edit rather than about
+   * anything the user typed — the box was drawn from a provider the list held, and both commit sites
+   * name one field — so reading them as impossible read the tree as inevitable, and either refusal was
+   * dropped on the floor. Dropped is the one thing a refusal may not be: a commit that closed without
+   * writing is indistinguishable, on screen, from one that saved, and a user cannot report a silence
+   * they were never told about.
    */
-  const refusal = (check: ProviderEditCheck): ProviderDraftRejection | null => {
-    if (check.ok) return null
-    if (check.code === 'NOT_FOUND' || check.code === 'NO_FIELDS') return null
-    return check.code
-  }
+  const refusal = (check: ProviderEditCheck): ProviderEditRejection | null => (check.ok ? null : check.code)
 
-  const onSaveName = (next: string): ProviderDraftRejection | null => {
+  const onSaveName = (next: string): ProviderEditRejection | null => {
     const check = resolveProviderEdit(providers, provider.id, { name: next })
     if (check.ok) updateCustomProvider({ id: provider.id, name: next })
     return refusal(check)
@@ -356,7 +357,7 @@ function CustomProviderCard({
    * refetch carries no key — main reads the one stored under the id, which did not move — and it is not
    * awaited by the commit: the box shows the saved URL and then the answer.
    */
-  const onSaveBaseUrl = (next: string): ProviderDraftRejection | null => {
+  const onSaveBaseUrl = (next: string): ProviderEditRejection | null => {
     const check = resolveProviderEdit(providers, provider.id, { baseUrl: next })
     if (!check.ok) return refusal(check)
 
