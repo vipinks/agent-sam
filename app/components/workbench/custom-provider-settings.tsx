@@ -5,9 +5,11 @@ import { conveyor } from '@/conveyor/client'
 import { useConveyorStore } from 'electron-conveyor/react'
 import {
   newProviderId,
+  resolveProviderEdit,
   validateProviderDraft,
   type CustomProvider,
   type ProviderDraftRejection,
+  type ProviderEditCheck,
 } from '@/conveyor/protocol/custom-provider'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import {
@@ -24,7 +26,7 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { fetchNotice, keySaveErrorMessage } from './provider-notices'
-import { ProviderBox } from './provider-box'
+import { draftError, ProviderBox } from './provider-box'
 
 /**
  * The providers the user added: the button that adds one, the dialog that describes it, and one box
@@ -32,8 +34,9 @@ import { ProviderBox } from './provider-box'
  *
  * A custom provider is not a second kind of thing on this screen. Its configuration is a name, a base
  * URL and an optional key, which is what a predefined provider's key row already asks for, so its box
- * *is* that box — `ProviderBox` — and the two affordances it adds are the two a predefined provider has
- * no use for: asking the server itself what it offers, and deleting the entry.
+ * *is* that box — `ProviderBox` — and the affordances it adds are the ones a predefined provider has no
+ * use for: its name and base URL edited in place, asking the server itself what it offers, and deleting
+ * the entry.
  *
  * The key is the one value that has to travel carefully. The list of providers is mirrored to every
  * window, so it can never hold a credential. The form therefore derives the id the provider is about to
@@ -42,18 +45,6 @@ import { ProviderBox } from './provider-box'
  * when a turn runs against the provider. A plaintext key exists in the renderer only while a user is
  * typing one.
  */
-
-/** Where a refused draft belongs, and what it says. One field at a time, because the rules answer one. */
-function draftError(code: ProviderDraftRejection): { field: 'name' | 'baseUrl'; message: string } {
-  switch (code) {
-    case 'NAME_REQUIRED':
-      return { field: 'name', message: 'A name is required.' }
-    case 'NAME_TAKEN':
-      return { field: 'name', message: 'A provider with this name already exists.' }
-    case 'BASE_URL_INVALID':
-      return { field: 'baseUrl', message: 'Enter an http(s) URL, like http://localhost:1234/v1.' }
-  }
-}
 
 /**
  * The added providers, as the tail of the Settings list.
@@ -270,8 +261,9 @@ export function AddProviderDialog({ disabled, onAdded }: { disabled: boolean; on
  * key is typed, the id travels too and main reads the key it already holds, because a key that was saved
  * is not in the renderer to send.
  *
- * Deleting asks first. There is no edit: changing a provider's URL or name is delete-plus-add, which is
- * named as a residual rather than hidden behind a field that would have to move a key between ids.
+ * Deleting asks first. The name and the base URL are edited in place instead: both are labels on the
+ * provider rather than its identity, so the id it was created under does not move — and with the id
+ * still, the saved key, the per-model declarations and the conversations that name it all survive.
  */
 function CustomProviderCard({
   provider,
@@ -293,11 +285,14 @@ function CustomProviderCard({
   const clear = conveyor.settings.clearApiKey.useMutation()
   const listModels = conveyor.provider.listModels.useMutation()
 
+  const providers = useConveyorStore(providerConfigStore, (s) => s.customProviders)
   const config = useConveyorStore(providerConfigStore, (s) => s.providers[provider.id])
   const {
     toggleModel,
     setSupportsImages,
     setCustomProviderModels,
+    setEnabledModels,
+    updateCustomProvider,
     removeCustomProvider,
     setModelRates,
     setModelWindows,
@@ -305,6 +300,71 @@ function CustomProviderCard({
 
   const enabled = useMemo(() => config?.enabledModels ?? [], [config])
   const catalogue = useMemo(() => provider.models.map((id) => ({ id })), [provider.models])
+
+  /**
+   * Why an edit was refused, in the words the form's own rules use.
+   *
+   * The check the store applies is run here too, so a refusal lands on the field that caused it: an
+   * action cannot answer with an error, and a name another provider holds would otherwise look like a
+   * save that did nothing. `NOT_FOUND` cannot happen for a box that is on screen and `NO_FIELDS` cannot
+   * happen for a box that sends a field, so neither is rendered as a sentence.
+   */
+  const refusal = (check: ProviderEditCheck): ProviderDraftRejection | null => {
+    if (check.ok) return null
+    if (check.code === 'NOT_FOUND' || check.code === 'NO_FIELDS') return null
+    return check.code
+  }
+
+  const onSaveName = (next: string): ProviderDraftRejection | null => {
+    const check = resolveProviderEdit(providers, provider.id, { name: next })
+    if (check.ok) updateCustomProvider({ id: provider.id, name: next })
+    return refusal(check)
+  }
+
+  /**
+   * Ask a newly saved URL what it offers, and make the store agree with the answer.
+   *
+   * The catalogue and the enable list both name models of one endpoint, so neither outlives a URL that
+   * does not serve them. A successful answer replaces the catalogue and drops the enabled ids it no
+   * longer lists — the rule a refresh applies to a shipped provider — while the per-model declarations
+   * are the record's and stay: they are keyed by model id and harmless until that id reappears. A failed
+   * answer clears both sets, because keeping them would offer the chat picker a model the new server has
+   * never heard of, and says why in the box, in the words the code chose.
+   */
+  const refetchCatalogue = async (baseUrl: string) => {
+    try {
+      const models = await listModels.mutateAsync({ baseUrl, apiKey: '', providerId: provider.id })
+      setCustomProviderModels({ id: provider.id, models })
+      const available = new Set(models)
+      const kept = enabled.filter((modelId) => available.has(modelId))
+      if (kept.length !== enabled.length) setEnabledModels({ providerId: provider.id, modelIds: kept })
+      setJustFetched(true)
+      setNotice(null)
+    } catch (err) {
+      setCustomProviderModels({ id: provider.id, models: [] })
+      setEnabledModels({ providerId: provider.id, modelIds: [] })
+      setJustFetched(false)
+      setNotice(fetchNotice(err, provider.name))
+    }
+  }
+
+  /**
+   * Save the new URL, then ask it for its catalogue.
+   *
+   * In that order, and as two facts: the URL is what the user asked for, so it is written whatever the
+   * server answers, and the catalogue is what the server said, so it is the fetch that decides it. The
+   * refetch carries no key — main reads the one stored under the id, which did not move — and it is not
+   * awaited by the commit: the box shows the saved URL and then the answer.
+   */
+  const onSaveBaseUrl = (next: string): ProviderDraftRejection | null => {
+    const check = resolveProviderEdit(providers, provider.id, { baseUrl: next })
+    if (!check.ok) return refusal(check)
+
+    const baseUrl = check.edit.baseUrl ?? next
+    updateCustomProvider({ id: provider.id, baseUrl })
+    void refetchCatalogue(baseUrl)
+    return null
+  }
 
   const onSaveKey = async () => {
     if (!keyValue.trim()) return
@@ -397,6 +457,11 @@ function CustomProviderCard({
         }}
         onWindowChange={(modelId, window) => setModelWindows({ providerId: provider.id, modelId, window })}
         notice={notice}
+        // The two facts a custom provider has that a predefined one does not: an endpoint the user typed,
+        // and a name that is a label rather than this app's own. Both are edited in the box, in place.
+        baseUrl={provider.baseUrl}
+        onSaveBaseUrl={onSaveBaseUrl}
+        onSaveName={onSaveName}
         actions={
           <>
             <Button

@@ -188,9 +188,24 @@ export function resolveProviderEdit(
   if (!current) return { ok: false, code: 'NOT_FOUND' }
   if (edit.name === undefined && edit.baseUrl === undefined) return { ok: false, code: 'NO_FIELDS' }
 
-  // The rules land in the commit that turns the red pins green: until then an edit that names a field is
-  // still refused, which is the state the first commit's suite records.
-  return { ok: false, code: 'NO_FIELDS' }
+  // The draft is the provider as it would be after the edit, validated by the create rules unchanged: the
+  // field that was not named keeps its stored value, so a rename is still checked against a URL that has
+  // already passed, and a URL move against a name compared with every provider but this one.
+  const check = validateProviderDraft(
+    { name: edit.name ?? current.name, baseUrl: edit.baseUrl ?? current.baseUrl, apiKey: '' },
+    providers.filter((provider) => provider.id !== id).map((provider) => provider.name)
+  )
+  if (!check.ok) return { ok: false, code: check.code }
+
+  // Only the fields that were named travel back: the write is partial, so a rename cannot restate a URL
+  // nobody touched, and a URL move cannot restate a name.
+  return {
+    ok: true,
+    edit: {
+      ...(edit.name !== undefined ? { name: check.draft.name } : {}),
+      ...(edit.baseUrl !== undefined ? { baseUrl: check.draft.baseUrl } : {}),
+    },
+  }
 }
 
 /** The catalogue endpoint for a provider's base URL. */

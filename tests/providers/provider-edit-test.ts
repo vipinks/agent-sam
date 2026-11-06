@@ -191,10 +191,12 @@ function anUnchangedNameIsNotARefusalByItself() {
     edit: { name: 'Local Llama' },
   })
   // Case and space are how the same name gets retyped; the provider being edited is excluded from the
-  // list it is compared against, so retyping its own name is not a collision with itself.
+  // list it is compared against, so retyping its own name is not a collision with itself. What comes back
+  // is the draft the create rules yield — trimmed, with the case the user typed — rather than a name this
+  // app decided to restyle.
   assert.deepEqual(resolveProviderEdit(providers, LLAMA.id, { name: ' local llama ' }), {
     ok: true,
-    edit: { name: 'Local Llama' },
+    edit: { name: 'local llama' },
   })
 
   results.push('an unchanged name is allowed: the edited provider is excluded from the taken list')

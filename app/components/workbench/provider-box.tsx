@@ -1,11 +1,13 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Check, KeyRound, Loader2, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Label } from '../ui/label'
 import { CardSurface } from '../ui/surface'
 import { Switch } from '../ui/switch'
 import { ModelList, type ModelEntry } from './model-list'
+import type { ProviderDraftRejection } from '@/conveyor/protocol/custom-provider'
 import type { ModelRates } from '@/conveyor/protocol/session-usage'
 import type { ModelWindows } from '@/conveyor/protocol/context-window'
 
@@ -54,6 +56,24 @@ export const CUSTOM_PROVIDER_ONLY_CONTROLS = [
   'provider-base-url',
 ] as const
 
+/**
+ * Where a refused draft belongs, and what it says. One field at a time, because the rules answer one.
+ *
+ * Here rather than in the settings section because the field a refusal belongs to is drawn here now: the
+ * add form and the two in-place editors ask the same rules, so they say the same sentence on the same
+ * field, and a second copy of this map would be a second answer to the same refusal.
+ */
+export function draftError(code: ProviderDraftRejection): { field: 'name' | 'baseUrl'; message: string } {
+  switch (code) {
+    case 'NAME_REQUIRED':
+      return { field: 'name', message: 'A name is required.' }
+    case 'NAME_TAKEN':
+      return { field: 'name', message: 'A provider with this name already exists.' }
+    case 'BASE_URL_INVALID':
+      return { field: 'baseUrl', message: 'Enter an http(s) URL, like http://localhost:1234/v1.' }
+  }
+}
+
 export function ProviderBox({
   id,
   name,
@@ -78,6 +98,9 @@ export function ProviderBox({
   onToggleModel,
   actions,
   notice,
+  baseUrl,
+  onSaveBaseUrl,
+  onSaveName,
 }: {
   id: string
   name: string
@@ -148,7 +171,78 @@ export function ProviderBox({
    * is what a user retrying after a fix needs to see change.
    */
   notice?: string | null
+  /**
+   * The base URL this provider is called at, and the act of changing it.
+   *
+   * Custom-only, and absent for a predefined provider — its endpoint is this app's, not the user's, so
+   * passing neither is what keeps its box exactly the box it was. The two travel together because a URL
+   * with no way to save an edit would be a row that only looks editable; the callback answers with why an
+   * edit was refused, or null when it was written, so the sentence lands on the field that caused it.
+   */
+  baseUrl?: string
+  onSaveBaseUrl?: (baseUrl: string) => ProviderDraftRejection | null
+  /**
+   * Rename this provider in place, answering with why the name was refused or null when it was written.
+   *
+   * Custom-only for the reason the URL is: the id a custom provider was created under does not move when
+   * the name does, so a rename is a label rather than an identity.
+   */
+  onSaveName?: (name: string) => ProviderDraftRejection | null
 }) {
+  // The two in-place editors: which one is open, the draft it is holding, and the sentence a refusal left.
+  // Local rather than in the store, because a half-typed name is nobody's state but this box's.
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(name)
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [editingBaseUrl, setEditingBaseUrl] = useState(false)
+  const [baseUrlDraft, setBaseUrlDraft] = useState(baseUrl ?? '')
+  const [baseUrlError, setBaseUrlError] = useState<string | null>(null)
+
+  const startNameEdit = () => {
+    setNameDraft(name)
+    setNameError(null)
+    setEditingName(true)
+  }
+
+  const cancelNameEdit = () => {
+    setNameError(null)
+    setEditingName(false)
+  }
+
+  const commitName = () => {
+    if (!onSaveName) return
+    const rejection = onSaveName(nameDraft)
+    if (rejection) {
+      // Still editing: the field the user has to fix is the field they are already in.
+      setNameError(draftError(rejection).message)
+      return
+    }
+    setNameError(null)
+    setEditingName(false)
+  }
+
+  const startBaseUrlEdit = () => {
+    setBaseUrlDraft(baseUrl ?? '')
+    setBaseUrlError(null)
+    setEditingBaseUrl(true)
+  }
+
+  const cancelBaseUrlEdit = () => {
+    setBaseUrlError(null)
+    setEditingBaseUrl(false)
+  }
+
+  const commitBaseUrl = () => {
+    if (!onSaveBaseUrl) return
+    const rejection = onSaveBaseUrl(baseUrlDraft)
+    if (rejection) {
+      setBaseUrlError(draftError(rejection).message)
+      return
+    }
+    setBaseUrlError(null)
+    setEditingBaseUrl(false)
+  }
+
   return (
     <CardSurface
       data-slot="provider-box"
@@ -158,7 +252,40 @@ export function ProviderBox({
     >
       <div className="flex items-center gap-2">
         <KeyRound className={cn('size-3.5 shrink-0', configured ? 'text-brand' : 'text-muted-foreground')} />
-        <span className="text-[13px] font-medium">{name}</span>
+        {/*
+          The name is a control for a provider the user added and a statement for one that ships here: a
+          custom provider's name is theirs to change, and clicking it turns the text into the field in
+          place — same header row, same gap beside the badge, no dialog over the screen.
+        */}
+        {onSaveName ? (
+          editingName ? (
+            <Input
+              autoFocus
+              value={nameDraft}
+              aria-label="Provider name"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') commitName()
+                if (event.key === 'Escape') cancelNameEdit()
+              }}
+              className="h-7 w-40 min-w-0 px-1.5 text-[13px] font-medium"
+            />
+          ) : (
+            <button
+              type="button"
+              data-slot="provider-edit-name"
+              title="Rename this provider"
+              onClick={startNameEdit}
+              className="-mx-1 min-w-0 truncate rounded px-1 text-left text-[13px] font-medium transition-colors hover:bg-muted"
+            >
+              {name}
+            </button>
+          )
+        ) : (
+          <span className="text-[13px] font-medium">{name}</span>
+        )}
         {configured && (
           <span
             data-slot="provider-saved-badge"
@@ -173,6 +300,54 @@ export function ProviderBox({
           {actions}
         </div>
       </div>
+
+      {nameError && (
+        <p data-slot="provider-name-error" role="alert" className="mt-1.5 text-[11.5px] text-destructive">
+          {nameError}
+        </p>
+      )}
+
+      {/*
+        The endpoint, on the screen rather than behind a form: a provider the user typed a URL for is one
+        they may have typed wrong, and moving it to a server they have since started elsewhere is the
+        same kind of edit as renaming it. Custom-only, so a predefined provider's box does not grow a row
+        it has no value for.
+      */}
+      {baseUrl !== undefined && onSaveBaseUrl && (
+        <div data-slot="provider-base-url" className="mt-2.5 flex items-center gap-2">
+          <Label className="w-[52px] shrink-0 text-[11.5px] font-normal text-muted-foreground">API URL</Label>
+          {editingBaseUrl ? (
+            <Input
+              autoFocus
+              value={baseUrlDraft}
+              aria-label="API URL"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setBaseUrlDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') commitBaseUrl()
+                if (event.key === 'Escape') cancelBaseUrlEdit()
+              }}
+              className="h-8 min-w-0 font-mono text-[12px]"
+            />
+          ) : (
+            <button
+              type="button"
+              title="Change this provider's base URL"
+              onClick={startBaseUrlEdit}
+              className="min-w-0 truncate rounded text-left font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {baseUrl}
+            </button>
+          )}
+        </div>
+      )}
+
+      {baseUrlError && (
+        <p data-slot="provider-url-error" role="alert" className="mt-1.5 text-[11.5px] text-destructive">
+          {baseUrlError}
+        </p>
+      )}
 
       <div className="mt-2.5 flex items-center gap-2">
         <Input
