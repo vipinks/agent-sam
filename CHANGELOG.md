@@ -6,6 +6,18 @@ coding assistant.
 
 <br>
 
+## 2026-11-06: v1.15.9 — Inline editing of custom providers
+
+- docs(readme): refresh the overview to the shipped product
+- docs(wiki): the ten-page source tree for the GitHub wiki
+- test(providers): red pins for inline editing of a custom provider
+- feat(providers): edit a custom provider's name and base URL in place — the display name and the API endpoint are now editable on an added provider without deleting it, the saved key, the per-model declarations and every conversation that references the provider all survive because the provider id is frozen at creation, the base URL is visible in the box where it was never shown before, a refused edit names itself on its field instead of closing silently, and an edit commits on blur so clicking away saves rather than discards
+- test(composer): stabilize the deferred-revoke assertion in the image-chip suite
+- test(providers): name a refused edit on its field instead of closing the editor silently
+- fix(providers): commit an in-place edit on blur instead of discarding it
+
+<br>
+
 ## 2026-11-05: v1.15.8 — From-here message delete
 
 - test(chat): pin the from-here message delete
