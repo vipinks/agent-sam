@@ -393,10 +393,19 @@ describe('taking a chip off', () => {
 
     await userEvent.type(await composer(), 'both of these{Enter}')
 
-    // The row clears after a successful send, and the chips going away is what releases their URLs.
+    // The row clears after a successful send, and the chips going away is what releases their URLs — but
+    // the two happen in different steps. The row keeps a dropped chip for one exit window
+    // (`useLeavingItems`), and the URL is revoked by the chip's own unmount cleanup (`useThumbnailUrl`),
+    // which React runs after the commit that took the chips out of the tree. So an empty row is one step
+    // earlier than the release, not the release itself: waiting for the DOM alone lets a loaded machine
+    // assert in between and read a revoke that has not happened yet.
     await waitFor(() => expect(draftChips()).toEqual([]))
-    expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[0])
-    expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[1])
+    // Waited for as the effect it is, rather than assumed from the tree: the claim stays that every chip's
+    // URL came back, only now the assertion is allowed to see the step it is actually made in.
+    await waitFor(() => {
+      expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[0])
+      expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[1])
+    })
   })
 })
 
