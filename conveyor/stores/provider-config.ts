@@ -1,6 +1,12 @@
 import { z } from 'zod'
 import { defineStore } from 'electron-conveyor/define'
-import { appendCustom, newProviderId, validateProviderDraft, type CustomProvider } from '../protocol/custom-provider'
+import {
+  appendCustom,
+  newProviderId,
+  resolveProviderEdit,
+  validateProviderDraft,
+  type CustomProvider,
+} from '../protocol/custom-provider'
 import type { ModelWindows } from '../protocol/context-window'
 import type { CatalogueRates, ModelRates } from '../protocol/session-usage'
 
@@ -150,6 +156,13 @@ export const providerConfigStore = defineStore('provider-config', {
     }),
     setEnabledModels: z.object({ providerId: z.string().min(1), modelIds: z.array(z.string()) }),
     addCustomProvider: z.object({ name: z.string().min(1), baseUrl: z.string().min(1) }),
+    // Both fields optional because a box sends the one it was asked to change; a payload naming neither is
+    // one the action refuses to write, the same silent refusal the add action applies to an unusable draft.
+    updateCustomProvider: z.object({
+      id: z.string().min(1),
+      name: z.string().min(1).optional(),
+      baseUrl: z.string().min(1).optional(),
+    }),
     removeCustomProvider: z.object({ id: z.string().min(1) }),
     setCustomProviderModels: z.object({ id: z.string().min(1), models: z.array(z.string().min(1)) }),
   },
@@ -367,6 +380,26 @@ export const providerConfigStore = defineStore('provider-config', {
         baseUrl: check.draft.baseUrl,
         apiKey: check.draft.apiKey,
       })
+    },
+
+    /**
+     * Rename a provider, or move it to a different base URL, without touching anything else.
+     *
+     * The id is the identity, and it does not move: it was derived from the name once, when the provider
+     * was created, and saved model choices, combo members and conversations all name it. A renamed
+     * provider therefore keeps the slug it was created under — the cosmetic trade a combo makes for the
+     * same reason — and no edit re-derives one.
+     *
+     * The rules are `resolveProviderEdit`'s, applied here because this side owns the list the name has to
+     * be unique against; a refused edit changes nothing, which is the discipline the add action follows
+     * for the same reason (an action cannot return an error). The catalogue is deliberately left alone:
+     * it describes one endpoint, so asking the new URL for a new one is the box's job, after this write.
+     */
+    updateCustomProvider: (state, { id, name, baseUrl }) => {
+      const check = resolveProviderEdit(state.customProviders, id, { name, baseUrl })
+      if (!check.ok) return
+
+      state.customProviders = state.customProviders.map((p) => (p.id === id ? { ...p, ...check.edit } : p))
     },
 
     /**

@@ -291,7 +291,7 @@ describe('the add-provider dialog', () => {
 })
 
 describe('the custom provider box', () => {
-  it('renders the controls a predefined box renders, with exactly two of its own', async () => {
+  it('renders the controls a predefined box renders, with exactly the four slots of its own', async () => {
     // Both kinds hold a key here, so the two boxes are in the same state: parity is a claim about the
     // boxes, and comparing a configured box with an unconfigured one would only prove they differ.
     stubSettings({ listConfigured: () => ['deepseek', LLAMA.id] }, POPULATED_STATE)
@@ -308,8 +308,10 @@ describe('the custom provider box', () => {
       expect(hasControl(custom, slot), `the custom box renders ${slot}`).toBe(true)
     }
 
-    // And exactly two affordances the custom box has on its own: the fetch that asks the provider
-    // itself, and the delete that removes it.
+    // And exactly the affordances the custom box has on its own: its name and its URL, each editable in
+    // place, and the two acts a predefined provider has no use for — the fetch that asks the provider
+    // itself, and the delete that removes it. Custom-only by construction rather than by editing the
+    // parity set above: a predefined box is passed none of the four.
     const own = slotsOf(custom).filter(
       (slot) => slot.startsWith('provider-') && !(PROVIDER_BOX_CONTROLS as readonly string[]).includes(slot)
     )

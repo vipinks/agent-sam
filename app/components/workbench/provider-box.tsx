@@ -39,11 +39,20 @@ export const PROVIDER_BOX_CONTROLS = [
 export const PROVIDER_BOX_CORE_CONTROLS = ['provider-key-input', 'provider-key-save', 'provider-actions'] as const
 
 /**
- * The two affordances only a provider the user added carries: asking the server itself for its
- * catalogue, and removing the provider. A predefined provider is asked through this app's own
- * `settings` module and removed by editing nothing — it is not the user's to delete.
+ * The slots only a provider the user added carries: its name and base URL, each editable in place, and
+ * the two affordances a predefined provider has no use for — asking the server itself for its catalogue,
+ * and removing the provider. A predefined provider is asked through this app's own `settings` module,
+ * and its name is this app's to state rather than the user's to change; it is not the user's to delete.
+ *
+ * Listed in the order a custom box renders them, because the parity suite compares this list with that
+ * box's own slots in document order.
  */
-export const CUSTOM_PROVIDER_ONLY_CONTROLS = ['provider-fetch-models', 'provider-delete'] as const
+export const CUSTOM_PROVIDER_ONLY_CONTROLS = [
+  'provider-edit-name',
+  'provider-fetch-models',
+  'provider-delete',
+  'provider-base-url',
+] as const
 
 export function ProviderBox({
   id,

@@ -145,6 +145,54 @@ export function appendCustom(current: readonly CustomProvider[], draft: NewCusto
   ]
 }
 
+/** One edit to a provider that already exists: a new name, a new base URL, or both. */
+export interface ProviderEdit {
+  name?: string
+  baseUrl?: string
+}
+
+/**
+ * The part of an edit worth writing: only the fields the caller named.
+ *
+ * Both optional because a box sends the one field it was asked to change, and the write must be partial
+ * — a rename may not restate the URL from a draft, and a URL move may not restate the name.
+ */
+export interface ProviderEditFields {
+  name?: string
+  baseUrl?: string
+}
+
+/** Why an edit cannot be applied: the draft's own three refusals, plus the two facts about an edit. */
+export type ProviderEditRejection = ProviderDraftRejection | 'NOT_FOUND' | 'NO_FIELDS'
+
+export type ProviderEditCheck = { ok: true; edit: ProviderEditFields } | { ok: false; code: ProviderEditRejection }
+
+/**
+ * Decide whether an edit to an existing provider may be applied, and hand back the fields worth storing.
+ *
+ * The same question `validateProviderDraft` asks of a new provider, put to one that already has an id:
+ * the draft is the provider as it would be after the edit, so a name is still checked against the other
+ * providers and the URL is still normalised — with the taken-name list filtered to exclude the provider
+ * being edited, or saving an unchanged name would refuse itself. The id is not part of the answer, and
+ * never is: it was derived once, at creation, and a rename does not re-derive it.
+ *
+ * Declared here, beside the create rules, because the store applies it and a suite drives it without a
+ * store runtime — the same division `validateProviderDraft` and `appendCustom` already have.
+ */
+export function resolveProviderEdit(
+  providers: readonly CustomProvider[],
+  id: string,
+  edit: ProviderEdit
+): ProviderEditCheck {
+  const current = providers.find((provider) => provider.id === id)
+  if (!current) return { ok: false, code: 'NOT_FOUND' }
+  if (edit.name === undefined && edit.baseUrl === undefined) return { ok: false, code: 'NO_FIELDS' }
+
+  // The rules land in the commit that turns the red pins green: until then an edit that names a field is
+  // still refused, which is the state the first commit's suite records.
+  return { ok: false, code: 'NO_FIELDS' }
+}
+
 /** The catalogue endpoint for a provider's base URL. */
 export function modelsUrl(baseUrl: string): string {
   return `${normalizeBaseUrl(baseUrl) ?? baseUrl}/models`

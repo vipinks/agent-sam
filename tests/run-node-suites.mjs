@@ -49,6 +49,7 @@ const SUITES = [
   { name: 'models engine', src: 'llm/models-test.ts' },
   { name: 'custom providers (routing + model list)', src: 'llm/custom-provider-test.ts' },
   { name: 'custom providers (store slice)', src: 'providers/provider-config-store-test.ts' },
+  { name: 'custom providers (inline edit)', src: 'providers/provider-edit-test.ts' },
   { name: 'session usage (request, capture, pricing rules)', src: 'llm/session-usage-test.ts' },
   { name: 'context window (estimate, breakdown, window, compact point)', src: 'llm/context-window-test.ts' },
   { name: 'context card (figure, badge, rows, pill, em dashes)', src: 'llm/context-card-test.ts' },
