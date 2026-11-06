@@ -37,6 +37,16 @@ export default defineConfig({
     testTimeout: 20000,
     // A failing React render should fail with a usable trace rather than a screenful of DOM.
     reporters: ['default'],
+    // `electron-conveyor/main` reads `electron` for the store's persistence and window manager. The one
+    // suite that registers the real store (`testing/custom-provider-edit-wiring.test.tsx`) answers those
+    // three APIs with `vi.mock('electron')`, and a module mock only reaches a package Vite transforms —
+    // a dependency Node loads natively resolves `electron` itself and fails before the mock exists. Only
+    // this subpath is inlined; the renderer and define subpaths the app imports stay external.
+    server: {
+      deps: {
+        inline: [/electron-conveyor/],
+      },
+    },
   },
   // The app's tsconfig sets `jsx: react-jsx`, so sources do not import React. Vitest transforms
   // independently of tsc and defaults to the classic runtime, which is why `React is not defined`

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Check, KeyRound, Loader2, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
@@ -202,30 +202,62 @@ export function ProviderBox({
 }) {
   // The two in-place editors: which one is open, the draft it is holding, and the sentence a refusal left.
   // Local rather than in the store, because a half-typed name is nobody's state but this box's.
+  //
+  // The two refs are the two facts a click-away makes ambiguous. `Escape` closes the editor, and the
+  // close is itself a blur in some browsers: the flag says the blur belongs to a cancel rather than to a
+  // save, so Escape cannot commit the draft it just discarded. The other ref is the field, so a refusal
+  // met while leaving can put the cursor back where the fix is.
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState(name)
   const [nameError, setNameError] = useState<string | null>(null)
+  const nameField = useRef<HTMLInputElement>(null)
+  const nameCancelled = useRef(false)
   const [editingBaseUrl, setEditingBaseUrl] = useState(false)
   const [baseUrlDraft, setBaseUrlDraft] = useState(baseUrl ?? '')
   const [baseUrlError, setBaseUrlError] = useState<string | null>(null)
+  const baseUrlField = useRef<HTMLInputElement>(null)
+  const baseUrlCancelled = useRef(false)
 
   const startNameEdit = () => {
     setNameDraft(name)
     setNameError(null)
+    nameCancelled.current = false
     setEditingName(true)
   }
 
   const cancelNameEdit = () => {
+    // The blur this close causes is the cancel's own, not a save of the draft it discarded.
+    nameCancelled.current = true
     setNameError(null)
     setEditingName(false)
   }
 
-  const commitName = () => {
+  /**
+   * Save the name, from Enter or from a click-away.
+   *
+   * A click-away is not a discard: the house precedent is the session rename, where leaving the field
+   * commits it. The one click-away that writes nothing is the one that changed nothing — a draft equal to
+   * the stored name is not an edit, so closing silently is the honest answer rather than dispatching a
+   * value the store already holds.
+   *
+   * A refusal keeps the editor open either way, because the field the user has to fix is the field they
+   * are already in. From a blur it also takes focus back: a person walking away from the field was not
+   * told the edit had failed, and the refusal has to meet them where they are.
+   */
+  const commitName = (from: 'enter' | 'blur' = 'enter') => {
     if (!onSaveName) return
+    if (from === 'blur' && nameDraft.trim() === name.trim()) {
+      setNameError(null)
+      setEditingName(false)
+      return
+    }
     const rejection = onSaveName(nameDraft)
     if (rejection) {
-      // Still editing: the field the user has to fix is the field they are already in.
       setNameError(draftError(rejection).message)
+      // Deferred by a microtask: this runs inside the blur the click-away is still completing, and a
+      // focus taken back mid-transition is dropped by the browser's focus fixup. One tick later the field
+      // is stable, and the cursor is back where the refused draft is.
+      if (from === 'blur') queueMicrotask(() => nameField.current?.focus())
       return
     }
     setNameError(null)
@@ -235,19 +267,29 @@ export function ProviderBox({
   const startBaseUrlEdit = () => {
     setBaseUrlDraft(baseUrl ?? '')
     setBaseUrlError(null)
+    baseUrlCancelled.current = false
     setEditingBaseUrl(true)
   }
 
   const cancelBaseUrlEdit = () => {
+    // As above, for the URL editor's own blur.
+    baseUrlCancelled.current = true
     setBaseUrlError(null)
     setEditingBaseUrl(false)
   }
 
-  const commitBaseUrl = () => {
+  /** Save the URL, from Enter or from a click-away; the name editor's rules apply unchanged. */
+  const commitBaseUrl = (from: 'enter' | 'blur' = 'enter') => {
     if (!onSaveBaseUrl) return
+    if (from === 'blur' && baseUrlDraft.trim() === (baseUrl ?? '').trim()) {
+      setBaseUrlError(null)
+      setEditingBaseUrl(false)
+      return
+    }
     const rejection = onSaveBaseUrl(baseUrlDraft)
     if (rejection) {
       setBaseUrlError(draftError(rejection).message)
+      if (from === 'blur') queueMicrotask(() => baseUrlField.current?.focus())
       return
     }
     setBaseUrlError(null)
@@ -272,6 +314,7 @@ export function ProviderBox({
           editingName ? (
             <Input
               autoFocus
+              ref={nameField}
               value={nameDraft}
               aria-label="Provider name"
               autoComplete="off"
@@ -280,6 +323,14 @@ export function ProviderBox({
               onKeyDown={(event) => {
                 if (event.key === 'Enter') commitName()
                 if (event.key === 'Escape') cancelNameEdit()
+              }}
+              onBlur={() => {
+                // Escape's own blur is not a save.
+                if (nameCancelled.current) {
+                  nameCancelled.current = false
+                  return
+                }
+                commitName('blur')
               }}
               className="h-7 w-40 min-w-0 px-1.5 text-[13px] font-medium"
             />
@@ -312,6 +363,17 @@ export function ProviderBox({
         </div>
       </div>
 
+      {/*
+        What the two keys do, stated while one of them can be pressed. A field that saves on Enter and
+        commits on a click-away reads as a form only to someone who already knows; one line under the
+        editor is what makes the gesture discoverable, and it is absent as soon as the editor is.
+      */}
+      {editingName && (
+        <p data-slot="provider-edit-hint" className="mt-1.5 text-[11px] text-muted-foreground">
+          Enter saves, Esc cancels
+        </p>
+      )}
+
       {nameError && (
         <p data-slot="provider-name-error" role="alert" className="mt-1.5 text-[11.5px] text-destructive">
           {nameError}
@@ -325,31 +387,47 @@ export function ProviderBox({
         it has no value for.
       */}
       {baseUrl !== undefined && onSaveBaseUrl && (
-        <div data-slot="provider-base-url" className="mt-2.5 flex items-center gap-2">
-          <Label className="w-[52px] shrink-0 text-[11.5px] font-normal text-muted-foreground">API URL</Label>
-          {editingBaseUrl ? (
-            <Input
-              autoFocus
-              value={baseUrlDraft}
-              aria-label="API URL"
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setBaseUrlDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') commitBaseUrl()
-                if (event.key === 'Escape') cancelBaseUrlEdit()
-              }}
-              className="h-8 min-w-0 font-mono text-[12px]"
-            />
-          ) : (
-            <button
-              type="button"
-              title="Change this provider's base URL"
-              onClick={startBaseUrlEdit}
-              className="min-w-0 truncate rounded text-left font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {baseUrl}
-            </button>
+        <div data-slot="provider-base-url" className="mt-2.5">
+          <div className="flex items-center gap-2">
+            <Label className="w-[52px] shrink-0 text-[11.5px] font-normal text-muted-foreground">API URL</Label>
+            {editingBaseUrl ? (
+              <Input
+                autoFocus
+                ref={baseUrlField}
+                value={baseUrlDraft}
+                aria-label="API URL"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => setBaseUrlDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') commitBaseUrl()
+                  if (event.key === 'Escape') cancelBaseUrlEdit()
+                }}
+                onBlur={() => {
+                  // Escape's own blur is not a save.
+                  if (baseUrlCancelled.current) {
+                    baseUrlCancelled.current = false
+                    return
+                  }
+                  commitBaseUrl('blur')
+                }}
+                className="h-8 min-w-0 font-mono text-[12px]"
+              />
+            ) : (
+              <button
+                type="button"
+                title="Change this provider's base URL"
+                onClick={startBaseUrlEdit}
+                className="min-w-0 truncate rounded text-left font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {baseUrl}
+              </button>
+            )}
+          </div>
+          {editingBaseUrl && (
+            <p data-slot="provider-edit-hint" className="mt-1.5 pl-[60px] text-[11px] text-muted-foreground">
+              Enter saves, Esc cancels
+            </p>
           )}
         </div>
       )}
