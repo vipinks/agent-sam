@@ -44,11 +44,38 @@ jobs:
     name: Build (${{ matrix.os }})
     # Gated on verify so three matrix jobs do not spend runner time on a typo.
     needs: verify
+    # The electron zip comes from a GitHub release. That CDN occasionally answers 504
+    # (v1.15.10 log: Build (ubuntu-latest) died with HTTPError 504 right after
+    # `downloaded label=electron progress=100%`, and the re-run was green), so the
+    # steady state must not need that request at all — the cache below is the lever.
+    # ELECTRON_MIRROR only backstops the zip on a cold cache: @electron/get consults it
+    # first and verifies the zip against that mirror's SHASUMS256.txt. It does not
+    # cover electron-builder's helper binaries (appimage, nsis, 7za), which download
+    # from electron-userland/electron-builder-binaries — the cached electron-builder
+    # directory covers those, not the mirror.
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
     strategy:
       # One platform failing should not hide the state of the other two.
       fail-fast: false
+      # The download caches live in a different place per OS: @electron/get uses
+      # ~/.cache/electron on Linux, ~/Library/Caches/electron on macOS, and
+      # %LOCALAPPDATA%\electron\Cache on Windows; electron-builder's own cache follows
+      # the same split under its name. A single path list would miss on two of three.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            electron-cache-path: |
+              ~/.cache/electron
+              ~/.cache/electron-builder
+          - os: macos-latest
+            electron-cache-path: |
+              ~/Library/Caches/electron
+              ~/Library/Caches/electron-builder
+          - os: windows-latest
+            electron-cache-path: |
+              ~\AppData\Local\electron\Cache
+              ~\AppData\Local\electron-builder\Cache
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -56,10 +83,27 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # Before `npm ci`, so the electron package's postinstall reads this cache too, and
+      # before the build step, so electron-builder finds an extracted artifact.
+      - name: Cache electron artifacts
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.electron-cache-path }}
+          # The exact key carries the lockfile hash plus the electron version resolved
+          # in it (43.5.1; package.json only pins ^43.4.1). The restore keys degrade in
+          # steps: same electron version across unrelated dependency churn, then any
+          # older cache for this OS.
+          key: electron-artifacts-v1-${{ runner.os }}-electron-43.5.1-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            electron-artifacts-v1-${{ runner.os }}-electron-43.5.1-
+            electron-artifacts-v1-${{ runner.os }}-
       - run: npm ci
       # Compiles main, preload and renderer. Catches path-separator and filename-case
       # bugs that a single dev machine never sees.
       - run: npm run vite:build:app
       # `--dir` produces an unpacked app and skips every packaging target, so no
-      # installers, no signing, and no snapcraft on the Linux runner.
-      - run: npm run electron:build:dir
+      # installers, no signing, and no snapcraft on the Linux runner. `--publish never`
+      # cancels the implicit publish that electron-builder.yml's `publish:` block would
+      # otherwise trigger, so CI never uploads (or opens a releases API call for)
+      # artifacts for targets this project does not ship.
+      - run: npm run electron:build:dir -- --publish never
