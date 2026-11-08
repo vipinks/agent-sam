@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { MessageBubble } from '@/app/components/workbench/message-bubble'
-import { LOST_PAUSE_CODE, type AgentTurn } from '@/app/components/workbench/agent-session'
+import { LOST_PAUSE_CODE, PROCESS_LOST_CODE, RUN_CUT_CODE, type AgentTurn } from '@/app/components/workbench/agent-session'
+import { reconcileInterruptedRuns, type TranscriptState } from '@/app/components/workbench/session-transcript'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -278,6 +279,102 @@ describe('a turn’s tool steps, as rows', () => {
     expect(isOpen(row)).toBe(true)
     expect(body(row).hasAttribute('hidden')).toBe(false)
     expect(within(row).getByText(/the app closed before you answered/)).toBeTruthy()
+  })
+
+  it('draws no spinner on a call a restart interrupted, and names how it ended', () => {
+    // The reconciled state, not a hand-written one: this is what a reopened conversation holds for a
+    // call the old process was still running. A spinner here would be a claim about work nobody is
+    // doing any more, and the row has to say which ending it was instead.
+    const interrupted: TranscriptState = {
+      interrupted: true,
+      turns: [
+        {
+          id: 'turn-1',
+          role: 'assistant',
+          content: 'Running them.',
+          steps: [
+            {
+              callId: 'lost',
+              tool: 'run_command',
+              args: { command: 'npm test' },
+              status: 'running',
+            },
+          ],
+        },
+      ],
+    }
+    render(<MessageBubble message={reconcileInterruptedRuns(interrupted).turns[0]} />)
+
+    const row = rowFor('Running npm test')
+    expect(row.querySelector('.animate-spin')).toBeNull()
+    expect(within(row).queryAllByLabelText('running')).toHaveLength(0)
+    expect(body(row).textContent).toContain('the app closed while this was running')
+  })
+
+  it('shows the final elapsed on a call a live Stop interrupted', () => {
+    // Both marks exist because the pane took them: the call started while this process was running, and
+    // the Stop ended it. A fixed number is the point — it records a span, it does not count.
+    const turn: AgentTurn = {
+      id: 'turn-1',
+      role: 'assistant',
+      content: '',
+      steps: [{ callId: 'cut', tool: 'write_file', args: { path: 'parser.ts' }, status: 'interrupted', code: RUN_CUT_CODE }],
+    }
+    render(
+      <MessageBubble
+        message={turn}
+        stepMarks={{ start: new Map([['cut', 1_000]]), end: new Map([['cut', 5_000]]) }}
+      />
+    )
+
+    const row = rowFor('Writing parser.ts')
+    expect(row.textContent).toContain('(4s)')
+    expect(row.querySelector('.animate-spin')).toBeNull()
+    // The number replaces the sentence: a call whose ending is known does not also need to be told.
+    expect(body(row).textContent).not.toContain('the turn ended while this was running')
+  })
+
+  it('shows the interrupted sentence and no number for a call whose ending it cannot know', () => {
+    // The same code without the marks is what a transcript saved after a live Stop holds once it is
+    // reopened: the marks were never written down. A duration there would be invented, so there is none.
+    const turn: AgentTurn = {
+      id: 'turn-1',
+      role: 'assistant',
+      content: '',
+      steps: [{ callId: 'cut', tool: 'write_file', args: { path: 'parser.ts' }, status: 'interrupted', code: RUN_CUT_CODE }],
+    }
+    render(<MessageBubble message={turn} />)
+
+    const row = rowFor('Writing parser.ts')
+    expect(row.textContent).not.toMatch(/\(\d+s\)/)
+    expect(body(row).textContent).toContain('the turn ended while this was running')
+  })
+
+  it('counts a running call up while it runs, and stops when it settles', () => {
+    const start = 1_700_000_000_000
+    vi.useFakeTimers()
+    vi.setSystemTime(start)
+    try {
+      const turn: AgentTurn = {
+        id: 'turn-1',
+        role: 'assistant',
+        content: '',
+        steps: [{ callId: 'run', tool: 'run_command', args: { command: 'npm test' }, status: 'running' }],
+      }
+      render(<MessageBubble message={turn} stepMarks={{ start: new Map([['run', start]]), end: new Map() }} />)
+
+      expect(rowFor('Running npm test').textContent).toContain('(0s)')
+
+      // The readout is a second-by-second reading of one mark, not a second timer of its own: advancing
+      // the window's clock is what moves it.
+      act(() => void vi.advanceTimersByTime(4_000))
+      expect(rowFor('Running npm test').textContent).toContain('(4s)')
+
+      act(() => void vi.advanceTimersByTime(1_000))
+      expect(rowFor('Running npm test').textContent).toContain('(5s)')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps the answer visible at rest, outside every row', async () => {

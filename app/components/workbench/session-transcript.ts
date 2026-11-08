@@ -4,7 +4,14 @@ import {
   type TranscriptSnapshot,
   type TranscriptTurn,
 } from '@/conveyor/protocol/transcript'
-import { isInterrupted, isUndecidedPause, LOST_PAUSE_CODE, type AgentTurn } from './agent-session'
+import {
+  interruptRunningSteps,
+  isInterrupted,
+  isUndecidedPause,
+  LOST_PAUSE_CODE,
+  PROCESS_LOST_CODE,
+  type AgentTurn,
+} from './agent-session'
 
 /**
  * Turning the live transcript into something that can be saved, and back.
@@ -329,6 +336,28 @@ export function reconcileOrphanedPauses(state: TranscriptState): TranscriptState
   })
 
   return { ...state, turns }
+}
+
+/**
+ * Reconcile a run the process did not survive.
+ *
+ * A step still marked `running` is the signature of an interruption: nothing can still be running in a
+ * process that has restarted, so a transcript read back by a later process cannot be shown as still
+ * working. Each such step is recorded as `interrupted` under `PROCESS_LOST`, and a turn the file left
+ * without an ending gets one — `interrupted`, resumable, because there is still work to continue and a
+ * person who can decide to continue it.
+ *
+ * The pause is deliberately not this pass's business. `reconcileOrphanedPauses` owns `awaiting` and
+ * `queued` and says `PAUSE_LOST`, non-resumable; those semantics are unchanged, and this pass moves only
+ * `running` steps, so the two cannot fight over a call.
+ *
+ * Idempotent by construction: a second pass finds no `running` step, and a turn that already carries an
+ * ending keeps it — a diagnosis of the reply is not overwritten by what happened to the run afterwards.
+ */
+export function reconcileInterruptedRuns(state: TranscriptState): TranscriptState {
+  // SEAM (next commit): the running-to-interrupted rewrite and the earned ending, asserted red by the
+  // load pin in `tests/sessions/chat-sessions-test.ts`.
+  return state
 }
 
 /** A snapshot for a session with no saved file. */

@@ -57,6 +57,10 @@ const SUITES = [
   { name: 'context preferences (compact-point store)', src: 'sessions/context-preferences-store-test.ts' },
   { name: 'terminal module', src: 'llm/terminal-test.ts' },
   { name: 'agent session', src: 'ui/agent-session-test.ts' },
+  {
+    name: 'time (duration boundaries, backwards clock, local stamp, unchanged age wording)',
+    src: 'ui/time-test.ts',
+  },
   { name: 'compaction (range, summary turn, send projection, record)', src: 'ui/compaction-test.ts' },
   { name: 'terminal theme mapping', src: 'ui/terminal-theme-test.ts' },
   {

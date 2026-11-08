@@ -364,6 +364,33 @@ export function abandonUndecidedCalls(turns: AgentTurn[], turnId: string, code: 
   }))
 }
 
+/**
+ * The two codes a call that was still running when its run ended can carry.
+ *
+ * Step codes in the `PAUSE_LOST` convention, not error codes: the card branches on them to say how the
+ * call ended, and the wording is the renderer's. Two codes rather than one because the two endings are
+ * different news — one means the app closed under the call, the other means the run was ended while it
+ * was still working — and a card that could not tell them apart would have to say neither.
+ */
+export const PROCESS_LOST_CODE = 'PROCESS_LOST'
+export const RUN_CUT_CODE = 'RUN_CUT'
+
+/**
+ * Mark every call still running as interrupted, under the given code.
+ *
+ * The step-side half of an ending: a turn that has ended cannot have a call under way, so a call left
+ * `running` is recorded as the state it is actually in rather than as one nothing is doing. Called at
+ * the load seam with `PROCESS_LOST`, and at the turn-end seam with `RUN_CUT`; the reason travels in the
+ * code so the two endings stay distinguishable on the card.
+ *
+ * Only `running` steps move. A pause's calls — `awaiting` and `queued` — are a different question with
+ * a different answer, and `abandonUndecidedCalls` owns them.
+ */
+export function interruptRunningSteps(turns: AgentTurn[], _code: string): AgentTurn[] {
+  // SEAM (next commit): the running-to-interrupted rewrite the turn-end pin and the load pin assert.
+  return turns
+}
+
 /** A file a send asked for that could not be attached, named with the code main reported. */
 export interface ContextNotice {
   path: string

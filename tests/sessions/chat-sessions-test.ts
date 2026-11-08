@@ -17,6 +17,7 @@ import {
 import {
   blankTranscript,
   rehydrateTranscript,
+  reconcileInterruptedRuns,
   reconcileOrphanedPauses,
   serializeTranscript,
   INTERRUPTED_NOTE,
@@ -24,11 +25,13 @@ import {
 } from '../../app/components/workbench/session-transcript'
 import {
   LOST_PAUSE_CODE,
+  PROCESS_LOST_CODE,
   resumeTurnNumbering,
   startAssistantTurn,
   startUserTurn,
 } from '../../app/components/workbench/agent-session'
 import { formatRelativeTime } from '../../app/components/workbench/relative-time'
+import { formatRelativeTime as formatRelativeTimeFromTime } from '../../app/components/workbench/time'
 import { isSearchable, planVisibleSessions, snippetsFor } from '../../app/components/workbench/session-search'
 import { SEARCH_MIN_TERM } from '../../conveyor/protocol/search'
 import { transcriptSnapshotSchema } from '../../conveyor/protocol/transcript'
@@ -298,6 +301,15 @@ function anUnfinishedTurnIsInterrupted() {
   assert.equal(restored.interrupted, true, 'and comes back interrupted')
   assert.equal(restored.turns.length, 2, 'the turns are still there — nothing is lost')
   assert.ok(INTERRUPTED_NOTE.length > 0, 'there is wording for it')
+
+  // And the flag is the file's word, not a state to hand back to the run: a reconciled turn is persisted
+  // as interrupted, so a save of a reopened conversation can never write a step as still running.
+  const reconciled = reconcileInterruptedRuns(restored)
+  assert.equal(
+    serializeTranscript(reconciled).turns[1].steps[0].status,
+    'interrupted',
+    'a reconciled run is written as interrupted, never as still running'
+  )
   results.push('a turn interrupted mid-run is marked, and keeps its turns')
 }
 
@@ -358,6 +370,89 @@ function aPauseTheProcessOutlivedIsReconciled() {
   const plain = rehydrateTranscript(serializeTranscript(transcriptWithTools()))
   assert.deepEqual(reconcileOrphanedPauses(plain), plain, 'a transcript with no pause is left as it was')
   results.push('a pause the process outlived reconciles at load into a named state and a notice')
+}
+
+/**
+ * The other ending a restart leaves behind: a run that was still working.
+ *
+ * A pause is a question nobody answered; this is a call nobody finished. Both are dead ends for the
+ * same reason — the process that held them is gone — and both are reconciled at load so the reopened
+ * conversation says what happened rather than drawing a spinner nothing will ever stop. The two passes
+ * are disjoint by construction: this one moves `running` steps and no others, so the pause's semantics
+ * and its own pin cannot move with it.
+ */
+function anInterruptedRunIsReconciledAtLoad() {
+  const midRun: TranscriptState = {
+    interrupted: true,
+    turns: [
+      { id: 'user-1', role: 'user', content: 'run the tests', steps: [] },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: 'Running them.',
+        steps: [
+          { callId: 'c1', tool: 'run_command', args: { command: 'npm test' }, status: 'running' },
+          { callId: 'c2', tool: 'read_file', args: { path: 'a.ts' }, status: 'ok', output: 'body' },
+        ],
+      },
+    ],
+  }
+
+  const held = rehydrateTranscript(serializeTranscript(midRun))
+  assert.equal(held.turns[1].steps[0].status, 'running', 'a mid-run step comes back exactly as it was written')
+
+  const reconciled = reconcileInterruptedRuns(held)
+  assert.equal(reconciled.turns[1].steps[0].status, 'interrupted', 'a step no process is running is not still running')
+  assert.equal(reconciled.turns[1].steps[0].code, PROCESS_LOST_CODE, 'and carries the code saying how it ended')
+  assert.equal(reconciled.turns[1].steps[1].status, 'ok', 'a settled step is left alone')
+  assert.equal(reconciled.turns[1].endNotice?.cause, 'interrupted', 'the turn gets the ending it earned')
+  assert.equal(reconciled.turns[1].endNotice?.resumable, true, 'and is offered back as work that could continue')
+
+  // Only running steps are this pass's business. A pause is the other pass's — `awaiting` and `queued`
+  // keep their own meaning, and a turn left by a pause keeps the notice the pause pass wrote.
+  const withPause: TranscriptState = {
+    interrupted: true,
+    turns: [
+      { id: 'user-1', role: 'user', content: 'go', steps: [] },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: '',
+        steps: [{ callId: 'c1', tool: 'write_file', args: {}, status: 'awaiting' }],
+      },
+    ],
+  }
+  const pauseKept = reconcileInterruptedRuns(withPause)
+  assert.equal(pauseKept.turns[1].steps[0].status, 'awaiting', 'a pause is not this pass to end')
+  assert.equal(pauseKept.turns[1].endNotice, undefined, 'and earns no ending from it')
+  // The pause pass still reconciles it, on its own terms and under its own code.
+  const pauseLost = reconcileOrphanedPauses(withPause)
+  assert.equal(pauseLost.turns[1].steps[0].status, 'interrupted')
+  assert.equal(pauseLost.turns[1].steps[0].code, LOST_PAUSE_CODE, 'the pause keeps saying PAUSE_LOST')
+
+  // A notice the file already carried is the diagnosis of the reply, not something a later pass rewrites.
+  const noticed: TranscriptState = {
+    interrupted: true,
+    turns: [
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: 'partial',
+        steps: [{ callId: 'c1', tool: 'run_command', args: {}, status: 'running' }],
+        endNotice: { cause: 'model_stop', resumable: false },
+      },
+    ],
+  }
+  const kept = reconcileInterruptedRuns(noticed)
+  assert.equal(kept.turns[0].steps[0].status, 'interrupted', 'the step is still reconciled')
+  assert.deepEqual(kept.turns[0].endNotice, { cause: 'model_stop', resumable: false }, 'an existing ending is kept')
+
+  // Idempotent, and inert on a conversation with nothing in flight — a load runs it unconditionally.
+  assert.deepEqual(reconcileInterruptedRuns(reconciled), reconciled, 'reconciling twice changes nothing')
+  const plain = rehydrateTranscript(serializeTranscript(transcriptWithTools()))
+  assert.equal(reconcileInterruptedRuns(plain), plain, 'a transcript with nothing running is returned as it was')
+
+  results.push('a run the process outlived reconciles at load into an interrupted call and a resumable ending')
 }
 
 // ---------------------------------------------------------------- numbering
@@ -439,6 +534,10 @@ function relativeTimes() {
 
   // A timestamp ahead of the clock reads as "just now", never as a negative age.
   assert.equal(formatRelativeTime(now + 60_000, now), 'just now', 'clock skew must not read as negative')
+
+  // The rule moved home to the time module and kept its name here: what the two call sites import is the
+  // same function, not a copy that could drift from the pinned wording above.
+  assert.equal(formatRelativeTime, formatRelativeTimeFromTime, 'relative-time re-exports the time module')
   results.push('relative ages read as minutes, hours, days, weeks, months, and years')
 }
 
@@ -665,6 +764,7 @@ async function main() {
   await step('interruption', anUnfinishedTurnIsInterrupted)
   await step('pause is not interruption', aPauseIsNotAnInterruption)
   await step('pause outlived by its process', aPauseTheProcessOutlivedIsReconciled)
+  await step('run outlived by its process', anInterruptedRunIsReconciledAtLoad)
   await step('numbering', numberingResumesPastRestoredTurns)
   await step('debounce', debouncedSavesCoalesce)
   await step('relative time', relativeTimes)

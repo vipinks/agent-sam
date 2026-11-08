@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
+import { MessageBubble } from '@/app/components/workbench/message-bubble'
+import type { AgentTurn } from '@/app/components/workbench/agent-session'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '@/conveyor/protocol/transcript'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
@@ -190,5 +192,84 @@ describe('the working row on a live turn', () => {
     await waitFor(() => expect(document.querySelectorAll('[data-slot="message-row"]')).toHaveLength(2))
     expect(workingRow()).toBeNull()
     expect(screen.queryByText(/Thinking/)).toBeNull()
+  })
+})
+
+/**
+ * The row's second half: how long the run has been going.
+ *
+ * The suffix is a reading of one mark — the turn's own `startedAt` — against the window's single clock,
+ * not a timer of the row's own. So the claims are made the way the readout works: put the clock where
+ * the test wants it, advance it, and read the same row again. A second timer inside the row would pass
+ * the first assertion and drift on the second, which is what this shape catches.
+ *
+ * Rendered directly rather than through a send: the pane owns `startedAt`, and what is under test here
+ * is the readout's arithmetic against it, which a rendered bubble states exactly.
+ */
+describe('the readout’s elapsed suffix', () => {
+  it('advances a second at a time from the turn’s own start', () => {
+    const start = 1_700_000_000_000
+    vi.useFakeTimers()
+    vi.setSystemTime(start)
+    try {
+      const turn: AgentTurn = { id: 'assistant-1', role: 'assistant', content: '', steps: [], startedAt: start }
+      render(<MessageBubble message={turn} live />)
+
+      // Shown immediately, from the first render: the time a run has been thinking is not something the
+      // user should have to wait a second to find out.
+      expect(workingRow()?.textContent).toContain('Thinking… (0s)')
+
+      act(() => void vi.advanceTimersByTime(4_000))
+      expect(workingRow()?.textContent).toContain('Thinking… (4s)')
+
+      act(() => void vi.advanceTimersByTime(1_000))
+      expect(workingRow()?.textContent).toContain('Thinking… (5s)')
+
+      act(() => void vi.advanceTimersByTime(1_000))
+      expect(workingRow()?.textContent).toContain('Thinking… (6s)')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows no suffix when the turn carries no start, rather than inventing one', () => {
+    // A turn opened from an older file has no `startedAt`: the absence is the answer, and a zeroed or
+    // guessed start would put a duration on screen that nothing measured.
+    const turn: AgentTurn = { id: 'assistant-1', role: 'assistant', content: '', steps: [] }
+    render(<MessageBubble message={turn} live />)
+
+    expect(workingRow()?.textContent).toContain('Thinking…')
+    expect(workingRow()?.textContent).not.toMatch(/\(\d+s\)/)
+  })
+})
+
+/**
+ * One clock for the window, not one per readout.
+ *
+ * The performance rule is the reason: a transcript can hold dozens of leaf readouts, and a timer each
+ * would be dozens of wake-ups a second for one number. The module is loaded fresh here, so the count is
+ * about this subscription's own lifetime rather than about anything another test left mounted.
+ */
+describe('the window clock', () => {
+  it('starts one interval for the first reader and clears it when the last one leaves', async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+
+    vi.resetModules()
+    const tick = await import('@/app/components/workbench/tick')
+
+    const first = tick.subscribeTick(() => {})
+    expect(setIntervalSpy.mock.calls.filter((call) => call[0] === 1_000)).toHaveLength(1)
+
+    // A second reader joins the clock that is already running rather than starting its own.
+    const second = tick.subscribeTick(() => {})
+    expect(setIntervalSpy.mock.calls.filter((call) => call[0] === 1_000)).toHaveLength(1)
+
+    // The first to leave does not stop it for the second — the count is of readers, not of mounts.
+    first()
+    expect(clearIntervalSpy).not.toHaveBeenCalled()
+
+    second()
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
   })
 })

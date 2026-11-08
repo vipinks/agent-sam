@@ -13,9 +13,12 @@ import { describe, expect, it } from 'vitest'
  * failure it prevents is the one that is easy to miss and expensive to notice: motion a reader asked
  * not to see.
  *
- * The four are the utilities `tw-animate-css` ships that move on their own. `pulse` and `bounce` were
+ * The five are the utilities `tw-animate-css` ships that move on their own. `pulse` and `bounce` were
  * added when the chat's working row gained one: a pulsing dot is motion like any other arrival, and a
- * sweep that only knew the two overlay families would have let the next one ship ungated.
+ * sweep that only knew the two overlay families would have let the next one ship ungated. `spin` joined
+ * them when the turn's readout did: a spinner is the most literally continuous motion in the app, and
+ * one sweeping past it because the regex knew arrival and exit but not rotation is exactly the escape
+ * this rule exists to close.
  *
  * Lines, not AST: every class string in this repo is one line, and a class split across lines would be
  * reported here as ungated rather than silently skipped. A surface that genuinely needs to build its
@@ -42,14 +45,14 @@ function componentFiles(directory: string): string[] {
 }
 
 describe('the motion inventory', () => {
-  it('gives every animate-in, animate-out, animate-pulse and animate-bounce class string an effective reduced-motion guard', () => {
+  it('gives every animate-in, animate-out, animate-pulse, animate-bounce and animate-spin class string an effective reduced-motion guard', () => {
     const ungated: string[] = []
 
     for (const file of componentFiles(APP)) {
       readFileSync(file, 'utf8')
         .split('\n')
         .forEach((line, index) => {
-          if (!/animate-(?:in|out|pulse|bounce)/.test(line)) return
+          if (!/animate-(?:in|out|pulse|bounce|spin)/.test(line)) return
           const where = `${relative(process.cwd(), file)}:${index + 1}`
 
           // The base guard: every animated class string names it, so a surface that ships without any
@@ -60,8 +63,8 @@ describe('the motion inventory', () => {
           // an attribute is class-plus-attribute, so on specificity alone the attribute wins and the
           // animation plays anyway. Every data-driven animation therefore needs the stacked variant —
           // `motion-reduce:data-[…]:animate-none` — which matches the same element shape.
-          for (const match of line.matchAll(/data-\[[^\]]+\]:animate-(?:in|out|pulse|bounce)/g)) {
-            const variant = match[0].replace(/:animate-(?:in|out|pulse|bounce)$/, '')
+          for (const match of line.matchAll(/data-\[[^\]]+\]:animate-(?:in|out|pulse|bounce|spin)/g)) {
+            const variant = match[0].replace(/:animate-(?:in|out|pulse|bounce|spin)$/, '')
             if (!line.includes(`motion-reduce:${variant}:animate-none`)) {
               ungated.push(`${where} (${variant} needs motion-reduce:${variant}:animate-none)`)
             }

@@ -8,9 +8,12 @@
  */
 import { strict as assert } from 'node:assert'
 import {
+  ABANDONED_PAUSE_CODE,
   applyAgentChunk,
   deleteFromTurn,
+  endTurn,
   resolveDecision,
+  RUN_CUT_CODE,
   startAssistantTurn,
   startUserTurn,
   toHistory,
@@ -522,6 +525,62 @@ function doneIsReported() {
   results.push('completion and the step cap are both reported')
 }
 
+/**
+ * The live turn-end seam: a turn that ends cannot still have a call running.
+ *
+ * Everything a turn can end through passes this one function, so this is where the transcript stops
+ * claiming work that is over — the same rule the load pass applies after a restart, under a different
+ * code because it is different news. A Stop also abandons the questions nobody answered, exactly as a
+ * denial leaves them; an ordinary model stop does not decide a question on the user's behalf.
+ */
+function theTurnEndCutsTheCallsStillRunning() {
+  const turns: AgentTurn[] = [
+    { id: 'user-1', role: 'user', content: 'go', steps: [] },
+    {
+      id: 'assistant-2',
+      role: 'assistant',
+      content: 'Working.',
+      steps: [
+        { callId: 'r1', tool: 'run_command', args: { command: 'npm test' }, status: 'running' },
+        { callId: 'w1', tool: 'write_file', args: { path: 'a.ts' }, status: 'awaiting' },
+        { callId: 'w2', tool: 'write_file', args: { path: 'b.ts' }, status: 'queued' },
+      ],
+    },
+  ]
+
+  // A Stop: the call under way is cut, and the pause it stopped at is abandoned rather than left open.
+  const stopped = endTurn(turns, 'assistant-2', 'interrupted')
+  assert.equal(stopped[1].steps[0].status, 'interrupted', 'a stopped run’s call is not still running')
+  assert.equal(stopped[1].steps[0].code, RUN_CUT_CODE, 'and says the run was cut, not that the process died')
+  assert.equal(stopped[1].steps[1].status, 'interrupted', 'the call being decided is abandoned with it')
+  assert.equal(stopped[1].steps[1].code, ABANDONED_PAUSE_CODE, 'under the denial path’s code, not the lost one')
+  assert.equal(stopped[1].steps[2].code, ABANDONED_PAUSE_CODE, 'and so are the calls queued behind it')
+  assert.equal(stopped[1].endNotice?.cause, 'interrupted', 'the turn says it was stopped')
+
+  // An ordinary ending still cuts the running call — the run is over either way — but it does not answer
+  // a question the user never answered.
+  const finished = endTurn(turns, 'assistant-2', 'model_stop')
+  assert.equal(finished[1].steps[0].status, 'interrupted', 'a call left running by any ending is cut')
+  assert.equal(finished[1].steps[0].code, RUN_CUT_CODE)
+  assert.equal(finished[1].steps[1].status, 'awaiting', 'but a pause keeps its question')
+
+  // A turn with nothing in flight is left exactly as it was, which is every ordinary ending.
+  const settled: AgentTurn[] = [
+    { id: 'user-1', role: 'user', content: 'go', steps: [] },
+    {
+      id: 'assistant-2',
+      role: 'assistant',
+      content: 'Done.',
+      steps: [{ callId: 'r1', tool: 'run_command', args: {}, status: 'ok', output: 'green' }],
+    },
+  ]
+  const ended = endTurn(settled, 'assistant-2', 'interrupted')
+  assert.equal(ended[1].steps[0].status, 'ok', 'a settled call keeps its outcome')
+  assert.equal(ended[1].steps[0].code, undefined, 'and gains no code')
+
+  results.push('a turn that ends cuts the calls still running, and a Stop abandons the queue with it')
+}
+
 function main() {
   step('text', textAccumulates)
   step('narration seam', narrationSeamsBecomeParagraphs)
@@ -545,6 +604,7 @@ function main() {
   step('from-here delete', fromHereDelete)
   step('summary pruning', aSurvivingSummaryLosesTheRemovedRange)
   step('done', doneIsReported)
+  step('turn-end step reconcile', theTurnEndCutsTheCallsStillRunning)
 
   console.log(`agent session: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)
