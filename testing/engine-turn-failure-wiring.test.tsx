@@ -134,6 +134,47 @@ describe('an engine turn that failed', () => {
     await screen.findByRole('button', SEND)
   })
 
+  it('reconciles the call the failure left running when the engine ended mid-call', async () => {
+    const stub = stubEngineChat()
+    renderChat()
+
+    await userEvent.type(await composer(), 'a question the engine dies in the middle of{Enter}')
+    const [started] = await startedStreams(stub, 1)
+    const channel = `conveyor:stream:${started}`
+
+    // The call is under way when the engine dies, which is the state this case exists for. Main writes the
+    // ending notice and *then* raises the failure, in that order: the recorded notice is what made the pane
+    // keep its own turn-end pass out of the way, and the pass is where a call left `running` stops being
+    // one. A turn that ended cannot still have a call under way, so the same normalization and the same
+    // code the ordinary ending gives it are owed here too.
+    chunk(stub, channel, {
+      type: 'tool_call_start',
+      callId: 'call-1',
+      tool: 'run_command',
+      args: { command: 'npm test' },
+      via: 'Kimi',
+    })
+    await waitFor(() => expect(screen.queryAllByLabelText('running')).toHaveLength(1))
+
+    chunk(stub, channel, {
+      type: 'turn_end_notice',
+      cause: 'stream_error',
+      resumable: true,
+      failure: { exitCode: 1, tail: 'the engine died' },
+    })
+    fail(stub, channel, 'ACP_REFUSED', REFUSAL)
+
+    await drawnText(REFUSAL)
+    // Nothing is spinning any more, and the card says exactly what the ordinary ending's cut card says.
+    await waitFor(() => expect(screen.queryAllByLabelText('running')).toHaveLength(0))
+    await drawnText('the turn ended while this was running')
+    // The recorded ending is still the engine's own: one card, carrying the exit code it died on, rather
+    // than a second notice saying the same ending again.
+    expect(screen.getAllByLabelText('Turn ended early')).toHaveLength(1)
+    await drawnText('Continue after failure (exit 1)')
+    await screen.findByRole('button', SEND)
+  })
+
   it('streams a second turn in the same session, with its narration marked via Kimi', async () => {
     const stub = stubEngineChat()
     renderChat()

@@ -581,6 +581,42 @@ function theTurnEndCutsTheCallsStillRunning() {
   results.push('a turn that ends cuts the calls still running, and a Stop abandons the queue with it')
 }
 
+/**
+ * The ending the pane does not route through `endTurn`.
+ *
+ * An engine turn that failed mid-call records its own notice — the cause, the exit code, the words — and
+ * the pane keeps that notice rather than re-wording the ending, which is why its turn-end pass is skipped
+ * when one is already recorded. That guard is right about the notice and used to be wrong about the steps:
+ * the turn is over, so a call it left `running` is not still running. The notice lands through this
+ * reducer, so the same normalization `endTurn` applies is applied here, under the same code, and the
+ * notice the ending arrived with is kept exactly as it was.
+ */
+function aRecordedEndingStillCutsTheCallsStillRunning() {
+  const notice = {
+    cause: 'stream_error' as const,
+    resumable: true,
+    failure: { exitCode: 1, tail: 'the engine died' },
+  }
+  const { turns, effects } = run([
+    { type: 'tool_call_start', callId: 'r1', tool: 'run_command', args: { command: 'npm test' } },
+    {
+      type: 'turn_end_notice',
+      cause: 'stream_error',
+      resumable: true,
+      failure: { exitCode: 1, tail: 'the engine died' },
+    },
+  ])
+
+  assert.equal(turns[1].steps[0].status, 'interrupted', 'a recorded ending does not leave a call running')
+  assert.equal(turns[1].steps[0].code, RUN_CUT_CODE, 'and says the run was cut, not that the process died')
+  // The ending is the one that was recorded, field for field: a failure notice must not be replaced by, or
+  // grow beside, a second one that words the same ending.
+  assert.deepEqual(turns[1].endNotice, notice, 'and the recorded ending is the one the turn keeps')
+  assert.equal(turns[1].endNotice?.failure?.tail, 'the engine died', 'with the engine’s own evidence intact')
+  assert.equal(effects[1].turnEndNotice, turns[1].endNotice, 'reported once, as the same record')
+  results.push('an ending recorded before the turn-end pass still cuts the call it left running')
+}
+
 function main() {
   step('text', textAccumulates)
   step('narration seam', narrationSeamsBecomeParagraphs)
@@ -605,6 +641,7 @@ function main() {
   step('summary pruning', aSurvivingSummaryLosesTheRemovedRange)
   step('done', doneIsReported)
   step('turn-end step reconcile', theTurnEndCutsTheCallsStillRunning)
+  step('recorded ending step reconcile', aRecordedEndingStillCutsTheCallsStillRunning)
 
   console.log(`agent session: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)

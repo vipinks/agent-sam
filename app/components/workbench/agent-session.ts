@@ -919,8 +919,15 @@ export function applyAgentChunk(
         ...(midWork ? { midWork: true } : {}),
         ...(combo === null ? {} : { combo }),
       }
+      // The ending is recorded here rather than routed through `endTurn`: the engine path writes its own
+      // notice, and the pane keeps that notice instead of re-wording the ending, which is why its turn-end
+      // pass is skipped when one is already recorded. What that pass also does — stop the transcript
+      // claiming a call is still running — is still owed to a turn that has ended, so it is done here, at
+      // the step before the notice lands, under the same code and meaning as every other ending: the run
+      // ended mid-call. The notice itself is not touched, and no second one is made for it.
+      const ended = interruptRunningSteps(turns, RUN_CUT_CODE)
       return {
-        turns: replaceTurn(turns, turnId, (turn) => ({
+        turns: replaceTurn(ended, turnId, (turn) => ({
           ...turn,
           // The error line is the transcript's own copy of the cause, and it is what keeps the empty
           // bubble from drawing `Thinking…` for a turn that is over. A notice without a failure leaves
