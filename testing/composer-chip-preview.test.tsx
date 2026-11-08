@@ -184,9 +184,15 @@ describe('the composer chip’s thumbnail', () => {
     await userEvent.click(screen.getByLabelText('Remove drop.png'))
 
     await waitFor(() => expect(chipThumbnails().length).toBe(1))
-    // Released, and released once: the URL holds the bytes alive until it is handed back, and a second
-    // revoke of the same URL is a call that says the chip's own bookkeeping is wrong.
-    expect(revokesOf(droppedUrl)).toHaveLength(1)
+    // The row clearing and the URL coming back are two steps, not one: the removed chip is drawn for one
+    // exit window (`useLeavingItems`), and its URL is revoked by the chip's own unmount cleanup
+    // (`useThumbnailUrl`), which React runs after the commit that took the chip out of the tree. So an
+    // empty row is one step earlier than the release, not the release itself — waiting for the DOM alone
+    // let a loaded machine assert in between and read a revoke that had not happened yet.
+    //
+    // Waited for as the effect it is, rather than assumed from the tree: the claim stays that the removed
+    // chip's URL is released exactly once, only now the assertion is allowed to see the step it is made in.
+    await waitFor(() => expect(revokesOf(droppedUrl)).toHaveLength(1))
     expect(revokesOf(keptUrl)).toEqual([])
     // And the chip that stayed is still drawing its own picture.
     expect(chipThumbnails()[0].src).toBe(keptUrl)
