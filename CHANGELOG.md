@@ -6,6 +6,15 @@ coding assistant.
 
 <br>
 
+## 2026-11-08: v1.15.10 — Turn legibility: live elapsed time and reconciled interrupted runs
+
+- test(turn-legibility): pin the interrupted run, the time module and the window clock red
+- feat(turn-legibility): reconcile in-flight steps, and read live elapsed time off one clock — a live turn now shows its own duration, Thinking… (4s) on the working row and (Ns) beside a running command's spinner, and a run that was in flight when the app was quit or the engine died no longer spins forever but reads as interrupted with its named reason, while a stopped run shows the fixed duration it reached
+- fix(turn-legibility): reconcile running steps on the engine-failure ending path
+- test(composer): stabilize the deferred-revoke assertion in the chip-preview suite
+
+<br>
+
 ## 2026-11-06: v1.15.9 — Inline editing of custom providers
 
 - docs(readme): refresh the overview to the shipped product
