@@ -440,7 +440,7 @@ function ProviderCard({
           disabled={fetchModels.isPending}
           onClick={() => void onFetch()}
         >
-          {fetchModels.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          {fetchModels.isPending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <RefreshCw />}
         </Button>
       }
     />

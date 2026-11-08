@@ -12,6 +12,7 @@ import { ScrollArea } from '../ui/scroll-area'
 import { Switch } from '../ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { Textarea } from '../ui/textarea'
+import { formatDateTime } from './time'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -280,8 +281,7 @@ export function MemoryPanel() {
                   {episode.ask === '' ? 'No question recorded' : episode.ask}
                 </p>
                 <p className="text-[10.5px] text-muted-foreground">
-                  Episode {episode.ordinal} ·{' '}
-                  {new Date(episode.capturedAt).toISOString().slice(0, 16).replace('T', ' ')}
+                  Episode {episode.ordinal} · {formatDateTime(episode.capturedAt)}
                 </p>
               </div>
             ))}

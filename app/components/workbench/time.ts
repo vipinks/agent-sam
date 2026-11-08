@@ -56,10 +56,15 @@ export function formatRelativeTime(timestamp: number, now: number): string {
  * and "0s" is the truthful reading of that, where "-3s" would be a bug report on screen.
  */
 export function formatDuration(ms: number): string {
-  // SEAM (next commit): the ruled boundaries — flooring, the 0s/59s, 1m 0s/59m 59s and 1h 0m steps,
-  // and the negative clamp — are the behaviour the pins in `tests/ui/time-test.ts` are recording as red.
-  // Declared here so the suite bundles and fails on the assertion rather than on the import.
-  return `${Math.max(0, ms)}ms`
+  // Floored before the split rather than per unit, so 61.999s is "1m 1s" and never "1m 2s".
+  const total = Math.floor(Math.max(0, ms) / 1000)
+  const seconds = total % 60
+  const minutes = Math.floor(total / 60) % 60
+  const hours = Math.floor(total / 3600)
+
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
 }
 
 /**
@@ -71,7 +76,7 @@ export function formatDuration(ms: number): string {
  * which is what lets it sit in a row without a second layout decision.
  */
 export function formatDateTime(ms: number): string {
-  // SEAM (next commit): local `YYYY-MM-DD HH:mm`, declared now so the pin can import it.
-  void ms
-  return ''
+  const date = new Date(ms)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }

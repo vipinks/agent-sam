@@ -171,7 +171,7 @@ export function ChangesSection({ rootPath }: { rootPath: string }) {
           disabled={status.isFetching}
           onClick={refreshAll}
         >
-          <RefreshCw className={status.isFetching ? 'animate-spin' : undefined} />
+          <RefreshCw className={status.isFetching ? 'animate-spin motion-reduce:animate-none' : undefined} />
         </Button>
       </div>
 

@@ -221,7 +221,7 @@ function RecentProjects() {
           disabled={rootSwitch.busy}
           onClick={() => void openAnother()}
         >
-          {rootSwitch.busy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
+          {rootSwitch.busy ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <FolderOpen />}
           {HOME_OPEN_FOLDER}
         </Button>
       </div>

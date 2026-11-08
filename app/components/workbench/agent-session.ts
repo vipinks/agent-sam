@@ -120,6 +120,15 @@ export interface AgentTurn {
   steps: ToolStep[]
   error?: string
   /**
+   * When this turn's run began, in epoch milliseconds, as the pane stamped it.
+   *
+   * Written by the pane at the two moments a turn starts being written — a send appending a turn, and a
+   * rewrite filling one that is already there — and read by the readouts that count. Absent means no
+   * duration is shown: a turn opened from a file written before this key existed has no start to measure
+   * from, and a default would put a number on screen that nothing measured.
+   */
+  startedAt?: number
+  /**
    * The ids of the turns this turn stands for at send time, when it is a summary.
    *
    * A summary is a regular turn — role `user`, its prose the summary itself — carrying the range it
@@ -386,9 +395,23 @@ export const RUN_CUT_CODE = 'RUN_CUT'
  * Only `running` steps move. A pause's calls — `awaiting` and `queued` — are a different question with
  * a different answer, and `abandonUndecidedCalls` owns them.
  */
-export function interruptRunningSteps(turns: AgentTurn[], _code: string): AgentTurn[] {
-  // SEAM (next commit): the running-to-interrupted rewrite the turn-end pin and the load pin assert.
-  return turns
+export function interruptRunningSteps(turns: AgentTurn[], code: string): AgentTurn[] {
+  let changed = false
+  const next = turns.map((turn) => {
+    if (!turn.steps.some((step) => step.status === 'running')) return turn
+
+    changed = true
+    return {
+      ...turn,
+      steps: turn.steps.map((step) =>
+        step.status === 'running' ? { ...step, status: 'interrupted' as const, code } : step
+      ),
+    }
+  })
+
+  // The same array when nothing moved, so a caller can compare and so a reconciled transcript that had
+  // nothing to reconcile keeps the identity of every turn in it.
+  return changed ? next : turns
 }
 
 /** A file a send asked for that could not be attached, named with the code main reported. */
@@ -1303,7 +1326,16 @@ export function endTurn(
   cause: TurnEndCause = 'model_stop',
   options: { allowMidWork?: boolean } = {}
 ): AgentTurn[] {
-  const ended = endTurnPlan(turns, turnId)
+  // Every ending passes here, so this is where the transcript stops claiming work that is over: a call
+  // that was still `running` when the turn ended is recorded as interrupted under `RUN_CUT`. A Stop also
+  // abandons the questions nobody answered, exactly as a denial leaves them — the two codes are
+  // different news, which is why a Step carries one and not a single "it was interrupted".
+  const ended = endTurnPlan(
+    cause === 'interrupted'
+      ? abandonUndecidedCalls(interruptRunningSteps(turns, RUN_CUT_CODE), turnId, ABANDONED_PAUSE_CODE)
+      : interruptRunningSteps(turns, RUN_CUT_CODE),
+    turnId
+  )
   const turn = ended.find((t) => t.id === turnId)
   if (!turn || turn.endNotice) return ended
 

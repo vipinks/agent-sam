@@ -242,7 +242,7 @@ export function AddProviderDialog({ disabled, onAdded }: { disabled: boolean; on
           <AlertDialogFooter>
             <AlertDialogCancel onClick={close}>Cancel</AlertDialogCancel>
             <Button size="sm" disabled={saveKey.isPending} onClick={() => void onSave()}>
-              {saveKey.isPending && <Loader2 className="animate-spin" />}
+              {saveKey.isPending && <Loader2 className="animate-spin motion-reduce:animate-none" />}
               Save provider
             </Button>
           </AlertDialogFooter>
@@ -473,7 +473,7 @@ function CustomProviderCard({
               disabled={listModels.isPending}
               onClick={() => void onFetch()}
             >
-              {listModels.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              {listModels.isPending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <RefreshCw />}
             </Button>
             <Button
               data-slot="provider-delete"

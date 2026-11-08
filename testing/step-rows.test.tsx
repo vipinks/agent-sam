@@ -5,7 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { MessageBubble } from '@/app/components/workbench/message-bubble'
-import { LOST_PAUSE_CODE, PROCESS_LOST_CODE, RUN_CUT_CODE, type AgentTurn } from '@/app/components/workbench/agent-session'
+import {
+  LOST_PAUSE_CODE,
+  PROCESS_LOST_CODE,
+  RUN_CUT_CODE,
+  type AgentTurn,
+} from '@/app/components/workbench/agent-session'
 import { reconcileInterruptedRuns, type TranscriptState } from '@/app/components/workbench/session-transcript'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
@@ -303,7 +308,9 @@ describe('a turn’s tool steps, as rows', () => {
         },
       ],
     }
-    render(<MessageBubble message={reconcileInterruptedRuns(interrupted).turns[0]} />)
+    const reconciled = reconcileInterruptedRuns(interrupted)
+    expect(reconciled.turns[0].steps[0].code).toBe(PROCESS_LOST_CODE)
+    render(<MessageBubble message={reconciled.turns[0]} />)
 
     const row = rowFor('Running npm test')
     expect(row.querySelector('.animate-spin')).toBeNull()
@@ -318,13 +325,12 @@ describe('a turn’s tool steps, as rows', () => {
       id: 'turn-1',
       role: 'assistant',
       content: '',
-      steps: [{ callId: 'cut', tool: 'write_file', args: { path: 'parser.ts' }, status: 'interrupted', code: RUN_CUT_CODE }],
+      steps: [
+        { callId: 'cut', tool: 'write_file', args: { path: 'parser.ts' }, status: 'interrupted', code: RUN_CUT_CODE },
+      ],
     }
     render(
-      <MessageBubble
-        message={turn}
-        stepMarks={{ start: new Map([['cut', 1_000]]), end: new Map([['cut', 5_000]]) }}
-      />
+      <MessageBubble message={turn} stepMarks={{ start: new Map([['cut', 1_000]]), end: new Map([['cut', 5_000]]) }} />
     )
 
     const row = rowFor('Writing parser.ts')
@@ -341,7 +347,9 @@ describe('a turn’s tool steps, as rows', () => {
       id: 'turn-1',
       role: 'assistant',
       content: '',
-      steps: [{ callId: 'cut', tool: 'write_file', args: { path: 'parser.ts' }, status: 'interrupted', code: RUN_CUT_CODE }],
+      steps: [
+        { callId: 'cut', tool: 'write_file', args: { path: 'parser.ts' }, status: 'interrupted', code: RUN_CUT_CODE },
+      ],
     }
     render(<MessageBubble message={turn} />)
 

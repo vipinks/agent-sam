@@ -87,6 +87,17 @@ const turnBaseSchema = z.object({
   steps: z.array(toolStepSchema),
   error: z.string().optional(),
   /**
+   * When this turn's run began, in epoch milliseconds, when one was stamped.
+   *
+   * Stored so a reopened conversation can still say how long a turn took: a duration is read from two
+   * instants, and the start is the only half the record can hold — the end is when the run stopped being
+   * read, which no file can know. Additive and optional, and it did not bump the version for the reason
+   * every optional field above did not: a file written before this key has none, an absent optional key
+   * is stripped rather than defaulted, and an absent start is read as "no duration to show" rather than
+   * as a default instant.
+   */
+  startedAt: z.number().int().nonnegative().optional(),
+  /**
    * The ids of the turns this turn stands for at send time, when it is a summary.
    *
    * Compaction never rewrites the transcript: it adds a summary turn at the head and names, here, the

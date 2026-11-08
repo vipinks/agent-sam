@@ -53,7 +53,7 @@ import { CombosModelPicker } from './combos-model-picker'
 import { EnginePicker } from './engine-picker'
 import { EngineModelPicker } from './engine-model-picker'
 import type { ToolStep } from './agent-session'
-import { MessageBubble } from './message-bubble'
+import { MessageBubble, type StepMarks } from './message-bubble'
 import { SummarySeam } from './summary-seam'
 import { MentionPicker } from './mention-picker'
 import { CommandNotice, CommandPicker, type CommandNoticeText } from './command-picker'
@@ -888,6 +888,23 @@ export function ChatPanel() {
   // yield its `interrupted` ending, so the renderer has to remember why it closed; an id rather than a
   // boolean keeps that fact attached to the right run if the user starts another before it unwinds.
   const stoppedTurnRef = useRef<string | null>(null)
+  /**
+   * In-flight marks for the calls this window is watching, keyed by call id.
+   *
+   * Held here rather than on the step because a step is written to the transcript wholesale, and these
+   * are facts about this process: when a call started, and — for an ending that happened while it was on
+   * screen — when it stopped. Nothing about them survives a restart, which is the point: a duration
+   * assembled afterwards would be invented. Both maps are stable objects, so a memoised bubble is not
+   * re-rendered by a mark being added.
+   */
+  const stepMarksRef = useRef<StepMarks>({ start: new Map(), end: new Map() })
+  /**
+   * When the running turn last produced a chunk.
+   *
+   * The quiet row's whole input: a turn that has stopped speaking is only interesting once the silence
+   * has lasted, and the pane is the only side that sees the frames.
+   */
+  const lastFrameAtRef = useRef(0)
 
   const providers = conveyor.settings.listProviders.useQuery()
   // The seeded catalogue: what to offer before a provider has ever been fetched.
@@ -1582,6 +1599,9 @@ export function ChatPanel() {
           if (done) break
 
           const chunk = value as Record<string, unknown>
+          // Every frame is the run still being alive, and the quiet row's threshold is measured from the
+          // last one. Taken here rather than on the flush, because a card or a pause is a frame too.
+          lastFrameAtRef.current = Date.now()
           // Text is buffered for the frame; everything else applies immediately, because a card or a
           // pause is a discrete event and should not wait on a frame.
           if (chunk.type === 'text_delta' && typeof chunk.text === 'string') {
@@ -1623,6 +1643,15 @@ export function ChatPanel() {
           drainNow()
           const { turns, effect } = applyAgentChunk(messagesRef.current, turnId, chunk)
           updateMessages(turns)
+
+          // A call is timed from the moment this process saw it start, and the mark is taken once: a call
+          // the loop announces again is the same call, and re-stamping it would restart a duration that
+          // has already been running.
+          if (chunk.type === 'tool_call_start' && typeof chunk.callId === 'string') {
+            if (!stepMarksRef.current.start.has(chunk.callId)) {
+              stepMarksRef.current.start.set(chunk.callId, Date.now())
+            }
+          }
 
           if (effect.contextNotice) {
             // A file the send named that could not be included. Written onto the turn as a warning row
@@ -1685,6 +1714,12 @@ export function ChatPanel() {
         // says the turn finished — that would leave a failed turn looking like a quiet one.
         const endingRecorded = messagesRef.current.some((turn) => turn.id === turnId && turn.endNotice !== undefined)
         if (!paused && !endingRecorded) {
+          // The calls that were still running at the moment of the ending are marked ended before the
+          // reducer rewrites them: that pair is what lets the card show a final span for an ending this
+          // window watched, and the absence of the pair is what keeps it from showing one after a restart.
+          for (const step of messagesRef.current.find((turn) => turn.id === turnId)?.steps ?? []) {
+            if (step.status === 'running') stepMarksRef.current.end.set(step.callId, Date.now())
+          }
           updateMessages(
             endTurn(messagesRef.current, turnId, cause, {
               allowMidWork: !failed && (!ceiling || currentPlan(messagesRef.current) === null),
@@ -1744,13 +1779,19 @@ export function ChatPanel() {
       // versions beside it.
       let turnId = rewrittenTurnId ?? ''
       if (rewrittenTurnId === undefined) {
-        const assistantTurn = startAssistantTurn()
+        // The turn's own clock starts with the send: the readout measures the answer being written, and
+        // an instant stamped anywhere else would measure something else.
+        const assistantTurn = { ...startAssistantTurn(), startedAt: Date.now() }
         turnId = assistantTurn.id
         updateMessages([...turns, assistantTurn])
       } else {
-        updateMessages(turns)
+        // A rewrite fills a turn that is already there, so its clock starts now rather than when it was
+        // first written: the duration on the readout is this answer's, not the one it replaced.
+        const startedAt = Date.now()
+        updateMessages(turns.map((turn) => (turn.id === rewrittenTurnId ? { ...turn, startedAt } : turn)))
       }
       streamingTurnIdRef.current = turnId
+      lastFrameAtRef.current = Date.now()
       requestAnimationFrame(stickToBottom)
 
       // What this conversation runs as decides where the turn is spoken. A conversation that named an engine
@@ -2230,6 +2271,14 @@ export function ChatPanel() {
       // would claim consent the user has not given.
       const decided = resolveDecision(messagesRef.current, current.turnId, current.callId, approved)
 
+      // An approval is when the call starts running, so the readout starts here: the wait for the
+      // decision was not time this call spent working, and counting it would put the pause's length on a
+      // row that was doing nothing. The quiet row's silence is measured from the same moment.
+      if (approved) {
+        stepMarksRef.current.start.set(current.callId, Date.now())
+        lastFrameAtRef.current = Date.now()
+      }
+
       if (!approved) {
         // A denial ends the turn where it stands, and the calls behind the head are never put to the
         // user: they are recorded as undecided so the transcript stops showing a question waiting on a
@@ -2688,6 +2737,13 @@ export function ChatPanel() {
                           // screen, because a send appends it and a regenerate truncates the trail to
                           // the reply it rewrites. Only this one bubble may draw the working row.
                           live={isStreaming && item.index === messages.length - 1}
+                          // The in-flight marks this window took, and when the run last spoke. Both are
+                          // the pane's facts: a step's start is never written down, and the quiet row's
+                          // threshold is about frames only this side sees.
+                          stepMarks={stepMarksRef.current}
+                          lastFrameAt={
+                            isStreaming && item.index === messages.length - 1 ? lastFrameAtRef.current : undefined
+                          }
                           canEdit={editAllowed}
                           onCheckoutBranch={checkoutReplyBranch}
                           // The conversation these turns belong to, which is where a turn's images are stored:

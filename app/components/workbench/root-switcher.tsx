@@ -51,7 +51,7 @@ export function RootSwitcher({
             accessible name were the folder it happened to be showing would be a different control
             after every switch. */}
         <Button variant="ghost" size="xs" aria-label="Recent folders" disabled={busy} className="max-w-40">
-          {busy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
+          {busy ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <FolderOpen />}
           <span className="truncate">{label}</span>
           <ChevronDown className="text-muted-foreground" />
         </Button>

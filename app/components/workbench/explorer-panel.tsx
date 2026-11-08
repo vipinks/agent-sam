@@ -146,7 +146,7 @@ export function ExplorerPanel({
 
   const picker = (
     <Button variant="outline" size="sm" disabled={busy} onClick={() => void onOpenFolder()}>
-      {busy && <Loader2 className="animate-spin" />}
+      {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
       {rootPath ? 'Choose Another Folder' : 'Open Folder'}
     </Button>
   )

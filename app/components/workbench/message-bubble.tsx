@@ -28,7 +28,24 @@ import { MentionChipRow } from './mention-chip'
 import { AttachmentRefChipRow } from './attachment-chip'
 import { contextNoticeText } from './mentions'
 import { useLeavingItems } from './motion'
-import { branchCount, branchPosition, type AgentTurn } from './agent-session'
+import { branchCount, branchPosition, isUndecidedPause, type AgentTurn } from './agent-session'
+import { formatDuration } from './time'
+import { useNow } from './tick'
+
+/**
+ * The pane's in-flight marks, keyed by the call id they belong to.
+ *
+ * A step's start and end are known only to the process that watched the call: the transcript has no
+ * place for them — `freezeTurn` copies a step wholesale, so an ephemeral key written onto one would go
+ * into the file — and a duration assembled after a restart would be invented. So the pane holds them for
+ * the life of the window and hands them down, and a card that has no mark simply shows no number.
+ */
+export interface StepMarks {
+  /** When each call was first seen running. Written by the pane, read by the cards. */
+  start: Map<string, number>
+  /** When each call's run was cut off, for the endings that happened while this process was watching. */
+  end: Map<string, number>
+}
 
 /**
  * Whether this turn is a run with nothing on screen yet.
@@ -49,6 +66,16 @@ export function isWorking(turn: AgentTurn, live: boolean): boolean {
   return (
     live && turn.content === '' && turn.steps.length === 0 && turn.error === undefined && turn.endNotice === undefined
   )
+}
+
+/**
+ * Whether a call is in flight, which is the same three states the card draws that way.
+ *
+ * Read here as well as there because the mid-turn row asks a question about the whole turn — is anything
+ * happening — and a run that has a call under way is not quiet, however long ago it last spoke.
+ */
+function stepInFlight(step: { status: string }): boolean {
+  return step.status === 'running' || isUndecidedPause(step)
 }
 
 /**
@@ -83,7 +110,9 @@ function turnBlocks(
   turn: AgentTurn,
   live: boolean,
   onApprove?: (callId: string) => void,
-  onDeny?: (callId: string) => void
+  onDeny?: (callId: string) => void,
+  stepMarks?: StepMarks,
+  lastFrameAt?: number
 ): ReactNode[] {
   const marks = turn.continuations ?? []
   const blocks: ReactNode[] = []
@@ -97,7 +126,18 @@ function turnBlocks(
     const end = Math.min(boundary, turn.steps.length)
     for (let index = cards; index < end; index += 1) {
       const step = turn.steps[index]
-      blocks.push(<AgentActionCard key={step.callId} step={step} onApprove={onApprove} onDeny={onDeny} />)
+      blocks.push(
+        <AgentActionCard
+          key={step.callId}
+          step={step}
+          onApprove={onApprove}
+          onDeny={onDeny}
+          // The marks the pane took for this call, when it took any. Absent after a restart, which is
+          // what keeps an interrupted card from wearing a duration no one measured.
+          startedAt={stepMarks?.start.get(step.callId)}
+          endedAt={stepMarks?.end.get(step.callId)}
+        />
+      )
     }
     cards = end
   }
@@ -132,7 +172,16 @@ function turnBlocks(
   if (rest) {
     blocks.push(<MarkdownContent key={`prose-${chars}`} content={rest} />)
   } else if (isWorking(turn, live)) {
-    blocks.push(<WorkingRow key={`working-${chars}`} />)
+    blocks.push(<WorkingRow key={`working-${chars}`} startedAt={turn.startedAt} />)
+  }
+
+  // The mid-turn quiet row: the run has spoken, nothing is in flight, and it has been silent long
+  // enough that "is it still going?" is a fair question. The same row and the same word as above —
+  // because it is the same state, caught later — drawn at the tail of the live turn only, and only
+  // while the turn has an ending left to arrive. Its threshold is the window's own tick, so this adds
+  // no second timer to the pane.
+  if (live && lastFrameAt !== undefined && !isWorking(turn, live) && !turn.steps.some(stepInFlight)) {
+    blocks.push(<IdleRow key={`idle-${chars}`} startedAt={turn.startedAt} lastFrameAt={lastFrameAt} />)
   }
 
   return blocks
@@ -153,8 +202,46 @@ function turnBlocks(
  * The dots pulse, and the guard is the base one (`motion-reduce:animate-none`) rather than the stacked
  * `motion-reduce:data-[…]:animate-none` form: this row is conditionally *rendered*, so no data
  * attribute gates the animation whose specificity the guard would have to match.
+ *
+ * It is also where the run's elapsed time is read, from the turn's own start: the row a user stares at
+ * while nothing else has arrived is exactly where "how long has this been going" belongs, and it is
+ * shown from the first render rather than after the first whole second.
  */
-function WorkingRow() {
+function WorkingRow({ startedAt }: { startedAt?: number }) {
+  // The one clock, subscribed at the leaf: the bubble around this row is memoised and the transcript is
+  // virtualized, so a reading that ticks has to live here or it re-renders the conversation once a second.
+  const now = useNow()
+  return <WorkingRowMarkup elapsed={startedAt === undefined ? null : now - startedAt} />
+}
+
+/**
+ * The row a live turn draws when it has gone quiet mid-run.
+ *
+ * A turn that has said something and is waiting on its own model looks exactly like a finished one: the
+ * prose stops, the cards are folded, and nothing moves. This is the row that says otherwise — but only
+ * after a silence long enough to be worth reporting, which is why the threshold is read from the window's
+ * tick rather than answered on the frame the last chunk landed. Below it this draws nothing at all, so a
+ * normal token gap does not make the row flicker in and out.
+ *
+ * `lastFrameAt` is the pane's mark, taken as every chunk arrives; the row itself holds no state, so it
+ * cannot outlive the run it describes or survive into a turn nothing is writing.
+ */
+const QUIET_ROW_MS = 700
+
+function IdleRow({ startedAt, lastFrameAt }: { startedAt?: number; lastFrameAt: number }) {
+  const now = useNow()
+  if (now - lastFrameAt < QUIET_ROW_MS) return null
+  return <WorkingRowMarkup elapsed={startedAt === undefined ? null : now - startedAt} />
+}
+
+/**
+ * The row itself: three pulsing dots and the word, with the elapsed span when there is one to show.
+ *
+ * One markup for both callers, because the quiet row is the same state caught later rather than a second
+ * thing to word. The span is passed in rather than read here so each caller owns exactly one subscription
+ * to the window's clock.
+ */
+function WorkingRowMarkup({ elapsed }: { elapsed: number | null }) {
   return (
     <div data-slot="message-working" role="status" className="flex items-center gap-1.5 text-muted-foreground">
       <span aria-hidden="true" className="flex items-center gap-1">
@@ -162,7 +249,9 @@ function WorkingRow() {
         <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
         <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
       </span>
-      <span>Thinking…</span>
+      {/* The word, never the word instead of the time: a run that has been going four seconds says both,
+          and a turn without a start says only the word rather than a number nothing measured. */}
+      <span>{elapsed === null ? 'Thinking…' : `Thinking… (${formatDuration(elapsed)})`}</span>
     </div>
   )
 }
@@ -179,6 +268,8 @@ export const MessageBubble = memo(function MessageBubble({
   live = false,
   onApprove,
   onDeny,
+  stepMarks,
+  lastFrameAt,
   canEdit,
   onResend,
   onRegenerate,
@@ -200,6 +291,22 @@ export const MessageBubble = memo(function MessageBubble({
    * bubble that claimed to be would draw a working row for a run that does not exist.
    */
   live?: boolean
+  /**
+   * The pane's in-flight marks for this turn's calls, when it has any.
+   *
+   * The pane's fact rather than the bubble's, for the reason `live` is: the marks are taken as the stream
+   * reports, they are never written down, and a bubble rendered on its own — as the copy and step-row
+   * suites do — has no process behind it to have taken them. Absent means every row draws its state and
+   * no duration, which is the honest reading for a transcript read back from disk.
+   */
+  stepMarks?: StepMarks
+  /**
+   * When the last chunk of this run arrived, and only while it is the live one.
+   *
+   * The mark the mid-turn quiet row measures silence from. Absent for every settled turn, and for the
+   * live one until its first frame, so a turn cannot draw the row before anything has happened.
+   */
+  lastFrameAt?: number
   onApprove?: (callId: string) => void
   onDeny?: (callId: string) => void
   /**
@@ -280,7 +387,7 @@ export const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === 'user'
   // The turn's blocks, built once per render: their order is the order the run happened in, and two
   // passes over the same data would be a second place for it to be got wrong.
-  const blocks = turnBlocks(message, live, onApprove, onDeny)
+  const blocks = turnBlocks(message, live, onApprove, onDeny, stepMarks, lastFrameAt)
 
   /*
    * The editor, held here rather than in the pane.

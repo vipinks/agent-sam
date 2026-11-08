@@ -352,7 +352,7 @@ function ServerRow({
             disabled={setAutoApprove.isPending}
             onClick={() => void onToggleAutoApprove(!server.autoApprove)}
           >
-            {setAutoApprove.isPending ? <Loader2 className="animate-spin" /> : <Zap />}
+            {setAutoApprove.isPending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <Zap />}
           </Button>
 
           {/* The two process controls read as a status light as well as a pair of actions: play is green
@@ -370,7 +370,7 @@ function ServerRow({
             onClick={() => void onStart()}
           >
             {start.isPending ? (
-              <Loader2 className="animate-spin" />
+              <Loader2 className="animate-spin motion-reduce:animate-none" />
             ) : (
               <Play className={isRunning ? 'text-green-500' : 'text-muted-foreground'} />
             )}
@@ -385,7 +385,7 @@ function ServerRow({
             onClick={() => void onStop()}
           >
             {stop.isPending ? (
-              <Loader2 className="animate-spin" />
+              <Loader2 className="animate-spin motion-reduce:animate-none" />
             ) : (
               <Square className={isRunning ? 'text-red-500' : 'text-muted-foreground'} />
             )}
@@ -842,7 +842,7 @@ function ServerFormDialog({
         <AlertDialogFooter>
           <AlertDialogCancel onClick={close}>Cancel</AlertDialogCancel>
           <Button size="sm" disabled={busy} onClick={() => void onSave()}>
-            {busy && <Loader2 className="animate-spin" />}
+            {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
             {editing ? 'Save changes' : 'Save server'}
           </Button>
         </AlertDialogFooter>
@@ -1297,7 +1297,7 @@ function LogsDialog({ server, children }: { server: McpServerListing; children: 
               disabled={loading}
               onClick={() => void fetchLogs()}
             >
-              {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <RefreshCw />}
               Refresh logs
             </Button>
             <AlertDialogCancel>Close</AlertDialogCancel>

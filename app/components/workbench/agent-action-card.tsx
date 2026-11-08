@@ -15,7 +15,9 @@ import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { CollapsibleSection } from './collapsible-section'
 import { DiffView } from './diff-view'
-import { ABANDONED_PAUSE_CODE, LOST_PAUSE_CODE, type ToolStep } from './agent-session'
+import { ABANDONED_PAUSE_CODE, LOST_PAUSE_CODE, PROCESS_LOST_CODE, RUN_CUT_CODE, type ToolStep } from './agent-session'
+import { formatDuration } from './time'
+import { useNow } from './tick'
 
 /**
  * One tool call, as a card in the transcript.
@@ -41,10 +43,22 @@ export function AgentActionCard({
   step,
   onApprove,
   onDeny,
+  startedAt,
+  endedAt,
 }: {
   step: ToolStep
   onApprove?: (callId: string) => void
   onDeny?: (callId: string) => void
+  /**
+   * When this call started, as the pane marked it while watching the run.
+   *
+   * In memory only, and never written down: `freezeTurn` copies a step wholesale, so an ephemeral key on
+   * the step would land in the transcript file. Absent after a restart, which is why the card falls back
+   * to words rather than to a made-up start.
+   */
+  startedAt?: number
+  /** When this call's run was cut off, when that happened while this process was watching. */
+  endedAt?: number
 }) {
   const awaiting = step.status === 'awaiting'
   const queued = step.status === 'queued'
@@ -54,6 +68,18 @@ export function AgentActionCard({
   // In flight from the moment the call starts until it has an outcome, which is the whole of what the
   // auto rule reads: a decision being waited on is as much a step in progress as a call being run.
   const inFlight = step.status === 'running' || awaiting || queued
+  // A call a live Stop interrupted has both marks, so its final span is a fact; one read back from disk
+  // has neither, so its end is unknowable and a duration there would be invented. No number, then, and
+  // the sentence says why — the two codes are two different pieces of news.
+  const finalElapsed = step.status === 'interrupted' && startedAt !== undefined && endedAt !== undefined
+  const interruptedNote =
+    step.status !== 'interrupted' || finalElapsed
+      ? null
+      : step.code === PROCESS_LOST_CODE
+        ? 'Interrupted — the app closed while this was running.'
+        : step.code === RUN_CUT_CODE
+          ? 'Interrupted — the turn ended while this was running.'
+          : null
   // The line the row names the call in, computed once: the header truncates it, so the same string is
   // what the title offers in full when the row had to cut it.
   const summary = describe(step)
@@ -68,7 +94,12 @@ export function AgentActionCard({
       // conversation is read in, and it is a state only the user may leave.
       defaultOpen={undecided !== null}
       icon={<ToolIcon tool={step.tool} />}
-      trailing={<StatusMark status={step.status} />}
+      trailing={
+        <>
+          <StepElapsed status={step.status} startedAt={startedAt} endedAt={endedAt} />
+          <StatusMark status={step.status} />
+        </>
+      }
       className={cn(
         'rounded-md bg-card text-[12px] shadow-sm',
         // The accent token rather than a warning colour, which this theme does not define: a pending
@@ -145,6 +176,15 @@ export function AgentActionCard({
       {queued && (
         <p className="mt-2 text-[11px] text-muted-foreground">
           Waiting its turn — nothing here runs until the decision above is made.
+        </p>
+      )}
+
+      {/* A call that was running when its run ended, with no ending of its own to state: the words are
+          all this record supports, and the code decides which words. Drawn in place of a duration rather
+          than beside one — there is no number to show. */}
+      {interruptedNote && (
+        <p data-slot="step-interrupted" className="mt-2 text-[11px] text-muted-foreground">
+          {interruptedNote}
         </p>
       )}
 
@@ -255,10 +295,55 @@ function ToolIcon({ tool }: { tool: string }) {
   }
 }
 
+/**
+ * How long this call has been going, in the row's trailing cluster.
+ *
+ * A call in flight counts up from its mark, a second at a time; a call a live Stop interrupted shows the
+ * fixed span between its two marks and does not move; every other state shows nothing, because the card
+ * speaks for a call that has landed and its outcome is the news. The split matters for the performance
+ * rule: only the counting half subscribes to the window's clock, so a settled row — and there can be
+ * dozens of them — is not re-rendered once a second for a number it does not show.
+ */
+function StepElapsed({
+  status,
+  startedAt,
+  endedAt,
+}: {
+  status: ToolStep['status']
+  startedAt?: number
+  endedAt?: number
+}) {
+  if (status === 'running') {
+    return startedAt === undefined ? null : <RunningElapsed startedAt={startedAt} />
+  }
+  if (status !== 'interrupted' || startedAt === undefined || endedAt === undefined) return null
+
+  return (
+    <span data-slot="step-elapsed" className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+      ({formatDuration(endedAt - startedAt)})
+    </span>
+  )
+}
+
+/** The counting half of the readout, and the only part of this card that wakes on the window's tick. */
+function RunningElapsed({ startedAt }: { startedAt: number }) {
+  const now = useNow()
+  return (
+    <span data-slot="step-elapsed" className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+      ({formatDuration(now - startedAt)})
+    </span>
+  )
+}
+
 function StatusMark({ status }: { status: ToolStep['status'] }) {
   switch (status) {
     case 'running':
-      return <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="running" />
+      return (
+        <Loader2
+          className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+          aria-label="running"
+        />
+      )
     case 'ok':
       return <CircleCheck className="size-3.5 shrink-0 text-muted-foreground" aria-label="succeeded" />
     case 'failed':

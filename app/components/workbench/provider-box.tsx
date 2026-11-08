@@ -460,7 +460,7 @@ export function ProviderBox({
           disabled={disabled || !keyValue.trim() || saving}
           onClick={onSaveKey}
         >
-          {saving && <Loader2 className="animate-spin" />}
+          {saving && <Loader2 className="animate-spin motion-reduce:animate-none" />}
           Save
         </Button>
         {configured && onClearKey && (

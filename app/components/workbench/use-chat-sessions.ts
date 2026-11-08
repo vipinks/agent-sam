@@ -6,6 +6,7 @@ import { buddiesStore } from '@/conveyor/stores/buddies'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import {
   rehydrateTranscript,
+  reconcileInterruptedRuns,
   reconcileOrphanedPauses,
   serializeTranscript,
   type TranscriptState,
@@ -1210,8 +1211,14 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         // layer is still holding it. Reconciling the rest is what turns two dead ends — a card whose
         // buttons do nothing, and a turn that is neither running nor ended — into a named ending the
         // transcript can state.
+        //
+        // The run pass is unconditional, and wraps the pause's: a pause this process still holds is a
+        // pause, but a step still marked `running` cannot be anything but a run the process no longer
+        // has. The two passes are disjoint — this one moves `running`, the other `awaiting`/`queued` —
+        // so the order changes nothing about their states, and the pause's conditions stay exactly the
+        // ones they were.
         const loaded = rehydrateTranscript(snapshot)
-        applyTranscript(id, pausesRef.current[id] ? loaded : reconcileOrphanedPauses(loaded))
+        applyTranscript(id, reconcileInterruptedRuns(pausesRef.current[id] ? loaded : reconcileOrphanedPauses(loaded)))
         // Put the model this conversation's turns last ran back into the header's control. The control's value is
         // window state and does not survive a relaunch, so without this a reopened engine conversation shows an
         // empty field while its turns ran a chosen model — and the transcript is no help here either: the record

@@ -10,7 +10,11 @@
  * No React, no DOM, no disk: this is the pure rule half of the turn-legibility feature.
  */
 import { strict as assert } from 'node:assert'
-import { formatDateTime, formatDuration, formatRelativeTime as formatRelativeTimeFromTime } from '../../app/components/workbench/time'
+import {
+  formatDateTime,
+  formatDuration,
+  formatRelativeTime as formatRelativeTimeFromTime,
+} from '../../app/components/workbench/time'
 import { formatRelativeTime } from '../../app/components/workbench/relative-time'
 
 const results: string[] = []

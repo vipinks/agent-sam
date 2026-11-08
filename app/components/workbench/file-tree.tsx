@@ -74,7 +74,7 @@ export function TreeLevel({
   if (isLoading) {
     return (
       <div className={cn('flex items-center gap-1.5 py-1.5 text-[12.5px] text-muted-foreground', indentClass(depth))}>
-        <Loader2 className="size-3.5 animate-spin" />
+        <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
         Loading…
       </div>
     )

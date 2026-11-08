@@ -436,7 +436,7 @@ function controlGlyph(glyph: McpServerButtonGlyph) {
     case 'stop':
       return <Square className="text-red-500" />
     case 'spinner':
-      return <Loader2 className="animate-spin text-muted-foreground" />
+      return <Loader2 className="animate-spin text-muted-foreground motion-reduce:animate-none" />
     case 'retry':
       return <RotateCw className="text-destructive" />
   }

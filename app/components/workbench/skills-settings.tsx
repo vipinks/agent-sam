@@ -408,7 +408,7 @@ function SkillCard({
         <div data-slot="skill-body" className="mt-3 border-t border-border pt-3">
           {body.isPending && (
             <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" /> Reading {skill.id}…
+              <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> Reading {skill.id}…
             </p>
           )}
           {body.isError && (

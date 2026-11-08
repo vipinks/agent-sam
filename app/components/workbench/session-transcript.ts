@@ -90,6 +90,10 @@ function freezeTurn(turn: AgentTurn): TranscriptTurn {
     content: turn.content,
     steps: turn.steps.map((step) => ({ ...step })),
     ...(turn.error !== undefined ? { error: turn.error } : {}),
+    // The instant the run began, written only when the pane stamped one. Additive like every optional
+    // field here, and the same rule: a turn nothing has timed carries no key rather than a zero that a
+    // reader would have to tell apart from "started at the epoch".
+    ...(turn.startedAt !== undefined ? { startedAt: turn.startedAt } : {}),
     // The range a summary turn stands for. Written only when there is one, so an ordinary turn is the
     // same record it was before compaction existed — the same additive rule every optional field here
     // follows, and the reason a compacted conversation still opens in a build that predates this key.
@@ -204,6 +208,9 @@ function thawTurn(turn: TranscriptTurn): AgentTurn {
     content: turn.content,
     steps: turn.steps.map((step) => ({ ...step })),
     ...(turn.error !== undefined ? { error: turn.error } : {}),
+    // Carried back only when the file holds one, so a reopened conversation shows the same duration it
+    // showed live and a turn written before this key existed shows none rather than a fabricated start.
+    ...(turn.startedAt !== undefined ? { startedAt: turn.startedAt } : {}),
     // Carried back so a compacted conversation still sends its summary rather than the turns it stands
     // for: the range is what the projection reads, and a reopened transcript with the key dropped would
     // send the whole conversation again — which is not wrong, but is not what the user compacted for.
@@ -355,9 +362,19 @@ export function reconcileOrphanedPauses(state: TranscriptState): TranscriptState
  * ending keeps it — a diagnosis of the reply is not overwritten by what happened to the run afterwards.
  */
 export function reconcileInterruptedRuns(state: TranscriptState): TranscriptState {
-  // SEAM (next commit): the running-to-interrupted rewrite and the earned ending, asserted red by the
-  // load pin in `tests/sessions/chat-sessions-test.ts`.
-  return state
+  let changed = false
+  const turns = state.turns.map((turn) => {
+    const cut = interruptRunningSteps([turn], PROCESS_LOST_CODE)[0]
+    if (cut === turn) return turn
+
+    changed = true
+    // A run that was still going when the process died ended without saying how, so the turn gets the
+    // ending it earned — and only a turn that has none: an existing notice is the diagnosis of the
+    // reply, which a later fact about the run must not overwrite.
+    return cut.endNotice === undefined ? { ...cut, endNotice: { cause: 'interrupted' as const, resumable: true } } : cut
+  })
+
+  return changed ? { ...state, turns } : state
 }
 
 /** A snapshot for a session with no saved file. */

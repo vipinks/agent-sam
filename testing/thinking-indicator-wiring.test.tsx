@@ -252,24 +252,30 @@ describe('the readout’s elapsed suffix', () => {
  */
 describe('the window clock', () => {
   it('starts one interval for the first reader and clears it when the last one leaves', async () => {
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
-    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+    // Timers, counted rather than spied on: the claim is about how many the window is carrying, and a
+    // fake clock answers that directly. The module is loaded fresh so the count is about this
+    // subscription's own lifetime rather than about anything another test left mounted.
+    vi.useFakeTimers()
+    try {
+      const baseline = vi.getTimerCount()
+      vi.resetModules()
+      const tick = await import('@/app/components/workbench/tick')
 
-    vi.resetModules()
-    const tick = await import('@/app/components/workbench/tick')
+      const first = tick.subscribeTick(() => {})
+      expect(vi.getTimerCount()).toBe(baseline + 1)
 
-    const first = tick.subscribeTick(() => {})
-    expect(setIntervalSpy.mock.calls.filter((call) => call[0] === 1_000)).toHaveLength(1)
+      // A second reader joins the clock that is already running rather than starting its own.
+      const second = tick.subscribeTick(() => {})
+      expect(vi.getTimerCount()).toBe(baseline + 1)
 
-    // A second reader joins the clock that is already running rather than starting its own.
-    const second = tick.subscribeTick(() => {})
-    expect(setIntervalSpy.mock.calls.filter((call) => call[0] === 1_000)).toHaveLength(1)
+      // The first to leave does not stop it for the second — the count is of readers, not of mounts.
+      first()
+      expect(vi.getTimerCount()).toBe(baseline + 1)
 
-    // The first to leave does not stop it for the second — the count is of readers, not of mounts.
-    first()
-    expect(clearIntervalSpy).not.toHaveBeenCalled()
-
-    second()
-    expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
+      second()
+      expect(vi.getTimerCount()).toBe(baseline)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
