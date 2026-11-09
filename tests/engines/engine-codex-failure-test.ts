@@ -11,6 +11,10 @@
  * The four-line probe case is the baseline, and it is deliberately green on the tree before this change:
  * the JSONL vocabulary is the capture's and is not being extended. It exists here so a red run still
  * proves the mapper reads the probe's exact four lines as `ok` plus the usage triple.
+ *
+ * The clean exit is stated here as the neighbour of those three: a child that closes 0 without a word on
+ * stdout did not fail, so its notice is an `empty_stop` with no code and no tail — the one ending in this
+ * file that carries no failure, and the one a suite that read only failures would leave unproven.
  */
 import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
@@ -249,6 +253,49 @@ async function aResolutionRefusalEmitsItsConveyorErrorCode() {
   results.push('a refused resolution is a ConveyorError-coded failure chunk, never a message string')
 }
 
+// ---------------------------------------------------------------- the clean ending
+
+/**
+ * A clean exit with nothing on stdout is said out loud, and it is not a failure.
+ *
+ * This is the shape the defect left silent: no code, no tail, no error — the child simply said nothing
+ * and closed on zero. The notice is the whole of what the pane needs, and the absence of a `failure` is
+ * the difference between "the model stopped without answering" and "the child died", so both halves are
+ * asserted here: the cause that is worded, and the ticket that must not be printed beside it.
+ */
+async function aSilentCleanExitEmitsAnEmptyStopNotice() {
+  const script = scriptedChild()
+  const chunks: EngineTranscriptChunk[] = []
+  const turn = runCodexTurn(
+    { engineId: CODEX, prompt: 'a question nobody answered', cwd: 'C:/work' },
+    { spawnImpl: spawnOf(script.child), binaryOverride: CODEX_BINARY },
+    (chunk) => chunks.push(chunk)
+  )
+
+  await new Promise((resolve) => setImmediate(resolve))
+  script.close(0)
+  const outcome = await turn
+
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.type),
+    ['turn_end_notice', 'turn_end'],
+    'the notice, then the ending it belongs to'
+  )
+  const notice = chunks[0]
+  assert.equal(notice?.type === 'turn_end_notice' ? notice.cause : '', 'empty_stop', 'a clean exit with no answer')
+  assert.equal(notice?.type === 'turn_end_notice' ? notice.resumable : false, true, 'and the ending offers Continue')
+  assert.equal(notice?.type === 'turn_end_notice' ? notice.failure : null, undefined, 'with no failure ticket')
+  assert.equal(
+    chunks[1]?.type === 'turn_end' ? chunks[1].cause : '',
+    'empty_stop',
+    'the transcript is told the same thing the outcome is'
+  )
+  assert.equal(outcome.exitCode, 0, 'nothing failed, so there is no code to report')
+  assert.equal(outcome.cause, 'empty_stop', 'the ending is the missing answer')
+
+  results.push('a clean exit with nothing said is an empty_stop notice, never silence and never a failure ticket')
+}
+
 // ---------------------------------------------------------------- report
 
 async function main() {
@@ -271,6 +318,7 @@ async function main() {
   await step('child error', aChildErrorCarriesItsCodeAndTail)
   await step('synchronous spawn failure', aSynchronousSpawnFailureEmitsItsCode)
   await step('resolution refusal', aResolutionRefusalEmitsItsConveyorErrorCode)
+  await step('clean exit', aSilentCleanExitEmitsAnEmptyStopNotice)
 
   console.log('codex failure visibility: ' + results.length + ' passed, ' + failed + ' failed')
   for (const result of results) console.log('  pass: ' + result)
