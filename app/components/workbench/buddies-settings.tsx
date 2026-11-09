@@ -66,6 +66,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { BUDDY_GLYPHS, buddyGlyphFor, buddyMonogram } from './buddy-glyphs'
+import { resolveProviderModels } from './provider-models'
 
 /** The value a `Select` needs for \"nothing chosen\": Radix refuses an empty string as an item's value. */
 const NONE = 'none'
@@ -354,9 +355,9 @@ function draftFor(record: BuddyRecord | null): BuddyDraft {
  *
  * The three lists it offers are read, never invented. Skills are the ones installed, as the Skills section
  * sees them; servers are the ones `canStartServer` permits, which is the same judgment that decides whether a
- * row in the MCP section may be started; and the models are the ones that provider's own catalogue last
- * answered. A Buddy narrows what the app was already allowed to do, and a list this screen made up for itself
- * would be a way to declare something that is not.
+ * row in the MCP section may be started; and the models are the ones the chat picker would offer for that
+ * provider, resolved by the same rule. A Buddy narrows what the app was already allowed to do, and a list this
+ * screen made up for itself would be a way to declare something that is not.
  */
 function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose: () => void }) {
   const custom = useConveyorStore(buddiesStore, (s) => s.custom)
@@ -407,6 +408,9 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
   // Both kinds of provider, because the id a record pins may be either: a model id belongs to the provider
   // that serves it, and which of the two lists that provider came from is not the record's business.
   const providers = conveyor.settings.listProviders.useQuery()
+  // The seeded catalogue a shipped provider offers before anything has been fetched. The picker reads
+  // the same answer, and a fresh install has no `enabledModels` yet for either surface to fall back on.
+  const defaultModels = conveyor.settings.defaultModels.useQuery()
   const customProviders = useConveyorStore(providerConfigStore, (s) => s.customProviders)
   const configs = useConveyorStore(providerConfigStore, (s) => s.providers)
   const providerRows = useMemo(
@@ -416,9 +420,14 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
     ],
     [providers.data, customProviders]
   )
-  const modelRows = useMemo(
-    () => (draft.providerId === null ? [] : (configs[draft.providerId]?.fetchedModels ?? [])),
-    [configs, draft.providerId]
+  // The same resolver the chat picker's lists are built from, over the mirror this screen already has:
+  // nothing is fetched or written to answer it, and the two surfaces cannot drift apart again.
+  const modelIds = useMemo(
+    () =>
+      draft.providerId === null
+        ? []
+        : resolveProviderModels(draft.providerId, configs, customProviders, defaultModels.data),
+    [configs, customProviders, defaultModels.data, draft.providerId]
   )
 
   /**
@@ -662,7 +671,7 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
               <Label htmlFor="buddy-model">Model</Label>
               <Select
                 value={draft.model ?? NONE}
-                disabled={draft.providerId === null || modelRows.length === 0}
+                disabled={draft.providerId === null || modelIds.length === 0}
                 onValueChange={(next) => edit({ model: next === NONE ? null : next })}
               >
                 <SelectTrigger
@@ -674,10 +683,13 @@ function BuddyEditor({ record, onClose }: { record: BuddyRecord | null; onClose:
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE}>The provider&rsquo;s default</SelectItem>
-                  {modelRows.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.name ?? model.id}
+                  {/* "The provider's default" is itself a choice, so it is offered only when there is a
+                      list to choose from: a provider with nothing switched on and no catalogue offers
+                      no choice at all, and this control says nothing rather than naming a default. */}
+                  {modelIds.length > 0 && <SelectItem value={NONE}>The provider&rsquo;s default</SelectItem>}
+                  {modelIds.map((model) => (
+                    <SelectItem key={model} value={model}>
+                      {model}
                     </SelectItem>
                   ))}
                 </SelectContent>

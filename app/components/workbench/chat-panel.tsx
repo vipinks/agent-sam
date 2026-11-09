@@ -48,6 +48,7 @@ import { COMPOSER_MIN_HEIGHT, clampComposerHeight, composerBounds } from './comp
 import { HOME_STARTERS } from './home'
 import { HomeHero, HomePanel } from './home-panel'
 import { PaneHeader } from './pane-header'
+import { resolveProviderModels } from './provider-models'
 import { AgentActionCard } from './agent-action-card'
 import { CombosModelPicker } from './combos-model-picker'
 import { EnginePicker } from './engine-picker'
@@ -964,12 +965,11 @@ export function ChatPanel() {
   // does not know yet, and the refusal belongs at send time rather than in a menu that would hide a
   // choice the user just made in Settings.
   const enabledCombos = combos.filter((combo) => combo.enabled)
-  const modelsFor = (providerId: string): string[] => {
-    const enabled = configs[providerId]?.enabledModels
-    if (enabled && enabled.length > 0) return enabled
-    // The seeded catalogue carries names as well as ids; the composer only needs the ids.
-    return (defaultModels.data?.[providerId] ?? []).map((m) => m.id)
-  }
+  // Both lists resolve through the one helper the Buddy editor reads too, so the two surfaces cannot
+  // offer different models for the same provider. The rule itself is `provider-models.ts`'s; this is
+  // the picker's call into it.
+  const modelsFor = (providerId: string): string[] =>
+    resolveProviderModels(providerId, configs, customProviders, defaultModels.data)
 
   /**
    * The models a provider the user added offers, by the same rule a predefined one follows: what the
@@ -979,11 +979,8 @@ export function ChatPanel() {
    * here: a box whose toggles changed nothing would be a control that lies. A provider with no models
    * and nothing switched on yields an empty list, which is the case the picker names rather than drops.
    */
-  const customModelsFor = (provider: CustomProvider): string[] => {
-    const enabled = configs[provider.id]?.enabledModels
-    if (enabled && enabled.length > 0) return enabled
-    return provider.models
-  }
+  const customModelsFor = (provider: CustomProvider): string[] =>
+    resolveProviderModels(provider.id, configs, customProviders, defaultModels.data)
 
   /**
    * The sections the header's picker draws: the shipped providers in registry order, then the ones the

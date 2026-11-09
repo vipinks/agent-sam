@@ -21,6 +21,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { BUILTIN_BUDDIES, type BuddyRecord } from '@/conveyor/protocol/buddies'
+import type { CustomProvider } from '@/conveyor/protocol/custom-provider'
 import { buddiesStore, type BuddiesState } from '@/conveyor/stores/buddies'
 import { SettingsView } from '@/app/components/workbench/settings-view'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
@@ -62,6 +63,20 @@ const QUIET: BuddyRecord = {
 /** An empty store: the built-ins are not in it, which is the point of their being pure data. */
 const EMPTY: BuddiesState = { custom: [], disabledIds: [] }
 
+/** A custom record that pins neither provider nor model, so a save's pair is the editor's own choice. */
+const UNPINNED: BuddyRecord = {
+  id: 'unpinned-buddy',
+  name: 'Unpinned Buddy',
+  glyph: CAPTAIN.glyph,
+  description: CAPTAIN.description,
+  rolePrompt: CAPTAIN.rolePrompt,
+  skillIds: CAPTAIN.skillIds,
+  mcpIds: CAPTAIN.mcpIds,
+  autoApprove: CAPTAIN.autoApprove,
+  starters: CAPTAIN.starters,
+  builtin: false,
+}
+
 /** One provider that ships, because the editor's provider list is read from settings. */
 const PROVIDERS = [{ id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' }]
 
@@ -70,6 +85,31 @@ const PROVIDER_CONFIG = {
   providers: { deepseek: { fetchedModels: [{ id: 'deepseek-chat' }], enabledModels: ['deepseek-chat'] } },
   customProviders: [],
 }
+
+/**
+ * The slices of the provider-config store the editor reads, as a case here can seed them.
+ *
+ * A custom provider is the case this suite had none of, and it is the one the editor got wrong: its
+ * models live on the descriptor (`customProviders[].models`), not in the per-provider `fetchedModels`
+ * cache the editor used to read — and a custom provider never writes that cache at all.
+ */
+type ProviderConfigSeed = {
+  providers: Record<string, { enabledModels: string[]; fetchedModels: Array<{ id: string; name?: string }> }>
+  customProviders: CustomProvider[]
+}
+
+/** One provider the user added, with the catalogue its descriptor carries. */
+const LLAMA: CustomProvider = {
+  id: 'local-llama',
+  name: 'Local Llama',
+  baseUrl: 'http://localhost:1234/v1',
+  apiKey: '',
+  dialect: 'openai',
+  models: ['llama-3.1-8b', 'qwen2.5-coder-7b'],
+}
+
+/** The seeded default a fresh install sees for a predefined provider, before any Fetch is pressed. */
+const SEEDED_DEFAULTS = { deepseek: [{ id: 'deepseek-chat', name: 'deepseek-chat' }] }
 
 /** The skills listing the editor's multi-select reads: one skill, so a row can be ticked. */
 const SKILLS = {
@@ -153,10 +193,18 @@ function fakeMain(stub: BridgeStub, initial: BuddiesState): { state: () => Buddi
 }
 
 /** Install a bridge whose answers are the ones this suite describes. */
-function stubBuddies(state: BuddiesState = EMPTY): { stub: BridgeStub; main: { state: () => BuddiesState } } {
+function stubBuddies(
+  state: BuddiesState = EMPTY,
+  options: {
+    /** The provider-config the editor reads: an enabled set, a descriptor catalogue, or neither. */
+    providerConfig?: ProviderConfigSeed
+    /** What `settings.defaultModels` answers: the seeded catalogue a fresh install has. */
+    defaultModels?: Record<string, Array<{ id: string; name?: string }>>
+  } = {}
+): { stub: BridgeStub; main: { state: () => BuddiesState } } {
   const stub = createBridgeStub({
     listProviders: () => PROVIDERS,
-    defaultModels: () => ({}),
+    defaultModels: () => options.defaultModels ?? {},
     listConfigured: () => [],
     isEncryptionAvailable: () => true,
     listSkills: () => SKILLS,
@@ -169,7 +217,7 @@ function stubBuddies(state: BuddiesState = EMPTY): { stub: BridgeStub; main: { s
     }),
     listRunningTools: () => [],
   })
-  stubStore(stub, 'provider-config', structuredClone(PROVIDER_CONFIG))
+  stubStore(stub, 'provider-config', structuredClone(options.providerConfig ?? PROVIDER_CONFIG))
   const main = fakeMain(stub, state)
   setActiveStub(stub)
   return { stub, main }
@@ -384,6 +432,124 @@ describe('the Buddies section', () => {
     const plate = control(row('release-captain'), 'buddy-glyph')
     expect(plate?.querySelector('svg')).not.toBeNull()
     expect(plate?.textContent).toBe('')
+  })
+
+  // The Model list is the chat picker's rule, put to the editor. Every case below was blank before that:
+  // the editor read `configs[id].fetchedModels`, which a custom provider never writes at all, and which a
+  // fresh install has not written yet for a predefined one.
+  it('offers a custom provider’s switched-on models in the editor', async () => {
+    stubBuddies(EMPTY, {
+      providerConfig: {
+        providers: { [LLAMA.id]: { enabledModels: [LLAMA.models[0]], fetchedModels: [] } },
+        customProviders: [LLAMA],
+      },
+    })
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    await openSelect('Provider')
+    await userEvent.click(await screen.findByRole('option', { name: LLAMA.name }))
+
+    // Alive is the fact the empty cache took away: a disabled Select never opens, so a test that only
+    // looked for the option would wait on a menu that had no reason to exist.
+    const model = await screen.findByRole('combobox', { name: 'Model' })
+    expect((model as HTMLButtonElement).disabled).toBe(false)
+    await openSelect('Model')
+    expect(screen.getByRole('option', { name: LLAMA.models[0] })).toBeTruthy()
+  })
+
+  it('falls back to a custom provider’s descriptor catalogue when nothing is switched on', async () => {
+    stubBuddies(EMPTY, {
+      providerConfig: {
+        providers: { [LLAMA.id]: { enabledModels: [], fetchedModels: [] } },
+        customProviders: [LLAMA],
+      },
+    })
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    await openSelect('Provider')
+    await userEvent.click(await screen.findByRole('option', { name: LLAMA.name }))
+
+    // The catalogue that arrived with the descriptor answers while no switch has been set — the same
+    // fallback the picker takes, so the two surfaces cannot offer different models for one provider.
+    const model = await screen.findByRole('combobox', { name: 'Model' })
+    expect((model as HTMLButtonElement).disabled).toBe(false)
+    await openSelect('Model')
+    for (const id of LLAMA.models) expect(screen.getByRole('option', { name: id })).toBeTruthy()
+  })
+
+  it('offers a predefined provider’s seeded default before anything has been fetched', async () => {
+    stubBuddies(EMPTY, {
+      providerConfig: { providers: { deepseek: { enabledModels: [], fetchedModels: [] } }, customProviders: [] },
+      defaultModels: SEEDED_DEFAULTS,
+    })
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    await openSelect('Provider')
+    await userEvent.click(await screen.findByRole('option', { name: 'DeepSeek' }))
+
+    // A fresh install has fetched nothing: the seeded catalogue is what the picker offers, and it is
+    // what the editor must offer rather than a disabled box reading a cache nobody has filled.
+    const model = await screen.findByRole('combobox', { name: 'Model' })
+    expect((model as HTMLButtonElement).disabled).toBe(false)
+    await openSelect('Model')
+    expect(screen.getByRole('option', { name: 'deepseek-chat' })).toBeTruthy()
+  })
+
+  it('saves the chosen model beside the provider a Buddy pins', async () => {
+    const { stub } = stubBuddies(
+      { custom: [UNPINNED], disabledIds: [] },
+      {
+        providerConfig: {
+          providers: { [LLAMA.id]: { enabledModels: [LLAMA.models[0]], fetchedModels: [] } },
+          customProviders: [LLAMA],
+        },
+      }
+    )
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await waitFor(() => expect(rows().length).toBe(4))
+
+    await userEvent.click(within(row(UNPINNED.id)).getByRole('button', { name: `Edit ${UNPINNED.name}` }))
+    await screen.findByRole('alertdialog')
+
+    await openSelect('Provider')
+    await userEvent.click(await screen.findByRole('option', { name: LLAMA.name }))
+    await openSelect('Model')
+    await userEvent.click(await screen.findByRole('option', { name: LLAMA.models[0] }))
+    await userEvent.click(within(editor()).getByRole('button', { name: 'Save Buddy' }))
+
+    // Both halves travel together, so the conversation this Buddy starts is seeded with a real model that
+    // belongs to the provider it names rather than with the window's model beside a custom id.
+    await waitFor(() => expect(called(stub, 'updateBuddy')).toBe(true))
+    expect(payloadOf(stub, 'updateBuddy')).toEqual({ ...UNPINNED, providerId: LLAMA.id, model: LLAMA.models[0] })
+  })
+
+  it('leaves the model select disabled, with no default label, when a provider offers nothing at all', async () => {
+    stubBuddies(EMPTY, {
+      providerConfig: {
+        providers: { [LLAMA.id]: { enabledModels: [], fetchedModels: [] } },
+        customProviders: [{ ...LLAMA, models: [] }],
+      },
+    })
+    renderSettings()
+    act(() => useWorkbenchStore.getState().openSettingsAt('buddies'))
+    await openNewBuddy()
+
+    await openSelect('Provider')
+    await userEvent.click(await screen.findByRole('option', { name: LLAMA.name }))
+
+    // Nothing to choose, so the control says nothing. "The provider's default" is itself a choice, and a
+    // provider with neither a switched-on model nor a catalogue offers none to make.
+    const model = await screen.findByRole('combobox', { name: 'Model' })
+    expect((model as HTMLButtonElement).disabled).toBe(true)
+    expect(model.textContent).toBe('')
+    expect(within(editor()).queryByText(/provider’s default/i)).toBeNull()
   })
 
   it('refuses a draft on its own field, in the rule’s own words, and stays open', async () => {
