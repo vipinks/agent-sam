@@ -151,6 +151,33 @@ const MAX_TOOL_OUTPUT = 20_000
  */
 export const RUN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
 
+/**
+ * The environment variable that carries a ceiling for one run_command.
+ *
+ * It exists for this repository's own full gate: the DOM suite is allowed 600 seconds, so a build run
+ * through `run_command` would hit the coded ceiling before the gate had spent its budget. Setting this
+ * variable to 660000 — 600 seconds plus a minute of margin — raises the ceiling for that run.
+ */
+export const RUN_COMMAND_TIMEOUT_MS_OVERRIDE = 'SAM_RUN_COMMAND_TIMEOUT_MS'
+
+/**
+ * The ceiling one `run_command` is given, with the override applied only where it is safe.
+ *
+ * A shipped build always enforces the coded ceiling: `NODE_ENV === 'production'` refuses the override
+ * outright. Otherwise it applies when the process is a test run or the variable is explicitly set —
+ * never as a default, because there is no default that moves this number.
+ *
+ * Read at the call rather than at module load, so a suite can set the variable for one case without
+ * changing what every other case in the same process enforces.
+ */
+export function runCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  if (env.NODE_ENV === 'production') return RUN_COMMAND_TIMEOUT_MS
+  const said = env[RUN_COMMAND_TIMEOUT_MS_OVERRIDE]
+  if (env.NODE_ENV !== 'test' && said === undefined) return RUN_COMMAND_TIMEOUT_MS
+  const parsed = Number(said)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : RUN_COMMAND_TIMEOUT_MS
+}
+
 export const TOOL_NAMES = ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'] as const
 export type AgentToolName = (typeof TOOL_NAMES)[number]
 
@@ -458,7 +485,7 @@ export async function executeTool(
           command,
           cwd: workingDirectory,
           signal,
-          timeoutMs: RUN_COMMAND_TIMEOUT_MS,
+          timeoutMs: runCommandTimeoutMs(),
           spawnImpl,
         })) {
           chunks.push(chunk)

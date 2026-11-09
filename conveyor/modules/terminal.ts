@@ -87,6 +87,47 @@ export function workspaceRootFromStoreFile(userDataDir: string): string | null {
 }
 
 /**
+ * How long a run waits for `close` after it has asked the process to stop.
+ *
+ * SIGTERM is a request, not a fact, and `close` is not the same thing as a process ending: a child can
+ * ignore the signal, and a grandchild that inherited the pipes can hold them open after its parent is
+ * gone, in which case `close` never arrives at all. Two seconds is the backstop that makes every ending
+ * unconditional — the SIGKILL escalation for a child that ignored the signal, and, for a deadline, the
+ * coded failure itself. A constant rather than an option, because the number is part of the contract
+ * and a suite that waited on a shorter one would be proving a different guarantee than the one shipped.
+ */
+export const WEDGE_GUARD_MS = 2000
+
+/**
+ * End a child's whole tree, by the pid it was started with, with the platform's own tool.
+ *
+ * Windows is the platform with a tool for this, and the one the leak was measured on: the direct child
+ * is a shell, so killing it can leave the command it started alive — still holding the pipes, still
+ * running, with nothing left to stop it. `taskkill /T /F` names the tree rather than the process.
+ * Elsewhere this does nothing: there is no portable way to name a child's descendants, and the direct
+ * child shares this process's group, so a signal is the whole answer there.
+ *
+ * Exported rather than inlined, so a suite can observe the request without killing something real;
+ * the pid is the fact that has to be provable.
+ */
+export function killTreeByPlatform(
+  pid: number | undefined,
+  platform: NodeJS.Platform,
+  spawnImpl: typeof spawn = spawn
+): void {
+  if (platform !== 'win32' || pid === undefined) return
+  const tree = spawnImpl('taskkill', ['/pid', String(pid), '/T', '/F'], {
+    stdio: 'ignore',
+    // Never a shell, and never a line of words for one to read.
+    shell: false,
+    windowsHide: true,
+  })
+  // A killer that could not start is not this run's problem: the wedge guard still settles it.
+  tree.on('error', () => undefined)
+  tree.unref?.()
+}
+
+/**
  * Spawn a command and yield its output as it arrives.
  *
  * Chunks are yielded as they come, with stderr carrying a prefix rather than a wrapper so a partial
@@ -103,6 +144,11 @@ export async function* runCommand(options: {
   /** A wall-clock ceiling for this run. Omitted for the user's own terminal, which is unbounded. */
   timeoutMs?: number
   spawnImpl?: typeof spawn
+  /**
+   * How the spawned tree is ended on win32. Left out in the app, where the platform's own tool is
+   * used; supplied by a suite that would rather observe the pid than kill something real.
+   */
+  killTreeImpl?: (pid: number | undefined) => void
 }): AsyncGenerator<string, void, undefined> {
   const { command, cwd, signal } = options
   const platform = options.platform ?? process.platform

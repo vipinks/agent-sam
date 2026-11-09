@@ -11,7 +11,16 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { executeTool, needsApproval, runAgentLoop, TOOL_DEFINITIONS } from '../../conveyor/modules/agent'
+import {
+  executeTool,
+  needsApproval,
+  runAgentLoop,
+  RUN_COMMAND_TIMEOUT_MS,
+  RUN_COMMAND_TIMEOUT_MS_OVERRIDE,
+  runCommandTimeoutMs,
+  TOOL_DEFINITIONS,
+} from '../../conveyor/modules/agent'
+import { WEDGE_GUARD_MS } from '../../conveyor/modules/terminal'
 import { firstPauseViolation } from '../../conveyor/protocol/approval'
 import { applyAgentChunk, startAssistantTurn, type ToolStep } from '../../app/components/workbench/agent-session'
 import {
@@ -19,6 +28,7 @@ import {
   agentSystemPrompt,
   assembleRoleSection,
   assembleSystemContext,
+  COMMAND_BOUND_NOTE,
   PLAN_DISCIPLINE_NOTE,
   POWERSHELL_SHELL_NOTE,
 } from '../../conveyor/protocol/context'
@@ -302,6 +312,88 @@ async function runCommandTool() {
 
     results.push('run_command runs through the terminal module and reports stdout, stderr, and exit')
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The ceiling on one command, and the one way a test run may move it.
+ *
+ * Five minutes is the product's answer: long enough for the full gate, short enough that a hung
+ * process is a failed call. The override is for this repository's own gate — whose DOM suite is
+ * allowed ten minutes — and a shipped build must never read it.
+ */
+function commandTimeoutBounds() {
+  assert.equal(RUN_COMMAND_TIMEOUT_MS, 5 * 60 * 1000, 'one command may run for five minutes')
+  assert.equal(runCommandTimeoutMs({}), RUN_COMMAND_TIMEOUT_MS, 'with no override the coded ceiling stands')
+  assert.equal(
+    runCommandTimeoutMs({ [RUN_COMMAND_TIMEOUT_MS_OVERRIDE]: '660000' }),
+    660_000,
+    'the full gate may raise the ceiling to ten minutes plus margin'
+  )
+  assert.equal(
+    runCommandTimeoutMs({ NODE_ENV: 'production', [RUN_COMMAND_TIMEOUT_MS_OVERRIDE]: '660000' }),
+    RUN_COMMAND_TIMEOUT_MS,
+    'a shipped build never reads the override'
+  )
+  // A value that is not a positive number is refused rather than turned into NaN milliseconds.
+  assert.equal(runCommandTimeoutMs({ [RUN_COMMAND_TIMEOUT_MS_OVERRIDE]: 'soon' }), RUN_COMMAND_TIMEOUT_MS)
+  results.push('run_command is bounded at five minutes, and production refuses the test override')
+}
+
+/**
+ * A deadline reaches the tool result as a code, even when the child never closes.
+ *
+ * The reported shape: the shell was killed but a grandchild held the inherited pipes, so `close`
+ * never arrived and the turn waited on a command that was already over. The wedge guard settles it,
+ * and the code — not the sentence — is what the card and the model both branch on.
+ */
+async function aTimedOutCommandIsCoded() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  const previousNodeEnv = process.env.NODE_ENV
+  const previousOverride = process.env[RUN_COMMAND_TIMEOUT_MS_OVERRIDE]
+  try {
+    const { EventEmitter } = await import('node:events')
+    type Emitter = InstanceType<typeof EventEmitter>
+    const child = new EventEmitter() as Emitter & {
+      stdout: Emitter
+      stderr: Emitter
+      killed: boolean
+      kill: () => boolean
+    }
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.killed = false
+    // A child that ignores the signal and never closes: the pipe-holding case the guard exists for.
+    child.kill = () => {
+      child.killed = true
+      return true
+    }
+    const spawnImpl = (() => child) as never
+
+    process.env.NODE_ENV = 'test'
+    process.env[RUN_COMMAND_TIMEOUT_MS_OVERRIDE] = '20'
+
+    const outcome = await Promise.race([
+      executeTool(
+        'run_command',
+        JSON.stringify({ command: 'sleep 100' }),
+        root,
+        new AbortController().signal,
+        spawnImpl
+      ),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), WEDGE_GUARD_MS + 800)),
+    ])
+
+    assert.ok(outcome, 'the deadline must settle the tool call rather than wait on a child that never closes')
+    assert.equal(outcome.ok, false, 'a timed-out command is a failure')
+    assert.equal(outcome.code, 'COMMAND_TIMED_OUT', 'and reaches the card as a code, never a sentence to match')
+    results.push('run_command that outlives its deadline fails with COMMAND_TIMED_OUT, even with no close')
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
+    if (previousOverride === undefined) delete process.env[RUN_COMMAND_TIMEOUT_MS_OVERRIDE]
+    else process.env[RUN_COMMAND_TIMEOUT_MS_OVERRIDE] = previousOverride
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -1147,15 +1239,23 @@ async function windowsIsToldItsShell() {
     1,
     'and the plan-discipline line appears exactly once, beside it'
   )
+  // The command-shape line is the third addition, and it is on every platform: the sentence names the
+  // Windows mechanism and the portable alternative, so one statement is true wherever it is sent.
+  assert.equal(win.split(COMMAND_BOUND_NOTE).length - 1, 1, 'and the command-shape line appears exactly once on win32')
   assert.equal(
     agentSystemPrompt('linux'),
-    `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}`,
-    'off win32 the prompt is the two platform-independent lines'
+    `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}\n${COMMAND_BOUND_NOTE}`,
+    'off win32 the prompt is the platform-independent lines'
   )
   assert.equal(
     agentSystemPrompt('darwin'),
     agentSystemPrompt('linux'),
     'and on every other platform too — the shell line is the only platform-detected part'
+  )
+  assert.equal(
+    agentSystemPrompt('linux').split(COMMAND_BOUND_NOTE).length - 1,
+    1,
+    'the command-shape line is stated once on a non-Windows host too'
   )
 
   const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
@@ -1184,6 +1284,7 @@ async function windowsIsToldItsShell() {
       1,
       'and the plan-discipline line does too, in the same message'
     )
+    assert.equal(sent[0].split(COMMAND_BOUND_NOTE).length - 1, 1, 'and so does the command-shape line')
 
     // And a resumed run re-enters with the history the pause handed back, which already carries the
     // composed prompt: the injection is refused on that fact, so the line is not sent a second time.
@@ -1628,6 +1729,8 @@ async function main() {
   await step('ReAct loop with a mocked provider', reactLoop)
   await step('write_file tool', writeThenRead)
   await step('run_command tool', runCommandTool)
+  await step('command timeout bounds', commandTimeoutBounds)
+  await step('timed-out command is coded', aTimedOutCommandIsCoded)
   await step('pauses for approval', pausesForApproval)
   await step('gated write diff', gatedWriteCarriesItsDiff)
   await step('calls behind a decision wait', callsBehindADecisionWait)

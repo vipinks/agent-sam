@@ -68,15 +68,30 @@ export const POWERSHELL_SHELL_NOTE =
   'On this machine the terminal is Windows PowerShell, so shell commands must use PowerShell syntax.'
 
 /**
+ * The one line about the shape of a shell command: bounded, observed, and never left to end on its own.
+ *
+ * A command that never exits turns a turn into a wait, and a pipeline that ends on `Select-Object -Last`
+ * buffers everything before it prints a single line — the tool card stays silent for minutes and the
+ * model cannot tell slow from hung. The line names mechanisms rather than a mood: a smoke budget, a
+ * wait-for-tripwire on Windows, or a timeout wrapper anywhere, and progress streamed as it happens.
+ *
+ * One line, on every platform: the Windows mechanism is named because that is the shell this app
+ * actually spawns there, and the timeout wrapper is the portable alternative, so the sentence is true
+ * on either host without a second variant to keep in step.
+ */
+export const COMMAND_BOUND_NOTE =
+  'Bound every shell command within a smoke budget while the command-shape line is being written.'
+
+/**
  * The agent's standing instruction as the platform composes it.
  *
- * The base line, the plan discipline line, and on Windows only the shell note: additions composed
- * into one message rather than sent as their own, so the injection rule still decides one thing — is
- * the standing instruction already in this history — instead of one thing per line, and so a resumed
- * run that already carries the composed prompt is not given a second copy of part of it. The platform
- * is a required argument rather than a defaulted `process.platform` because this module is shared with
- * the renderer, where `process` is not the main process's; the caller that runs in main is the side
- * that knows.
+ * The base line, the plan discipline line, the command-shape line, and on Windows only the shell note:
+ * additions composed into one message rather than sent as their own, so the injection rule still
+ * decides one thing — is the standing instruction already in this history — instead of one thing per
+ * line, and so a resumed run that already carries the composed prompt is not given a second copy of
+ * part of it. The platform is a required argument rather than a defaulted `process.platform` because
+ * this module is shared with the renderer, where `process` is not the main process's; the caller that
+ * runs in main is the side that knows.
  *
  * The discipline line is here rather than beside the plan rules because it is an instruction to the
  * model, not a rule the app enforces: nothing can make the model call `set_plan` on time, and what the
@@ -85,7 +100,8 @@ export const POWERSHELL_SHELL_NOTE =
  */
 export function agentSystemPrompt(platform: NodeJS.Platform): string {
   const base = `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}`
-  return platform === 'win32' ? `${base}\n${POWERSHELL_SHELL_NOTE}` : base
+  const withShell = platform === 'win32' ? `${base}\n${POWERSHELL_SHELL_NOTE}` : base
+  return `${withShell}\n${COMMAND_BOUND_NOTE}`
 }
 
 /**

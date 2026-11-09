@@ -7,10 +7,35 @@
  */
 import { strict as assert } from 'node:assert'
 import { EventEmitter } from 'node:events'
-import { resolveCwd, runCommand, shellFor, workspaceRootFromStoreFile } from '../../conveyor/modules/terminal'
+import {
+  killTreeByPlatform,
+  resolveCwd,
+  runCommand,
+  shellFor,
+  WEDGE_GUARD_MS,
+  workspaceRootFromStoreFile,
+} from '../../conveyor/modules/terminal'
 import { EXIT_MARKER, STDERR_MARKER } from '../../conveyor/protocol/terminal'
 
 const results: string[] = []
+
+/** Let the real clocks and timers in the module move; the wedge's guarantee is about wall-clock. */
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Hold the event loop open while a run is expected to settle.
+ *
+ * The deadline timer inside `runCommand` is deliberately unref'd — a timed command must not be the
+ * reason the app stays alive — and the fake child owns no real handle, so a suite parked before its
+ * deadline would let the process exit before the deadline fired. The hold is the suite's handle on the
+ * loop, not the module's; without it the later cases in this file never run at all.
+ */
+function holdLoop(ms: number): () => void {
+  const timer = setTimeout(() => undefined, ms)
+  return () => clearTimeout(timer)
+}
 
 // ---------------------------------------------------------------- a fake child process
 
@@ -28,6 +53,16 @@ class FakeChild extends EventEmitter {
   killed = false
   killSignals: string[] = []
   spawnArgs: { command: string; options: Record<string, unknown> } | null = null
+  /** The pid a tree-kill would be asked for; a real process always has one. */
+  pid = 4242
+  /**
+   * Whether the child ignores a stop.
+   *
+   * A real process can, and a grandchild holding the inherited pipes can keep `close` from ever
+   * arriving even after its parent is gone. That is the shape the wedge guard exists for, so the double
+   * has to be able to produce it.
+   */
+  ignoreKill = false
 
   private queued: Array<() => void> = []
   private drainScheduled = false
@@ -48,8 +83,8 @@ class FakeChild extends EventEmitter {
   kill(signal?: string) {
     this.killed = true
     this.killSignals.push(signal ?? 'SIGTERM')
-    // A real kill produces a close event with a signal-derived code.
-    this.enqueue(() => this.emit('close', null))
+    // A real kill produces a close event with a signal-derived code — unless the process ignores it.
+    if (!this.ignoreKill) this.enqueue(() => this.emit('close', null))
     return true
   }
 
@@ -262,10 +297,141 @@ async function deadlineKillsTheChild() {
 
   // The deadline ends the process the same way an abort does, but it is not a cancellation: the
   // caller has to be able to tell the model the tool failed because it ran too long.
-  await assert.rejects(promise, (e: { code?: string }) => e.code === 'COMMAND_TIMED_OUT')
+  const release = holdLoop(2000)
+  try {
+    await assert.rejects(promise, (e: { code?: string }) => e.code === 'COMMAND_TIMED_OUT')
+  } finally {
+    release()
+  }
   assert.equal(child.killed, true, 'the deadline must kill the process')
   assert.deepEqual(child.killSignals, ['SIGTERM'], 'the deadline kills with SIGTERM before escalating')
   results.push('a command that outlives its deadline is killed and reported as COMMAND_TIMED_OUT')
+}
+
+/**
+ * The wedge guard: a deadline's failure is this process's to state, not the child's to allow.
+ *
+ * A child that ignores SIGTERM — and, in the reported case, a grandchild that inherited the pipes —
+ * never emits `close`, so a run that waited on it would wait forever. The guard escalates once and
+ * then settles the run anyway, which is the only way the coded failure is unconditional.
+ */
+async function theDeadlineSettlesWithoutClose() {
+  const child = new FakeChild()
+  child.ignoreKill = true
+  const controller = new AbortController()
+  const outcome: { code?: string } = {}
+  const promise = collect(
+    runCommand({
+      command: 'sleep 100',
+      cwd: process.cwd(),
+      platform: 'linux',
+      signal: controller.signal,
+      timeoutMs: 20,
+      spawnImpl: spawnDouble(child),
+    })
+  )
+  // Attached rather than awaited: a promise that never settles must fail this assertion instead of
+  // hanging the suite, so the observation window is the guard's own contract plus a margin.
+  promise.catch((err: { code?: string }) => {
+    outcome.code = err.code
+  })
+  child.out('started\n')
+
+  await wait(WEDGE_GUARD_MS + 300)
+
+  assert.deepEqual(child.killSignals, ['SIGTERM', 'SIGKILL'], 'the guard escalates to SIGKILL')
+  assert.equal(outcome.code, 'COMMAND_TIMED_OUT', 'and fails the run even though close never arrives')
+  results.push('a deadline escalates and settles as COMMAND_TIMED_OUT with no close from the child')
+}
+
+/**
+ * On Windows the direct child is a shell, so a stop has to name the tree.
+ *
+ * Asserted at the seam the run uses: the pid handed to the tree-kill is the spawned process's, and the
+ * run still ends as the timeout it was rather than merely ending.
+ */
+async function theDeadlineKillsTheTreeOnWindows() {
+  const child = new FakeChild()
+  const treeKills: Array<number | undefined> = []
+  const controller = new AbortController()
+  const promise = collect(
+    runCommand({
+      command: 'sleep 100',
+      cwd: process.cwd(),
+      platform: 'win32',
+      signal: controller.signal,
+      timeoutMs: 20,
+      spawnImpl: spawnDouble(child),
+      killTreeImpl: (pid) => {
+        treeKills.push(pid)
+        // What a real `taskkill /T /F` produces: the shell and its children end, and close arrives.
+        child.close(null)
+      },
+    })
+  )
+
+  await assert.rejects(promise, (e: { code?: string }) => e.code === 'COMMAND_TIMED_OUT')
+  assert.deepEqual(treeKills, [child.pid], 'win32 asks for the spawned tree, not just the shell')
+  results.push('a deadline on win32 kills the spawned tree by pid')
+}
+
+async function abortKillsTheTreeOnWindows() {
+  const child = new FakeChild()
+  const treeKills: Array<number | undefined> = []
+  const controller = new AbortController()
+  const promise = collect(
+    runCommand({
+      command: 'sleep 100',
+      cwd: process.cwd(),
+      platform: 'win32',
+      signal: controller.signal,
+      spawnImpl: spawnDouble(child),
+      killTreeImpl: (pid) => {
+        treeKills.push(pid)
+        child.close(null)
+      },
+    })
+  )
+
+  // Stop and the deadline share the one stop path, so the tree-kill has to be true of both.
+  controller.abort()
+  await promise
+  assert.deepEqual(treeKills, [child.pid], 'Stop on win32 asks for the tree too')
+  results.push('Stop on win32 kills the spawned tree by pid')
+}
+
+/**
+ * The tree-kill request itself, read off the spawner it would use.
+ *
+ * No real taskkill runs: what is being proved is the request's shape — the platform tool, an argument
+ * array, and never a shell — against an emitter that stands in for the spawned killer.
+ */
+function treeKillUsesTaskkill() {
+  const calls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = []
+  const fakeSpawn = ((command: string, args: string[], options: Record<string, unknown>) => {
+    calls.push({ command, args, options })
+    const tree = new EventEmitter() as EventEmitter & { unref?: () => void }
+    tree.unref = () => undefined
+    return tree
+  }) as never
+
+  killTreeByPlatform(4242, 'win32', fakeSpawn)
+  assert.deepEqual(
+    calls,
+    [
+      {
+        command: 'taskkill',
+        args: ['/pid', '4242', '/T', '/F'],
+        options: { stdio: 'ignore', shell: false, windowsHide: true },
+      },
+    ],
+    'win32 ends the tree with the platform tool, as an argument array and never a shell'
+  )
+
+  killTreeByPlatform(4242, 'linux', fakeSpawn)
+  killTreeByPlatform(undefined, 'win32', fakeSpawn)
+  assert.equal(calls.length, 1, 'elsewhere, and without a pid, there is nothing to ask for')
+  results.push('win32 tree-kill is taskkill /pid <pid> /T /F, never a shell')
 }
 
 async function abortBeforeStart() {
@@ -401,6 +567,10 @@ async function main() {
   await step('output flushed after close', outputAfterCloseIsFlushed)
   await step('abort kills the child', abortKillsTheChild)
   await step('deadline kills the child', deadlineKillsTheChild)
+  await step('deadline settles without close', theDeadlineSettlesWithoutClose)
+  await step('deadline kills the tree on win32', theDeadlineKillsTheTreeOnWindows)
+  await step('abort kills the tree on win32', abortKillsTheTreeOnWindows)
+  await step('tree-kill uses taskkill', treeKillUsesTaskkill)
   await step('abort before start', abortBeforeStart)
   await step('abort ends the stream and kills the child', abandoningTheStreamKillsTheChild)
   await step('spawn failure is typed', spawnFailureIsTyped)

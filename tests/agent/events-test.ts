@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notifyWorkspaceChanged, setWorkspaceChangeSink, type WorkspaceChanged } from '../../conveyor/events'
 import { workspaceModule } from '../../conveyor/modules/workspace'
-import { runCommand, terminalModule } from '../../conveyor/modules/terminal'
+import { runCommand, terminalModule, WEDGE_GUARD_MS } from '../../conveyor/modules/terminal'
 import { executeTool } from '../../conveyor/modules/agent'
 
 const results: string[] = []
@@ -39,6 +39,8 @@ class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
   stderr = new EventEmitter()
   killed = false
+  /** Whether a stop is ignored and `close` never arrives — the pipe-holding shape the wedge settles. */
+  ignoreKill = false
   private queued: Array<() => void> = []
   private scheduled = false
 
@@ -54,8 +56,9 @@ class FakeChild extends EventEmitter {
 
   kill() {
     this.killed = true
-    // A real kill still leads to a close event, which is what ends the read loop.
-    this.enqueue(() => this.emit('close', null))
+    // A real kill still leads to a close event, which is what ends the read loop — unless the child
+    // ignores it and a descendant keeps the pipes open.
+    if (!this.ignoreKill) this.enqueue(() => this.emit('close', null))
     return true
   }
 
@@ -230,6 +233,47 @@ async function abortEmitsOnce() {
   }
 }
 
+/**
+ * A timed-out run announces once too, including the shape where `close` never arrives.
+ *
+ * A command killed at its deadline can still have written files, so the notification has to fire on the
+ * wedge guard's ending as much as on a clean close. Asserted at exactly one, because a run that is
+ * settled from outside is precisely where a second, late ending could announce again.
+ */
+async function timeoutEmitsOnce() {
+  const sink = new Sink()
+  sink.install()
+  const root = mkdtempSync(join(tmpdir(), 'sam-events-'))
+  try {
+    const child = new FakeChild()
+    child.ignoreKill = true
+    const spawnImpl = (() => child) as never
+
+    const outcome = await Promise.race([
+      drain(
+        runCommand({
+          command: 'sleep 100',
+          cwd: root,
+          platform: 'linux',
+          signal: abortSignal().signal,
+          timeoutMs: 20,
+          spawnImpl,
+        })
+      ).then(
+        () => 'resolved' as const,
+        (e: { code?: string }) => e.code ?? 'untyped'
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), WEDGE_GUARD_MS + 500)),
+    ])
+
+    assert.equal(outcome, 'COMMAND_TIMED_OUT', 'a timeout that never closes must still end the run')
+    assert.equal(sink.exited.length, 1, 'and announce exactly once, from the ending that did happen')
+    results.push('a timed-out run emits exactly one command-exited')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 async function spawnFailureEmitsOnce() {
   const sink = new Sink()
   sink.install()
@@ -313,6 +357,7 @@ async function main() {
   await step('command exit emits once', commandExitEmitsOnce)
   await step('non-zero exit emits once', nonZeroExitEmitsOnce)
   await step('abort emits once', abortEmitsOnce)
+  await step('timeout emits once', timeoutEmitsOnce)
   await step('spawn failure emits once', spawnFailureEmitsOnce)
   await step('the agent command is announced', theAgentCommandIsAnnounced)
 

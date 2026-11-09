@@ -121,6 +121,26 @@ function failedResult() {
   results.push('a refused tool is shown as failed, with its code')
 }
 
+/**
+ * A command killed at its deadline is a failed call with the code, exactly as any other refusal is.
+ *
+ * The card branches on status and code, never on the sentence main composed, so what this reducer owes
+ * the card is the two stored facts — settled-failed and `COMMAND_TIMED_OUT` — and the model's words as
+ * output. No key of its own: the timeout is not a state of the run, only a reason a call failed.
+ */
+function timedOutResult() {
+  const output = 'The command was stopped after 300 seconds because it exceeded the run_command time limit.'
+  const { turns } = run([
+    { type: 'tool_call_start', callId: 'slow', tool: 'run_command', args: { command: 'python serve.py' } },
+    { type: 'tool_result', callId: 'slow', tool: 'run_command', ok: false, code: 'COMMAND_TIMED_OUT', output },
+  ])
+  const step0 = turns[1].steps[0]
+  assert.equal(step0.status, 'failed', 'a timed-out command must not still look like it is running')
+  assert.equal(step0.code, 'COMMAND_TIMED_OUT', 'the code is what the card and the model branch on')
+  assert.equal(step0.output, output, 'the words main sent are kept for the card to show, not re-derived')
+  results.push('a timed-out command settles as failed with COMMAND_TIMED_OUT')
+}
+
 function resultForAnUnknownCallIsIgnored() {
   const { turns } = run([
     { type: 'tool_call_start', callId: 'a1', tool: 'read_file', args: {} },
@@ -622,6 +642,7 @@ function main() {
   step('narration seam', narrationSeamsBecomeParagraphs)
   step('tool lifecycle', toolLifecycle)
   step('failed result', failedResult)
+  step('timed-out result', timedOutResult)
   step('unknown call', resultForAnUnknownCallIsIgnored)
   step('multiple calls', multipleCallsInOneTurn)
   step('pause', pauseIsReported)

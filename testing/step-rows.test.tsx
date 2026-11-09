@@ -234,6 +234,42 @@ describe('a turn’s tool steps, as rows', () => {
     expect(isOpen(failed)).toBe(false)
   })
 
+  it('turns a running command into a landed failure when the result is a timeout', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    chunk(stub, channel, {
+      type: 'tool_call_start',
+      callId: 'slow',
+      tool: 'run_command',
+      args: { command: 'python serve.py' },
+    })
+    await waitFor(() => expect(rows().length).toBe(1))
+
+    const running = rowFor('Running python serve.py')
+    // In flight: open, and wearing the spinner rather than an outcome glyph.
+    expect(isOpen(running)).toBe(true)
+    expect(within(running).getByLabelText('running')).toBeTruthy()
+
+    chunk(stub, channel, {
+      type: 'tool_result',
+      callId: 'slow',
+      tool: 'run_command',
+      ok: false,
+      code: 'COMMAND_TIMED_OUT',
+      output: 'The command was stopped after 300 seconds because it exceeded the run_command time limit.',
+    })
+    finishTurn(stub, channel)
+
+    // The card branches on the result's status and code, never on the sentence: the spinner is gone and
+    // the row is a failed, folded row whose body still carries what main said the ending was.
+    await waitFor(() => expect(within(running).queryAllByLabelText('running')).toHaveLength(0))
+    const settled = rowFor('Running python serve.py')
+    expect(within(settled).getByLabelText('failed')).toBeTruthy()
+    expect(isOpen(settled)).toBe(false)
+    expect(body(settled).textContent).toContain('exceeded the run_command time limit')
+  })
+
   it('opens the row of a step waiting on the user, with its decision reachable', async () => {
     const stub = stubChat()
     const channel = await startRun(stub)
