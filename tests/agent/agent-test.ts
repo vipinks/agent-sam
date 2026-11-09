@@ -30,6 +30,7 @@ import {
   assembleSystemContext,
   COMMAND_BOUND_NOTE,
   PLAN_DISCIPLINE_NOTE,
+  POWERSHELL_QUOTING_NOTE,
   POWERSHELL_SHELL_NOTE,
   SURGICAL_EDIT_NOTE,
 } from '../../conveyor/protocol/context'
@@ -1406,6 +1407,13 @@ async function windowsIsToldItsShell() {
   assert.ok(win.startsWith(AGENT_SYSTEM_PROMPT), 'the standing instruction still leads the prompt')
   assert.equal(win.split(POWERSHELL_SHELL_NOTE).length - 1, 1, 'the shell line appears exactly once on win32')
   assert.ok(/powershell/i.test(POWERSHELL_SHELL_NOTE), 'and names the shell the terminal actually is')
+  // The quoting note is the fifth addition and the second win32-only one: it is a fact about this
+  // shell, not about commands in general, so a host that spawns bash must not be told it. It is
+  // composed after the shell line and before the command-shape line, so the exact-equality pins
+  // below — which start at the command-shape line — still describe the tail this change left alone.
+  assert.equal(win.split(POWERSHELL_QUOTING_NOTE).length - 1, 1, 'the quoting note appears exactly once on win32')
+  assert.equal(agentSystemPrompt('linux').split(POWERSHELL_QUOTING_NOTE).length - 1, 0, 'and never off win32')
+  assert.equal(agentSystemPrompt('darwin').split(POWERSHELL_QUOTING_NOTE).length - 1, 0, 'nor on darwin')
   assert.equal(
     win.split(PLAN_DISCIPLINE_NOTE).length - 1,
     1,

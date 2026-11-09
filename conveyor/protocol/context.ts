@@ -68,6 +68,23 @@ export const POWERSHELL_SHELL_NOTE =
   'On this machine the terminal is Windows PowerShell, so shell commands must use PowerShell syntax.'
 
 /**
+ * The second line a Windows machine needs: how to keep a literal literal.
+ *
+ * The shell line says what the terminal is; this one says what that costs a command carrying text.
+ * A `"` inside a `"`-quoted argument, or a regex character handed to `Select-String`, is a quoting
+ * question before it is a matching one, and getting it wrong fails the command for a reason that
+ * reads like the model picked the wrong approach — so it spent a step adapting to something a line
+ * could have stated. It names both halves concretely: quote the literal, and ask for a literal match
+ * instead of letting the pattern language decide one.
+ *
+ * One line, and deliberately narrower than its neighbours: bounding a pipeline is
+ * `COMMAND_BOUND_NOTE`'s job and never scripting an edit is `SURGICAL_EDIT_NOTE`'s, so this line
+ * spends its characters on quoting alone rather than repeating a rule that already has an owner.
+ */
+export const POWERSHELL_QUOTING_NOTE =
+  'Quote literal text explicitly: single-quote any argument containing quotes or regex characters, and use Select-String -SimpleMatch for literal matches; never nest unescaped quotes.'
+
+/**
  * The one line about the shape of a shell command: bounded, observed, and never left to end on its own.
  *
  * A command that never exits turns a turn into a wait, and a pipeline that ends on `Select-Object -Last`
@@ -101,12 +118,12 @@ export const SURGICAL_EDIT_NOTE =
  * The agent's standing instruction as the platform composes it.
  *
  * The base line, the plan discipline line, the command-shape line, the surgical-edit line, and on
- * Windows only the shell note: additions composed into one message rather than sent as their own, so
- * the injection rule still decides one thing — is the standing instruction already in this history —
- * instead of one thing per line, and so a resumed run that already carries the composed prompt is not
- * given a second copy of part of it. The platform is a required argument rather than a defaulted
- * `process.platform` because this module is shared with the renderer, where `process` is not the main
- * process's; the caller that runs in main is the side that knows.
+ * Windows only the shell and quoting notes: additions composed into one message rather than sent as
+ * their own, so the injection rule still decides one thing — is the standing instruction already in
+ * this history — instead of one thing per line, and so a resumed run that already carries the
+ * composed prompt is not given a second copy of part of it. The platform is a required argument
+ * rather than a defaulted `process.platform` because this module is shared with the renderer, where
+ * `process` is not the main process's; the caller that runs in main is the side that knows.
  *
  * The discipline line is here rather than beside the plan rules because it is an instruction to the
  * model, not a rule the app enforces: nothing can make the model call `set_plan` on time, and what the
@@ -115,7 +132,7 @@ export const SURGICAL_EDIT_NOTE =
  */
 export function agentSystemPrompt(platform: NodeJS.Platform): string {
   const base = `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}`
-  const withShell = platform === 'win32' ? `${base}\n${POWERSHELL_SHELL_NOTE}` : base
+  const withShell = platform === 'win32' ? `${base}\n${POWERSHELL_SHELL_NOTE}\n${POWERSHELL_QUOTING_NOTE}` : base
   return `${withShell}\n${COMMAND_BOUND_NOTE}\n${SURGICAL_EDIT_NOTE}`
 }
 
