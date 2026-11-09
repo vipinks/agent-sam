@@ -14,13 +14,14 @@
  * Whether the URL then *loads* is the renderer's policy question rather than a wiring one, and it is
  * answered by loading one under the app's own `img-src` in a real Electron renderer, not by jsdom.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
+import { MOTION_QUICK_MS } from '@/app/components/workbench/motion'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
 /**
@@ -56,6 +57,11 @@ beforeEach(() => {
   createdObjectUrls.length = 0
   // The code viewer's open file lives in the workbench store, which outlives a test.
   useWorkbenchStore.setState({ selectedFile: null })
+})
+
+/** The clock is real except around the one exit window below; a faked one would poison every test after it. */
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 const SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -181,20 +187,33 @@ describe('the composer chip’s thumbnail', () => {
     expect(createObjectURL).toHaveBeenCalledTimes(2)
 
     const [keptUrl, droppedUrl] = createdObjectUrls
-    await userEvent.click(screen.getByLabelText('Remove drop.png'))
 
-    await waitFor(() => expect(chipThumbnails().length).toBe(1))
     // The row clearing and the URL coming back are two steps, not one: the removed chip is drawn for one
     // exit window (`useLeavingItems`), and its URL is revoked by the chip's own unmount cleanup
-    // (`useThumbnailUrl`), which React runs after the commit that took the chip out of the tree. So an
-    // empty row is one step earlier than the release, not the release itself — waiting for the DOM alone
-    // let a loaded machine assert in between and read a revoke that had not happened yet.
-    //
-    // Waited for as the effect it is, rather than assumed from the tree: the claim stays that the removed
-    // chip's URL is released exactly once, only now the assertion is allowed to see the step it is made in.
-    await waitFor(() => expect(revokesOf(droppedUrl)).toHaveLength(1))
+    // (`useThumbnailUrl`), which React runs after the commit that took the chip out of the tree. Waiting
+    // on the one-chip tree is what makes the assertion a race — under load the wait can resume between
+    // those steps and read a revoke that has not happened yet. The window is a timer the removal's own
+    // render schedules, so faking the clock and advancing it by hand drives the exit deterministically.
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(screen.getByLabelText('Remove drop.png'))
+      // Still drawn: the window belongs to the row, not to the click.
+      expect(chipThumbnails().length).toBe(2)
+
+      // Past the window, so the chip unmounts; the extra act turn flushes the passive cleanup that owns
+      // the release. No `waitFor` here — it would advance the very clock under test.
+      act(() => void vi.advanceTimersByTime(MOTION_QUICK_MS))
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The claim, unchanged: the removed chip's URL is released exactly once, and the kept chip's is not
+    // released at all.
+    expect(revokesOf(droppedUrl)).toHaveLength(1)
     expect(revokesOf(keptUrl)).toEqual([])
     // And the chip that stayed is still drawing its own picture.
+    expect(chipThumbnails().length).toBe(1)
     expect(chipThumbnails()[0].src).toBe(keptUrl)
   })
 })

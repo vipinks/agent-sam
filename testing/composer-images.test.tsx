@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ConveyorError } from 'electron-conveyor/react'
@@ -7,6 +7,7 @@ import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-c
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { ATTACHMENT_ACCEPT_ATTRIBUTE } from '@/app/components/workbench/attachments'
+import { MOTION_QUICK_MS } from '@/app/components/workbench/motion'
 import { IMAGE_ATTACHMENT_MIME_TYPES } from '@/conveyor/protocol/image-attachments'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
@@ -86,6 +87,14 @@ beforeEach(() => {
   useWorkbenchStore.setState({ selectedFile: null })
 })
 
+/**
+ * The clock is real except around the two exit windows below, and a test that leaves it faked would
+ * poison every test after it — `waitFor` and `userEvent` both wait on real timers.
+ */
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 const SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
 
 /**
@@ -159,6 +168,30 @@ async function composer(): Promise<HTMLTextAreaElement> {
 /** The composer's draft chips, in the order they are rendered. */
 function draftChips(): string[] {
   return [...document.querySelectorAll('[data-slot="attachment-chip"]')].map((chip) => chip.textContent ?? '')
+}
+
+/** The chips the row is still drawing for their exit window, which the draft has already dropped. */
+function leavingChips(): number {
+  return document.querySelectorAll('[data-slot="attachment-chip"][data-leaving="true"]').length
+}
+
+/**
+ * Drain a send's promise chain until the row has started its exit window.
+ *
+ * A send is asynchronous: it stores its images and only then clears the row, so the window opens a few
+ * promise turns after the keypress rather than inside it. Draining microtasks is enough — the transport
+ * answers with promises — and the window's own timer is faked by the caller, so the row cannot finish
+ * leaving until the test advances it. The loop watches the rendered leaving mark rather than counting
+ * turns, so it cannot pass early or hang on how many awaits a send happens to make.
+ */
+async function untilRowLeaves(images: number): Promise<void> {
+  for (let turn = 0; turn < 100; turn += 1) {
+    if (leavingChips() === images) return
+    await act(async () => {
+      await Promise.resolve()
+    })
+  }
+  throw new Error('the send never started the row’s exit window')
 }
 
 /** The reference chips a sent message draws, in the order they were attached. */
@@ -372,12 +405,31 @@ describe('taking a chip off', () => {
     // Two thumbnails, so two URLs are out there and each has to come back.
     expect(createObjectURL).toHaveBeenCalledTimes(2)
 
-    await userEvent.click(screen.getByLabelText('Remove drop.png'))
+    // The removal is a window, not a step: the row keeps the dropped chip mounted for `MOTION_QUICK_MS`
+    // (`useLeavingItems`), and its URL comes back only when that chip unmounts — one scheduler step after
+    // the commit that takes it out of the tree (`useThumbnailUrl`'s cleanup). Waiting on the DOM turns
+    // that into a race: under load the wait can resume between the two steps and read a revoke that has
+    // not happened yet. The window is a timer the removal's own render schedules, so faking the clock
+    // and advancing it by hand drives the exit the product deliberately opens, and the revoke is asserted
+    // in the step it is actually made in.
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(screen.getByLabelText('Remove drop.png'))
+      // Still drawn: the window belongs to the row, not to the click.
+      expect(draftChips().length).toBe(2)
 
-    await waitFor(() => expect(draftChips().length).toBe(1))
-    expect(draftChips()[0]).toContain('keep.png')
-    // Revoked, not merely unrendered: the URL holds the bytes alive until it is released.
+      // Past the window, so the chip unmounts; the extra act turn is where the passive unmount cleanup
+      // that owns the release is flushed. No `waitFor` here: it would advance the very clock under test.
+      act(() => void vi.advanceTimersByTime(MOTION_QUICK_MS))
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
     expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[1])
+    expect(draftChips().length).toBe(1)
+    expect(draftChips()[0]).toContain('keep.png')
 
     // And gone from the draft, which is what a send proves: only the image left is stored.
     await userEvent.type(await composer(), 'look at this{Enter}')
@@ -391,21 +443,36 @@ describe('taking a chip off', () => {
     fireEvent.drop(await composer(), { dataTransfer: { files: [imageFile('one.png'), imageFile('two.png')] } })
     await waitFor(() => expect(draftChips().length).toBe(2))
 
-    await userEvent.type(await composer(), 'both of these{Enter}')
+    // The composer is found before the clock is faked: `composer()` waits on a real timer, and a
+    // `waitFor` cannot run once the clock it polls is the test's.
+    const area = await composer()
 
-    // The row clears after a successful send, and the chips going away is what releases their URLs — but
-    // the two happen in different steps. The row keeps a dropped chip for one exit window
-    // (`useLeavingItems`), and the URL is revoked by the chip's own unmount cleanup (`useThumbnailUrl`),
-    // which React runs after the commit that took the chips out of the tree. So an empty row is one step
-    // earlier than the release, not the release itself: waiting for the DOM alone lets a loaded machine
-    // assert in between and read a revoke that has not happened yet.
-    await waitFor(() => expect(draftChips()).toEqual([]))
-    // Waited for as the effect it is, rather than assumed from the tree: the claim stays that every chip's
-    // URL came back, only now the assertion is allowed to see the step it is actually made in.
-    await waitFor(() => {
-      expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[0])
-      expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[1])
-    })
+    // The same window as a removal, reached by a different door: a successful send clears the images
+    // after it has stored them, the row keeps both chips mounted for `MOTION_QUICK_MS` (`useLeavingItems`),
+    // and each URL is released by its chip's own unmount cleanup (`useThumbnailUrl`) one scheduler step
+    // after the commit that empties the row. Waiting for the empty row alone lets a loaded machine assert
+    // in between and read zero revokes; faking the clock makes the two steps separable, because the
+    // window is a timer the clear schedules and it opens only when this test says so.
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(area, { target: { value: 'both of these' } })
+      fireEvent.keyDown(area, { key: 'Enter' })
+
+      // The send stores each image before it clears the row, so the window opens a few promise turns
+      // after the keypress; drain that chain first, watching the leaving mark rather than the clock.
+      await untilRowLeaves(2)
+
+      act(() => void vi.advanceTimersByTime(MOTION_QUICK_MS))
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(draftChips()).toEqual([])
+    // Every chip's URL came back, exactly once each: the row clearing is what released them.
+    expect(revokeObjectURL).toHaveBeenCalledTimes(2)
+    expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[0])
+    expect(revokeObjectURL).toHaveBeenCalledWith(createdObjectUrls[1])
   })
 })
 
