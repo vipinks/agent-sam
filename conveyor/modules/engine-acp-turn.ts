@@ -9,6 +9,7 @@ import {
   type EngineId,
 } from '../protocol/engine'
 import type { EngineTranscriptChunk } from '../protocol/codex-turn'
+import { isResumable, type TurnEndCause } from '../protocol/turn-end'
 import { createAcpClient, type AcpSpawnImpl } from './engine-acp'
 
 /**
@@ -101,7 +102,9 @@ export interface AcpTurnOutcome {
  * The ending is drawn here rather than by the mapper, because the protocol's own ending is a *response* rather
  * than an update on the wire: `model_stop` when the turn said something and stopped, and `empty_stop` when it
  * stopped having said nothing — the same two words the exec dialect's ending is worded with, so the pane's own
- * notice needs no second vocabulary.
+ * notice needs no second vocabulary. The ending is said out loud before the turn is over, for the reason the
+ * Codex runner's is: a bare `turn_end` is read by nobody downstream, and an ordinary stop is the one ending
+ * that needs nothing said about it.
  *
  * A refusal to resolve, a handshake the agent answered with an error, and a session that could not be opened
  * all travel as `ConveyorError`s with the law's or the protocol's own code. The caller branches on the code and
@@ -132,11 +135,39 @@ export async function runAcpTurn(
 
   let sawText = false
 
+  /**
+   * Whether this turn has already worded its ending.
+   *
+   * One turn, one ending: the ending goes out through `endTurn` and nowhere else, so a second call is refused
+   * rather than doubled. A failure never reaches that function — a refused call ends the turn by rejecting,
+   * which is the one ending `engine.ts` raises to the pane — so the close that follows cannot invent a second
+   * one, and no separate flag is needed to remember a notice that has already been spoken.
+   */
+  let settled = false
+
   const emit = (chunks: readonly EngineTranscriptChunk[]): void => {
     for (const chunk of chunks) {
       if (chunk.type === 'text_delta' && chunk.text.trim() !== '') sawText = true
       onChunk(chunk)
     }
+  }
+
+  /**
+   * Word this turn's ending, once.
+   *
+   * The notice comes first and the ending second, in the words main uses (agent.ts:1155-1164): a bare
+   * `turn_end` is read by nobody on this path, so an engine that stopped without saying anything would end on
+   * silence — or, with tools behind it, on the mid-work card. The ordinary ending stays silent, exactly as it
+   * does on main, and `isResumable` is what makes the notice offer Continue: an empty stop is a stop with
+   * something left to say, not a turn that finished.
+   */
+  const endTurn = (cause: TurnEndCause): void => {
+    if (settled) return
+    settled = true
+    if (cause !== 'model_stop') {
+      emit([{ type: 'turn_end_notice', cause, resumable: isResumable(cause) }])
+    }
+    emit([{ type: 'turn_end', cause }])
   }
 
   const client = createAcpClient({
@@ -190,7 +221,7 @@ export async function runAcpTurn(
     const result = await client.prompt(input.prompt)
     if (cancelled) return { stopReason: result.stopReason, cancelled: true }
 
-    emit([{ type: 'turn_end', cause: sawText ? 'model_stop' : 'empty_stop' }])
+    endTurn(sawText ? 'model_stop' : 'empty_stop')
     return { stopReason: result.stopReason, cancelled: false }
   } catch (error) {
     // A cancel rejects the call that was in flight — the client refuses what it was waiting on when it closes —

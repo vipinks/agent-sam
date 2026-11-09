@@ -40,6 +40,10 @@
  *                to end the tree rather than the process it was pointed at.
  * - die          exit mid-turn, after the handshake, without answering the prompt, so the client's
  *                close-event path is stated as an assertion rather than inferred.
+ * - silent-ok    answer the prompt with an ordinary stop and nothing said, then close on zero: the turn
+ *                whose answer was never written, which the runner has to word rather than let end on silence.
+ * - failed-ok    answer the prompt with a JSON-RPC error of its own, then close on zero — a turn that
+ *                declares its own failure, whose exit must not word a second ending over the declared one.
  */
 
 const { spawn } = require('node:child_process')
@@ -185,6 +189,19 @@ async function handle(message) {
     if (mode === 'die') {
       // A process that ends mid-turn: the client's close event is the only thing that can end this turn.
       process.exit(2)
+    }
+
+    // The two endings a prompt can leave without a tool call: one answered with nothing said, and one the
+    // agent declares failed. Both go out through the write's own callback and the process closes after it,
+    // because the answer has to be on the pipe before the process ends — the suite is observing an ending,
+    // not racing its own fixture.
+    if (mode === 'silent-ok' || mode === 'failed-ok') {
+      const answer =
+        mode === 'silent-ok'
+          ? { jsonrpc: '2.0', id: message.id, result: { stopReason: 'end_turn' } }
+          : { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'the model failed' } }
+      process.stdout.write(JSON.stringify(answer) + '\n', () => process.exit(0))
+      return
     }
 
     if (mode === 'grandchild' || mode === 'grandchild-stalled') {

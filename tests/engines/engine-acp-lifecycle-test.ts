@@ -1,7 +1,8 @@
 /**
  * The ACP engine's turn lifecycle, as a process: one child per turn, the child's whole tree reaped when the
- * turn ends, and every way a turn can end — success, refusal, cancel, a child that dies, a call that is never
- * answered — ending *within a stated bound* with a traced cause instead of leaving the pane on Thinking.
+ * turn ends, and every way a turn can end — success with an answer, success with nothing said, a failure the
+ * agent declares, refusal, cancel, a child that dies, a call that is never answered — ending *within a stated
+ * bound* with a traced cause instead of leaving the pane on Thinking.
  *
  * The defect this suite was written red against, and the live evidence for it: the second and third prompts of
  * an OpenCode session hung on Thinking with no `[engine]` line in the terminal, while the first turn streamed
@@ -407,6 +408,80 @@ async function aChildThatDiesMidTurnEndsWithATracedCause() {
   }
 }
 
+/**
+ * A turn that stops with nothing said ends on an empty stop, and the ending is said out loud.
+ *
+ * The defect this pins, measured on the tree before the change: the runner emitted a bare `turn_end`, the
+ * reducer answered it with `effect.turnEnd`, and the pane's run loop reads that effect nowhere — so the turn
+ * closed on the default `model_stop` and an empty reply ended in silence, or on the mid-work card when tools
+ * had run. Main has always said such endings out loud before ending the turn (`agent.ts:1155-1164`), and
+ * `isResumable` is what makes the notice offer Continue: an empty stop is a stop with something left to say.
+ *
+ * The order is the claim: the notice first, then the ending it belongs to.
+ */
+async function aSilentTurnEndsOnASaidEmptyStop() {
+  const run = fixtureSpawn('silent-ok')
+  runs.push(run)
+  try {
+    const turn = await oneTurn(run, 'a question answered with nothing')
+
+    assert.equal(turn.ended, true, 'the turn ends inside the bound')
+    assert.equal(turn.error, null, 'without a failure')
+    assert.deepEqual(
+      typesOf(turn.chunks),
+      ['turn_end_notice', 'turn_end'],
+      'the notice, then the ending it belongs to: an ending said out loud, never a bare one'
+    )
+    const notice = turn.chunks[0]
+    assert.equal(notice?.type === 'turn_end_notice' ? notice.cause : '', 'empty_stop', 'an empty stop')
+    assert.equal(notice?.type === 'turn_end_notice' ? notice.resumable : false, true, 'and the notice offers Continue')
+    const ending = turn.chunks[1]
+    assert.equal(ending?.type === 'turn_end' ? ending.cause : '', 'empty_stop', 'the ending agrees with the notice')
+    assert.equal(turn.outcome?.stopReason, 'end_turn', "on the agent's own word for why it stopped")
+
+    results.push('a turn that stopped without saying anything says so before it ends')
+  } finally {
+    reap([run])
+  }
+}
+
+/**
+ * A failure the child declares, and then a clean close, is one ending and not two.
+ *
+ * An ACP turn's ending is the response to `session/prompt`, so a failure the agent declares arrives as a
+ * refusal of that call: the mapper draws no ending of its own (`acp-turn.ts:62-64`), and the rejection is the
+ * one ending the module raises to the pane (`engine.ts:561-583`). The count is what this states — one ending
+ * reaches the transcript's owner, and the close that follows words nothing over it.
+ *
+ * The shape worth guarding is the fix's own: had the notice been emitted on the close path rather than on the
+ * answered path, this turn would have gained a second ending — the `empty_stop` a silent clean exit implies —
+ * over a failure the agent had already named.
+ */
+async function aDeclaredFailureEndsTheTurnOnce() {
+  const run = fixtureSpawn('failed-ok')
+  runs.push(run)
+  try {
+    const turn = await oneTurn(run, 'a question the model declared failed')
+
+    assert.equal(turn.ended, true, 'the close after the declared failure ends the turn')
+    assert.equal(turn.outcome, null, 'it does not come back as a completed turn')
+    assert.ok(turn.error instanceof Error, 'the failure is the ending the pane words')
+    assert.equal(
+      (turn.error as { code?: unknown }).code,
+      ACP_CODES.ACP_REFUSED,
+      'carrying the code the agent\u2019s refusal travelled under'
+    )
+
+    const endingLike = turn.chunks.filter((chunk) => chunk.type === 'turn_end' || chunk.type === 'turn_end_notice')
+    assert.deepEqual(endingLike, [], 'and the close adds no ending of its own over the one already declared')
+    assert.equal(endingLike.length + (turn.error === null ? 0 : 1), 1, 'exactly one ending, never two')
+
+    results.push('a child that declares its own failure ends the turn once, not twice')
+  } finally {
+    reap([run])
+  }
+}
+
 /** Cancel: the user's own click ends the turn silently, and the child's tree dies with it. */
 async function cancelEndsTheTreeAndTheTurn() {
   const run = fixtureSpawn('grandchild-stalled')
@@ -465,6 +540,8 @@ async function main() {
   await step('unanswered call', aCallThatIsNeverAnsweredEndsWithATracedCause)
   await step('refused handshake', aRefusedHandshakeEndsWithATracedCause)
   await step('child death', aChildThatDiesMidTurnEndsWithATracedCause)
+  await step('silent turn', aSilentTurnEndsOnASaidEmptyStop)
+  await step('declared failure', aDeclaredFailureEndsTheTurnOnce)
   await step('cancel', cancelEndsTheTreeAndTheTurn)
 
   if (failures.length > 0) {
