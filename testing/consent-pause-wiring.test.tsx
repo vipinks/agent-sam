@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider, useChatSessionsContext } from '@/app/components/workbench/chat-sessions-context'
@@ -556,6 +556,61 @@ describe('a consent pause', () => {
     const statuses = writes[0].snapshot.turns.flatMap((turn) => turn.steps.map((step) => step.status))
     expect(statuses).not.toContain('awaiting')
     expect(statuses).not.toContain('queued')
+  })
+
+  it('writes the paused turn once as interrupted when the window unloads', async () => {
+    // A conversation that already has a file, so the ending is a write against bytes that exist rather
+    // than the first file a session is ever given.
+    const stored: TranscriptSnapshot = {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        { id: 'user-1', role: 'user', content: 'tidy the module', steps: [] },
+        { id: 'assistant-2', role: 'assistant', content: 'Which module?', steps: [] },
+      ],
+    }
+    const { stub, transcripts } = renderChat({ files: { [FIRST_ID]: stored } })
+    await screen.findByText('Which module?')
+
+    const asked = 'quit while the question stands'
+    const channel = await startRun(stub, asked)
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'c1', tool: 'write_file', args: { path: 'a.ts' } })
+    chunk(
+      stub,
+      channel,
+      pause({ callId: 'c1', args: { path: 'a.ts' }, calls: [call('c1', 'write_file', { path: 'a.ts', content: 'x' })] })
+    )
+    await screen.findByRole('button', { name: 'Approve' })
+
+    // Standing still is not an ending: the debounce fires and finds nothing it may write. Only the
+    // deliberate exit below may turn the question into an ending.
+    await afterDebounce()
+    expect(pausedSaveCalls(stub)).toHaveLength(0)
+
+    act(() => {
+      window.dispatchEvent(new Event('beforeunload'))
+    })
+
+    // One write carrying this send, recorded as the named ending load would have given it: the call is
+    // never decided under the lost-pause code, and the turn carries the same lost-pending notice — so a
+    // reload shows an interrupted turn rather than one that was lost or one still waiting to be answered.
+    await waitFor(() =>
+      expect(saveCalls(stub).filter((call) => call.snapshot.turns.some((turn) => turn.content === asked))).toHaveLength(
+        1
+      )
+    )
+    const writes = saveCalls(stub).filter((call) => call.snapshot.turns.some((turn) => turn.content === asked))
+    expect(writes[0].id).toBe(FIRST_ID)
+    const statuses = writes[0].snapshot.turns.flatMap((turn) => turn.steps.map((step) => step.status))
+    expect(statuses).not.toContain('awaiting')
+    expect(statuses).not.toContain('queued')
+    const lost = writes[0].snapshot.turns.flatMap((turn) => turn.steps).filter((step) => step.code === 'PAUSE_LOST')
+    expect(lost).toHaveLength(1)
+    expect(lost[0].status).toBe('interrupted')
+    expect(writes[0].snapshot.turns.some((turn) => turn.endNotice?.lostPending === true)).toBe(true)
+
+    // And the file the reload would read is that same ending, not the transcript as it stood before it.
+    expect(transcripts.files[FIRST_ID]).toEqual(writes[0].snapshot)
   })
 
   it('writes the approved turn once, when the run it resumed comes to rest', async () => {

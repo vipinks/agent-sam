@@ -18,6 +18,7 @@ import {
   type AgentTurn,
   type PendingCall,
 } from './agent-session'
+import type { TranscriptSnapshot } from '@/conveyor/protocol/transcript'
 import { compactionRange, summarizeRange } from '@/conveyor/protocol/truncate'
 import { pastCompactPoint, resolveWindow } from '@/conveyor/protocol/context-window'
 import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
@@ -697,6 +698,35 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   }, [])
 
   /**
+   * The one IPC write a save performs.
+   *
+   * Split out of `saveNow` for the quit seam: the ending written on a deliberate exit is a snapshot the
+   * live transcript does not hold — the pause has been reconciled on a copy — and that copy has already
+   * passed the gate `saveNow` applies. Both callers still cross the bridge with the same payload and the
+   * same coded failure, so there is one writer rather than a second save path.
+   */
+  const writeSnapshot = useCallback(
+    async (id: string, snapshot: TranscriptSnapshot, options?: SaveOptions): Promise<ConveyorError | null> => {
+      try {
+        await conveyor.sessions.saveTranscript({
+          id,
+          snapshot,
+          // Written only for the delete-save, so every other save's payload keeps the shape it had.
+          ...(options?.deletedTurnIds === undefined ? {} : { deletedTurnIds: [...options.deletedTurnIds] }),
+        })
+        return null
+      } catch (error) {
+        // Branched on by the caller through the code, never the message: the reason the write failed is
+        // main's, and the sentence a person reads is this side's.
+        return error instanceof ConveyorError
+          ? error
+          : new ConveyorError('SESSION_WRITE_FAILED', 'Could not save this conversation.')
+      }
+    },
+    []
+  )
+
+  /**
    * Write the active transcript, if it has changed and may be written.
    *
    * Guarded four ways: no session, nothing written yet, not actually different, and a pause awaiting
@@ -720,38 +750,29 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
    * to be able to say the removal did not land. Returning the coded error keeps both honest without a
    * second save path.
    */
-  const saveNow = useCallback(async (options?: SaveOptions): Promise<ConveyorError | null> => {
-    const id = activeIdRef.current
-    if (!id) return null
-    const snapshot = serializeTranscript(transcriptRef.current)
-    // An empty conversation is never written for a session that never had one: a session the user
-    // created and left is not a session with a transcript. The other exception is `isDirty`'s — a
-    // session whose user turned auto-approve on has a choice to remember before it has a message.
-    if (snapshot.turns.length === 0 && snapshot.autoApprove !== true && savedRef.current === null) return null
-    if (savedRef.current && !isDirty(transcriptRef.current, savedRef.current)) return null
-    // The gate, after the snapshot and before the write: a pause is not persisted, wherever the turn
-    // that holds it came from — the debounce, a blur, a switch or the consent toggle. What the card
-    // needs is kept above the pane and served back on a return, so skipping here loses nothing.
-    if (!mayPersist(transcriptRef.current)) return null
+  const saveNow = useCallback(
+    async (options?: SaveOptions): Promise<ConveyorError | null> => {
+      const id = activeIdRef.current
+      if (!id) return null
+      const snapshot = serializeTranscript(transcriptRef.current)
+      // An empty conversation is never written for a session that never had one: a session the user
+      // created and left is not a session with a transcript. The other exception is `isDirty`'s — a
+      // session whose user turned auto-approve on has a choice to remember before it has a message.
+      if (snapshot.turns.length === 0 && snapshot.autoApprove !== true && savedRef.current === null) return null
+      if (savedRef.current && !isDirty(transcriptRef.current, savedRef.current)) return null
+      // The gate, after the snapshot and before the write: a pause is not persisted, wherever the turn
+      // that holds it came from — the debounce, a blur, a switch or the consent toggle. What the card
+      // needs is kept above the pane and served back on a return, so skipping here loses nothing.
+      if (!mayPersist(transcriptRef.current)) return null
 
-    try {
-      await conveyor.sessions.saveTranscript({
-        id,
-        snapshot,
-        // Written only for the delete-save, so every other save's payload keeps the shape it had.
-        ...(options?.deletedTurnIds === undefined ? {} : { deletedTurnIds: [...options.deletedTurnIds] }),
-      })
+      const failure = await writeSnapshot(id, snapshot, options)
+      if (failure !== null) return failure
       if (!mountedRef.current) return null
       savedRef.current = snapshot
       return null
-    } catch (error) {
-      // Branched on by the caller through the code, never the message: the reason the write failed is
-      // main's, and the sentence a person reads is this side's.
-      return error instanceof ConveyorError
-        ? error
-        : new ConveyorError('SESSION_WRITE_FAILED', 'Could not save this conversation.')
-    }
-  }, [])
+    },
+    [writeSnapshot]
+  )
 
   /**
    * Delete a turn and every turn after it.
@@ -967,18 +988,51 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     [saveNow, setTranscript]
   )
 
+  /**
+   * Write every pause that stands when the window is deliberately going away.
+   *
+   * This is the other half of the write gate. A pause is never written while it is live, and a quit
+   * that only called `saveNow` would therefore lose the turn the pause was holding. A deliberate
+   * ending is not a pause, so each held conversation is reconciled on its own copy — the same named
+   * ending a later load would have given it (`interrupted`, `PAUSE_LOST`, `lostPending`) — and written
+   * exactly once. The copy is reconciled in memory only: the window is going away, and the card is not.
+   *
+   * Every held conversation is walked, not just the active one, because a same-root session switch is
+   * allowed while a pause stands: the pause's conversation may no longer be the one on screen, while
+   * its transcript is still kept under it. `pausedTranscriptsRef` holds those copies; an id without one
+   * is skipped rather than guessed at from the live transcript.
+   *
+   * `mayPersist` is checked again on the reconciled copy. It should always pass — the reconcile is what
+   * removes the awaiting/queued steps the gate refuses — and the check is here so a state this flush
+   * cannot name as ended is left unwritten rather than written as a pause.
+   */
+  const flushPausesOnExit = useCallback(() => {
+    for (const id of Object.keys(pausesRef.current)) {
+      const held = pausedTranscriptsRef.current[id]
+      if (!held) continue
+      const ending = reconcileOrphanedPauses(held)
+      if (!mayPersist(ending)) continue
+      void writeSnapshot(id, serializeTranscript(ending))
+    }
+  }, [writeSnapshot])
+
   // Best-effort saves on the two ways a window can go away. Neither is guaranteed to complete, which
   // is why the debounced save exists as the primary path — these only narrow the window.
   useEffect(() => {
     const onBlur = () => void saveNow()
-    const onBeforeUnload = () => void saveNow()
+    // The deliberate ending, and the one place a held pause may be written. Focus loss (`blur`) is not
+    // an exit: it keeps the plain save, which writes nothing while a pause merely stands.
+    const onBeforeUnload = () => {
+      flushPausesOnExit()
+      void saveNow()
+    }
     window.addEventListener('blur', onBlur)
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => {
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('beforeunload', onBeforeUnload)
     }
-  }, [saveNow])
+  }, [flushPausesOnExit, saveNow])
 
   const addSession = useConveyorActions(chatSessionsStore).addSession
   const setActive = useConveyorActions(chatSessionsStore).setActive
