@@ -9,10 +9,10 @@ import {
   settingsModule,
   setCustomProviderIds,
   clearProviderKey,
-  PROVIDERS,
   DEFAULT_MODELS,
   configuredProviderIdsSync,
 } from './modules/settings'
+import { PROVIDERS } from './protocol/providers'
 import {
   combosModule,
   setCombosSink,

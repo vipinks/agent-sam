@@ -7,6 +7,7 @@ import {
   newProviderId,
   validateProviderDraft,
 } from '@/conveyor/protocol/custom-provider'
+import { PROVIDERS } from '@/conveyor/protocol/providers'
 
 /**
  * The rules that decide whether a custom provider may exist, and under what name and id.
@@ -72,6 +73,18 @@ describe('a provider id', () => {
   it('cannot collide with an id already in use', () => {
     expect(newProviderId('Local Llama', ['local-llama'])).toBe('local-llama-2')
     expect(newProviderId('Local Llama', ['local-llama', 'local-llama-2'])).toBe('local-llama-3')
+  })
+
+  it('cannot take the id of a provider that ships with the build', () => {
+    // A name that slug-matches a shipped provider used to derive that provider's id. `providers[id]`
+    // is keyed by id alone, so the custom provider would then own the shipped provider's record — and
+    // a removal takes that record with it. Every shipped id has to be avoided, by id or by name, and
+    // the suffix walk around the widened set has to keep working against the custom ids too.
+    for (const provider of PROVIDERS) {
+      expect(newProviderId(provider.id, [])).toBe(`${provider.id}-2`)
+      expect(newProviderId(provider.name, [])).toBe(`${provider.id}-2`)
+    }
+    expect(newProviderId('DeepSeek', ['deepseek-2'])).toBe('deepseek-3')
   })
 
   it('still yields something usable from a name with nothing sluggable in it', () => {

@@ -5,6 +5,7 @@ import { dirname, join } from 'path'
 import { z } from 'zod'
 import { ConveyorError } from 'electron-conveyor/main'
 import { defineModule, query, command } from '../init'
+import { PROVIDERS } from '../protocol/providers'
 import { fetchModels } from './models-engine'
 
 /**
@@ -15,20 +16,6 @@ import { fetchModels } from './models-engine'
 
 /** Sidecar file under `userData`. Never a hardcoded absolute path. */
 const KEY_FILE = ['settings', 'api-keys.json']
-
-/**
- * The providers offered in Settings, each with the model to preselect.
- *
- * `defaultModel` is a starting point, not a constraint: `fetchModels` replaces it with the provider's
- * real catalogue, and the chat dropdown only ever shows models the user has switched on.
- */
-export const PROVIDERS = [
-  { id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' },
-  { id: 'openrouter', name: 'OpenRouter', defaultModel: 'openai/gpt-4o-mini' },
-  { id: 'opencode', name: 'OpenCode', defaultModel: 'opencode-model' },
-  { id: 'openai', name: 'OpenAI', defaultModel: 'gpt-4o-mini' },
-  { id: 'anthropic', name: 'Anthropic', defaultModel: 'claude-3-5-sonnet-latest' },
-] as const
 
 /**
  * A provider's catalogue when it has not been fetched.

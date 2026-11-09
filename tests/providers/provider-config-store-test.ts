@@ -117,6 +117,50 @@ function aSecondProviderWithTheSameNameGetsItsOwnId() {
   results.push('a differently named provider cannot take an id that is already in use')
 }
 
+/**
+ * A custom provider may not be handed the id of one that ships with the build.
+ *
+ * The shipped provider's record lives in `providers[id]`, keyed by the id alone, exactly as a custom
+ * provider's does. Derived from a name like "DeepSeek" it used to be `deepseek`, so the two owners were
+ * the same key — and the removal introduced for custom providers takes `providers[id]` with it. This is
+ * the regression the pin exists for: deleting the mis-named custom provider must leave the shipped
+ * provider's record exactly as the user declared it.
+ */
+function aCustomProviderCannotTakeAShippedProvidersId() {
+  const store = createHarness()
+  const forgotten: string[] = []
+  setCustomProviderDeleteSink((id) => forgotten.push(id))
+
+  // What the shipped provider already owns: a model switched on, image support declared, a window set.
+  store.run('toggleModel', { providerId: 'deepseek', modelId: 'deepseek-chat' })
+  store.run('setSupportsImages', { providerId: 'deepseek', supported: true })
+  store.run('setModelWindows', { providerId: 'deepseek', modelId: 'deepseek-chat', window: 64_000 })
+
+  store.run('addCustomProvider', { name: 'DeepSeek', baseUrl: 'http://localhost:1234/v1' })
+  const custom = store.state().customProviders[0]
+  assert.notEqual(custom.id, 'deepseek', 'the shipped id is not handed out again')
+  assert.equal(custom.id, 'deepseek-2', 'the suffix walk widens rather than re-derives')
+  assert.equal(
+    store.state().customProviders.filter((provider) => provider.id === custom.id).length,
+    1,
+    'and the id it does get is its own'
+  )
+
+  store.run('removeCustomProvider', { id: custom.id })
+
+  assert.deepEqual(store.state().customProviders, [], 'the custom provider is gone')
+  // The regression guard: the shipped provider's record is untouched because the delete removed the
+  // custom provider's key, which is no longer the shipped provider's key.
+  assert.deepEqual(store.state().providers.deepseek.enabledModels, ['deepseek-chat'])
+  assert.equal(store.state().providers.deepseek.supportsImages, true)
+  assert.deepEqual(store.state().providers.deepseek.modelWindows, { 'deepseek-chat': { contextWindow: 64_000 } })
+  assert.equal('deepseek-2' in store.state().providers, false, 'and the custom record went with it')
+  assert.deepEqual(forgotten, ['deepseek-2'], 'the key cleared is the custom provider’s own')
+
+  setCustomProviderDeleteSink(() => {})
+  results.push('a custom provider cannot take a shipped id, and deleting it leaves that provider alone')
+}
+
 // ---------------------------------------------------------------- removing and models
 
 function removingTakesOnlyTheNamedProvider() {
@@ -584,6 +628,7 @@ function main() {
   step('adding appends with a derived id', addingAProviderRecordsItWithADerivedId)
   step('normalising and refusing', addingNormalisesTheBaseUrlAndRefusesWhatCannotBeUsed)
   step('ids stay unique', aSecondProviderWithTheSameNameGetsItsOwnId)
+  step('shipped ids are avoided', aCustomProviderCannotTakeAShippedProvidersId)
   step('removing by id', removingTakesOnlyTheNamedProvider)
   step('setting models by id', settingModelsReplacesTheListForThatProviderOnly)
   step('round trip', aListSurvivesARestart)

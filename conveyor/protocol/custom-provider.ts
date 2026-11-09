@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PROVIDERS } from './providers'
 
 /**
  * The shape of a custom model provider, and the rules that decide whether one may exist.
@@ -93,12 +94,18 @@ export function normalizeBaseUrl(baseUrl: string): string | null {
 
 /**
  * An id for a provider, derived from its name so it reads like the provider it belongs to, and free of
- * collisions with the ids already in use.
+ * collisions with every id already spoken for — the custom providers' and this build's own.
  *
  * Derived rather than random because the id appears in saved model choices and in the store's keys,
  * where `local-llama` is worth reading and `1f3c…` is not. Stability is the whole point: the same name
  * against the same ids yields the same id, so a form can compute the id it is about to create and use
  * it before the store has answered — which matters because a store action cannot return a value.
+ *
+ * The shipped ids are avoided here rather than passed in beside the custom ones, because they are not
+ * the caller's to know and must not be forgotten: `providers[id]` holds a shipped provider's record
+ * exactly as it holds a custom one's, and a removal takes that record with it — so a custom provider
+ * called "DeepSeek" must derive `deepseek-2`, or deleting it would delete the shipped provider's
+ * switches, prices and windows.
  */
 export function newProviderId(name: string, existing: readonly string[]): string {
   const slug = name
@@ -106,11 +113,12 @@ export function newProviderId(name: string, existing: readonly string[]): string
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   const base = slug || 'custom-provider'
+  const taken = new Set([...existing, ...PROVIDERS.map((provider) => provider.id)])
 
-  if (!existing.includes(base)) return base
+  if (!taken.has(base)) return base
   for (let suffix = 2; ; suffix += 1) {
     const candidate = `${base}-${suffix}`
-    if (!existing.includes(candidate)) return candidate
+    if (!taken.has(candidate)) return candidate
   }
 }
 
