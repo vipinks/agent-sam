@@ -233,6 +233,25 @@ describe('the turn-end notice', () => {
     expect(await persistedMidWork(saves.snapshots)).toEqual({ cause: 'model_stop', midWork: true })
   })
 
+  it('keeps a planless stop that ends with an answer silent', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    emitToolWork(stub, channel, 3)
+    // The closing frame is the model's answer, written after the last tool result. The mid-work card's
+    // premise is a stop that left the user with nothing but the last tool card, and this turn did not:
+    // the answer is on screen and the turn ended on it.
+    chunk(stub, channel, { type: 'text_delta', text: 'The parser reads the table left to right.' })
+    stub.emit(channel, { type: 'end' })
+
+    expect(await screen.findByText('The parser reads the table left to right.')).toBeTruthy()
+    expect(await screen.findByLabelText('Send message')).toBeTruthy()
+    // No card at all — not the mid-work row, not the plan-unfinished one, and no Continue.
+    expect(screen.queryByLabelText('Turn ended early')).toBeNull()
+    expect(screen.queryByText(/Ended mid-work/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
   it('keeps a two-step ordinary stop silent', async () => {
     const stub = stubChat()
     const channel = await startRun(stub)

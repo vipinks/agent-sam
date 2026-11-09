@@ -266,9 +266,9 @@ async function anAbortedTurnEndsWithAnInterruptedNotice() {
   results.push('an aborted turn yields an interrupted turn_end with the plan-unfinished notice')
 }
 
-// ---------------------------------------------------------------- C2 / T-D2 in the loop
+// ---------------------------------------------------------------- the answer that ends a planless turn
 
-async function aPlanlessModelStopAfterThreeStepsGetsTheGenericNotice() {
+async function aPlanlessModelStopThatAnsweredSaysNothing() {
   const calls = (count: number) =>
     Array.from({ length: count }, (_, index) => ({
       id: `read-${index}`,
@@ -276,24 +276,24 @@ async function aPlanlessModelStopAfterThreeStepsGetsTheGenericNotice() {
       args: { path: `file-${index}.txt` },
     }))
 
+  // Three tool results and then a closing answer: the shape the old pin read as a mid-work stop because
+  // it counted the tools and never looked at what the reply said last. The fence is that closing text,
+  // so this turn ended on an answer and is owed no notice — not the mid-work card, and no Continue.
   const three = await runLoop({
     rounds: [toolFrames(calls(3)), proseFrames('I looked at the files.')],
   })
-  const midWork = notice(three.chunks)
-  assert.ok(midWork, 'three tool steps and a complete model stop earn the generic mid-work notice')
-  assert.equal(midWork?.cause, 'model_stop', 'under the ordinary cause, not a new one')
-  assert.equal(midWork?.midWork, true, 'and carrying the generic flag rather than a plan count')
-  assert.equal(midWork?.unfinishedSteps, undefined, 'with no plan count to invent')
+  assert.equal(notice(three.chunks), undefined, 'a planless stop that ends in prose earns no notice')
   assert.equal(
     three.chunks.some((chunk) => chunk.type === 'auto_continue'),
     false,
-    'the app never auto-continues this notice'
+    'and the app never auto-continues it'
   )
 
-  // The fence: two steps are an ordinary short answer, not a mid-work death.
+  // The steps floor is unchanged and now sits beside the text fence: two steps that end in prose are an
+  // ordinary short answer either way.
   const two = await runLoop({ rounds: [toolFrames(calls(2)), proseFrames('I looked at the files.')] })
   assert.equal(notice(two.chunks), undefined, 'two steps stay silent')
-  results.push('C2/T-D2: a planless model stop earns the mid-work notice at three steps and not at two')
+  results.push('a planless model stop that ends in an answer says nothing, at three steps as at two')
 }
 
 // ---------------------------------------------------------------- the planless stop
@@ -338,10 +338,7 @@ async function main() {
     ['a nudge turn inherits the plan it is being nudged about', aNudgeTurnInheritsThePlanItIsBeingNudgedAbout],
     ['an aborted turn ends with an interrupted notice', anAbortedTurnEndsWithAnInterruptedNotice],
     ['a planless stop still says it was stopped', aPlanlessStopStillSaysItWasStopped],
-    [
-      'a planless model stop after three steps gets the generic notice',
-      aPlanlessModelStopAfterThreeStepsGetsTheGenericNotice,
-    ],
+    ['a planless model stop that answered says nothing', aPlanlessModelStopThatAnsweredSaysNothing],
   ]
 
   let failed = 0

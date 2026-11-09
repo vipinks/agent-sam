@@ -95,6 +95,28 @@ function silentFrames(): string[] {
   return [stopFrame('stop'), '[DONE]']
 }
 
+/** A reply asking for several tools at once, as one frame's fragment stream delivers the batch. */
+function batchToolFrames(calls: Array<{ id: string; name: string; args: Record<string, unknown> }>): string[] {
+  return [
+    JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: calls.map((call, index) => ({
+              index,
+              id: call.id,
+              type: 'function',
+              function: { name: call.name, arguments: JSON.stringify(call.args) },
+            })),
+          },
+        },
+      ],
+    }),
+    stopFrame('tool_calls'),
+    '[DONE]',
+  ]
+}
+
 /** A `set_plan` call that declares one step in progress and one pending. */
 function planFrames(callId: string, steps: readonly PlanStep[]): string[] {
   const args = JSON.stringify({ steps })
@@ -445,6 +467,40 @@ async function aReplyThatOnlyAsksForToolsIsNotASilentOne() {
   results.push('a reply whose only content is a tool call still runs it, and is not a silent stop')
 }
 
+async function aPlanlessStopThatAnsweredSaysNothing() {
+  // Three tool steps and then a closing answer: the turn ended on prose written after its last tool
+  // result, which is an answer rather than a stop mid-work. Main used to card this shape on the tool
+  // count alone; the fence is the closing text, so the ending is silent — no notice chunk, and nothing
+  // stored on the turn for a reopened conversation to draw.
+  const calls = Array.from({ length: 3 }, (_, index) => ({
+    id: `read_${index}`,
+    name: 'read_file',
+    args: { path: `file-${index}.txt` },
+  }))
+  const chunks = await runLoop([batchToolFrames(calls), proseFrames('I looked at the files.', 'stop')])
+
+  assert.deepEqual(
+    chunks.map((c) => c.type),
+    [
+      'tool_call_start',
+      'tool_result',
+      'tool_call_start',
+      'tool_result',
+      'tool_call_start',
+      'tool_result',
+      'text_delta',
+      'turn_end',
+      'done',
+    ],
+    `unexpected chunk sequence: ${JSON.stringify(chunks.map((c) => c.type))}`
+  )
+  assert.equal(causeOf(chunks.slice(0, -1)), 'model_stop', 'the reply itself was an ordinary stop')
+  assert.ok(!chunks.some((c) => c.type === 'turn_end_notice'), 'a stop that ends in prose is not announced')
+  assert.equal(record(chunks).turns[0].endNotice, undefined, 'and no notice is stored on the turn')
+
+  results.push('a planless stop that ended in an answer says nothing at the finishTurn seam')
+}
+
 function everyCauseIsAccountedFor() {
   // The vocabulary is closed, and every cause has a case somewhere: a cause added later without one
   // would leave a transcript that could store an ending nothing knows how to word. `interrupted` is
@@ -465,6 +521,7 @@ async function main() {
     ['a clean stop', aCleanStopSaysSoAndShowsNothing],
     ['a stop that says nothing', aStopThatSaysNothingIsNamed],
     ['a reply that only asks for tools', aReplyThatOnlyAsksForToolsIsNotASilentOne],
+    ['a planless stop that answered', aPlanlessStopThatAnsweredSaysNothing],
     ['the cause vocabulary', everyCauseIsAccountedFor],
   ]
 
