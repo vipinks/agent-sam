@@ -45,9 +45,19 @@ export function isDirty(state: TranscriptState, lastSaved: TranscriptSnapshot | 
  * `queued` is checked alongside `awaiting` for the same reason and not for symmetry: a call waiting
  * its turn is part of the same unresumable pause, and a restored queue would look like a decision
  * the user could still make.
+ *
+ * The parked trails are walked too, and recursively: a branch point holds whole turns, and a turn
+ * with a pause parked under it is the same unresumable state as one on the checked-out trail. A file
+ * carrying either would be read back the same way, so the predicate has to see both.
  */
 export function mayPersist(state: TranscriptState): boolean {
-  return !state.turns.some((turn) => turn.steps.some((step) => step.status === 'awaiting' || step.status === 'queued'))
+  return !state.turns.some(holdsUnansweredDecision)
+}
+
+/** One turn, or any turn parked in its branches, still waiting on a person. */
+function holdsUnansweredDecision(turn: TranscriptState['turns'][number]): boolean {
+  if (turn.steps.some((step) => step.status === 'awaiting' || step.status === 'queued')) return true
+  return (turn.branchPoints ?? []).some((tail) => tail.turns.some(holdsUnansweredDecision))
 }
 
 /** Coalescing delay for the post-turn save. Roughly one pause in a person's reading. */

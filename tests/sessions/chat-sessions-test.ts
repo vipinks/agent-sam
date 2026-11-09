@@ -147,6 +147,47 @@ function thePauseIsNotPersisted() {
     ],
   }
   assert.equal(mayPersist(queued), false, 'a queue behind the decision must not be written either')
+
+  // A parked trail is the same conversation: an edit or a regenerate parks the turns it replaced under
+  // a branch point, and a paused call can be among them. A file holding it would be read back as the
+  // same zombie card, so the predicate walks the tails — and the tails' own tails — as well.
+  const parkedPause: TranscriptState = {
+    interrupted: false,
+    turns: [
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: '',
+        steps: [],
+        branchPoints: [
+          {
+            turns: [
+              {
+                id: 'assistant-3',
+                role: 'assistant',
+                content: '',
+                steps: [],
+                branchPoints: [
+                  {
+                    turns: [
+                      {
+                        id: 'assistant-4',
+                        role: 'assistant',
+                        content: '',
+                        steps: [{ callId: 'c9', tool: 'run_command', args: { command: 'rm x' }, status: 'awaiting' }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  }
+  assert.equal(mayPersist(parkedPause), false, 'a pause parked in a branch tail, at any depth, must not be written')
+
   assert.equal(mayPersist(transcriptWithTools()), true, 'ordinary turns are written')
 
   results.push('a transcript paused for approval is not persisted')

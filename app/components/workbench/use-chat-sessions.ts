@@ -24,7 +24,7 @@ import { contextPreferencesStore } from '@/conveyor/stores/context-preferences'
 import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import type { DraftAttachment } from './attachments'
 import { planRename } from './rename'
-import { createDebouncedSave, isDirty, titleFromMessage, UNTITLED } from './session-rules'
+import { createDebouncedSave, isDirty, mayPersist, titleFromMessage, UNTITLED } from './session-rules'
 import { planFirstSend, planResumeFinish, planResumeStart } from './session-resume'
 import { planRootStamp, planSelectRoot, planSessionSwitch, moveNotice, selectNotice } from './session-project'
 import { useWorkbenchStore } from './store'
@@ -697,16 +697,23 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   }, [])
 
   /**
-   * Write the active transcript, if it has changed.
+   * Write the active transcript, if it has changed and may be written.
    *
-   * Guarded three ways: no session, nothing written yet, or not actually different. That is what
-   * keeps a save from being a disk write per keystroke — the cadence decision is the caller's, but
-   * this is the backstop.
+   * Guarded four ways: no session, nothing written yet, not actually different, and a pause awaiting
+   * an answer. The first three are what keep a save from being a disk write per keystroke — the
+   * cadence decision is the caller's, but this is the backstop. The fourth is the reason this skip is
+   * a success rather than a failure: a pause is a question the current process is holding, and a run
+   * cannot survive a restart, so the pause is never written.
    *
    * The two guards about an empty conversation answer two different questions. A session that has
    * never had a file is not given one here; a conversation whose turns were just deleted does have a
    * file, and writing its emptiness is the point — refusing it would leave the removed turns in the
    * old bytes, and reopening the conversation would resurrect them.
+   *
+   * A pause that skips the write is not a failure and not an error: it returns like the other no-ops,
+   * and it deliberately leaves `savedRef` untouched. The transcript stays dirty, so the save the
+   * decision schedules writes the settled turn, and the debounce that fired while the card was up has
+   * simply found nothing it was allowed to do.
    *
    * A failure is returned rather than thrown or swallowed. The turn-boundary callers have nothing to
    * do about one and must not have the conversation interrupted for it, while the delete's caller has
@@ -722,6 +729,10 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     // session whose user turned auto-approve on has a choice to remember before it has a message.
     if (snapshot.turns.length === 0 && snapshot.autoApprove !== true && savedRef.current === null) return null
     if (savedRef.current && !isDirty(transcriptRef.current, savedRef.current)) return null
+    // The gate, after the snapshot and before the write: a pause is not persisted, wherever the turn
+    // that holds it came from — the debounce, a blur, a switch or the consent toggle. What the card
+    // needs is kept above the pane and served back on a return, so skipping here loses nothing.
+    if (!mayPersist(transcriptRef.current)) return null
 
     try {
       await conveyor.sessions.saveTranscript({

@@ -6,6 +6,7 @@ import { ChatSessionsProvider, useChatSessionsContext } from '@/app/components/w
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
 import { firstPauseViolation } from '@/conveyor/protocol/approval'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '@/conveyor/protocol/transcript'
+import { SAVE_DEBOUNCE_MS } from '@/app/components/workbench/session-rules'
 import { agentSystemPrompt, PLAN_DISCIPLINE_NOTE } from '@/conveyor/protocol/context'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
 
@@ -103,8 +104,15 @@ function saveCalls(stub: BridgeStub): SaveCall[] {
  */
 function pausedSaveCalls(stub: BridgeStub): SaveCall[] {
   return saveCalls(stub).filter((call) =>
-    call.snapshot.turns.some((turn) => turn.steps.some((step) => step.status === 'awaiting' || step.status === 'queued'))
+    call.snapshot.turns.some((turn) =>
+      turn.steps.some((step) => step.status === 'awaiting' || step.status === 'queued')
+    )
   )
+}
+
+/** Let the real debounce window pass and its IPC chain settle, as the phase-34 pin does. */
+async function afterDebounce(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, SAVE_DEBOUNCE_MS + 100))
 }
 
 /** The switch between two conversations, driven through the same `openSession` the list uses. */
@@ -503,6 +511,88 @@ describe('a consent pause', () => {
     // break, and it is the red this commit's product change is made against.
     expect(pausedWritesWhileAway).toHaveLength(0)
     expect(fileWhileAway).toBeUndefined()
+  })
+
+  it('writes nothing while the decision is open, and the settled turn once it is denied', async () => {
+    // A conversation that already has a file: "unchanged" is a claim about bytes that exist, not
+    // about a file that was never there.
+    const stored: TranscriptSnapshot = {
+      version: TRANSCRIPT_VERSION,
+      interrupted: false,
+      turns: [
+        { id: 'user-1', role: 'user', content: 'tidy the module', steps: [] },
+        { id: 'assistant-2', role: 'assistant', content: 'Which module?', steps: [] },
+      ],
+    }
+    const { stub, transcripts } = renderChat({ files: { [FIRST_ID]: stored } })
+    await screen.findByText('Which module?')
+
+    const asked = 'write the settled turn once'
+    const channel = await startRun(stub, asked)
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'c1', tool: 'write_file', args: { path: 'a.ts' } })
+    chunk(
+      stub,
+      channel,
+      pause({ callId: 'c1', args: { path: 'a.ts' }, calls: [call('c1', 'write_file', { path: 'a.ts', content: 'x' })] })
+    )
+    await screen.findByRole('button', { name: 'Approve' })
+
+    // The post-turn debounce is deliberately not cancelled by the pause: it still fires, and it must
+    // find nothing to write. The claim is about a payload that carries the pause — a file is never
+    // given the awaiting step — and about the bytes on disk, which stay exactly the ones the
+    // conversation opened with.
+    await afterDebounce()
+    expect(pausedSaveCalls(stub)).toHaveLength(0)
+    expect(transcripts.files[FIRST_ID]).toEqual(stored)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    await afterDebounce()
+
+    // An ending is worth writing: exactly one write carrying this send, and it holds no call waiting
+    // on a person.
+    const writes = saveCalls(stub).filter((call) => call.snapshot.turns.some((turn) => turn.content === asked))
+    expect(writes).toHaveLength(1)
+    expect(writes[0].id).toBe(FIRST_ID)
+    const statuses = writes[0].snapshot.turns.flatMap((turn) => turn.steps.map((step) => step.status))
+    expect(statuses).not.toContain('awaiting')
+    expect(statuses).not.toContain('queued')
+  })
+
+  it('writes the approved turn once, when the run it resumed comes to rest', async () => {
+    const { stub, transcripts } = renderChat()
+    const asked = 'approve the write once'
+    const channel = await startRun(stub, asked)
+
+    chunk(stub, channel, { type: 'tool_call_start', callId: 'c1', tool: 'write_file', args: { path: 'a.ts' } })
+    chunk(
+      stub,
+      channel,
+      pause({ callId: 'c1', args: { path: 'a.ts' }, calls: [call('c1', 'write_file', { path: 'a.ts', content: 'x' })] })
+    )
+    await screen.findByRole('button', { name: 'Approve' })
+
+    // Let the pause's own debounce pass before the decision, so the only write left to see is the one
+    // the settled turn earns rather than one the pause should have skipped.
+    await afterDebounce()
+    expect(pausedSaveCalls(stub)).toHaveLength(0)
+    expect(transcripts.files[FIRST_ID]).toBeUndefined()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(starts(stub).length).toBe(2))
+    const resumed = await streamChannelFrom(stub, 1)
+
+    chunk(stub, resumed, { type: 'tool_result', callId: 'c1', tool: 'write_file', ok: true, output: 'wrote a.ts' })
+    chunk(stub, resumed, { type: 'turn_end', cause: 'model_stop' })
+    chunk(stub, resumed, { type: 'done', reason: 'complete', steps: 1 })
+    stub.emit(resumed, { type: 'end' })
+
+    await afterDebounce()
+
+    // The decision's save is the turn at rest: one call carrying this send, and the step it was
+    // decided on is settled rather than still asking or still running.
+    const writes = saveCalls(stub).filter((call) => call.snapshot.turns.some((turn) => turn.content === asked))
+    expect(writes).toHaveLength(1)
+    expect(writes[0].snapshot.turns.flatMap((turn) => turn.steps.map((step) => step.status))).toEqual(['ok'])
   })
 
   it('reconciles a pause the process outlived into a named state and a notice', async () => {
