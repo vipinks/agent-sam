@@ -97,16 +97,32 @@ export interface ProviderConfigState {
   /**
    * Providers the user added, in the order they added them.
    *
-   * Beside the predefined ones rather than among them: `providers` above is keyed by id and holds only
-   * what the user chose for a provider that ships with the app, while this is the list of providers
-   * that exist because someone typed a base URL. A `Record` would lose the creation order the list UI
-   * reads in, and an array cannot collide with a predefined id.
+   * A list beside the map above rather than a key in it, because the two hold different facts. `providers`
+   * is keyed by id and holds each provider's model choices — the switches, windows and prices the user
+   * declared — for a shipped provider and one the user added alike: the custom card writes its record into
+   * `providers[id]` exactly as a predefined box does. Creation order is a fact only a list keeps, and it is
+   * what the settings screen reads, so the custom ones are listed here while their records live there.
    *
    * `apiKey` is part of the descriptor and is always empty *here*: this state is mirrored to every
    * window, so a credential written into it would be a credential in the renderer. The key a turn runs
    * with is resolved in main and handed to the loop there, which is also the only place it is used.
    */
   customProviders: CustomProvider[]
+}
+
+/**
+ * The credential a delete has to take with it.
+ *
+ * Not state, and deliberately not in this slice: a key lives in main's encrypted file, resolved there
+ * and never mirrored to a window. So the action cannot clear it itself — main installs the sink at
+ * registration, and the delete reaches it here. Until one is installed the call is a no-op, which is
+ * what keeps the definition runnable in a suite and in the renderer without a filesystem.
+ */
+let forgetProviderKey: (providerId: string) => void = () => {}
+
+/** Install what a removed provider's id is handed to. Called once from `router.ts`. */
+export function setCustomProviderDeleteSink(sink: (providerId: string) => void): void {
+  forgetProviderKey = sink
 }
 
 const modelSchema = z.object({ id: z.string(), name: z.string().optional() })
@@ -403,11 +419,20 @@ export const providerConfigStore = defineStore('provider-config', {
     },
 
     /**
-     * Remove a provider by id. Removing one that is not there is not an error: the list the caller
-     * asked for is the list it has.
+     * Remove a provider by id, with everything the store keeps for it.
+     *
+     * The model choices go with it, because they are that provider's record and a record left behind
+     * would keep the deleted id looking alive to every reader of the mirror — the header's target
+     * resolver, the Overview's rates and the context card's window. The credential is not state, so the
+     * action hands the id to the sink main installed; a delete that left a key under an id nothing will
+     * name again would be the half of the removal no screen can show and no user can repeat.
+     *
+     * Removing one that is not there is not an error: the list the caller asked for is the list it has.
      */
     removeCustomProvider: (state, { id }) => {
       state.customProviders = state.customProviders.filter((p) => p.id !== id)
+      delete state.providers[id]
+      forgetProviderKey(id)
     },
 
     /**

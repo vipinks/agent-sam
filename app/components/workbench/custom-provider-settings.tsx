@@ -410,11 +410,11 @@ function CustomProviderCard({
     }
   }
 
-  const onConfirmDelete = async () => {
+  const onConfirmDelete = () => {
     removeCustomProvider({ id: provider.id })
-    // The key goes with it: a provider that is gone must not leave a credential behind under an id
-    // nothing will ever name again.
-    if (configured) await clear.mutateAsync({ providerId: provider.id }).catch(() => undefined)
+    // The key goes with it, in main: the store action hands the id to the sink main installed, so the
+    // credential is cleared by the delete itself rather than by this box remembering to ask — and a
+    // failed clear cannot be swallowed here, where nothing would ever retry it.
     onKeyChanged()
   }
 
@@ -498,11 +498,7 @@ function CustomProviderCard({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep it</AlertDialogCancel>
-            <AlertDialogAction
-              data-slot="provider-delete-confirm"
-              disabled={clear.isPending}
-              onClick={() => void onConfirmDelete()}
-            >
+            <AlertDialogAction data-slot="provider-delete-confirm" onClick={onConfirmDelete}>
               Remove provider
             </AlertDialogAction>
           </AlertDialogFooter>

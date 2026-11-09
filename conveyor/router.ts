@@ -8,6 +8,7 @@ import { workspaceModule } from './modules/workspace'
 import {
   settingsModule,
   setCustomProviderIds,
+  clearProviderKey,
   PROVIDERS,
   DEFAULT_MODELS,
   configuredProviderIdsSync,
@@ -56,7 +57,7 @@ import {
   refreshEngineStatus,
 } from './modules/engine'
 import { workspaceStore } from './stores/workspace'
-import { providerConfigStore } from './stores/provider-config'
+import { providerConfigStore, setCustomProviderDeleteSink } from './stores/provider-config'
 import { chatSessionsStore } from './stores/chat-sessions'
 import { terminalPreferencesStore } from './stores/terminal-preferences'
 import { contextPreferencesStore } from './stores/context-preferences'
@@ -257,6 +258,21 @@ setTerminalEventSink({ data: emitTerminal.data, exit: emitTerminal.exit })
  * adds to is not the list this file saw at startup.
  */
 setCustomProviderIds(() => router.stores['provider-config'].getState().customProviders.map((p) => p.id))
+
+/**
+ * Give a provider's removal the means to clear its credential, in the same action.
+ *
+ * The store owns the list and the provider's model record, but not the key file: a credential is never
+ * written into a store that every window mirrors. So the delete hands the id here, where main's own
+ * function forgets it — the deletion is one act rather than a state write and a renderer's later
+ * request that can fail unobserved. The catch is housekeeping reported rather than a delete that
+ * throws after the provider has already gone; there is nothing left for the caller to retry.
+ */
+setCustomProviderDeleteSink((providerId) => {
+  void clearProviderKey(providerId).catch((error: unknown) => {
+    console.warn('[settings] a deleted provider key could not be cleared', error)
+  })
+})
 
 /**
  * Give the skills module the session store, so switching a skill off can take it out of every conversation.

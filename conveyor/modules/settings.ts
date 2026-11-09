@@ -134,6 +134,24 @@ export function configuredProviderIdsSync(): readonly string[] {
   }
 }
 
+/**
+ * Forget one provider's key, on disk.
+ *
+ * A plain function rather than only the command, because two callers need the same act: the Settings
+ * button, and the delete invariant that removes a custom provider. The delete runs in the store, which
+ * owns no filesystem, so the router hands this function to that action's sink — and the credential is
+ * cleared by the removal itself rather than by a renderer that could forget to ask, or swallow the
+ * failure of asking.
+ */
+export async function clearProviderKey(providerId: string): Promise<void> {
+  const file = await readKeyFile()
+  delete file[providerId]
+
+  const path = keyFilePath()
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify(file, null, 2), 'utf8')
+}
+
 export const settingsModule = defineModule({
   /** The providers Settings lists. Static data, so the UI has one source for names and models. */
   listProviders: query(() => PROVIDERS.map((p) => ({ ...p }))),
@@ -211,11 +229,6 @@ export const settingsModule = defineModule({
 
   /** Forget a provider's key. */
   clearApiKey: command(z.object({ providerId: z.string().min(1) }), async ({ input }) => {
-    const file = await readKeyFile()
-    delete file[input.providerId]
-
-    const path = keyFilePath()
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, JSON.stringify(file, null, 2), 'utf8')
+    await clearProviderKey(input.providerId)
   }),
 })

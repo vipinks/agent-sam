@@ -14,7 +14,7 @@
  * slice untouched. Nothing to clean up: the harness clones its state and the JSON is a string.
  */
 import { strict as assert } from 'node:assert'
-import { providerConfigStore } from '../../conveyor/stores/provider-config'
+import { providerConfigStore, setCustomProviderDeleteSink } from '../../conveyor/stores/provider-config'
 import type { ProviderConfigState } from '../../conveyor/stores/provider-config'
 import { declaredRates, RATES, resolveRates } from '../../conveyor/protocol/session-usage'
 import { CONTEXT_WINDOWS, resolveWindow } from '../../conveyor/protocol/context-window'
@@ -121,19 +121,30 @@ function aSecondProviderWithTheSameNameGetsItsOwnId() {
 
 function removingTakesOnlyTheNamedProvider() {
   const store = createHarness()
+  const forgotten: string[] = []
+  setCustomProviderDeleteSink((id) => forgotten.push(id))
 
   store.run('addCustomProvider', LOCAL)
   store.run('addCustomProvider', REMOTE)
+  // The model choices this store keeps for a provider, written by the custom card's own switches: the
+  // record is the leftover that used to keep a deleted id looking alive to every reader of the mirror.
+  store.run('toggleModel', { providerId: 'local-llama', modelId: 'llama-3.1-8b' })
   store.run('removeCustomProvider', { id: 'local-llama' })
 
   assert.deepEqual(
     store.state().customProviders.map((p) => p.id),
     ['work-gateway']
   )
+  assert.equal('local-llama' in store.state().providers, false, 'the model choices go with the provider')
+  // The credential is not this store's to hold, so the action hands the id to the sink main installs.
+  // Cleared here rather than by the renderer's swallowed call: a delete that left a key under an id
+  // nothing will name again would be the half of the removal the user cannot see or repeat.
+  assert.deepEqual(forgotten, ['local-llama'], 'the delete takes the credential with it')
   // Removing something that is not there is not an error: the list is what it is either way.
   store.run('removeCustomProvider', { id: 'nope' })
   assert.equal(store.state().customProviders.length, 1)
-  results.push('removing by id takes that provider and nothing else')
+  setCustomProviderDeleteSink(() => {})
+  results.push('removing by id takes that provider, its record and its key, and nothing else')
 }
 
 function settingModelsReplacesTheListForThatProviderOnly() {
