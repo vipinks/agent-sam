@@ -194,6 +194,15 @@ export interface AgentTurn {
    */
   contextNotices?: ContextNotice[]
   /**
+   * Whether the model wrote prose after its last tool call in this turn.
+   *
+   * Live-only, and deliberately not stored: it is a fact about the order of one stream, and the
+   * transcript keeps prose and cards without keeping which came last. The pane is the side that sees
+   * the chunks in order, so the reducer sets this on a text delta and clears it on a call, and the turn
+   * end reads it once. A reopened conversation re-judges nothing — its stored notice is what it had.
+   */
+  spokeAfterLastTool?: boolean
+  /**
    * The plan the model has declared for this turn, as the checklist shows it.
    *
    * Live while the turn runs and stored when it ends: the plan is a fact about the turn, so it lives
@@ -628,8 +637,31 @@ function replaceTurn(turns: AgentTurn[], id: string, mutate: (turn: AgentTurn) =
   return next
 }
 
-function appendText(turns: AgentTurn[], turnId: string, text: string, paragraph: boolean): AgentTurn[] {
-  return replaceTurn(turns, turnId, (turn) => ({ ...turn, content: joinNarrationChunk(turn.content, text, paragraph) }))
+function appendText(
+  turns: AgentTurn[],
+  turnId: string,
+  text: string,
+  paragraph: boolean,
+  spokeAfterLastTool: boolean
+): AgentTurn[] {
+  return replaceTurn(turns, turnId, (turn) => ({
+    ...turn,
+    content: joinNarrationChunk(turn.content, text, paragraph),
+    ...(spokeAfterLastTool ? { spokeAfterLastTool: true } : {}),
+  }))
+}
+
+/**
+ * The turn with the live closing-text flag cleared, and its identity kept when there is nothing to clear.
+ *
+ * A call is the last thing to have happened, so prose written before it is narration rather than the
+ * turn's answer: the flag is removed here and set again only by text that follows. Removing the key
+ * rather than writing `false` keeps a turn that never spoke byte for byte the turn it was.
+ */
+function clearSpokeAfterLastTool(turn: AgentTurn): AgentTurn {
+  const { spokeAfterLastTool, ...rest } = turn
+  if (spokeAfterLastTool === undefined) return turn
+  return rest
 }
 
 function updateStep(
@@ -722,7 +754,10 @@ export function applyAgentChunk(
       // side that knows a card landed since the last piece of prose. It is a marker, not content: the
       // reducer decides what a seam does to the message, and a chunk from main never carries it.
       const paragraph = c.paragraph === true
-      return { turns: appendText(turns, turnId, text, paragraph), effect: { textDelta: text } }
+      // A delta that actually says something is the model speaking after whatever came before it; a
+      // whitespace-only chunk is spacing and leaves the mark as it was. A later call clears it, so what
+      // it records at the turn end is prose written after the last tool call.
+      return { turns: appendText(turns, turnId, text, paragraph, text.trim() !== ''), effect: { textDelta: text } }
     }
 
     case 'project_instructions': {
@@ -758,17 +793,19 @@ export function applyAgentChunk(
       // its turn. Appending would put the same call in the transcript twice and split its outcome
       // across two rows; replacing keeps the one card the user has been looking at, now running.
       return {
-        turns: replaceTurn(turns, turnId, (turn) => ({
-          ...turn,
-          steps: upsertStep(turn.steps, {
-            callId,
-            tool,
-            args,
-            status: 'running',
-            ...(via ? { via } : {}),
-            ...(autoApproved ? { autoApproved } : {}),
-          }),
-        })),
+        turns: replaceTurn(turns, turnId, (turn) =>
+          clearSpokeAfterLastTool({
+            ...turn,
+            steps: upsertStep(turn.steps, {
+              callId,
+              tool,
+              args,
+              status: 'running',
+              ...(via ? { via } : {}),
+              ...(autoApproved ? { autoApproved } : {}),
+            }),
+          })
+        ),
         effect: {},
       }
     }
@@ -1323,7 +1360,8 @@ export function endTurnPlan(turns: AgentTurn[], turnId: string): AgentTurn[] {
  * The cause defaults to the ordinary one, and the ordinary one words nothing: for a denial or an
  * ordinary completion there is no reply to diagnose, and naming one that did not happen would be worse
  * than saying less. An explicit `interrupted` keeps the path Turn A added, and a planless model stop
- * with real work behind it earns the generic mid-work notice from the same rule main uses. The other
+ * with real work behind it earns the generic mid-work notice from the same rule — unless the live turn
+ * wrote after its last tool call, which is the answer a mid-work card must not sit under. The other
  * non-ordinary causes arrive with main's notice and are not re-worded here.
  *
  * Neither is an ending the app continues by itself, and the reason is the same as the loop's: a user who
@@ -1387,6 +1425,9 @@ export function endTurn(
     steps: turn.steps.length,
     sawSetPlan: turn.steps.some((step) => step.tool === 'set_plan'),
     plan,
+    // The live half of the fence: prose written after the last call means the turn ended on an answer,
+    // and the generic card's premise — a stop with nothing said after the tools — is false.
+    spokeAfterLastTool: turn.spokeAfterLastTool === true,
   })
   if (!midWork) return ended
 

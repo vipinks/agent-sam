@@ -53,7 +53,6 @@ import {
   isReplyCutShort,
   isResumable,
   isToolCallCut,
-  midWorkNotice,
   planUnfinishedNotice,
   shouldAutoContinue,
   turnEndCause,
@@ -817,7 +816,9 @@ export type AgentChunk =
    *
    * `midWork` is the planless counterpart: a model stop after at least `MID_WORK_MIN_STEPS` tool steps,
    * with no `set_plan` and no unfinished plan work. It carries no count; the card says only that the
-   * stop happened mid-work, and the transcript already shows the tools that ran.
+   * stop happened mid-work, and the transcript already shows the tools that ran. The live judgment
+   * belongs to the pane, which is the side that sees whether the reply spoke after its last tool call;
+   * the field stays in the vocabulary for the records and tests written against it.
    */
   | {
       type: 'turn_end_notice'
@@ -1117,14 +1118,6 @@ async function* finishTurn(
    */
   continuable: boolean,
   /**
-   * The tool work this turn did, supplied only by the ordinary-stop exit.
-   *
-   * Omitted for a denial, the step ceiling, a cut-off reply and an abort so those existing endings keep
-   * their exact handling. C2 is a `model_stop`-only notice; the omission is the caller saying which
-   * stop this is, rather than teaching this function to guess from a count.
-   */
-  midWork?: { steps: number; sawSetPlan: boolean },
-  /**
    * What a combo walk did, when this turn ran through one.
    *
    * Passed by the loop rather than read here: the walk is the loop's, and this function's job is to
@@ -1168,22 +1161,6 @@ async function* finishTurn(
       cause,
       resumable: isResumable(cause),
       ...(comboBlock ? { combo: comboBlock } : {}),
-    }
-  } else if (midWork) {
-    const notice = midWorkNotice({ cause, ...midWork, plan: reconciled })
-    if (notice) {
-      yield {
-        type: 'turn_end_notice',
-        cause: 'model_stop',
-        resumable: true,
-        midWork: true,
-        ...(comboBlock ? { combo: comboBlock } : {}),
-      }
-    } else if (comboBlock) {
-      // The mid-work rule did not fire, but the combo has news of its own. The ordinary ending is
-      // silent only when neither has anything to say, so the report is not lost because the caller
-      // happened to pass the tool counts the mid-work rule considers.
-      yield { type: 'turn_end_notice', cause: 'model_stop', resumable: false, combo: comboBlock }
     }
   } else if (comboBlock) {
     // A combo that failed over and then answered: the reply arrived complete, so the cause says
@@ -1467,10 +1444,6 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
   const combo = opts.combo
   const comboReport: ComboReport | null = combo ? { id: combo.id, name: combo.name, requests: [], attempts: [] } : null
 
-  /** How many tool calls this turn actually ran, and whether one of them declared a plan. */
-  let toolSteps = 0
-  let sawSetPlan = false
-
   // The plan in hand, carried across the round-trips of this run so each declaration merges over the
   // last rather than replacing it. A frame that names three of six steps therefore cannot shrink the
   // checklist to three. It is not persisted here: the renderer owns the turn, and a turn is what a
@@ -1731,8 +1704,6 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
       }
 
       const outcome = await runCall(tool, call.function.arguments)
-      toolSteps += 1
-      if (tool === 'set_plan') sawSetPlan = true
       if (opts.signal.aborted) return 'aborted'
 
       yield { type: 'tool_result', callId: call.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
@@ -1791,13 +1762,6 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         }
       : await runCall(tool, decided.function.arguments)
 
-    // A denied call never ran, so it is not work this turn did. An approved one is, and a resumed
-    // `set_plan` still means the turn declared a plan.
-    if (!opts.pending.denied) {
-      toolSteps += 1
-      if (tool === 'set_plan') sawSetPlan = true
-    }
-
     // The result is yielded as well as recorded, so the card already on screen can be completed
     // rather than left looking like it is still running.
     yield { type: 'tool_result', callId: decided.id, tool, ok: outcome.ok, code: outcome.code, output: outcome.output }
@@ -1843,7 +1807,6 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         'max_steps',
         continuations,
         true,
-        undefined,
         comboReport ?? undefined
       )
       if (nudge === null) return
@@ -1996,16 +1959,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
           // silent stop this phase exists to remove. It is ended on the way out instead, under the cause
           // that names what happened, and it is not continuable: a cancelled run is a decision.
           if (opts.signal.aborted) {
-            yield* finishTurn(
-              plan,
-              'interrupted',
-              steps,
-              null,
-              continuations,
-              false,
-              undefined,
-              comboReport ?? undefined
-            )
+            yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, comboReport ?? undefined)
             return
           }
 
@@ -2034,7 +1988,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         replied = true
       } catch (err) {
         if (opts.signal.aborted) {
-          yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, undefined, comboReport ?? undefined)
+          yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, comboReport ?? undefined)
           return
         }
         if (!(err instanceof ConveyorError)) throw err
@@ -2083,7 +2037,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // what each one said, rather than throwing a single provider's failure as if it were the whole
     // story. `shouldAutoContinue` refuses this cause, so no nudge follows it.
     if (comboReport && served === null) {
-      yield* finishTurn(plan, 'combo_failed', steps, null, continuations, false, undefined, comboReport)
+      yield* finishTurn(plan, 'combo_failed', steps, null, continuations, false, comboReport)
       return
     }
 
@@ -2187,7 +2141,6 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
         null,
         continuations,
         calls.length === 0,
-        undefined,
         comboReport ?? undefined
       )
       if (nudge === null) return
@@ -2209,19 +2162,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // nowhere else: no chunk carries it, so the pane never renders it as something the user typed, and
     // the transcript of this conversation gains no turn from it.
     if (calls.length === 0) {
-      const nudge = yield* finishTurn(
-        plan,
-        cause,
-        steps,
-        'complete',
-        continuations,
-        true,
-        {
-          steps: toolSteps,
-          sawSetPlan,
-        },
-        comboReport ?? undefined
-      )
+      const nudge = yield* finishTurn(plan, cause, steps, 'complete', continuations, true, comboReport ?? undefined)
       if (nudge === null) return
 
       // The step budget starts over with the segment, as it does at the ceiling and at a dead reply: the
@@ -2245,7 +2186,7 @@ export async function* runAgentLoop(opts: LoopOptions): AsyncGenerator<AgentChun
     // reaching it, which is what keeps a decision card from being carded as an ending.
     const walked = yield* walkFrame(calls, 0)
     if (walked === 'aborted') {
-      yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, undefined, comboReport ?? undefined)
+      yield* finishTurn(plan, 'interrupted', steps, null, continuations, false, comboReport ?? undefined)
       return
     }
     if (walked !== 'settled') return

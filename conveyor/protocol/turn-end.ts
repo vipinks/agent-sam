@@ -274,6 +274,15 @@ export interface MidWorkEvidence {
   sawSetPlan: boolean
   /** The plan in hand after the turn-end reconciliation. */
   plan: readonly PlanStep[]
+  /**
+   * Whether the model wrote assistant text after its last tool result.
+   *
+   * The one fact that says the turn ended on an answer rather than on a tool. A planless stop after
+   * several steps is mid-work only while the last thing the reply did was act; prose after the last
+   * step is the model speaking last, and speaking last is what an answer is, whatever the tool count
+   * behind it says. Live-only: only the pane sees the stream in order, so main never supplies it.
+   */
+  spokeAfterLastTool?: boolean
 }
 
 /** What a planless stop after real work says about itself. */
@@ -291,13 +300,18 @@ export interface MidWorkNotice {
  * card and no statement that the run is over. This rule gives that shape a card without turning every
  * one- or two-step answer into an incident. The fenced evidence is the whole rule: an unfinished plan
  * already has `planUnfinishedNotice`, a `set_plan` step is also a plan-shaped ending, and every cause
- * other than `model_stop` already has its own copy and handling.
+ * other than `model_stop` already has its own copy and handling. The closing-text fence is the fourth,
+ * and it is evidence the other three cannot see: a reply that wrote after its last tool result has
+ * already told the user what it did, so the shape that looks mid-work from the counts is the ordinary
+ * ending from the stream — and carding it is the false positive that teaches the user to ignore the
+ * card that matters.
  *
  * `shouldAutoContinue` is deliberately not asked here and remains false for this notice: the user gets
  * the Continue button, but the app does not spend a round-trip on a stop it cannot prove was unfinished.
  */
 export function midWorkNotice(evidence: MidWorkEvidence): MidWorkNotice | null {
   if (evidence.cause !== 'model_stop') return null
+  if (evidence.spokeAfterLastTool === true) return null
   if (evidence.steps < MID_WORK_MIN_STEPS) return null
   if (evidence.sawSetPlan) return null
   if (unfinishedPlanSteps(evidence.plan) !== 0) return null
