@@ -385,6 +385,11 @@ function aPauseTheProcessOutlivedIsReconciled() {
           { callId: 'c1', tool: 'write_file', args: { path: 'a.ts' }, status: 'awaiting' },
           { callId: 'c2', tool: 'run_command', args: { command: 'npm test' }, status: 'queued' },
         ],
+        // The plan the same run was working from: one step under way when the process went away.
+        plan: [
+          { id: 'p1', text: 'write a.ts', status: 'in_progress' },
+          { id: 'p2', text: 'run the tests', status: 'pending' },
+        ],
       },
     ],
   }
@@ -405,11 +410,41 @@ function aPauseTheProcessOutlivedIsReconciled() {
   assert.equal(reconciled.turns[1].steps[1].status, 'interrupted', 'the calls queued behind it with it')
   assert.equal(reconciled.turns[1].endNotice?.lostPending, true, 'and the turn says so')
   assert.equal(reconciled.turns[1].endNotice?.cause, 'model_stop', 'naming a cause that words nothing')
+  // The turn ends here, so the plan it was working from ends with it: a step still `in_progress` is a
+  // claim about now, and nothing is doing that work any more. The same normalizer every other ending
+  // applies, so the checklist beside the notice cannot keep claiming work the notice has ended.
+  assert.equal(
+    reconciled.turns[1].plan?.[0].status,
+    'interrupted',
+    'and a plan step the turn had under way is not left in progress'
+  )
+  assert.equal(reconciled.turns[1].plan?.[1].status, 'pending', 'while a step it never started is left alone')
 
   // Idempotent, and it leaves a conversation with no pause untouched: a load runs it unconditionally.
   assert.deepEqual(reconcileOrphanedPauses(reconciled), reconciled, 'reconciling twice changes nothing')
   const plain = rehydrateTranscript(serializeTranscript(transcriptWithTools()))
   assert.deepEqual(reconcileOrphanedPauses(plain), plain, 'a transcript with no pause is left as it was')
+
+  // A turn loaded intact keeps its plan exactly as the file wrote it: the settle belongs to a turn this
+  // pass actually ends, not to every turn a load happens to read.
+  const intactNoPause: TranscriptState = {
+    interrupted: false,
+    turns: [
+      { id: 'user-1', role: 'user', content: 'go', steps: [] },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content: '',
+        steps: [{ callId: 'c1', tool: 'read_file', args: { path: 'a.ts' }, status: 'ok', output: 'body' }],
+        plan: [{ id: 'p1', text: 'read a.ts', status: 'in_progress' }],
+      },
+    ],
+  }
+  assert.deepEqual(
+    reconcileOrphanedPauses(intactNoPause),
+    intactNoPause,
+    'a turn with no standing pause keeps its plan untouched'
+  )
   results.push('a pause the process outlived reconciles at load into a named state and a notice')
 }
 

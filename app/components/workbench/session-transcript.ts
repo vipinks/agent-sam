@@ -5,6 +5,7 @@ import {
   type TranscriptTurn,
 } from '@/conveyor/protocol/transcript'
 import {
+  endTurnPlan,
   interruptRunningSteps,
   isInterrupted,
   isUndecidedPause,
@@ -324,12 +325,17 @@ export function rehydrateTranscript(snapshot: TranscriptSnapshot | null): Transc
  * so, and the conversation gets a notice. Nothing is guessed about what the user would have answered —
  * an undecided call is not a refused one — and nothing is dropped, so the turn keeps the record of what
  * was proposed. Idempotent: a transcript with no pause comes back untouched.
+ *
+ * A turn that ends here ends the plan it was working from too, through the same normalizer every other
+ * ending applies: a step left `in_progress` is a claim about now, and the process that was doing that
+ * work is gone. The settle is scoped to the turns this pass actually ends, so a turn a load reads
+ * intact keeps whatever its plan says.
  */
 export function reconcileOrphanedPauses(state: TranscriptState): TranscriptState {
   const turns = state.turns.map((turn) => {
     if (!turn.steps.some(isUndecidedPause)) return turn
 
-    return {
+    const reconciled: AgentTurn = {
       ...turn,
       steps: turn.steps.map((step) =>
         isUndecidedPause(step) ? { ...step, status: 'interrupted' as const, code: LOST_PAUSE_CODE } : step
@@ -340,6 +346,12 @@ export function reconcileOrphanedPauses(state: TranscriptState): TranscriptState
       // happened to the pause afterwards.
       endNotice: turn.endNotice ?? { cause: 'model_stop' as const, resumable: false, lostPending: true },
     }
+
+    // The plan's half, run on this one turn rather than the transcript: the notice the step reconcile
+    // just wrote is this turn's ending, and an ending must not leave a checklist claiming work it has
+    // already ended. The normalizer is `endTurnPlan` — the same one the engine-failure seam and
+    // `endTurn` call — so there is no second rule for what a plan reads as once its turn is over.
+    return endTurnPlan([reconciled], reconciled.id)[0]
   })
 
   return { ...state, turns }
