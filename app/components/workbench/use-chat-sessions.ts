@@ -599,6 +599,22 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
   const pausesRef = useRef<Record<string, PendingApproval>>({})
   const [pauses, setPauses] = useState<Record<string, PendingApproval>>({})
 
+  /**
+   * The conversation each held pause was asked in, as it stood when the question appeared.
+   *
+   * A pause is deliberately not written to the file — the run behind it cannot survive a restart, so a
+   * stored pause would restore a card nothing could answer — and the turn it belongs to is more than
+   * the call in `PendingApproval`: it is the narration before it, the steps already settled and the
+   * plan. None of that is in the pause record and none of it is on disk while the decision is open,
+   * so it is kept here, under the conversation it belongs to, and a load of that conversation is
+   * served from here instead of the file. That is what makes the card independent of the write: it
+   * survives a switch without the file ever having carried it.
+   *
+   * Keyed like `pauses`, and dropped with it: the decision record says what a resume needs, this says
+   * what the user was reading when the question was put to them.
+   */
+  const pausedTranscriptsRef = useRef<Record<string, TranscriptState>>({})
+
   const holdPause = useCallback((approval: PendingApproval) => {
     pausesRef.current = { ...pausesRef.current, [approval.sessionId]: approval }
     setPauses(pausesRef.current)
@@ -609,8 +625,21 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     const rest = { ...pausesRef.current }
     delete rest[id]
     pausesRef.current = rest
+    // The held transcript goes with the pause it was kept for: a decided turn is written by the save
+    // its decision schedules, and a copy left behind would be a conversation the file no longer owns.
+    delete pausedTranscriptsRef.current[id]
     setPauses(rest)
   }, [])
+
+  // Keep that copy in step with the screen while the pause stands. The awaiting step arrives with the
+  // pause, and the consent toggle is still the user's to flip while the card is up — both are changes
+  // to the same transcript, and a return has to show the one the user last saw. Written only for the
+  // conversation the pause belongs to, so leaving it cannot file one conversation's turns under
+  // another's id.
+  useEffect(() => {
+    if (openId === null || pauses[openId] === undefined) return
+    pausedTranscriptsRef.current[openId] = transcript
+  }, [openId, pauses, transcript])
 
   // Mirrors, so the save callback reads the latest values without being re-created — which is what
   // keeps the debounce timer from being thrown away on every render.
@@ -1218,7 +1247,16 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         // so the order changes nothing about their states, and the pause's conditions stay exactly the
         // ones they were.
         const loaded = rehydrateTranscript(snapshot)
-        applyTranscript(id, reconcileInterruptedRuns(pausesRef.current[id] ? loaded : reconcileOrphanedPauses(loaded)))
+        // A conversation whose pause this process still holds comes back from its own transcript, not
+        // from the file: the paused turn is deliberately never written, so the file is the conversation
+        // as it stood before the question — serving it would lose the card the moment the user returned.
+        // Read through `pausesRef` for the same reason as the reconcile below: this runs in the middle
+        // of an async load, where a value read from state would be a render behind.
+        const held = pausesRef.current[id] ? pausedTranscriptsRef.current[id] : undefined
+        applyTranscript(
+          id,
+          held ?? reconcileInterruptedRuns(pausesRef.current[id] ? loaded : reconcileOrphanedPauses(loaded))
+        )
         // Put the model this conversation's turns last ran back into the header's control. The control's value is
         // window state and does not survive a relaunch, so without this a reopened engine conversation shows an
         // empty field while its turns ran a chosen model — and the transcript is no help here either: the record

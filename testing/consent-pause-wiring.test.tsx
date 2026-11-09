@@ -81,6 +81,32 @@ function transcriptFiles(initial: Record<string, TranscriptSnapshot>) {
   }
 }
 
+/** A save as the bridge recorded it, already read down to the pair main is handed. */
+interface SaveCall {
+  id: string
+  snapshot: TranscriptSnapshot
+}
+
+function saveCalls(stub: BridgeStub): SaveCall[] {
+  return stub
+    .callsTo('sessions')
+    .filter((call) => call.method === 'saveTranscript')
+    .map((call) => call.args[0] as SaveCall)
+}
+
+/**
+ * The writes no save may ever produce: a snapshot that still holds a call waiting on a person.
+ *
+ * Read off the payloads rather than off the file map, because the file is what the stub kept and the
+ * payload is what this side asked to be written — a file the test never touched and a call that
+ * carried the pause are the same defect seen from its two ends.
+ */
+function pausedSaveCalls(stub: BridgeStub): SaveCall[] {
+  return saveCalls(stub).filter((call) =>
+    call.snapshot.turns.some((turn) => turn.steps.some((step) => step.status === 'awaiting' || step.status === 'queued'))
+  )
+}
+
 /** The switch between two conversations, driven through the same `openSession` the list uses. */
 function SessionSwitch() {
   const sessions = useChatSessionsContext()
@@ -438,8 +464,8 @@ describe('a consent pause', () => {
     expect(composerPlaceholder()).toBe('Ask about this project… (@ to attach a file)')
   })
 
-  it('keeps the card across a switch to another conversation and back', async () => {
-    const { stub } = renderChat()
+  it('keeps the card across a switch to another conversation and back, without writing the pause', async () => {
+    const { stub, transcripts } = renderChat()
     const channel = await startRun(stub)
 
     chunk(stub, channel, { type: 'tool_call_start', callId: 'c1', tool: 'write_file', args: { path: 'a.ts' } })
@@ -456,13 +482,27 @@ describe('a consent pause', () => {
     // that is not about it.
     await waitFor(() => expect(composerPlaceholder()).toBe('Ask about this project… (@ to attach a file)'))
 
+    // What leaving did to the disk, read here and asserted after the return: the card has to be proved
+    // on the way back first, because the claim is that the two can now be true together.
+    const pausedWritesWhileAway = pausedSaveCalls(stub)
+    const fileWhileAway = transcripts.files[FIRST_ID]
+
     await userEvent.click(screen.getByRole('button', { name: 'open the first conversation' }))
 
-    // Back in it, the decision is still the decision: the same card, and still actionable.
+    // Back in it, the decision is still the decision: the same card, and still actionable. The card is
+    // here without the file having held it — the paused turn comes back from this process's own
+    // memory of the conversation, which is what lets the write be gated without losing what the user
+    // was looking at.
     const approve = await screen.findByRole('button', { name: 'Approve' })
     await userEvent.click(approve)
     await waitFor(() => expect(starts(stub).length).toBe(2))
     expect(starts(stub)[1].input.decision).toBe('approved')
+
+    // Leaving a paused conversation must not write the card down: a file holding `awaiting` can only
+    // ever be read back as a question nothing can answer. This is the half a save at the switch would
+    // break, and it is the red this commit's product change is made against.
+    expect(pausedWritesWhileAway).toHaveLength(0)
+    expect(fileWhileAway).toBeUndefined()
   })
 
   it('reconciles a pause the process outlived into a named state and a notice', async () => {
