@@ -178,6 +178,17 @@ export function runCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): numbe
   return Number.isFinite(parsed) && parsed > 0 ? parsed : RUN_COMMAND_TIMEOUT_MS
 }
 
+/**
+ * What a timed-out command's result says beyond the fact of the timeout.
+ *
+ * The fact alone is a prompt to try again the same way: the first failure is where the model
+ * re-issues the identical unbounded command and only learns on the second. This clause names the
+ * bound to re-issue with. It is model-facing only — the thrown error's message, and the card's body,
+ * keep the factual record — and it is appended on the code, never on a sentence.
+ */
+const COMMAND_TIMED_OUT_RETRY_NOTE =
+  ' Re-issue with a bound — Start-Job plus Wait-Job -Timeout, or a smoke budget — and stream progress; do not re-run the same unbounded command.'
+
 export const TOOL_NAMES = ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'] as const
 export type AgentToolName = (typeof TOOL_NAMES)[number]
 
@@ -523,7 +534,11 @@ export async function executeTool(
     // Containment failures arrive here as typed errors; anything else is reported as-is so the model
     // can see why it failed rather than being told a generic failure.
     if (err instanceof ConveyorError) {
-      return { ok: false, code: err.code, output: err.message }
+      // A deadline is the one failure a model tends to repeat verbatim: told only that the command
+      // timed out, it re-issues the same unbounded command. The note names the retry, and the code —
+      // never the message — is what gates it. The error's own message is left as the factual record.
+      const output = err.code === 'COMMAND_TIMED_OUT' ? err.message + COMMAND_TIMED_OUT_RETRY_NOTE : err.message
+      return { ok: false, code: err.code, output }
     }
     const reason = err instanceof Error ? err.message : String(err)
     return { ok: false, code: 'TOOL_FAILED', output: `${tool} failed: ${reason}` }

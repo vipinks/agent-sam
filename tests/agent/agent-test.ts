@@ -388,7 +388,13 @@ async function aTimedOutCommandIsCoded() {
     assert.ok(outcome, 'the deadline must settle the tool call rather than wait on a child that never closes')
     assert.equal(outcome.ok, false, 'a timed-out command is a failure')
     assert.equal(outcome.code, 'COMMAND_TIMED_OUT', 'and reaches the card as a code, never a sentence to match')
-    results.push('run_command that outlives its deadline fails with COMMAND_TIMED_OUT, even with no close')
+    // The fact of the timeout is not enough: a model told only what went wrong re-issues the same
+    // unbounded command and learns on the second failure. The result it receives must name the bound.
+    assert.ok(
+      outcome.output.includes('Re-issue with a bound'),
+      `the timed-out result must tell the model to retry with a bound: ${JSON.stringify(outcome.output)}`
+    )
+    results.push('run_command that outlives its deadline fails with COMMAND_TIMED_OUT and a bounded-retry clause')
   } finally {
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV
     else process.env.NODE_ENV = previousNodeEnv
