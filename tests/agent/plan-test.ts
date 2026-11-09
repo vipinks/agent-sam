@@ -178,11 +178,18 @@ async function declaredPlan() {
 
   // The turn was live as `in_progress` first: the reconcile above happens at the turn end, and a plan
   // that read as interrupted from the moment it arrived would be a checklist that never shows work
-  // in flight. Asserted from the chunks alone, before any turn end is applied.
-  const live = chunks.reduce<AgentTurn[]>(
-    (turns, chunk) => applyAgentChunk(turns, 'assistant-1', chunk).turns,
-    [{ id: 'assistant-1', role: 'assistant', content: '', steps: [] }]
-  )
+  // in flight. Read from the chunks before the ending: the first `turn_end` is where the turn stops
+  // running, and a plan still `in_progress` past its notice would be the defect that notice exists to
+  // correct — the reducer settles plan and steps together on every ending path, not only this suite's.
+  const live = chunks
+    .slice(
+      0,
+      chunks.findIndex((chunk) => chunk.type === 'turn_end')
+    )
+    .reduce<AgentTurn[]>(
+      (turns, chunk) => applyAgentChunk(turns, 'assistant-1', chunk).turns,
+      [{ id: 'assistant-1', role: 'assistant', content: '', steps: [] }]
+    )
   assert.equal(live[0].plan?.[0].status, 'in_progress', 'the plan is live while the turn is running')
   assert.deepEqual(
     snapshot.turns[0].plan,

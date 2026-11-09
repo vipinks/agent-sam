@@ -610,6 +610,11 @@ function theTurnEndCutsTheCallsStillRunning() {
  * the turn is over, so a call it left `running` is not still running. The notice lands through this
  * reducer, so the same normalization `endTurn` applies is applied here, under the same code, and the
  * notice the ending arrived with is kept exactly as it was.
+ *
+ * The plan is owed the same reconciliation for the same reason: the checklist and the step cards are two
+ * views of one run, and a step left `in_progress` here was a row claiming work the notice beside it had
+ * already ended. What must not be called for it is a bundled `endTurn`: the notice is the engine's, and
+ * the generic one a second ending would write is the clobber the guard above exists to prevent.
  */
 function aRecordedEndingStillCutsTheCallsStillRunning() {
   const notice = {
@@ -618,6 +623,14 @@ function aRecordedEndingStillCutsTheCallsStillRunning() {
     failure: { exitCode: 1, tail: 'the engine died' },
   }
   const { turns, effects } = run([
+    // The plan the run was working from: one step finished, one under way when the engine died.
+    {
+      type: 'plan',
+      plan: [
+        { id: 'read', text: 'Read the parser', status: 'done' },
+        { id: 'edit', text: 'Change the precedence table', status: 'in_progress' },
+      ],
+    },
     { type: 'tool_call_start', callId: 'r1', tool: 'run_command', args: { command: 'npm test' } },
     {
       type: 'turn_end_notice',
@@ -629,12 +642,22 @@ function aRecordedEndingStillCutsTheCallsStillRunning() {
 
   assert.equal(turns[1].steps[0].status, 'interrupted', 'a recorded ending does not leave a call running')
   assert.equal(turns[1].steps[0].code, RUN_CUT_CODE, 'and says the run was cut, not that the process died')
+  // The plan's half of the same seam. The ending says the run is over, so the step it was on is over too;
+  // left `in_progress` the checklist would claim work the notice beside it has already ended, and only a
+  // restart would ever correct it.
+  assert.equal(turns[1].plan?.[1].status, 'interrupted', 'and a recorded ending does not leave a plan step in progress')
+  assert.deepEqual(
+    turns[1].plan?.[1],
+    { id: 'edit', text: 'Change the precedence table', status: 'interrupted' },
+    'with the interrupted status and no outcome invented for it'
+  )
+  assert.equal(turns[1].plan?.[0].status, 'done', 'while a step that was finished keeps its outcome')
   // The ending is the one that was recorded, field for field: a failure notice must not be replaced by, or
   // grow beside, a second one that words the same ending.
   assert.deepEqual(turns[1].endNotice, notice, 'and the recorded ending is the one the turn keeps')
   assert.equal(turns[1].endNotice?.failure?.tail, 'the engine died', 'with the engine’s own evidence intact')
-  assert.equal(effects[1].turnEndNotice, turns[1].endNotice, 'reported once, as the same record')
-  results.push('an ending recorded before the turn-end pass still cuts the call it left running')
+  assert.equal(effects[2].turnEndNotice, turns[1].endNotice, 'reported once, as the same record')
+  results.push('an ending recorded before the turn-end pass still cuts the call and the plan step it left running')
 }
 
 function main() {

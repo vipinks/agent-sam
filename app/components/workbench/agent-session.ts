@@ -922,10 +922,13 @@ export function applyAgentChunk(
       // The ending is recorded here rather than routed through `endTurn`: the engine path writes its own
       // notice, and the pane keeps that notice instead of re-wording the ending, which is why its turn-end
       // pass is skipped when one is already recorded. What that pass also does — stop the transcript
-      // claiming a call is still running — is still owed to a turn that has ended, so it is done here, at
-      // the step before the notice lands, under the same code and meaning as every other ending: the run
-      // ended mid-call. The notice itself is not touched, and no second one is made for it.
-      const ended = interruptRunningSteps(turns, RUN_CUT_CODE)
+      // claiming a call is still running, and a plan step still in progress — is still owed to a turn that
+      // has ended, so it is done here, at the step before the notice lands, under the same code and meaning
+      // as every other ending: the run ended mid-call. `endTurnPlan` is called on its own and never the
+      // bundled `endTurn`, because the notice is the engine's: a second one would overwrite the cause and
+      // tail it carried, which is the clobber the steps' guard avoids. The notice itself is not touched,
+      // and no second one is made for it.
+      const ended = endTurnPlan(interruptRunningSteps(turns, RUN_CUT_CODE), turnId)
       return {
         turns: replaceTurn(ended, turnId, (turn) => ({
           ...turn,
