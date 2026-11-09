@@ -146,10 +146,10 @@ const MAX_TOOL_OUTPUT = 20_000
  *
  * The terminal pane deliberately has no such ceiling: a person watching a command can decide when to
  * stop it. A model cannot, and a silent command that never exits otherwise holds the whole turn open
- * with no way out but stopping the run. Ten minutes is long enough for the repository's full gate run
+ * with no way out but stopping the run. Five minutes is long enough for the repository's full gate run
  * and short enough that a hung process is a failed tool call rather than a stuck conversation.
  */
-export const RUN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
+export const RUN_COMMAND_TIMEOUT_MS = 5 * 60 * 1000
 
 /**
  * The environment variable that carries a ceiling for one run_command.

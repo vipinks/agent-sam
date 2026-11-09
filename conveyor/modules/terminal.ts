@@ -134,7 +134,14 @@ export function killTreeByPlatform(
  * line is still attributed to the right stream. The exit code is always the last chunk, including
  * after a kill — a cancelled run reports its code rather than stopping mid-line.
  *
- * `spawnImpl` is injected so this can be driven by a fake process without running a real shell.
+ * A stop is about the tree, not the process: on win32 the platform's own `taskkill /T /F` names the
+ * shell and everything it started, and elsewhere the direct child takes SIGTERM and then SIGKILL. A
+ * deadline is a failure rather than a cancellation, so it is thrown as `COMMAND_TIMED_OUT`; the wedge
+ * guard is what makes that throw unconditional, because the child — or a grandchild holding the pipes
+ * — may never report its ending.
+ *
+ * `spawnImpl` and `killTreeImpl` are injected so this can be driven by a fake process, and a fake
+ * killer, without touching a real shell.
  */
 export async function* runCommand(options: {
   command: string
@@ -154,6 +161,7 @@ export async function* runCommand(options: {
   const platform = options.platform ?? process.platform
   const timeoutMs = options.timeoutMs
   const doSpawn = options.spawnImpl ?? spawn
+  const killTree = options.killTreeImpl ?? ((pid: number | undefined) => killTreeByPlatform(pid, platform))
 
   if (signal.aborted) return
 
@@ -163,25 +171,52 @@ export async function* runCommand(options: {
     windowsHide: true,
   } as never) as ChildProcessWithoutNullStreams
 
-  // Cancellation and the deadline share the same two jobs. The kill stops the process; the wake is
-  // what makes the read loop prompt, because a command that has been silent leaves the loop parked
-  // on `await`, and a parked `await` cannot be interrupted from outside. The escalation covers a
-  // child that ignores SIGTERM: without it the stream would never see `close` and the caller would
-  // wait forever on a process that will not die.
-  let escalate: ReturnType<typeof setTimeout> | null = null
+  // Cancellation and the deadline share the same jobs. The stop ends the process tree; the wake is what
+  // makes the read loop prompt, because a command that has been silent leaves the loop parked on
+  // `await`, and a parked `await` cannot be interrupted from outside. The wedge guard is the third: it
+  // covers a child that ignores the signal, or a descendant that holds the inherited pipes open after
+  // its parent is gone, and settles the run whether or not `close` ever arrives.
+  let wedge: ReturnType<typeof setTimeout> | null = null
   let deadline: ReturnType<typeof setTimeout> | null = null
   let wake: (() => void) | null = null
   let exitCode: number | null = null
   let timedOut = false
+  /** Set by the wedge guard when `close` did not arrive: the run's ending is this process's to state. */
+  let settled = false
+  /** The failure the wedge guard settles with, built there so a pipe-holding child cannot defeat it. */
+  let wedgeError: ConveyorError | null = null
+
+  const timeoutFailure = () =>
+    new ConveyorError(
+      'COMMAND_TIMED_OUT',
+      `The command was stopped after ${Math.ceil((timeoutMs ?? 0) / 1000)} seconds because it exceeded the run_command time limit.`
+    )
 
   const stopChild = () => {
-    if (!child.killed) child.kill('SIGTERM')
+    // Windows: the direct child is a shell, so killing it can leave the command it started running and
+    // holding the pipes. The tree is what a stop is about. POSIX keeps the direct child — it shares this
+    // process's group, and there is no portable way to name its descendants.
+    if (platform === 'win32') {
+      killTree(child.pid)
+    } else if (!child.killed) {
+      child.kill('SIGTERM')
+    }
     wake?.()
-    escalate = setTimeout(() => {
-      if (exitCode === null) child.kill('SIGKILL')
-    }, 2000)
-    // Do not hold the event loop open just for the escalation timer.
-    escalate.unref?.()
+    // Armed once per run, however many endings ask for it: the deadline and an abort share one stop.
+    if (wedge) return
+    wedge = setTimeout(() => {
+      wedge = null
+      if (exitCode !== null) return
+      // The process has not ended after SIGTERM. Escalate once — on win32 `taskkill /F` already did —
+      // and settle the run: a deadline becomes its coded failure without waiting on a `close` that may
+      // never come, and an abort ends here rather than hanging the caller.
+      if (platform !== 'win32') child.kill('SIGKILL')
+      settled = true
+      if (timedOut) wedgeError = timeoutFailure()
+      wake?.()
+    }, WEDGE_GUARD_MS)
+    // Do not hold the event loop open just for the wedge.
+    wedge.unref?.()
   }
 
   const onAbort = () => stopChild()
@@ -224,6 +259,13 @@ export async function* runCommand(options: {
       clearTimeout(deadline)
       deadline = null
     }
+    // And a close that did arrive is the ending the wedge exists to stand in for, so it retires the
+    // guard. Disarmed here rather than left to fire: a settled run announces once, and a second, late
+    // ending is exactly what the "announces once" cases are about.
+    if (wedge) {
+      clearTimeout(wedge)
+      wedge = null
+    }
     wake?.()
   })
 
@@ -236,6 +278,11 @@ export async function* runCommand(options: {
       }
       if (spawnError) throw new ConveyorError('SPAWN_FAILED', (spawnError as Error).message)
       if (exited) break
+      // The wedge guard's ending: `close` never came, so nothing else will wake this loop.
+      if (settled) {
+        if (wedgeError) throw wedgeError
+        break
+      }
       await new Promise<void>((res) => {
         wake = res
       })
@@ -251,16 +298,13 @@ export async function* runCommand(options: {
 
     if (spawnError) throw new ConveyorError('SPAWN_FAILED', (spawnError as Error).message)
 
-    if (timedOut) {
-      throw new ConveyorError(
-        'COMMAND_TIMED_OUT',
-        `The command was stopped after ${Math.ceil((timeoutMs ?? 0) / 1000)} seconds because it exceeded the run_command time limit.`
-      )
-    }
+    // The ordinary deadline path: the process did close, and the run is still read as the timeout it
+    // was. The wedge guard's path threw above, before this point, so both end as the same code.
+    if (timedOut) throw timeoutFailure()
 
     yield `${EXIT_MARKER}${exitCode ?? -1}]`
   } finally {
-    if (escalate) clearTimeout(escalate)
+    if (wedge) clearTimeout(wedge)
     if (deadline) clearTimeout(deadline)
     signal.removeEventListener('abort', onAbort)
     // If the consumer abandons the generator, the process must not be left running.

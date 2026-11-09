@@ -218,7 +218,13 @@ async function abortEmitsOnce() {
     const controller = abortSignal()
     const spawnImpl = (() => child) as never
 
-    const iter = runCommand({ command: 'sleep 100', cwd: root, signal: controller.signal, spawnImpl })
+    const iter = runCommand({
+      command: 'sleep 100',
+      cwd: root,
+      platform: 'linux',
+      signal: controller.signal,
+      spawnImpl,
+    })
     const pump = drain(iter)
     // Abort while the command is running and silent, which is the case the wake-up exists for.
     await new Promise((r) => setTimeout(r, 10))

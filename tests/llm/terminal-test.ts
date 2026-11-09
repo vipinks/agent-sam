@@ -370,7 +370,13 @@ async function theDeadlineKillsTheTreeOnWindows() {
     })
   )
 
-  await assert.rejects(promise, (e: { code?: string }) => e.code === 'COMMAND_TIMED_OUT')
+  // The deadline timer is unref'd in the product, so the suite holds the loop for it.
+  const release = holdLoop(2000)
+  try {
+    await assert.rejects(promise, (e: { code?: string }) => e.code === 'COMMAND_TIMED_OUT')
+  } finally {
+    release()
+  }
   assert.deepEqual(treeKills, [child.pid], 'win32 asks for the spawned tree, not just the shell')
   results.push('a deadline on win32 kills the spawned tree by pid')
 }
@@ -393,7 +399,9 @@ async function abortKillsTheTreeOnWindows() {
     })
   )
 
-  // Stop and the deadline share the one stop path, so the tree-kill has to be true of both.
+  // Stop arrives while the command is in flight, as the button does — not before the run has spawned.
+  child.out('starting\n')
+  await wait(50)
   controller.abort()
   await promise
   assert.deepEqual(treeKills, [child.pid], 'Stop on win32 asks for the tree too')

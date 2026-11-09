@@ -15,8 +15,10 @@ unclassified is to ask.
 
 Arguments are validated against the tool's own schema before anything touches the disk or a shell, and a
 path is workspace-relative. `write_file` creates parent directories and overwrites the file if it exists.
-`run_command` returns combined output and the exit code, runs for at most ten minutes, and is bounded on
-child exit with a tree-kill on abort; its output handed back to the model is capped at 20,000 characters.
+`run_command` returns combined output and the exit code, runs for at most five minutes, and a stop — the
+user's or its own deadline — ends the spawned tree on Windows and the direct child elsewhere, with a
+two-second wedge that settles the run if a descendant holds the pipes and `close` never arrives; its
+output handed back to the model is capped at 20,000 characters.
 `set_plan` merges the list it is sent: a known id updates that step, a new id is added, an omitted step is
 kept exactly as it was.
 

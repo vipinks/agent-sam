@@ -80,7 +80,7 @@ export const POWERSHELL_SHELL_NOTE =
  * on either host without a second variant to keep in step.
  */
 export const COMMAND_BOUND_NOTE =
-  'Bound every shell command within a smoke budget while the command-shape line is being written.'
+  'Bound every shell command with a smoke budget, a PowerShell wait-for-tripwire (Start-Job + Wait-Job -Timeout), or a timeout wrapper; never end a pipeline with Select-Object -Last without a bound; stream progress.'
 
 /**
  * The agent's standing instruction as the platform composes it.
