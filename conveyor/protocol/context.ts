@@ -83,15 +83,30 @@ export const COMMAND_BOUND_NOTE =
   'Bound every shell command with a smoke budget, a PowerShell wait-for-tripwire (Start-Job + Wait-Job -Timeout), or a timeout wrapper; never end a pipeline with Select-Object -Last without a bound; stream progress.'
 
 /**
+ * The one line that keeps an edit surgical: swap the text, do not script it and do not rewrite the file.
+ *
+ * A model with a whole-file write and a shell reaches for both when asked for a one-line change — it
+ * writes a patch script and runs it, or regenerates the file from what it read — and either way the
+ * bytes it never looked at are at risk. The tool makes the surgical edit the cheap one, and this line
+ * says it is the expected one. It names the tool because the model has to pick it, and it states the
+ * two refusals together because they are the same mistake made two ways.
+ *
+ * One line, on every platform, of the same shape as the notes above it: a positive instruction and the
+ * two things not to do.
+ */
+export const SURGICAL_EDIT_NOTE =
+  'To change part of an existing file, use replace_in_file with the exact text to swap; never write a patch script and never rewrite the file whole.'
+
+/**
  * The agent's standing instruction as the platform composes it.
  *
- * The base line, the plan discipline line, the command-shape line, and on Windows only the shell note:
- * additions composed into one message rather than sent as their own, so the injection rule still
- * decides one thing — is the standing instruction already in this history — instead of one thing per
- * line, and so a resumed run that already carries the composed prompt is not given a second copy of
- * part of it. The platform is a required argument rather than a defaulted `process.platform` because
- * this module is shared with the renderer, where `process` is not the main process's; the caller that
- * runs in main is the side that knows.
+ * The base line, the plan discipline line, the command-shape line, the surgical-edit line, and on
+ * Windows only the shell note: additions composed into one message rather than sent as their own, so
+ * the injection rule still decides one thing — is the standing instruction already in this history —
+ * instead of one thing per line, and so a resumed run that already carries the composed prompt is not
+ * given a second copy of part of it. The platform is a required argument rather than a defaulted
+ * `process.platform` because this module is shared with the renderer, where `process` is not the main
+ * process's; the caller that runs in main is the side that knows.
  *
  * The discipline line is here rather than beside the plan rules because it is an instruction to the
  * model, not a rule the app enforces: nothing can make the model call `set_plan` on time, and what the
@@ -101,7 +116,7 @@ export const COMMAND_BOUND_NOTE =
 export function agentSystemPrompt(platform: NodeJS.Platform): string {
   const base = `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}`
   const withShell = platform === 'win32' ? `${base}\n${POWERSHELL_SHELL_NOTE}` : base
-  return `${withShell}\n${COMMAND_BOUND_NOTE}`
+  return `${withShell}\n${COMMAND_BOUND_NOTE}\n${SURGICAL_EDIT_NOTE}`
 }
 
 /**

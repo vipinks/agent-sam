@@ -189,7 +189,14 @@ export function runCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): numbe
 const COMMAND_TIMED_OUT_RETRY_NOTE =
   ' Re-issue with a bound — Start-Job plus Wait-Job -Timeout, or a smoke budget — and stream progress; do not re-run the same unbounded command.'
 
-export const TOOL_NAMES = ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'] as const
+export const TOOL_NAMES = [
+  'read_file',
+  'write_file',
+  'replace_in_file',
+  'run_command',
+  'set_plan',
+  'web_fetch',
+] as const
 export type AgentToolName = (typeof TOOL_NAMES)[number]
 
 /**
@@ -226,6 +233,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           content: { type: 'string', description: 'The complete new file contents' },
         },
         required: ['path', 'content'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'replace_in_file',
+      description:
+        'Change part of a text file in the open workspace by replacing one exact occurrence of old_string with new_string. The match is literal, so old_string must appear exactly once; include surrounding text to make it unique. An empty new_string deletes the match. Paths are relative to the workspace root.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Workspace-relative path, e.g. src/utils/format.ts' },
+          old_string: {
+            type: 'string',
+            description: 'The exact text to replace, matched literally; it must appear once in the file',
+          },
+          new_string: { type: 'string', description: 'The exact text to put in its place; empty deletes it' },
+        },
+        required: ['path', 'old_string', 'new_string'],
         additionalProperties: false,
       },
     },
@@ -315,6 +343,14 @@ function isFetchableUrl(value: string): boolean {
 const TOOL_ARG_SCHEMAS = {
   read_file: z.object({ path: z.string().min(1) }),
   write_file: z.object({ path: z.string().min(1), content: z.string() }),
+  // The minimum is on the anchor, not on the replacement. An empty anchor matches everywhere, so it
+  // is refused here and never reaches an occurrence count; an empty replacement is the deletion case
+  // and stays legal.
+  replace_in_file: z.object({
+    path: z.string().min(1),
+    old_string: z.string().min(1),
+    new_string: z.string(),
+  }),
   run_command: z.object({ command: z.string().min(1), cwd: z.string().optional() }),
   // A plan beyond the cap is refused rather than truncated, so the model is told its declaration did
   // not land instead of having steps dropped and then working from a list the user cannot see.
@@ -401,6 +437,39 @@ function requireRoot(workspaceRoot: string | null): string {
 }
 
 /**
+ * Where an anchor stands in a file: the first index, and how many times it occurs there.
+ *
+ * Literal and non-overlapping — `indexOf` from the start, then from past each match — because the
+ * model's anchor is text to find, never a pattern to interpret. The count is taken before anything is
+ * written, because zero and many are both refusals and only exactly one is an edit.
+ *
+ * The schema refuses an empty anchor, so this never counts one; the guard is here so a stray caller
+ * cannot make `indexOf` advance by nothing and loop forever.
+ */
+function findAnchor(haystack: string, anchor: string): { count: number; first: number } {
+  if (!anchor) return { count: 0, first: -1 }
+  let count = 0
+  let first = -1
+  let at = haystack.indexOf(anchor)
+  while (at !== -1) {
+    if (first === -1) first = at
+    count += 1
+    at = haystack.indexOf(anchor, at + anchor.length)
+  }
+  return { count, first }
+}
+
+/**
+ * The one match `findAnchor` found, swapped for the replacement.
+ *
+ * Sliced rather than passed to `String.replace`, so a replacement containing `$&` or `$1` stays the
+ * literal text the model sent rather than being read as a replacement pattern.
+ */
+function substituteAnchor(haystack: string, first: number, anchor: string, replacement: string): string {
+  return haystack.slice(0, first) + replacement + haystack.slice(first + anchor.length)
+}
+
+/**
  * Run one tool call.
  *
  * A refused operation is returned as `ok: false` rather than thrown: the model should be told that
@@ -482,6 +551,49 @@ export async function executeTool(
           ok: true,
           output: `Wrote ${bytes} bytes to ${displayPath(workspaceRoot, written.path)}.`,
         }
+      }
+
+      case 'replace_in_file': {
+        const { path, old_string, new_string } = parsed.data as {
+          path: string
+          old_string: string
+          new_string: string
+        }
+        const target = resolveWorkspacePath(workspaceRoot, path)
+
+        let before: string
+        try {
+          before = await readFileFromDisk(target, 'utf8')
+        } catch {
+          return { ok: false, code: 'FILE_UNAVAILABLE', output: `There is no file at ${path}.` }
+        }
+
+        // No stale-read refusal in v1, on purpose: `read_file` reports no mtime, so the model has no
+        // baseline to send and inventing one would refuse honest edits. The guarantee is the read
+        // above — the bytes are re-read here and the anchor is verified against them, so a file that
+        // changed under the model fails with a code instead of being written over from a stale copy.
+        const match = findAnchor(before, old_string)
+        if (match.count === 0) {
+          throw new ConveyorError(
+            'REPLACE_NOT_FOUND',
+            `The text to replace was not found in ${path}. Read the file and copy the exact text to swap.`
+          )
+        }
+        if (match.count > 1) {
+          throw new ConveyorError(
+            'REPLACE_AMBIGUOUS',
+            `The text to replace appears ${match.count} times in ${path}. Include more surrounding text so it matches once.`
+          )
+        }
+
+        // Through the workspace's own write path, like `write_file`: containment, parent directories
+        // and the change notification are inherited rather than re-implemented.
+        const written = await writeWorkspaceFile(
+          requireRoot(workspaceRoot),
+          path,
+          substituteAnchor(before, match.first, old_string, new_string)
+        )
+        return { ok: true, output: `Replaced 1 occurrence in ${displayPath(workspaceRoot, written.path)}.` }
       }
 
       case 'run_command': {
@@ -609,8 +721,9 @@ export type AgentChunk =
       tool: string
       args: Record<string, unknown>
       /**
-       * The change this write would make, when it is a `write_file` and the baseline could be read.
-       * Computed in main — the renderer must not read the disk — and absent for every other tool.
+       * The change this call would make, when it is a `write_file` or a `replace_in_file` whose
+       * baseline could be read. Computed in main — the renderer must not read the disk — and absent
+       * for every other tool, and for a replace whose anchor cannot match exactly once.
        */
       diff?: FileDiff
       /**
@@ -868,22 +981,30 @@ interface PendingDecision {
 }
 
 /**
- * The change a `write_file` would make, for the consent card.
+ * The change a `write_file` or a `replace_in_file` would make, for the consent card.
  *
  * Read here, in main, because the renderer must never touch the disk: only the finished diff crosses
  * the IPC hop. A write whose target cannot be resolved or read gets no preview rather than a failed
  * pause — executing it will report the real problem, and the user still needs the card to decide on.
+ * A replace earns one only when its anchor stands in the file exactly once: zero or many matches are
+ * refusals the execution reports with a code, and a preview of a substitution that will not happen
+ * would be a picture of an edit nobody is about to make.
  */
 async function previewWriteDiff(
   workspaceRoot: string | null,
   tool: string,
   argsJson: string
 ): Promise<FileDiff | undefined> {
-  if (tool !== 'write_file') return undefined
+  if (tool !== 'write_file' && tool !== 'replace_in_file') return undefined
 
-  let requested: { path: string; content: string }
+  // Parsed by the same schema execution uses: arguments the run would refuse must not preview as a
+  // change the user is about to approve.
+  let write: { path: string; content: string } | undefined
+  let replace: { path: string; old_string: string; new_string: string } | undefined
   try {
-    requested = TOOL_ARG_SCHEMAS.write_file.parse(JSON.parse(argsJson || '{}'))
+    const raw: unknown = JSON.parse(argsJson || '{}')
+    if (tool === 'replace_in_file') replace = TOOL_ARG_SCHEMAS.replace_in_file.parse(raw)
+    else write = TOOL_ARG_SCHEMAS.write_file.parse(raw)
   } catch {
     // Malformed arguments are the execution's problem to report, not the card's.
     return undefined
@@ -891,7 +1012,7 @@ async function previewWriteDiff(
 
   let target: string
   try {
-    target = resolveWorkspacePath(workspaceRoot, requested.path)
+    target = resolveWorkspacePath(workspaceRoot, write?.path ?? replace?.path ?? '')
   } catch {
     // Outside the workspace, or no workspace at all. Both are refused at execution time with a code
     // the UI branches on; the card just shows the call.
@@ -905,11 +1026,18 @@ async function previewWriteDiff(
     if (size > MAX_FILE_BYTES) return undefined
     before = await readFileFromDisk(target, 'utf8')
   } catch {
-    // Absent is the ordinary "new file" case, which is a diff of pure additions.
+    // Absent is the ordinary "new file" case for a write, which is a diff of pure additions. A
+    // replace has nothing to anchor to, so it gets no preview rather than a fabricated one.
     before = null
   }
 
-  return computeFileDiff(before, requested.content)
+  if (write) return computeFileDiff(before, write.content)
+
+  // A replace is previewed from the bytes on disk, and only when the anchor stands in them once.
+  if (!replace || before === null) return undefined
+  const match = findAnchor(before, replace.old_string)
+  if (match.count !== 1) return undefined
+  return computeFileDiff(before, substituteAnchor(before, match.first, replace.old_string, replace.new_string))
 }
 
 /**

@@ -528,4 +528,73 @@ describe('a turn’s tool steps, as rows', () => {
     expect(document.querySelector('[data-slot="step-run"]')).toBeNull()
     expect(screen.queryByText(/View Steps/)).toBeNull()
   })
+
+  it('names a replace_in_file call by its path and shows a clipped swap, never the raw strings', async () => {
+    const stub = stubChat()
+    const channel = await startRun(stub)
+
+    // The anchor a real edit carries can be a whole line. The row has to show enough of it to be
+    // recognised, and clip the rest: an argument dump is what this test exists to rule out. No diff on
+    // this call, because the argument copy is what is under test.
+    const longAnchor = 'const parser = createParser({ strict: true, roots: ["src"], verbose: false, cache: true })'
+    chunk(stub, channel, {
+      type: 'tool_call_start',
+      callId: 'r1',
+      tool: 'replace_in_file',
+      args: { path: 'lexer.ts', old_string: longAnchor, new_string: 'const parser = createParser({ strict: false })' },
+    })
+    chunk(stub, channel, {
+      type: 'tool_result',
+      callId: 'r1',
+      tool: 'replace_in_file',
+      ok: true,
+      output: 'Replaced 1 occurrence.',
+    })
+
+    // The waiting call carries the diff main computed, which is the half a replace card must keep
+    // whole: a one-line edit has to read as one line removed and one added before it is allowed.
+    const oldLine = 'const strict = true'
+    const newLine = 'const strict = false'
+    chunk(stub, channel, {
+      type: 'tool_call_start',
+      callId: 'r2',
+      tool: 'replace_in_file',
+      args: { path: 'parser.ts', old_string: oldLine, new_string: newLine },
+    })
+    chunk(stub, channel, {
+      type: 'awaiting_approval',
+      callId: 'r2',
+      tool: 'replace_in_file',
+      args: { path: 'parser.ts', old_string: oldLine, new_string: newLine },
+      diff: {
+        lines: [
+          { kind: 'removed', text: oldLine },
+          { kind: 'added', text: newLine },
+        ],
+        added: 1,
+        removed: 1,
+        truncated: false,
+      },
+      calls: [{ id: 'r2', type: 'function', function: { name: 'replace_in_file', arguments: '{}' } }],
+      messages: [],
+      steps: 1,
+      plan: [],
+    })
+
+    await waitFor(() => expect(rows().length).toBe(2))
+
+    const clipped = body(rowFor('Editing lexer.ts')).textContent ?? ''
+    expect(clipped).toContain('path: lexer.ts')
+    expect(clipped).toContain('old: const parser = createParser')
+    expect(clipped).toContain('…')
+    expect(clipped).not.toContain(longAnchor)
+    expect(clipped).not.toContain('old_string')
+
+    const swapping = body(rowFor('Editing parser.ts')).textContent ?? ''
+    expect(swapping).toContain('old: const strict = true')
+    expect(swapping).toContain('new: const strict = false')
+    expect(swapping).toContain('1 added, 1 removed')
+    expect(swapping).toContain('- const strict = true')
+    expect(swapping).toContain('+ const strict = false')
+  })
 })

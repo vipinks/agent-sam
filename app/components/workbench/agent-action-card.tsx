@@ -5,6 +5,7 @@ import {
   FilePenLine,
   FileText,
   Loader2,
+  Replace,
   ShieldQuestion,
   SquareTerminal,
   XCircle,
@@ -32,8 +33,8 @@ import { useNow } from './tick'
  * while it runs, and the rule folds it the moment the call has an outcome. The two pause states are in
  * flight on the same grounds — nothing has happened to the call yet — and only `awaiting` has buttons:
  * consent is per call, so a queued card shows that it is coming without offering a decision it is not
- * entitled to yet. For a `write_file` the card also shows the change itself, so the write is approved
- * after being read rather than before.
+ * entitled to yet. For a `write_file` or a `replace_in_file` the card also shows the change itself, so
+ * the write is approved after being read rather than before.
  *
  * A call nobody ever decided mounts open for the same reason it always did — a collapsed prompt would
  * hide the one thing worth reading there, which of the two ways that question ended — and it is the
@@ -288,6 +289,8 @@ function ToolIcon({ tool }: { tool: string }) {
       return <FileText className={className} />
     case 'write_file':
       return <FilePenLine className={className} />
+    case 'replace_in_file':
+      return <Replace className={className} />
     case 'run_command':
       return <SquareTerminal className={className} />
     default:
@@ -375,6 +378,8 @@ function describe(step: ToolStep): string {
       return path ? `Reading ${path}` : 'Reading a file'
     case 'write_file':
       return path ? `Writing ${path}` : 'Writing a file'
+    case 'replace_in_file':
+      return path ? `Editing ${path}` : 'Editing a file'
     case 'run_command':
       return command ? `Running ${command}` : 'Running a command'
     case 'web_fetch': {
@@ -386,13 +391,36 @@ function describe(step: ToolStep): string {
   }
 }
 
+/** How much of a swapped string a step row shows before it clips the rest. */
+const ARG_CLIP = 80
+
+/**
+ * One argument as a single clipped line.
+ *
+ * A replace anchor is often a whole statement, and the row exists to say what is being swapped rather
+ * than to reprint the file: the first 80 characters are enough to recognise it, and the diff below
+ * carries the change itself.
+ */
+function clippedArg(value: string): string {
+  const oneLine = value.replace(/\s+/g, ' ').trim()
+  return oneLine.length > ARG_CLIP ? `${oneLine.slice(0, ARG_CLIP)}…` : oneLine
+}
+
 /**
  * The arguments, with file content substituted by a size note.
  *
  * A `write_file` call carries the whole file in its arguments; printing that would push the actual
- * conversation off the screen and duplicate the result below it.
+ * conversation off the screen and duplicate the result below it. A `replace_in_file` call is the same
+ * problem in two smaller pieces, so its anchor and replacement are shown clipped, one line each, under
+ * the path — never as the JSON that names them.
  */
 function formatArgs(step: ToolStep): string {
+  if (step.tool === 'replace_in_file') {
+    const path = typeof step.args.path === 'string' ? step.args.path : ''
+    const oldText = typeof step.args.old_string === 'string' ? clippedArg(step.args.old_string) : ''
+    const newText = typeof step.args.new_string === 'string' ? clippedArg(step.args.new_string) : ''
+    return [`path: ${path}`, `old: ${oldText}`, `new: ${newText}`].join('\n')
+  }
   const { content, ...rest } = step.args as { content?: unknown } & Record<string, unknown>
   const lines = [JSON.stringify(rest, null, 2)]
   if (typeof content === 'string') {

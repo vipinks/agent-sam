@@ -300,9 +300,17 @@ async function theToolListCarriesARunningServersTools() {
   assert.match(String(sent?.function.description), /alpha/, 'the description says which server offers it')
   assert.match(String(sent?.function.description), /approval/, 'and that every call is put to the user')
 
-  // The built-ins are unaffected: an ordinary tool keeps its own name and the list it always had.
-  assert.deepEqual(names.slice(0, 5), ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'])
-  assert.equal(names.length, 6, 'the five built-ins and the one running tool')
+  // The built-ins are unaffected: an ordinary tool keeps its own name and the list it always had,
+  // now six with the surgical replace beside its whole-file sibling.
+  assert.deepEqual(names.slice(0, 6), [
+    'read_file',
+    'write_file',
+    'replace_in_file',
+    'run_command',
+    'set_plan',
+    'web_fetch',
+  ])
+  assert.equal(names.length, 7, 'the six built-ins and the one running tool')
 
   // And the loop read the reply back: nothing ran, and the turn ended on the model's own answer.
   assert.equal(chunks.at(-1)?.reason, 'complete')
@@ -323,7 +331,7 @@ async function aStoppedServerContributesNothing() {
   const names = toolNames(provider.log[0])
   assert.deepEqual(
     names,
-    ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'],
+    ['read_file', 'write_file', 'replace_in_file', 'run_command', 'set_plan', 'web_fetch'],
     'only the built-ins are left'
   )
   assert.equal(
@@ -359,6 +367,7 @@ async function aSubsetNarrowsTheToolListAndNothingElse() {
   assert.deepEqual(wideNames, [
     'read_file',
     'write_file',
+    'replace_in_file',
     'run_command',
     'set_plan',
     'web_fetch',
@@ -375,7 +384,7 @@ async function aSubsetNarrowsTheToolListAndNothingElse() {
   const narrowNames = toolNames(narrow.log[0])
   assert.deepEqual(
     narrowNames,
-    ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch', ALPHA_WIRE],
+    ['read_file', 'write_file', 'replace_in_file', 'run_command', 'set_plan', 'web_fetch', ALPHA_WIRE],
     'only the named server is advertised, and the built-ins are untouched'
   )
   assert.equal(narrowNames.includes(BETA_WIRE), false, 'the server the conversation did not name is gone')
@@ -400,7 +409,7 @@ async function aSubsetNarrowsTheToolListAndNothingElse() {
   )
   assert.deepEqual(
     toolNames(nothing.log[0]),
-    ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'],
+    ['read_file', 'write_file', 'replace_in_file', 'run_command', 'set_plan', 'web_fetch'],
     'and a conversation naming only untrusted servers is offered no MCP tool at all'
   )
 

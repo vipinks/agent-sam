@@ -31,6 +31,7 @@ import {
   COMMAND_BOUND_NOTE,
   PLAN_DISCIPLINE_NOTE,
   POWERSHELL_SHELL_NOTE,
+  SURGICAL_EDIT_NOTE,
 } from '../../conveyor/protocol/context'
 import { MAX_FILE_BYTES } from '../../conveyor/modules/workspace'
 import { resolveWorkspacePath } from '../../conveyor/modules/workspace-paths'
@@ -226,7 +227,7 @@ async function reactLoop() {
 
     // Both requests advertised the tools; the second carried the tool result back.
     const second = log[1] as { body: { messages: Array<Record<string, unknown>>; tools?: unknown[] } }
-    assert.ok(Array.isArray(second.body.tools) && second.body.tools.length === 5, 'tools were advertised')
+    assert.ok(Array.isArray(second.body.tools) && second.body.tools.length === 6, 'tools were advertised')
     const assistantTurn = second.body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert.ok(assistantTurn, 'the assistant tool-call turn was replayed back to the provider')
     const toolTurn = second.body.messages.find((m) => m.role === 'tool')
@@ -254,6 +255,87 @@ async function writeThenRead() {
     assert.equal(readFileSync(join(root, 'nested', 'deep', 'out.txt'), 'utf8'), 'written by the agent')
 
     results.push('write_file creates intermediate directories and writes the content')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The surgical edit: one exact anchor swapped, and nothing else in the file touched.
+ *
+ * Four claims, because each is a way this tool could be safe to offer and still wrong: the success
+ * path changes only the anchor; a deletion is legal because the minimum is on the anchor and not on
+ * the replacement; an absent anchor and an ambiguous one are distinct coded refusals; and the file is
+ * byte-identical after either refusal, since the guarantee is that a refused replace writes nothing.
+ */
+async function replaceThenRead() {
+  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  try {
+    const signal = new AbortController().signal
+    writeFileSync(join(root, 'notes.txt'), 'alpha\nbeta\ngamma\n', 'utf8')
+
+    const replaced = await executeTool(
+      'replace_in_file',
+      JSON.stringify({ path: 'notes.txt', old_string: 'beta', new_string: 'BETA' }),
+      root,
+      signal
+    )
+    assert.equal(replaced.ok, true, `replace failed: ${replaced.output}`)
+    assert.equal(readFileSync(join(root, 'notes.txt'), 'utf8'), 'alpha\nBETA\ngamma\n', 'only the anchor changed')
+    assert.ok(replaced.output.includes('notes.txt'), `the result names the file it edited: ${replaced.output}`)
+
+    // An empty replacement deletes the match: the schema's minimum is on the anchor, not on this.
+    const deleted = await executeTool(
+      'replace_in_file',
+      JSON.stringify({ path: 'notes.txt', old_string: 'BETA\n', new_string: '' }),
+      root,
+      signal
+    )
+    assert.equal(deleted.ok, true, `delete failed: ${deleted.output}`)
+    assert.equal(
+      readFileSync(join(root, 'notes.txt'), 'utf8'),
+      'alpha\ngamma\n',
+      'a deletion removes exactly the anchor'
+    )
+
+    // An anchor that is not there is its own code, and the file keeps every byte it had.
+    const missing = await executeTool(
+      'replace_in_file',
+      JSON.stringify({ path: 'notes.txt', old_string: 'delta', new_string: 'x' }),
+      root,
+      signal
+    )
+    assert.equal(missing.ok, false, 'a replace that cannot match is a failure')
+    assert.equal(missing.code, 'REPLACE_NOT_FOUND', 'and reports it under its own code')
+    assert.equal(readFileSync(join(root, 'notes.txt'), 'utf8'), 'alpha\ngamma\n', 'a refusal writes nothing')
+
+    // Two matches are ambiguous: the tool must not pick one for the model. Byte-identical on refusal.
+    writeFileSync(join(root, 'twice.txt'), 'same\nsame\n', 'utf8')
+    const ambiguous = await executeTool(
+      'replace_in_file',
+      JSON.stringify({ path: 'twice.txt', old_string: 'same', new_string: 'changed' }),
+      root,
+      signal
+    )
+    assert.equal(ambiguous.ok, false, 'an ambiguous anchor is refused rather than guessed at')
+    assert.equal(ambiguous.code, 'REPLACE_AMBIGUOUS', 'under its own code')
+    assert.deepEqual(
+      readFileSync(join(root, 'twice.txt')),
+      Buffer.from('same\nsame\n', 'utf8'),
+      'the refused file is byte-identical'
+    )
+
+    // The amendment, as the schema states it: an empty anchor is refused before any occurrence count,
+    // because an empty string matches everywhere and counting it would be the wrong question.
+    const empty = await executeTool(
+      'replace_in_file',
+      JSON.stringify({ path: 'twice.txt', old_string: '', new_string: 'x' }),
+      root,
+      signal
+    )
+    assert.equal(empty.code, 'INVALID_TOOL_ARGS', 'an empty anchor never reaches the counter')
+
+    results.push('replace_in_file swaps one exact anchor, refuses zero and many, and a refusal writes nothing')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -432,6 +514,9 @@ function approvalRules() {
   // this machine is looking. It is gated by the same rule as a write or a command, and runs without
   // asking only when the conversation's Auto-approve is on.
   assert.equal(needsApproval('web_fetch'), true, 'fetching a page reaches outside this process')
+  // A replace is a write by classification, whatever it leaves of the file: it changes bytes the user
+  // owns, so it asks like one.
+  assert.equal(needsApproval('replace_in_file'), true, 'a surgical edit is still a write')
   assert.equal(needsApproval('something_new'), true, 'an unknown tool must ask rather than assume')
   results.push('only read_file and set_plan are pre-approved; an unknown tool asks')
 }
@@ -532,10 +617,72 @@ async function gatedWriteCarriesItsDiff() {
     const commandPause = commandChunks.find((c) => c.type === 'awaiting_approval')
     assert.ok(commandPause, 'the command must gate')
     assert.equal(commandPause.diff, undefined, 'only a write has a change to preview')
+
+    // A replace earns the same preview, computed from the anchor it is about to swap: the card shows
+    // the changed line, not the JSON that describes the edit.
+    writeFileSync(join(root, 'r.txt'), 'alpha\nbeta\ngamma\n', 'utf8')
+    const replaceChunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'edit r.txt' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: singleToolCallFetch(
+          'replace_in_file',
+          { path: 'r.txt', old_string: 'beta', new_string: 'BETA' },
+          log
+        ) as never,
+      })
+    )
+    const replacePause = replaceChunks.find((c) => c.type === 'awaiting_approval')
+    assert.ok(replacePause, 'the replace must gate')
+    const replaceDiff = replacePause.diff as {
+      lines: Array<{ kind: string; text: string }>
+      added: number
+      removed: number
+    }
+    assert.ok(replaceDiff, 'a gated replace carries the change it would make')
+    assert.deepEqual(
+      replaceDiff.lines.filter((line) => line.kind !== 'context'),
+      [
+        { kind: 'removed', text: 'beta' },
+        { kind: 'added', text: 'BETA' },
+      ],
+      'the preview names the line the anchor lands on, not the arguments that describe it'
+    )
+
+    // An anchor that cannot match exactly once has nothing to preview: execution refuses it with a
+    // code, and the card still needs a decision, so the field is absent rather than invented.
+    writeFileSync(join(root, 'twice.txt'), 'same\nsame\n', 'utf8')
+    const ambiguousChunks = await collect(
+      runAgentLoop({
+        providerId: 'deepseek',
+        apiKey: 'test-key',
+        model: 'test-model',
+        workspaceRoot: root,
+        messages: [{ role: 'user', content: 'edit twice.txt' }],
+        autoApprove: false,
+        signal: new AbortController().signal,
+        fetchImpl: singleToolCallFetch(
+          'replace_in_file',
+          { path: 'twice.txt', old_string: 'same', new_string: 'changed' },
+          log
+        ) as never,
+      })
+    )
+    const ambiguousPause = ambiguousChunks.find((c) => c.type === 'awaiting_approval')
+    assert.ok(ambiguousPause, 'the ambiguous replace still gates: the decision is the user’s')
+    assert.equal(ambiguousPause.diff, undefined, 'an anchor that cannot match once gets no preview')
+
     assertPauseInvariant(chunks, 'a write waiting for consent, carrying its diff')
     assertPauseInvariant(commandChunks, 'a command waiting for consent')
+    assertPauseInvariant(replaceChunks, 'a replace waiting for consent, carrying its diff')
+    assertPauseInvariant(ambiguousChunks, 'an ambiguous replace waiting for consent')
 
-    results.push('a gated write carries a diff of the change, computed in main')
+    results.push('a gated write or replace carries a diff of the change, computed in main')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -1055,17 +1202,18 @@ async function badArgumentsAreReported() {
 
 function toolDefinitionsAreWellFormed() {
   const names = TOOL_DEFINITIONS.map((t) => t.function.name)
-  // Five, in the order the model reads them. `set_plan` is the one declaration, and `web_fetch` the
-  // one network tool, both listed here so the assertion keeps proving that every tool the loop
-  // recognises is advertised to the model, and every tool advertised is one the loop recognises.
-  assert.deepEqual(names, ['read_file', 'write_file', 'run_command', 'set_plan', 'web_fetch'])
+  // Six, in the order the model reads them. `replace_in_file` sits beside `write_file` because it is
+  // the same act done surgically; `set_plan` is the one declaration, and `web_fetch` the one network
+  // tool, both listed here so the assertion keeps proving that every tool the loop recognises is
+  // advertised to the model, and every tool advertised is one the loop recognises.
+  assert.deepEqual(names, ['read_file', 'write_file', 'replace_in_file', 'run_command', 'set_plan', 'web_fetch'])
   for (const tool of TOOL_DEFINITIONS) {
     assert.equal(tool.type, 'function')
     assert.ok(tool.function.description.length > 10, `${tool.function.name} needs a real description`)
     assert.equal((tool.function.parameters as { type?: string }).type, 'object')
     assert.ok((tool.function.parameters as { properties?: unknown }).properties, 'parameters must be described')
   }
-  results.push('the five tool schemas are OpenAI-shaped and fully described')
+  results.push('the six tool schemas are OpenAI-shaped and fully described')
 }
 
 // ---------------------------------------------------------------- project instructions
@@ -1266,9 +1414,14 @@ async function windowsIsToldItsShell() {
   // The command-shape line is the third addition, and it is on every platform: the sentence names the
   // Windows mechanism and the portable alternative, so one statement is true wherever it is sent.
   assert.equal(win.split(COMMAND_BOUND_NOTE).length - 1, 1, 'and the command-shape line appears exactly once on win32')
+  // The surgical-edit line is the fourth addition and closes the prompt on every platform. It is
+  // asserted by count here and by exact equality below, so a second copy — the way a line costs the
+  // budget twice — fails rather than merely reading oddly.
+  assert.equal(win.split(SURGICAL_EDIT_NOTE).length - 1, 1, 'and the surgical-edit line appears exactly once on win32')
+  assert.ok(win.endsWith(`\n${SURGICAL_EDIT_NOTE}`), 'and it closes the composed prompt, after the command-shape line')
   assert.equal(
     agentSystemPrompt('linux'),
-    `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}\n${COMMAND_BOUND_NOTE}`,
+    `${AGENT_SYSTEM_PROMPT}\n${PLAN_DISCIPLINE_NOTE}\n${COMMAND_BOUND_NOTE}\n${SURGICAL_EDIT_NOTE}`,
     'off win32 the prompt is the platform-independent lines'
   )
   assert.equal(
@@ -1277,9 +1430,19 @@ async function windowsIsToldItsShell() {
     'and on every other platform too — the shell line is the only platform-detected part'
   )
   assert.equal(
+    agentSystemPrompt('darwin').split(SURGICAL_EDIT_NOTE).length - 1,
+    1,
+    'and the surgical-edit line is on darwin'
+  )
+  assert.equal(
     agentSystemPrompt('linux').split(COMMAND_BOUND_NOTE).length - 1,
     1,
     'the command-shape line is stated once on a non-Windows host too'
+  )
+  assert.equal(
+    agentSystemPrompt('linux').split(SURGICAL_EDIT_NOTE).length - 1,
+    1,
+    'the surgical-edit line is stated once on a non-Windows host too'
   )
 
   const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
@@ -1309,6 +1472,7 @@ async function windowsIsToldItsShell() {
       'and the plan-discipline line does too, in the same message'
     )
     assert.equal(sent[0].split(COMMAND_BOUND_NOTE).length - 1, 1, 'and so does the command-shape line')
+    assert.equal(sent[0].split(SURGICAL_EDIT_NOTE).length - 1, 1, 'and so does the surgical-edit line')
 
     // And a resumed run re-enters with the history the pause handed back, which already carries the
     // composed prompt: the injection is refused on that fact, so the line is not sent a second time.
@@ -1752,6 +1916,7 @@ async function main() {
   await step('consent rules', approvalRules)
   await step('ReAct loop with a mocked provider', reactLoop)
   await step('write_file tool', writeThenRead)
+  await step('replace_in_file tool', replaceThenRead)
   await step('run_command tool', runCommandTool)
   await step('command timeout bounds', commandTimeoutBounds)
   await step('timed-out command is coded', aTimedOutCommandIsCoded)
