@@ -14,9 +14,10 @@ import {
 import { useConveyorStore } from 'electron-conveyor/react'
 import { conveyor } from '@/conveyor/client'
 import { chatSessionsStore, type ChatSession } from '@/conveyor/stores/chat-sessions'
+import { providerConfigStore } from '@/conveyor/stores/provider-config'
 import { workspaceStore } from '@/conveyor/stores/workspace'
 import { SEARCH_MIN_TERM } from '@/conveyor/protocol/search'
-import { sessionRowLabel } from '@/conveyor/protocol/session-row'
+import { sessionPairTitle, sessionRowLabel } from '@/conveyor/protocol/session-row'
 import { rootTail } from '@/conveyor/protocol/recent-roots'
 import type { ExportFormat } from '@/conveyor/protocol/export'
 import { cn } from '@/lib/utils'
@@ -119,6 +120,18 @@ export function SessionListPanel({
 }) {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
+  // The providers this build can still offer, for the one claim a row makes about the record's pair: a
+  // session naming a provider that is no longer here says so rather than printing the dead id. `null`
+  // until the list answers, because an unfinished answer is not a statement that anybody was deleted.
+  const providerList = conveyor.settings.listProviders.useQuery()
+  const customProviders = useConveyorStore(providerConfigStore, (s) => s.customProviders)
+  const providerOrder = useMemo(
+    () =>
+      providerList.data === undefined
+        ? null
+        : [...providerList.data.map((provider) => provider.id), ...customProviders.map((provider) => provider.id)],
+    [providerList.data, customProviders]
+  )
   const activity = activityById('chat')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
@@ -330,8 +343,9 @@ export function SessionListPanel({
                       const isActive = session.id === activeSessionId
                       const isBroken = error?.id === session.id
                       // Who ran the turn, which is the engine's own name for a conversation an engine
-                      // answered and the stored pair for one that runs the Sam loop.
-                      const metaLabel = sessionRowLabel(session)
+                      // answered and the stored pair for one that runs the Sam loop — with the provider
+                      // half read against the roster, so a removed provider is named as removed.
+                      const metaLabel = sessionRowLabel(session, providerOrder)
                       const match = queryFocused && searchable ? snippetsFor(session.id, matches.data) : undefined
                       // Where this row may be moved to, decided by the rule rather than by the menu: the
                       // remembered folders and the projects the list is drawing, minus this row's own
@@ -379,10 +393,11 @@ export function SessionListPanel({
                                     // The pair's middot spelling is kept for a Sam conversation only: a
                                     // conversation an engine ran is described in the same words its label
                                     // uses, so the tooltip cannot explain the line with a model that did
-                                    // not answer it.
+                                    // not answer it. The provider half is the row's own reading, so the
+                                    // tooltip and the line cannot disagree about a removed provider.
                                     title={
                                       session.engineId === undefined
-                                        ? `${session.providerId} · ${session.model}`
+                                        ? sessionPairTitle(session, providerOrder)
                                         : metaLabel
                                     }
                                   >

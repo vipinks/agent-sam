@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { act, render, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatSessionsProvider, useChatSessionsContext } from '@/app/components/workbench/chat-sessions-context'
 import type { ChatSessions } from '@/app/components/workbench/use-chat-sessions'
 import { SAVE_DEBOUNCE_MS } from '@/app/components/workbench/session-rules'
@@ -98,10 +99,15 @@ function renderSessions(saveTranscript?: (input: unknown) => unknown, deleteTran
   setActiveStub(stub)
 
   const api = { current: null as ChatSessions | null }
+  // The session provider reads the provider roster on mount, so it lives under a query client here as
+  // it does in the app shell. A retry off, because a suite has no provider list to answer with.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const view = render(
-    <ChatSessionsProvider>
-      <SessionProbe capture={(sessions) => (api.current = sessions)} />
-    </ChatSessionsProvider>
+    <QueryClientProvider client={queryClient}>
+      <ChatSessionsProvider>
+        <SessionProbe capture={(sessions) => (api.current = sessions)} />
+      </ChatSessionsProvider>
+    </QueryClientProvider>
   )
 
   return { ...view, api, stub }

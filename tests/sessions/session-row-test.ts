@@ -7,14 +7,15 @@
  * therefore one rule, exercised here without a DOM — `testing/session-row-label-wiring.test.tsx` covers the
  * row that renders it.
  *
- * Three cases, and each is a different reading of the record. An engine id this build ships is named by the
- * engine's own label. No engine id at all is the Sam loop, and keeps the pair it has always shown. An engine
+ * Four cases, and each is a different reading of the record. An engine id this build ships is named by the
+ * engine's own label. No engine id at all is the Sam loop, and keeps the pair it has always shown — unless the
+ * provider that pair names has been removed, which the row says rather than printing the dead id. An engine
  * id this build does not ship is named as the id the record carries, which is `engineLabel`'s own rule,
  * deliberately reused rather than restated: a row and the header above it have to call an engine the same
  * thing, and a name invented for an engine nobody can name would be an invention rather than a reading.
  */
 import { strict as assert } from 'node:assert'
-import { sessionRowLabel } from '../../conveyor/protocol/session-row'
+import { REMOVED_PROVIDER_LABEL, sessionRowLabel } from '../../conveyor/protocol/session-row'
 import { ENGINE_LABELS } from '../../conveyor/protocol/engine'
 import type { ChatSession } from '../../conveyor/stores/chat-sessions'
 
@@ -93,12 +94,38 @@ function anEngineThisBuildCannotNameIsDrawnAsItsId() {
   results.push('rule: an engine this build cannot name is drawn as its id')
 }
 
+/**
+ * A conversation whose provider has been removed still says so, rather than printing its raw id.
+ *
+ * The pair is history and stays on the record — this rule never prunes it — but a row for a provider
+ * the app no longer offers has to name that fact, the way a deleted Buddy's conversation does. An id
+ * absent from a known roster is the only deletion the rule knows; an unfinished roster (`null`) is not
+ * a statement about anybody, so the pair keeps its usual spelling until the list answers.
+ */
+function aRemovedProviderIsNamedAsRemoved() {
+  const session = samSession()
+
+  assert.equal(
+    sessionRowLabel(session, ['deepseek']),
+    'deepseek/deepseek-chat',
+    'a listed provider keeps its usual pair'
+  )
+  assert.equal(sessionRowLabel(session, null), 'deepseek/deepseek-chat', 'an unanswered roster judges nobody')
+  assert.equal(sessionRowLabel(session, []), 'deepseek/deepseek-chat', 'an empty roster is unanswered too')
+
+  const gone = sessionRowLabel({ ...session, providerId: 'local-llama', model: 'llama-3.1-8b' }, ['deepseek'])
+  assert.equal(gone, `${REMOVED_PROVIDER_LABEL}/llama-3.1-8b`, 'a removed provider is named as removed')
+  assert.equal(gone.includes('local-llama'), false, 'and the raw dead id is not what the row prints')
+  results.push('rule: a removed provider is named as removed')
+}
+
 // ---------------------------------------------------------------- harness
 
 function main(): void {
   step('engine: named by its label', anEngineSessionIsNamedByItsLabel)
   step('sam: the pair', aSamSessionKeepsThePair)
   step('engine: unnamed', anEngineThisBuildCannotNameIsDrawnAsItsId)
+  step('provider: removed', aRemovedProviderIsNamedAsRemoved)
 
   console.log(`session row: ${results.length} passed`)
   for (const r of results) console.log(`  pass: ${r}`)

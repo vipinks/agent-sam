@@ -128,8 +128,11 @@ interface WorkbenchState {
    *
    * A launch reads the stored pair before the provider config crosses the bridge, so this is the
    * first moment the pair can be judged rather than trusted. It is deliberately narrow: a provider
-   * with no enabled list is left alone, because in that state the header still offers the seeded
-   * catalogue and an empty list is "nothing recorded yet" rather than "everything switched off".
+   * that is still in `providerOrder` but has no enabled list is left alone, because in that state the
+   * header still offers the seeded catalogue and an empty list is "nothing recorded yet" rather than
+   * "everything switched off". A provider *absent* from `providerOrder` is the different fact: the
+   * list is what says a provider exists, so an id it does not name has been removed — even when a stale
+   * record still holds an enabled list for it.
    */
   reconcileTarget: (enabledModels: EnabledModels, providerOrder: readonly string[]) => void
   /**
@@ -682,6 +685,24 @@ const workbenchState =
       // it as the boot seed for any later store construction, then reconcile the live pair below.
       setBootTargetSeed(enabledModels)
       return set((state) => {
+        // A provider the header no longer offers is gone, not merely unread. The order is the renderer's
+        // list of providers that exist — the shipped ones followed by the custom list — so an id absent
+        // from it is a delete, and the record an older delete left behind must not vote for itself. An
+        // empty order is "the list has not answered yet", the one state that keeps a remembered pair.
+        const rosterKnown = providerOrder.length > 0
+        if (rosterKnown && state.activeProviderId !== '' && !providerOrder.includes(state.activeProviderId)) {
+          // The dead id's record is dropped from the derivation rather than trusted: a leftover record
+          // would otherwise keep the stored model "still enabled" and the target would never move.
+          const live = Object.fromEntries(Object.entries(enabledModels).filter(([id]) => providerOrder.includes(id)))
+          const next = deriveTarget(
+            { activeProviderId: state.activeProviderId, activeModel: state.activeModel },
+            live,
+            providerOrder
+          )
+          // `deriveTarget` keeps the stored id when no provider has a model switched on. A deleted
+          // provider is not a fallback, so that state is the empty target rather than the dead id.
+          return providerOrder.includes(next.activeProviderId) ? next : { activeProviderId: '', activeModel: null }
+        }
         const enabled = state.activeProviderId === '' ? undefined : enabledModels[state.activeProviderId]
         // No list is no intent recorded, and the header still offers the seeded catalogue in that
         // state, so a remembered model is not stale merely because the list is empty.

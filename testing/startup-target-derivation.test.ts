@@ -75,4 +75,26 @@ describe('T-D3 startup target derivation', () => {
 
     expect(store.getState()).toMatchObject({ activeProviderId: 'deepseek', activeModel: 'deepseek-reasoner' })
   })
+
+  it('moves off a provider that has left the order, ignoring the record it left behind', () => {
+    localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId: 'local-llama', model: 'llama-3.1-8b' }))
+    const store = createWorkbenchStore()
+
+    // The leftover record is what a delete used to keep: the provider is gone from the order the header
+    // offers, but its enabled list still names the model it used to serve.
+    store.getState().reconcileTarget({ 'local-llama': ['llama-3.1-8b'], deepseek: ['deepseek-chat'] }, ['deepseek'])
+
+    expect(store.getState()).toMatchObject({ activeProviderId: 'deepseek', activeModel: 'deepseek-chat' })
+  })
+
+  it('drops a gone provider to the empty target rather than naming it', () => {
+    localStorage.setItem(TARGET_KEY, JSON.stringify({ providerId: 'local-llama', model: 'llama-3.1-8b' }))
+    const store = createWorkbenchStore()
+
+    // No live provider has a model switched on, so there is no pair to move to — and the dead id is not
+    // a fallback either: the header names nothing until the user chooses, which is the truth.
+    store.getState().reconcileTarget({ 'local-llama': [] }, ['deepseek'])
+
+    expect(store.getState()).toMatchObject({ activeProviderId: '', activeModel: null })
+  })
 })

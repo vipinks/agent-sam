@@ -33,6 +33,7 @@ import type { PlanStep } from '@/conveyor/protocol/plan'
 import { applySkillToggle } from '@/conveyor/protocol/skills'
 import { sameRoot } from '@/conveyor/protocol/recent-roots'
 import { buddySessionSeed, readBuddySession, resolveBuddy } from '@/conveyor/protocol/buddies'
+import { isProviderListed } from '@/conveyor/protocol/session-row'
 
 /**
  * The coordination between the session list, the transcript on screen, and the file it is saved to.
@@ -520,7 +521,11 @@ export interface ChatSessions {
   recordUsage: (id: string, counters: { prompt: number; completion: number; cached?: number }) => void
 }
 
-export function useChatSessions(providerId: string, model: string): ChatSessions {
+export function useChatSessions(
+  providerId: string,
+  model: string,
+  providerOrder: readonly string[] | null = null
+): ChatSessions {
   const sessions = useConveyorStore(chatSessionsStore, (s) => s.sessions)
   const activeSessionId = useConveyorStore(chatSessionsStore, (s) => s.activeSessionId)
   // The folder this window is showing, from the store main owns — the same one the explorer, the tree
@@ -850,15 +855,19 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     compactingRef.current = true
     try {
       const record = sessionsRef.current.find((s) => s.id === activeIdRef.current)
+      // The record's pair is what ran, and a provider that still exists is the one to summarize with.
+      // A provider that has since been removed is a different case: its id has no key, so `llm.chat`
+      // would stop at NO_API_KEY before a word of the summary was written. The pair this window is on
+      // is what this layer has instead — a provider that exists — so the summary goes through it.
+      const summaryPair =
+        record !== undefined && isProviderListed(record.providerId, providerOrder)
+          ? { providerId: record.providerId, model: record.model }
+          : { providerId, model }
       const summary = await summarizeRange(range, async (messages) => {
         let text = ''
         // Plain strings: `llm.chat` is the Sam loop's text-only surface, so a chunk is prose rather
         // than the agent's tagged frame.
-        for await (const piece of conveyor.llm.chat({
-          providerId: record?.providerId ?? providerId,
-          model: record?.model ?? model,
-          messages,
-        })) {
+        for await (const piece of conveyor.llm.chat({ ...summaryPair, messages })) {
           if (typeof piece === 'string') text += piece
         }
         return text
@@ -872,7 +881,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
     } finally {
       compactingRef.current = false
     }
-  }, [model, providerId, scheduleSave, setTurns])
+  }, [model, providerId, providerOrder, scheduleSave, setTurns])
 
   const compact = useCallback(() => {
     void runCompaction()
@@ -1167,6 +1176,14 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
       // a send without a Buddy creates rather than an error on the way to one.
       const buddy = resolveBuddy(buddyId, customBuddiesRef.current)
       const seed = buddy === null ? null : buddySessionSeed(buddy)
+      // A Buddy's provider pin is a choice about a provider that exists now, and the pin itself is kept
+      // on the record — provider ids are re-creatable slugs, so a provider that returns should light the
+      // pin back up. A pin naming a provider that is currently gone is the other case, treated like a
+      // Buddy that resolves to nothing: it seeds no pair, and the conversation starts on the window's
+      // own. Seeding the dead id would write a row that names nothing and cannot run.
+      const seededProviderId =
+        seed?.providerId !== undefined && isProviderListed(seed.providerId, providerOrder) ? seed.providerId : null
+      const seededModel = seededProviderId === null ? model : (seed?.model ?? model)
       // The skills the user turned on while there was no conversation to hold them. Written onto the row
       // rather than kept beside it: from here on the record is the only place the choice lives, which is
       // what makes it the conversation's choice and not the window's. An empty pending list adds no key
@@ -1182,9 +1199,11 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         id,
         title: UNTITLED,
         // A Buddy that pins a provider and a model runs as it was meant to. Both travel together, so
-        // there is no case here of a pinned model on whichever provider the window happened to be on.
-        providerId: seed?.providerId ?? providerId,
-        model: seed?.model ?? model,
+        // there is no case here of a pinned model on whichever provider the window happened to be on —
+        // and a pin naming a removed provider falls through to the window's pair, as `seededModel` above
+        // says, rather than writing a dead id onto a new conversation.
+        providerId: seededProviderId ?? providerId,
+        model: seededModel,
         ...(lastRoot === null ? {} : { lastRoot }),
         ...(chosenSkills.length > 0 ? { activeSkillIds: [...chosenSkills] } : {}),
         // The snapshots, taken now and never rewritten: the role this conversation runs in, and the
@@ -1239,7 +1258,7 @@ export function useChatSessions(providerId: string, model: string): ChatSessions
         mcpSubset: seed?.mcpSubset === undefined ? null : [...seed.mcpSubset],
       }
     },
-    [addSession, model, providerId, setActive, setTranscript]
+    [addSession, model, providerId, providerOrder, setActive, setTranscript]
   )
 
   /**

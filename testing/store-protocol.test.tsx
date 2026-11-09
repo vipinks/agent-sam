@@ -39,8 +39,12 @@ describe('store protocol', () => {
     const storeCalls = stub.calls.filter((c) => c.channel.startsWith('conveyor:store:'))
 
     expect(storeCalls.length, 'the store hooks should have called the bridge').toBeGreaterThan(0)
-    expect(storeCalls[0].channel).toBe(`conveyor:store:${CHAT_SESSIONS_STORE_ID}`)
-    expect(storeCalls[0].method).toBe('__get__')
+    // More than one store is read on mount — the session provider also reads the provider roster — so
+    // what is pinned is the channel shape and the reserved method, not which hook happened to read
+    // first. A rename of either would break the stub silently, which is the failure this test names.
+    const sessionRead = storeCalls.find((call) => call.channel === `conveyor:store:${CHAT_SESSIONS_STORE_ID}`)
+    expect(sessionRead, 'the sessions store is read through its own channel').toBeDefined()
+    expect(sessionRead?.method).toBe('__get__')
   })
 
   it('feeds the session store state the list then renders', async () => {

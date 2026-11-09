@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ChatSessionsProvider } from '@/app/components/workbench/chat-sessions-context'
 import { ChatPanel } from '@/app/components/workbench/chat-panel'
+import { useWorkbenchStore } from '@/app/components/workbench/store'
 import { TRANSCRIPT_VERSION, type TranscriptSnapshot } from '@/conveyor/protocol/transcript'
 import type { ContextSnapshot } from '@/conveyor/protocol/context-window'
 import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, type BridgeStub } from './bridge-stub'
@@ -75,10 +77,13 @@ function saved(): TranscriptSnapshot {
 const SAM_SUMMARY = 'The user compared two parsers and settled on the second.'
 
 /** One send's worth of transport: the reply stream and the summary stream the compaction opens. */
-function stubSession(): { stub: BridgeStub; saves: TranscriptSnapshot[] } {
+function stubSession(
+  pair: { providerId: string; model: string } = { providerId: 'deepseek', model: 'deepseek-chat' }
+): { stub: BridgeStub; saves: TranscriptSnapshot[] } {
   const saves: TranscriptSnapshot[] = []
   const stub = createBridgeStub({
     chatWithTools: () => undefined,
+    listProviders: () => [{ id: 'deepseek', name: 'DeepSeek', defaultModel: 'deepseek-chat' }],
     loadTranscript: () => saved(),
     saveTranscript: (input) => {
       const request = input as { snapshot?: TranscriptSnapshot } | undefined
@@ -93,8 +98,8 @@ function stubSession(): { stub: BridgeStub; saves: TranscriptSnapshot[] } {
         title: 'a conversation that has grown',
         createdAt: 1_700_000_000_000,
         updatedAt: 1_700_000_000_000,
-        providerId: 'deepseek',
-        model: 'deepseek-chat',
+        providerId: pair.providerId,
+        model: pair.model,
         contextSnapshot: SPENT,
       },
     ],
@@ -164,5 +169,45 @@ describe('automatic compaction after a send', () => {
     expect(written.turns[0].content).not.toContain('Summary of turns')
     expect(written.turns[0].summarizesTurns).toHaveLength(6)
     expect(written.turns).toHaveLength(8)
+  })
+
+  it('compacts a conversation whose provider is gone with the window’s own pair', async () => {
+    const errors = vi.spyOn(toast, 'error').mockImplementation(() => '')
+    // The conversation's history names a provider the app no longer offers. Its model is still one the
+    // shipped table knows, so the window resolves and the compact point is passed — the trigger is live,
+    // and the only question is which pair the summary is asked through.
+    const { stub } = stubSession({ providerId: 'local-llama', model: 'deepseek-chat' })
+    useWorkbenchStore.setState({ activeProviderId: 'deepseek', activeModel: 'deepseek-chat' })
+    const { container } = renderChat()
+
+    const composer = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+    await waitFor(() => expect(screen.getByText('user 0')).toBeTruthy())
+    await userEvent.type(composer, 'and what about the third parser?{Enter}')
+
+    const reply = await streamChannel(stub, 0)
+    stub.emit(reply, { type: 'data', value: { type: 'text_delta', text: 'The third parser is slower.' } })
+    stub.emit(reply, { type: 'end' })
+
+    const summary = await streamChannel(stub, 1)
+    stub.emit(summary, { type: 'data', value: SAM_SUMMARY })
+    stub.emit(summary, { type: 'end' })
+
+    // The summary is asked of the pair the window is on, not the removed provider its history names:
+    // `llm.chat` resolves a key from the provider id, and the dead one has none — it would stop with
+    // NO_API_KEY before answering. The conversation still compacts, and the seam lands.
+    const summaryInputs = stub.calls
+      .filter((call) => call.channel === 'conveyor:stream:start' && call.method.startsWith('llm.chat'))
+      .map((call) => (call.args[0] as { input?: { providerId?: string; model?: string } }).input)
+    expect(summaryInputs).toEqual([{ providerId: 'deepseek', model: 'deepseek-chat', messages: expect.any(Array) }])
+
+    // And nothing asks the removed provider for its catalogue: the only listModels caller is the live
+    // card in Settings, which refuses an id it was not given a base URL for.
+    const modelRequests = stub.callsTo('provider').filter((call) => call.method === 'listModels')
+    expect(modelRequests.some((call) => (call.args[0] as { providerId?: string }).providerId === 'local-llama')).toBe(
+      false
+    )
+
+    await waitFor(() => expect(seam(container).textContent).toContain('Turns 1 through 6 summarized'))
+    expect(errors).not.toHaveBeenCalled()
   })
 })

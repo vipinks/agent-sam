@@ -370,4 +370,28 @@ describe('the model picker', () => {
     // Absent rather than an empty descriptor: the built-in table is still what answers for a built-in.
     expect(payload.provider).toBeUndefined()
   })
+
+  it('moves the header off a provider the list no longer offers, ignoring its leftover record', async () => {
+    const stub = stubChat()
+    stubStore(stub, 'provider-config', {
+      // What a delete used to leave behind: the record of a provider whose id is no longer in the list
+      // the header offers. It must not vote for itself, or the target would stay on a dead id.
+      providers: {
+        'local-llama': { enabledModels: ['llama-3.1-8b'], fetchedModels: [] },
+        deepseek: { enabledModels: ['deepseek-chat'], fetchedModels: [] },
+      },
+      customProviders: [],
+    })
+    localStorage.setItem('sam-ai-chat-target', JSON.stringify({ providerId: 'local-llama', model: 'llama-3.1-8b' }))
+    useWorkbenchStore.getState().seedTarget()
+    renderChat()
+
+    // One render after the catalogue lands: the persisted pair is on a real predefined model, and the
+    // raw dead id — which the picker would otherwise print because no provider names it — is gone.
+    const trigger = await screen.findByRole('combobox', {
+      name: 'Provider and model: DeepSeek · deepseek-chat',
+    })
+    expect(trigger.textContent).toContain('DeepSeek · deepseek-chat')
+    expect(trigger.textContent).not.toContain('local-llama')
+  })
 })
