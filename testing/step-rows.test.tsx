@@ -150,6 +150,30 @@ function body(row: HTMLElement): HTMLElement {
   return found
 }
 
+/** The element a row draws its result into, which is where the token spans land. */
+function outputOf(row: HTMLElement): HTMLElement {
+  const found = row.querySelector<HTMLElement>('[data-slot="step-output"]')
+  if (!found) throw new Error('the row draws no step output')
+  return found
+}
+
+/**
+ * One settled command whose result is `output`, drawn from a turn.
+ *
+ * Rendered directly rather than streamed: what is under test is what the card draws for a result it
+ * was handed, and the transport's part in that is already pinned by the tests above.
+ */
+function renderCommand(output: string): HTMLElement {
+  const turn: AgentTurn = {
+    id: 'turn-1',
+    role: 'assistant',
+    content: '',
+    steps: [{ callId: 'run', tool: 'run_command', args: { command: 'npm test' }, status: 'ok', output }],
+  }
+  render(<MessageBubble message={turn} />)
+  return rowFor('Running npm test')
+}
+
 /** Whether a row is open, read the way a screen reader reads it. */
 function isOpen(row: HTMLElement): boolean {
   return header(row).getAttribute('aria-expanded') === 'true'
@@ -596,5 +620,47 @@ describe('a turn’s tool steps, as rows', () => {
     expect(swapping).toContain('1 added, 1 removed')
     expect(swapping).toContain('- const strict = true')
     expect(swapping).toContain('+ const strict = false')
+  })
+})
+
+/**
+ * What the row's result pane draws when a result is longer than a card, or structured.
+ *
+ * The cap is a drawing rule, so its proof is the drawn text: a 12,000-character result must not put
+ * 12,000 characters in the DOM, and the marker must say how much was withheld so the cut is a fact
+ * the reader can see rather than a silence. Nothing here reaches the store or the transcript — the
+ * step still carries every character — which is what the existing save pin above already proves.
+ */
+describe('what a step row draws for a long or structured result', () => {
+  it('cuts a 12,000-character result at 5,000 and names the characters it did not draw', () => {
+    const long = 'x'.repeat(12_000)
+    const shown = outputOf(renderCommand(long)).textContent ?? ''
+
+    // The drawn text is the first 5,000 characters, verbatim, and then the marker: the cap is a
+    // prefix cut at the limit, not a reflow or a summary of the text.
+    expect(shown.slice(0, 5_000)).toBe(long.slice(0, 5_000))
+    // A screenful plus a marker, never the 12,000 the step returned.
+    expect(shown.length).toBeLessThan(5_100)
+    expect(shown).toMatch(/… 7,000 more characters \(12,000 total\)$/)
+  })
+
+  it('tokenizes a JSON result inside the row’s output', () => {
+    const json = '{"path":"parser.ts","ok":true,"count":3}'
+    const output = outputOf(renderCommand(json))
+
+    // A tool that answers in JSON answers in structure, so the pane draws tokens: the quotes, the
+    // keys and the literals are spans carrying highlight.js's class names.
+    expect(output.querySelectorAll('span[class^="hljs-"]').length).toBeGreaterThan(0)
+    expect(output.querySelector('span.hljs-attr')).toBeTruthy()
+    // Highlighting wraps the source rather than rewriting it: the text between the spans is the JSON.
+    expect(output.textContent).toBe(json)
+  })
+
+  it('keeps a short result byte-identical, with no marker', () => {
+    const short = 'parser.ts body'
+    const shown = outputOf(renderCommand(short)).textContent ?? ''
+
+    expect(shown).toBe(short)
+    expect(shown).not.toContain('…')
   })
 })

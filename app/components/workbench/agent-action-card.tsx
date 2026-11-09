@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { CollapsibleSection } from './collapsible-section'
 import { DiffView } from './diff-view'
+import { highlightToHtml } from './highlight'
 import { ABANDONED_PAUSE_CODE, LOST_PAUSE_CODE, PROCESS_LOST_CODE, RUN_CUT_CODE, type ToolStep } from './agent-session'
 import { formatDuration } from './time'
 import { useNow } from './tick'
@@ -145,20 +146,24 @@ export function AgentActionCard({
         <McpConsentBlock consent={step.mcp} />
       ) : (
         <pre className="max-h-40 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-          {formatArgs(step)}
+          {capped(formatArgs(step), ARGS_DISPLAY_LIMIT)}
         </pre>
       )}
 
       {step.diff && <DiffView diff={step.diff} />}
 
+      {/* The result, cut to what a card can hold and tokenized so a JSON answer reads as structure.
+          The cut is a drawing rule: `step.output` keeps every character the call returned, and the
+          transcript is saved from that field rather than from this element, so nothing here can
+          shorten what was recorded. The failed hue sits on the code element because `.hljs` owns that
+          element's colour, while a token span still wins its own. */}
       {step.output && (
-        <pre
-          className={cn(
-            'mt-1.5 max-h-52 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap',
-            step.status === 'failed' && 'text-destructive'
-          )}
-        >
-          {step.output}
+        <pre className="mt-1.5 max-h-52 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+          <code
+            data-slot="step-output"
+            className={cn('hljs', step.status === 'failed' && 'text-destructive')}
+            dangerouslySetInnerHTML={{ __html: highlightedResult(step.output) }}
+          />
         </pre>
       )}
 
@@ -427,4 +432,59 @@ function formatArgs(step: ToolStep): string {
     lines.push(`content: ${content.length} characters`)
   }
   return lines.join('\n')
+}
+
+/**
+ * How much of a step's arguments and result this card draws.
+ *
+ * These are display caps, not model caps: main already bounds what a tool may hand back, and the store
+ * and the transcript keep every character of it. The card's limits are smaller because they answer a
+ * different question — how much text fits in a row someone is skimming — and they are applied while
+ * rendering, so nothing here can shorten what was recorded or what a reopened conversation reads back.
+ */
+const ARGS_DISPLAY_LIMIT = 2_000
+const RESULT_DISPLAY_LIMIT = 5_000
+
+/** A count with its thousands separated, so a withheld number reads as a quantity, not a timestamp. */
+function thousands(value: number): string {
+  return value.toLocaleString('en-US')
+}
+
+/**
+ * `text` cut to `limit` characters, with a marker naming what was withheld.
+ *
+ * The marker is the point of the whole function: a silent cut would leave the reader believing the call
+ * returned less than it did. It names the characters this card did not draw and the length of the
+ * result itself, so a 12,000-character answer cannot be mistaken for a 5,000-character one.
+ */
+function capped(text: string, limit: number): string {
+  if (text.length <= limit) return text
+  const dropped = text.length - limit
+  return `${text.slice(0, limit)}\n… ${thousands(dropped)} more characters (${thousands(text.length)} total)`
+}
+
+/** Whether `text` is a JSON document, which is what decides whether a result is tokenized as one. */
+function parsesAsJson(text: string): boolean {
+  try {
+    JSON.parse(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The result, cut to the card's limit and tokenized for the eye.
+ *
+ * JSON is worth tokenizing because a tool that answers in JSON answers in structure the reader is
+ * scanning for — which keys, which values — and the tokens are that structure made visible. Anything
+ * else is drawn as plain text, which highlight.js escapes and leaves uncoloured, so an ordinary string
+ * result still reads as itself.
+ *
+ * The string returned is highlight.js's own escaped token HTML, the same thing the code viewer places
+ * in an element, and that escaping is the only reason this card may hand markup to the DOM.
+ */
+function highlightedResult(output: string): string {
+  const shown = capped(output, RESULT_DISPLAY_LIMIT)
+  return highlightToHtml(shown, parsesAsJson(shown) ? 'json' : 'plaintext')
 }
