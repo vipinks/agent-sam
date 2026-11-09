@@ -7,6 +7,9 @@
  */
 import { strict as assert } from 'node:assert'
 import { EventEmitter } from 'node:events'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   killTreeByPlatform,
   resolveCwd,
@@ -545,10 +548,38 @@ function cwdContainment() {
     (e: { code?: string }) => e.code === 'CWD_REQUIRED'
   )
 
+  // A relative cwd is relative to the folder the user opened, not to wherever this process happens to
+  // be: the tool description promises the former, and the two differ as soon as the app is launched
+  // from anywhere but the workspace. A temp tree rather than this repository, so the case leaves
+  // nothing behind and does not depend on what the repository contains.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'sam-terminal-cwd-')))
+  try {
+    const workspace = join(base, 'workspace')
+    mkdirSync(join(workspace, 'sub'), { recursive: true })
+    // A real directory outside the root, reached by a relative route, so the refusal is the
+    // containment check rather than a missing directory.
+    mkdirSync(join(base, 'outside'), { recursive: true })
+
+    assert.equal(
+      resolveCwd('sub', workspace),
+      join(workspace, 'sub'),
+      'a relative cwd resolves against the open root, not this process’s directory'
+    )
+    assert.throws(
+      () => resolveCwd('../outside', workspace),
+      (e: { code?: string }) => e.code === 'CWD_OUTSIDE_WORKSPACE',
+      'a relative cwd that leaves the open root is still refused'
+    )
+    // The absolute case is unaffected: `resolve` ignores the base when the candidate is absolute.
+    assert.equal(resolveCwd(join(workspace, 'sub'), workspace), join(workspace, 'sub'))
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+
   // With no workspace open, containment cannot be checked, so any existing directory is allowed.
   assert.equal(resolveCwd(root, null), root)
 
-  results.push('cwd is confined to the workspace, with distinct codes per failure')
+  results.push('cwd is confined to the workspace, relative to the open root, with distinct codes per failure')
 }
 
 function storeFileFallback() {

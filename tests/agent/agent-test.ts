@@ -8,7 +8,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -260,7 +260,9 @@ async function writeThenRead() {
 }
 
 async function runCommandTool() {
-  const root = mkdtempSync(join(tmpdir(), 'sam-agent-'))
+  // Canonical, because the assertion below compares the spawned cwd to an absolute path the test
+  // builds: a temp root reached through a short name would otherwise differ from its own realpath.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sam-agent-')))
   try {
     // A mocked spawn, so nothing is executed: this checks that the tool routes through the terminal
     // module and collects stdout *and* stderr, not that a shell works.
@@ -281,7 +283,10 @@ async function runCommandTool() {
       child.killed = true
       return true
     }
-    const spawnImpl = (() => {
+    /** Every spawn the tool asked for, so the options a real child would receive can be read. */
+    const spawnCalls: Array<{ command: string; options: { cwd?: string } }> = []
+    const spawnImpl = ((command: string, options: { cwd?: string }) => {
+      spawnCalls.push({ command, options })
       setImmediate(() => {
         child.stdout.emit('data', Buffer.from('out\n'))
         child.stderr.emit('data', Buffer.from('warn\n'))
@@ -290,9 +295,13 @@ async function runCommandTool() {
       return child
     }) as never
 
+    // A relative cwd, which is what the tool description tells the model to send: it must mean the
+    // workspace's own subfolder, whatever directory this process was launched from.
+    mkdirSync(join(root, 'sub'))
+
     const outcome = await executeTool(
       'run_command',
-      JSON.stringify({ command: 'echo out' }),
+      JSON.stringify({ command: 'echo out', cwd: 'sub' }),
       root,
       new AbortController().signal,
       spawnImpl
@@ -309,6 +318,15 @@ async function runCommandTool() {
     )
     assert.ok(!outcome.output.includes('EXIT_CODE'), 'the exit marker must not reach the model')
     assert.ok(!outcome.output.includes('[STDERR]'), 'the stderr marker must be stripped for the model')
+
+    // And the spawn really ran where the model asked, relative to the open root: one call, one
+    // directory, resolved before the child exists.
+    assert.equal(spawnCalls.length, 1, 'the command is spawned once')
+    assert.equal(
+      spawnCalls[0].options.cwd,
+      join(root, 'sub'),
+      'a relative cwd is resolved against the open root before the spawn'
+    )
 
     results.push('run_command runs through the terminal module and reports stdout, stderr, and exit')
   } finally {

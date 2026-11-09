@@ -23,6 +23,9 @@ export function shellFor(platform: NodeJS.Platform): string {
 /**
  * Resolve a working directory and refuse to leave the workspace.
  *
+ * A relative request is resolved against the open root, not against this process's own directory, so
+ * `sub` means the workspace's subfolder wherever the app was launched from.
+ *
  * Symlinks are resolved before the comparison, so a link *inside* the workspace pointing outside it
  * cannot be used as a side door. Comparing against `root + sep` also rejects a sibling whose name
  * merely starts with the root's (`/workspace-2` when the root is `/workspace`).
@@ -35,7 +38,10 @@ export function resolveCwd(requested: string, workspaceRoot: string | null): str
 
   let resolved: string
   try {
-    resolved = realpathSync(resolve(candidate))
+    // Relative to the folder the user opened, which is what the tool description promises. An
+    // absolute request is unaffected — `resolve` ignores the base for one — and the no-workspace
+    // fallback is this process's own directory, because there is no other base to offer.
+    resolved = realpathSync(resolve(workspaceRoot ?? process.cwd(), candidate))
   } catch {
     throw new ConveyorError('CWD_NOT_FOUND', `The working directory does not exist: ${candidate}`)
   }
