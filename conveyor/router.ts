@@ -170,6 +170,23 @@ loadCombosSync()
 router.stores['provider-config'].dispatch('dropRetiredRates')
 
 /**
+ * Take records for providers this build no longer offers off the loaded slice.
+ *
+ * The second pass at the same seam and for the same reason: the load is one level deep, so a record an
+ * older build's delete left behind arrives whole. Runs synchronously between `dropRetiredRates` and any
+ * window or save, so the first launch after such an orphan exists rewrites the file clean and no reader
+ * ever sees the stale record — the Overview's prices and the context card's window both read it by id,
+ * and a same-name re-add would otherwise be handed it back.
+ *
+ * The shipped ids are handed in rather than reached for, because the store is pure: the roster is this
+ * file's to know. Through the store's own action, like the normalisation above, so the sweep is the
+ * definition's and the debounced write that follows persists the stripped map.
+ */
+router.stores['provider-config'].dispatch('dropOrphanedProviders', {
+  predefinedIds: PROVIDERS.map((provider) => provider.id),
+})
+
+/**
  * Clear transcript files left behind by a delete that removed the metadata but not the file.
  *
  * Runs once, here, immediately after the router exists — because that is the first moment the store

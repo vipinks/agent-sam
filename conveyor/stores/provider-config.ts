@@ -171,6 +171,9 @@ export const providerConfigStore = defineStore('provider-config', {
       catalogueRates: z.record(z.string(), rateDeclarationSchema).optional(),
     }),
     setEnabledModels: z.object({ providerId: z.string().min(1), modelIds: z.array(z.string()) }),
+    // The predefined ids are this build's shipped roster, handed in because the definition is pure: an
+    // id on this list is not an orphan, whatever the custom list says.
+    dropOrphanedProviders: z.object({ predefinedIds: z.array(z.string().min(1)) }),
     addCustomProvider: z.object({ name: z.string().min(1), baseUrl: z.string().min(1) }),
     // Both fields optional because a box sends the one it was asked to change; a payload naming neither is
     // one the action refuses to write, the same silent refusal the add action applies to an unusable draft.
@@ -357,6 +360,32 @@ export const providerConfigStore = defineStore('provider-config', {
           // included — the pass is about three keys that are gone, not about the ones that are here.
           ...(modelWindows !== undefined ? { modelWindows } : {}),
         }
+      }
+    },
+
+    /**
+     * Take records for providers this build no longer offers off the map, once, at a load.
+     *
+     * A delete in this build removes the provider's record with its descriptor (`removeCustomProvider`),
+     * but a file written before that line existed still carries the record: main's load is one level
+     * deep, so a `providers` map read from the file replaces the empty one wholesale and a dead id
+     * arrives as a top-level entry with nothing in `customProviders` naming it. No screen lists that
+     * provider any more, yet its record still answers the two readers that read by id — the Overview's
+     * declared prices and the context card's declared window — so a conversation naming the dead id
+     * would keep billing from a record the provider list says is gone rather than from the shipped
+     * table. And a same-name re-add is handed the record back, because the id is derived from the name
+     * and the freed slug re-derives the same one.
+     *
+     * The ids this build offers arrive in the payload rather than being imported: the definition is
+     * pure, and the shipped roster is the router's to know. An id still listed — a predefined
+     * provider's or a live custom one's — is left exactly as it was, down to the identity of the record
+     * the map holds, so a second run changes nothing at all.
+     */
+    dropOrphanedProviders: (state, { predefinedIds }) => {
+      const offered = new Set(predefinedIds)
+      for (const id of Object.keys(state.providers)) {
+        if (offered.has(id) || state.customProviders.some((provider) => provider.id === id)) continue
+        delete state.providers[id]
       }
     },
 

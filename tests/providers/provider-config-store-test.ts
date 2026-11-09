@@ -547,6 +547,99 @@ function theRetiredProviderRatesAreStrippedOnLoad() {
 }
 
 /**
+ * A record whose provider this build no longer offers is taken off the map at startup.
+ *
+ * An older build's delete removed a custom provider's descriptor and left its record behind; a load is
+ * one level deep, so the dead id arrives as a top-level entry with nothing in `customProviders` naming
+ * it — exactly the shape a file written before that delete was fixed has. Two readers still find the
+ * record by id (the Overview's prices and the context card's window), and a same-name re-add re-derives
+ * the freed slug, so leaving it behind is a stale price on an old conversation *and* a resurrected
+ * record on a new provider.
+ */
+function recordsForProvidersThisBuildNoLongerOffersAreDroppedOnLoad() {
+  // A file written by an older build, whose delete left the record behind: the custom list is empty,
+  // and the record for the provider it used to describe is still at the top of the map.
+  const loaded = rehydrate({
+    providers: {
+      'local-llama': {
+        enabledModels: ['llama-3.1-8b'],
+        fetchedModels: [{ id: 'llama-3.1-8b' }],
+        supportsImages: true,
+        modelRates: { 'llama-3.1-8b': { inputRate: 1, cacheHitRate: 0.5, outputRate: 2 } },
+        modelWindows: { 'llama-3.1-8b': { contextWindow: 32_000 } },
+      },
+      deepseek: { enabledModels: [CHAT], fetchedModels: [{ id: CHAT }] },
+    },
+    customProviders: [],
+  })
+  // The merge alone leaves it: the file's `providers` map replaced the empty one, dead entry and all —
+  // the same one-level merge that carries a record's retired keys through.
+  assert.deepEqual(
+    Object.keys(loaded.providers).sort(),
+    ['deepseek', 'local-llama'],
+    'the merge alone leaves the orphan'
+  )
+
+  const store = createHarness(loaded)
+  const predefined = store.state().providers.deepseek
+  store.run('dropOrphanedProviders', { predefinedIds: ['deepseek', 'openai'] })
+
+  assert.equal('local-llama' in store.state().providers, false, 'the orphan is gone after the load')
+  // A predefined provider is listed, so its record is not the sweep's business: it is left exactly as
+  // it was, down to the identity of the object the map holds.
+  assert.equal(store.state().providers.deepseek, predefined, 'a listed record keeps its identity')
+
+  // The reader's half of the fix, read the way the Overview and the context card read it: a conversation
+  // that still names the dead id finds no record, so its model prices as unknown — the em dash its row's
+  // "Removed provider" label already implies — where the orphaned record would have billed the stale
+  // declared rate for a provider the list says is gone.
+  assert.deepEqual(
+    resolveRates({ model: 'llama-3.1-8b', modelRates: loaded.providers['local-llama'].modelRates }),
+    { input: 1_000_000, cacheHit: 500_000, output: 2_000_000 },
+    'the persisted record declared a rate'
+  )
+  assert.equal(
+    resolveRates({ model: 'llama-3.1-8b', modelRates: store.state().providers['local-llama']?.modelRates }),
+    null,
+    'after the sweep the model resolves from the shipped table, which does not price it'
+  )
+
+  // Idempotent: the second run finds nothing to drop and changes nothing at all.
+  const once = JSON.stringify(store.state())
+  store.run('dropOrphanedProviders', { predefinedIds: ['deepseek', 'openai'] })
+  assert.equal(JSON.stringify(store.state()), once, 'a second run is byte-identical')
+
+  // And the re-add that would otherwise have been handed the old record back starts clean: the same
+  // name re-derives the freed slug, and the map holds nothing under it — no resurrected models, prices
+  // or windows.
+  store.run('addCustomProvider', LOCAL)
+  assert.equal(store.state().customProviders[0].id, 'local-llama', 'the freed slug comes back')
+  assert.equal('local-llama' in store.state().providers, false, 'the new provider starts with no record')
+
+  // A live custom provider is listed too, so its record is kept for the same reason a predefined one's
+  // is — the sweep reads the custom list, not just the roster it was handed.
+  const live = rehydrate({
+    providers: { 'work-gateway': { enabledModels: [CHAT], fetchedModels: [{ id: CHAT }] } },
+    customProviders: [
+      {
+        id: 'work-gateway',
+        name: 'Work Gateway',
+        baseUrl: 'https://gw.internal/v1',
+        apiKey: '',
+        dialect: 'openai',
+        models: [],
+      },
+    ],
+  })
+  const keeping = createHarness(live)
+  const custom = keeping.state().providers['work-gateway']
+  keeping.run('dropOrphanedProviders', { predefinedIds: ['deepseek', 'openai'] })
+  assert.equal(keeping.state().providers['work-gateway'], custom, 'a live custom record keeps its identity')
+
+  results.push('records for providers this build no longer offers are dropped on load')
+}
+
+/**
  * A declared window belongs to the model it was typed for, exactly as a declared price does.
  *
  * The map is the mirror of `modelRates` one key over — same `Record` keyed by model id, same
@@ -646,6 +739,7 @@ function main() {
   step('declared price kept on refresh', aCatalogueRefreshKeepsTheDeclaredPrices)
   step('declared price round trip', declaredPricesSurviveARestart)
   step('retired provider rates stripped on load', theRetiredProviderRatesAreStrippedOnLoad)
+  step('orphaned records dropped on load', recordsForProvidersThisBuildNoLongerOffersAreDroppedOnLoad)
   step('declared window written, per model', aModelsWindowIsWrittenUnderItsOwnKey)
   step('declared window blanked', clearingAWindowsEntryTakesItOff)
   step('declared window kept on rebuild', aRebuiltRecordKeepsTheDeclaredWindow)
