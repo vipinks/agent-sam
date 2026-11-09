@@ -19,8 +19,10 @@
  *   3. a second turn spawns its own child, streams from that child, and reaps it, leaving the first turn's
  *      child untouched;
  *   4. a child that exits without saying anything still ends its turn, with the cause the exit code implies,
- *      so a silent death can never leave the pane thinking;
- *   5. cancel kills the child — the signal is on the process, not on a stub — and ends the turn silently.
+ *      so a silent death can never leave the pane thinking — and it says so as a notice before the ending;
+ *   5. a child that declares `turn.failed` and then closes cleanly ends the turn exactly once: the ending
+ *      the child named, never a second one invented by the exit;
+ *   6. cancel kills the child — the signal is on the process, not on a stub — and ends the turn silently.
  *
  * What this proves is the lifecycle and the pipe semantics, not the live CLI: the fixture replays the captured
  * vocabulary, and the acceptance for the real thing is a person watching the installed binary — a second turn
@@ -215,7 +217,18 @@ async function aSilentChildEndsItsTurnWithATracedCause() {
   try {
     const clean = await oneTurn(ok, 'a question nobody answered')
     assert.equal(clean.ended, true, 'a child that exits with nothing said does not leave the turn thinking')
-    assert.deepEqual(typesOf(clean.chunks), ['turn_end'], 'the ending is the whole of what it streams')
+    assert.deepEqual(
+      typesOf(clean.chunks),
+      ['turn_end_notice', 'turn_end'],
+      'the notice, then the ending it belongs to: an ending said out loud, never a bare one'
+    )
+    const cleanNotice = clean.chunks[0]
+    assert.equal(cleanNotice?.type === 'turn_end_notice' ? cleanNotice.cause : '', 'empty_stop', 'an empty stop')
+    assert.equal(
+      cleanNotice?.type === 'turn_end_notice' ? cleanNotice.resumable : false,
+      true,
+      'and the notice offers Continue'
+    )
     assert.equal(clean.outcome?.exitCode, 0, 'read off the child')
     assert.equal(clean.outcome?.cause, 'empty_stop', 'and a clean exit with no answer is said out loud')
 
@@ -244,6 +257,36 @@ async function aSilentChildEndsItsTurnWithATracedCause() {
     results.push('a child that exits in silence ends its turn with a traced cause, never by leaving it open')
   } finally {
     reap([ok, failed])
+  }
+}
+
+/**
+ * A child that declares its own failure and then closes cleanly ends its turn exactly once.
+ *
+ * `turn.failed` is the CLI's own ending, and the mapper forwards it as a bare `turn_end`. The process then
+ * exits 0, which by the exit code alone is an empty stop — so a client that words every clean exit without
+ * an answer would put a second ending, an `empty_stop`, on a turn that had already ended as a failure. The
+ * count is what this states: one ending reaches the transcript, and it is the one the child declared.
+ */
+async function aDeclaredFailureEndsTheTurnOnce() {
+  const run = fixtureSpawn('failed-ok')
+  try {
+    const turn = await oneTurn(run, 'a question the model declared failed')
+
+    assert.equal(turn.ended, true, 'the close after turn.failed ends the turn')
+    const endings = turn.chunks.filter((chunk) => chunk.type === 'turn_end' || chunk.type === 'turn_end_notice')
+    assert.equal(endings.length, 1, 'the child named one ending, and the exit did not invent a second')
+    assert.equal(
+      endings[0]?.type === 'turn_end' ? endings[0].cause : '',
+      'stream_error',
+      'the ending is the failure the child reported, not a fresh empty_stop'
+    )
+    assert.equal(turn.outcome?.cause, 'stream_error', 'and the outcome agrees with the ending on the wire')
+    assert.equal(turn.outcome?.exitCode, 0, 'though the process itself closed on zero')
+
+    results.push('a child that reports its own failure ends the turn once, not twice')
+  } finally {
+    reap([run])
   }
 }
 
@@ -295,6 +338,7 @@ async function main() {
   await step('first turn', theFirstTurnStreamsEndsAndReapsItsChild)
   await step('second turn', theSecondTurnSpawnsItsOwnChild)
   await step('silent child', aSilentChildEndsItsTurnWithATracedCause)
+  await step('declared failure', aDeclaredFailureEndsTheTurnOnce)
   await step('cancel', cancelKillsTheChildAndEndsTheTurn)
 
   console.log('codex child lifecycle: ' + results.length + ' passed')

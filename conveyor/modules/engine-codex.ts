@@ -13,6 +13,7 @@ import {
 } from '../protocol/engine'
 import { codexTurnEndCause, mapCodexChunk, type CodexTurnEndCause, type CodexUpdate } from '../protocol/codex-jsonl'
 import { codexTranscriptChunks, type EngineTranscriptChunk } from '../protocol/codex-turn'
+import { isResumable } from '../protocol/turn-end'
 
 /**
  * The Codex engine, as a process: the binary the install pattern finds, the turn that runs it, and the cancel
@@ -379,6 +380,16 @@ export function runCodexTurn(
     let spawnError: NodeJS.ErrnoException | null = null
     let childExitCode: number | null = null
     let settled = false
+    /**
+     * The ending this turn has already put on the wire, when there is one.
+     *
+     * A `turn.failed` update reaches `emit` as a bare `turn_end`: the mapper forwards the ending the child
+     * declared (codex-jsonl.ts:244-248), and the process closes a moment later. Remembering that cause is what
+     * tells the exit path below that the turn is already ended, so a close cannot add a second ending to a turn
+     * that named its own — the close only supplies the exit code. The cause is kept rather than a boolean
+     * because it is also the outcome the exit still has to report.
+     */
+    let settledCause: CodexTurnEndCause | null = null
     let timer: unknown
 
     const emit = (updates: readonly CodexUpdate[]): void => {
@@ -387,6 +398,9 @@ export function runCodexTurn(
         // `turn.completed` is the only update that carries usage, so the usage chunk is also the turn's
         // completion marker. A failure seen after it is a failure after the answer, not an answer lost.
         if (chunk.type === 'usage') sawCompletion = true
+        // A notice or an ending is the turn saying how it stopped; from that moment the exit is only a
+        // confirmation, never a second ending.
+        if (chunk.type === 'turn_end' || chunk.type === 'turn_end_notice') settledCause = chunk.cause
         onChunk(chunk)
       }
     }
@@ -494,7 +508,21 @@ export function runCodexTurn(
         })
         return
       }
+      // The turn may already have named its ending — a `turn.failed` update, forwarded by the mapper as a
+      // bare `turn_end`. That ending is the turn's: the close confirms it and supplies the exit code, and a
+      // second ending invented here would show the user an ending the turn never had.
+      if (settledCause !== null) {
+        finish({ exitCode: childExitCode, cancelled: false, cause: settledCause })
+        return
+      }
       const cause = codexTurnEndCause(code, sawText)
+      // Main says an ending out loud before it ends the turn (agent.ts:1155-1164), and the engine path owes
+      // the pane the same sentence. A bare `turn_end` is read by nobody on this path, so without the notice a
+      // child that exited 0 without an answer would end on silence — or, with tools behind it, on the
+      // mid-work card. The ordinary ending stays silent, exactly as it does on main.
+      if (cause !== 'model_stop') {
+        onChunk({ type: 'turn_end_notice', cause, resumable: isResumable(cause) })
+      }
       emit([{ type: 'turn_end', sessionId: threadId ?? '', cause }])
       finish({ exitCode: childExitCode, cancelled: false, cause })
     })

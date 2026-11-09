@@ -16,6 +16,8 @@
  *   reply        — wait for stdin to end, print the vocabulary, exit 0.
  *   silent-ok    — wait for stdin to end, say nothing, exit 0.
  *   silent-fail  — wait for stdin to end, say nothing, exit 3.
+ *   failed-ok    — wait for stdin to end, declare `turn.failed`, exit 0. The one mode whose ending the
+ *                  child names itself, so the exit that follows must not name a second one.
  *   block        — say nothing and never exit: a turn in flight, for the cancel case. It ignores stdin, so
  *                  it is the one mode whose silence is not about the pipe.
  *
@@ -37,10 +39,19 @@ const REPLY = [
   '{"type":"turn.completed","usage":{"input_tokens":20775,"cached_input_tokens":6912,"output_tokens":5}}',
 ]
 
+/** The one line a turn that dies before answering leaves: the CLI's own declaration, nothing after it. */
+const FAILED = '{"type":"turn.failed","error":{"message":"the model failed"}}'
+
 function speak() {
   if (mode === 'reply') {
     process.stdout.write(`${REPLY.join('\n')}\n`)
     process.exit(0)
+  }
+  if (mode === 'failed-ok') {
+    // The write's callback, rather than the next line: the event has to be on the pipe before the process
+    // closes, or the suite would be racing its own fixture rather than observing an ending.
+    process.stdout.write(`${FAILED}\n`, () => process.exit(0))
+    return
   }
   process.exit(mode === 'silent-fail' ? 3 : 0)
 }
