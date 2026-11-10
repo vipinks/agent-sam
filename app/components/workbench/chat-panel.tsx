@@ -1767,6 +1767,19 @@ export function ChatPanel() {
       // leave a turn to explain, nor claim the conversation ran in a folder it never reached.
       if (engineId === null && stopForStaleModel()) return
 
+      // The target this turn runs under, read from the store rather than closed over: the send that
+      // creates a Buddy conversation moved the header to the Buddy's pin while it was already running
+      // (`createSession` in `use-chat-sessions`), so a value captured by this render names the target
+      // from before that conversation existed. Read once, like `engineModel` below, so the payload and
+      // the pair the turn is written down with cannot disagree — and so a picker move after the turn
+      // started is the next turn's choice rather than this one's claim.
+      const turnTarget = useWorkbenchStore.getState()
+      const turnProviderId = turnTarget.activeProviderId
+      const turnModel = turnTarget.activeModel ?? ''
+      const turnComboId = turnTarget.activeComboId
+      const turnCombo = turnComboId === null ? null : (combos.find((combo) => combo.id === turnComboId) ?? null)
+      const turnProvider = customProviders.find((provider) => provider.id === turnProviderId)
+
       // A turn is this conversation being used in this window's folder, so its start is what the project
       // is recorded from — and only when that differs from the folder already stored.
       sessionsRef.current.stampRoot(sessionId)
@@ -1833,11 +1846,11 @@ export function ChatPanel() {
       await runStream(
         engineTurn ??
           conveyor.agent.chatWithTools({
-            providerId: activeProviderId,
-            model: activeModel,
+            providerId: turnProviderId,
+            model: turnModel,
             // The descriptor of a provider the user added, when this is one. Absent for a built-in, whose
             // route main already knows by id.
-            provider: runProvider,
+            provider: turnProvider,
             messages: toHistory(history),
             workspaceRoot: rootPath,
             autoApprove,
@@ -1875,7 +1888,7 @@ export function ChatPanel() {
             // The combo the user chose, when one is active. The pair above is still its head, so a
             // reader that does not know combos sees a perfectly ordinary request; main is the side
             // that owns the member list and walks it.
-            comboId: activeComboId ?? undefined,
+            comboId: turnComboId ?? undefined,
           }),
         turnId,
         sessionId
@@ -1883,20 +1896,21 @@ export function ChatPanel() {
 
       // The pair this turn actually ran under, stamped onto the conversation.
       //
-      // A combo may have served a member other than its head, and a plain mid-conversation switch may
-      // have moved the pair at all; either way the row should name the model that wrote the answer,
-      // because the Overview prices at the row's pair and the compaction window resolves from it. The
-      // served member is read from the ending notice the loop just wrote; with no report (a head that
-      // answered, or a plain send) the head, then the window's pair, is the honest fallback.
+      // A combo may have served a member other than its head; either way the row should name the model
+      // that wrote the answer, because the Overview prices at the row's pair and the compaction window
+      // resolves from it. The served member is read from the ending notice the loop just wrote; with no
+      // report (a head that answered, or a plain send) the head, then the target this turn started with,
+      // is the honest fallback — the pair the payload above named, so the record cannot claim a target
+      // the request never carried.
       if (engineId === null) {
         const served = currentEndNotice(messagesRef.current)?.combo?.requests.at(-1)
-        const head = activeCombo?.members[0]
+        const head = turnCombo?.members[0]
         const pair = served
           ? { providerId: served.providerId, model: served.modelId }
           : head
             ? { providerId: head.providerId, model: head.modelId }
-            : activeModel !== ''
-              ? { providerId: activeProviderId, model: activeModel }
+            : turnModel !== ''
+              ? { providerId: turnProviderId, model: turnModel }
               : null
         if (pair) sessionsRef.current.stampTarget(sessionId, pair)
       }
@@ -1913,14 +1927,11 @@ export function ChatPanel() {
       if (rewrittenTurnId === undefined) sessionsRef.current.compactAutomatically()
     },
     [
-      activeCombo,
-      activeComboId,
-      activeModel,
-      activeProviderId,
       autoApprove,
+      combos,
+      customProviders,
       engineModels,
       rootPath,
-      runProvider,
       runStream,
       stickToBottom,
       stopForStaleModel,

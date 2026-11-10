@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { conveyor } from '@/conveyor/client'
 import { ConveyorError, useConveyorActions, useConveyorStore } from 'electron-conveyor/react'
 import { chatSessionsStore } from '@/conveyor/stores/chat-sessions'
@@ -519,6 +520,28 @@ export interface ChatSessions {
    * when the turn begins rather than when the usage frame arrives.
    */
   recordUsage: (id: string, counters: { prompt: number; completion: number; cached?: number }) => void
+}
+
+/**
+ * Whether a provider's model is one the user has switched on.
+ *
+ * The send guard's rule (`chat-panel.tsx:1042-1058`), read for a pair that is not on the header: an absent
+ * record or an empty enabled list is "the mirror has not answered yet" — the same reading `reconcileTarget`
+ * and `initialTarget` make — so a model is allowed while the persisted intent has not arrived. Only a model
+ * a non-empty list omits is a model the user switched off.
+ *
+ * Not lifted out of that seam and shared: the pane's copy is a memo over the *active* target with the
+ * window's own custom-provider list in it, and it answers "may this send go" rather than "may this pair be
+ * seeded". Handing a candidate pin to it would mean passing the candidate through the picker's state, which
+ * is a second way to ask the question rather than one rule in one place. The common core is the line below.
+ */
+function modelIsOffered(
+  providerId: string,
+  modelId: string,
+  configs: Record<string, { enabledModels: readonly string[] }>
+): boolean {
+  const enabled = configs[providerId]?.enabledModels
+  return enabled === undefined || enabled.length === 0 || enabled.includes(modelId)
 }
 
 export function useChatSessions(
@@ -1181,9 +1204,24 @@ export function useChatSessions(
       // pin back up. A pin naming a provider that is currently gone is the other case, treated like a
       // Buddy that resolves to nothing: it seeds no pair, and the conversation starts on the window's
       // own. Seeding the dead id would write a row that names nothing and cannot run.
-      const seededProviderId =
+      //
+      // The model is judged in the same breath and by the same rule: a pin whose provider is gone or whose
+      // model is no longer switched on is dropped pair-wide rather than half-kept, because a provider
+      // without its model names no run either. What is left is the window's pair — and the user is told
+      // once, because a silent drop would leave them believing the Buddy they chose is answering.
+      const pinnedProviderId =
         seed?.providerId !== undefined && isProviderListed(seed.providerId, providerOrder) ? seed.providerId : null
-      const seededModel = seededProviderId === null ? model : (seed?.model ?? model)
+      const pinnedModel = seed?.model ?? model
+      const pinOffered =
+        pinnedProviderId !== null && modelIsOffered(pinnedProviderId, pinnedModel, providersRef.current)
+      if (seed?.providerId !== undefined && !pinOffered) {
+        toast.error('That Buddy’s model is not available', {
+          description:
+            'This conversation starts on the header’s model instead. Choose a target in the header, then send again.',
+        })
+      }
+      const seededProviderId = pinOffered ? pinnedProviderId : null
+      const seededModel = seededProviderId === null ? model : pinnedModel
       // The skills the user turned on while there was no conversation to hold them. Written onto the row
       // rather than kept beside it: from here on the record is the only place the choice lives, which is
       // what makes it the conversation's choice and not the window's. An empty pending list adds no key
@@ -1195,13 +1233,28 @@ export function useChatSessions(
       // here rather than in the caller: what it runs as is decided at creation and cannot change afterwards,
       // so this is the one moment the choice is written. An absent key is the Sam loop.
       const chosenEngine = pendingEngineRef.current
+      // The seed's pair governs the first turn, and the header is what that turn is built from, so the
+      // header moves to the very pair the row is about to be written with. The send that got here is
+      // already running: a header left on the window's pair would build the turn from a target the row
+      // does not name, and the post-run stamp would then write that target over the pin. `setTarget` is
+      // the pair's unconditional writer (`store.ts:664-669`): it persists the pair and clears any combo in
+      // the same write, because the pair and the combo are one choice. `setComboTarget` would put a combo
+      // back that nothing here chose, and `seedTarget` (`store.ts:682`) re-derives the launch seed rather
+      // than naming this pin. The controls are not locked: a later pick is a later write and wins, which
+      // is the whole of the precedence rule — and this pair is creation-time truth only, so a conversation
+      // reopened later runs whatever pair the header is on.
+      if (chosenEngine === null && pinnedProviderId !== null && pinOffered) {
+        useWorkbenchStore.getState().setTarget({ providerId: pinnedProviderId, model: seededModel })
+      }
       addSession({
         id,
         title: UNTITLED,
-        // A Buddy that pins a provider and a model runs as it was meant to. Both travel together, so
-        // there is no case here of a pinned model on whichever provider the window happened to be on —
-        // and a pin naming a removed provider falls through to the window's pair, as `seededModel` above
-        // says, rather than writing a dead id onto a new conversation.
+        // The pair this conversation is created with. A Buddy that pins a provider and a model names both
+        // together, so there is no case here of a pinned model on whichever provider the window happened
+        // to be on — and a pin whose provider or model is no longer offered falls through to the window's
+        // pair, as `pinOffered` above says, rather than writing a pair that cannot run. This is
+        // creation-time truth only: a conversation reopened later runs whatever pair the header is on,
+        // which is what a later pick leaves it on.
         providerId: seededProviderId ?? providerId,
         model: seededModel,
         ...(lastRoot === null ? {} : { lastRoot }),

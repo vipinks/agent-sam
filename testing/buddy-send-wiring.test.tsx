@@ -26,6 +26,12 @@ import { CHAT_SESSIONS_STORE_ID, createBridgeStub, setActiveStub, stubStore, typ
  * proven. These cases are the proof, and they are deliberately about the payload the real client issues —
  * the stream call main receives — rather than about anything the pane renders.
  *
+ * The pair a Buddy pins is the third of those facts, and the one this file was extended for: the record
+ * seeds it, but the first turn is assembled from the header, so a header the create does not move sends
+ * the model that was on screen before the conversation existed — and the post-run stamp then writes that
+ * model back over the pin. The first case therefore also asserts the header at the moment of creation and
+ * the row after the turn: the payload, the control and the record are one claim about one send.
+ *
  * Kept in a file of its own rather than beside the picker's cases, and that is not tidiness: both cases
  * here send, and in this harness a picker opened in a case that follows a send is a picker opened against
  * a store mirror still holding the previous case's conversation, which reads as a conversation already on
@@ -83,6 +89,8 @@ interface SendFixture {
   stub: BridgeStub
   /** Every action dispatched at the chat-sessions store, in order. */
   actions: RecordedAction[]
+  /** The row state main holds, as the mirror receives it after each action. */
+  chat: { sessions: ChatSession[]; activeSessionId: string | null }
 }
 
 /**
@@ -126,7 +134,7 @@ function stubScreen(options: { buddies?: BuddiesState } = {}): SendFixture {
   }
 
   setActiveStub(stub)
-  return { stub, actions }
+  return { stub, actions, chat }
 }
 
 /** What main's reducer does with one action, narrowed to the writes this screen makes. */
@@ -237,6 +245,22 @@ async function chatTurnInput(stub: BridgeStub): Promise<Record<string, unknown>>
   return envelope.input
 }
 
+/**
+ * End the run's stream, as main does when the loop is done.
+ *
+ * The channel is read from the recorded start call rather than guessed, and an unstubbed stream stays
+ * open — deliberate on the stub's side, since most suites only care that a send went out. This one cares
+ * that the turn *ended*, because the transcript write is scheduled at that boundary and it is scheduled
+ * after the post-run stamp: ending the run is what makes "after the turn" a fact rather than a race.
+ */
+function endStream(stub: BridgeStub): void {
+  const started = stub.calls.find(
+    (call) => call.channel === 'conveyor:stream:start' && String(call.method).startsWith('agent.chatWithTools#')
+  )
+  if (!started) throw new Error('no agent turn was started')
+  stub.emit(`conveyor:stream:${started.method}`, { type: 'end' })
+}
+
 beforeEach(() => {
   localStorage.clear()
   useWorkbenchStore.setState({
@@ -249,13 +273,13 @@ beforeEach(() => {
 })
 
 describe('the turn the first send of a Buddy conversation starts', () => {
-  it('carries the chosen Buddy’s role verbatim and its server list, on the send that creates the conversation', async () => {
+  it('carries the chosen Buddy’s role, its server list and its pinned pair on the send that creates the conversation', async () => {
     // The state this is about: no conversation yet, a Buddy chosen while there is none to hold it, and the
     // first message as the send. The record the choice seeds is written by this very send and is back in
     // this window only after a round trip, so a turn assembled from what the window shows was assembled
     // before the create — and on a conversation's first message that means no role and no server list at
     // all, which is how the app's own loop came to answer a Buddy conversation as nobody.
-    const { actions, stub } = stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
+    const { actions, chat, stub } = stubScreen({ buddies: { custom: [CAPTAIN], disabledIds: [] } })
     renderScreen()
 
     await openBuddyPicker()
@@ -269,12 +293,37 @@ describe('the turn the first send of a Buddy conversation starts', () => {
     expect(created.rolePrompt).toBe(CAPTAIN.rolePrompt)
     expect(created.mcpSubset).toEqual(CAPTAIN.mcpIds)
 
+    // The pin is the third thing the create decides, and the seam this file was extended for: the row is
+    // what a reopened conversation, the Overview's pricing and the compaction window resolve.
+    expect(created.providerId).toBe(CAPTAIN.providerId)
+    expect(created.model).toBe(CAPTAIN.model)
+
+    // And the header has to move to it at that same moment, because the send that creates the
+    // conversation is already running when the seed is taken: a header left on the window's own pair
+    // would build the turn from a target the new row does not name.
+    const target = useWorkbenchStore.getState()
+    expect({ providerId: target.activeProviderId, model: target.activeModel }).toEqual({
+      providerId: CAPTAIN.providerId,
+      model: CAPTAIN.model,
+    })
+
     const payload = await chatTurnInput(stub)
 
     // And the turn. Verbatim, because the role reaches a provider as standing context: a turn that
     // re-derived it would be a second source of truth for what the conversation runs as.
     expect(payload.rolePrompt).toBe(CAPTAIN.rolePrompt)
     expect(payload.mcpSubset).toEqual(CAPTAIN.mcpIds)
+    // The pair travels with them by the same rule: a turn recorded as one pair and answered under another
+    // is a conversation whose row prices and compacts against a model that never ran.
+    expect(payload.providerId).toBe(CAPTAIN.providerId)
+    expect(payload.model).toBe(CAPTAIN.model)
+
+    // And the row still says so after the turn. The post-run stamp is the one write that can undo the
+    // seed, so the run is ended and the save at the turn boundary is what this waits for: it is scheduled
+    // after the stamp, which makes it the moment "after the turn" is a fact rather than a race.
+    endStream(stub)
+    await waitFor(() => expect(stub.methodsOn('sessions')).toContain('saveTranscript'), { timeout: 5000 })
+    expect(chat.sessions[0]).toMatchObject({ providerId: CAPTAIN.providerId, model: CAPTAIN.model })
   })
 
   it('carries neither a role nor a server list when the creating send is the Agent Sam default', async () => {
