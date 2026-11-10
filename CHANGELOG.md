@@ -6,6 +6,53 @@ coding assistant.
 
 <br>
 
+## v1.16.0 — 2026-11-10
+
+**Consent-pause integrity**
+
+- A turn paused for approval is no longer written to disk while the decision is open; the Approve/Deny card is served from per-session memory, so it survives switching away and back without the transcript file ever holding an undecided step.
+- A deliberate quit while a pause stands reconciles that pause to an interrupted state and writes the turn exactly once, so it survives a reload instead of vanishing; the live card is untouched and a mere blur still writes nothing.
+- The orphan/pause-lost reconcile now also settles the turn's plan, so a reloaded interrupted turn no longer shows a checklist stuck on an in-progress step.
+
+**Turn legibility**
+
+- A turn that ended on a real answer no longer draws the mid-work card; the fence keys on whether the model spoke after its last tool call.
+- The engine-failure ending seam now settles the plan like the normal ending, so a turn that died on an engine failure leaves no running plan step behind.
+
+**Agent tooling**
+
+- Added `replace_in_file`, a surgical exact-anchor edit, with a prompt line steering the model to it instead of writing patch scripts.
+- `run_command` is bounded at five minutes on the tree, fails with a coded `COMMAND_TIMED_OUT`, and a timed-out result carries a bounded-retry clause; a relative command cwd resolves against the open root.
+
+**Provider hygiene**
+
+- Deleting a custom provider now takes its record and its encrypted key with it through a router-installed sink, instead of leaving the credential and a stale per-provider record behind.
+- A conversation that named a deleted provider reads as "Removed provider" and compacts on the window's own pair, never throwing a missing-provider error on open or compaction.
+- `newProviderId` now avoids the shipped provider ids, so a custom provider named like a built-in can no longer derive a colliding id and a delete can no longer drop the shipped provider's record.
+- A load-time sweep strips provider records the list no longer offers (orphans left by deletes from older builds), so a same-name re-add starts clean and stale declared rates/windows no longer bill a removed provider.
+
+**Engine ending legibility**
+
+- The Codex and ACP runners now say a turn's ending out loud: an empty reply reports "stopped without saying anything" instead of ending on silence or the wrong mid-work card, and a child that declares its own failure ends exactly once (a settled guard prevents a double ending).
+
+**Windows authoring**
+
+- The win32 standing prompt gains one line telling the model to single-quote arguments containing quotes or regex characters and to use `Select-String -SimpleMatch` for literal matches, so a literal-text task lands on the first try.
+
+**Step-row output**
+
+- A tool result is cut at render time (arguments at 2,000 characters, results at 5,000) with a marker naming what was withheld and the full length, and JSON results are syntax-highlighted; the stored transcript and the model's view are untouched.
+
+**Buddies**
+
+- The Buddy editor resolves a provider's model list by the same rule the chat picker uses (switched-on models, else the descriptor catalogue, else the seeded default — never the fetch cache), so pinning a custom provider offers its models and seeds a real pair at creation; a provider that offers nothing stays disabled with no misleading "default" label.
+
+**Build & CI**
+
+- The CI workflow caches the electron artifacts and passes `--publish never`, so a verification run no longer attempts a publish.
+
+<br>
+
 ## 2026-11-08: v1.15.10 — Turn legibility: live elapsed time and reconciled interrupted runs
 
 - test(turn-legibility): pin the interrupted run, the time module and the window clock red
